@@ -12,11 +12,39 @@ function poolFor(cfg, 职能) {
   return null;
 }
 
-// 在池单，可选按职能过滤，按 优先级 > 创建时间 排序。
+// ---- 关键路径（D43⑤）：未完成工单的依赖图上，预计时间加权的最长链 ----
+// 与流程视图同一口径（红链）。环上节点不参与（波次算法同款兜底）。
+function criticalSet(root) {
+  const done = new Set(['完成', '已归档']);
+  const all = [];
+  for (const s of store.STATES) if (!done.has(s)) all.push(...store.list(root, s));
+  const byId = Object.fromEntries(all.map((t) => [t.id, t]));
+  const depsOf = (t) => t.fm.依赖
+    ? (Array.isArray(t.fm.依赖) ? t.fm.依赖 : String(t.fm.依赖).split(/[，,\s]+/)).filter((d) => byId[d]) : [];
+  const memo = {}; const visiting = new Set();
+  const longest = (id) => {
+    if (memo[id]) return memo[id];
+    if (visiting.has(id)) return { len: 0, path: [] }; // 成环：断链兜底
+    visiting.add(id);
+    let best = { len: 0, path: [] };
+    for (const d of depsOf(byId[id])) { const r = longest(d); if (r.len > best.len) best = r; }
+    visiting.delete(id);
+    const h = parseFloat(byId[id].fm.预计时间) || 1;
+    return memo[id] = { len: best.len + h, path: [...best.path, id] };
+  };
+  let cp = { len: 0, path: [] };
+  for (const t of all) { const r = longest(t.id); if (r.len > cp.len) cp = r; }
+  // 孤节点不算链：没有依赖关系的图里"最贵的一张单"不该插队（那是优先级的事）
+  return cp.path.length >= 2 ? new Set(cp.path) : new Set();
+}
+
+// 在池单，可选按职能过滤。排序：优先级 > 红链（D43⑤ 同优先级内关键路径先走，可用 执行器.红链优先=false 关）> 创建时间。
 function listPool(root, cfg, 职能) {
   let items = store.list(root, '池');
   if (职能) items = items.filter((t) => t.fm.职能 === 职能);
+  const crit = (cfg && cfg.执行器 && cfg.执行器.红链优先 === false) ? new Set() : criticalSet(root);
   items.sort((a, b) => (PRI[a.fm.优先级] ?? 9) - (PRI[b.fm.优先级] ?? 9)
+    || (crit.has(b.id) ? 1 : 0) - (crit.has(a.id) ? 1 : 0)
     || String(a.fm.创建时间 || '').localeCompare(String(b.fm.创建时间 || '')));
   return items;
 }
@@ -63,4 +91,4 @@ async function claim(root, cfg, agentId, now) {
   return { ok: false, error: '无可领单（池空 / 依赖未满足 / 都被抢走）', empty: true };
 }
 
-module.exports = { poolFor, listPool, inFlight, depsSatisfied, claim };
+module.exports = { poolFor, listPool, inFlight, depsSatisfied, claim, criticalSet };

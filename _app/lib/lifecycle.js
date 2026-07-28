@@ -65,7 +65,8 @@ function QA裁定(root, cfg, id, 通过) {
 }
 
 // 待定夺裁决（D10）：接受→待验收；给方向→在途(单未死，不违 D6)；打回→已归档(+新单另调 返工)。
-function 定夺(root, id, 决定) {
+// D43③ 扩展：给方向可附方向文本（追加进工单正文，主办 agent 重执行时能读到）+ 裁决人署名。
+function 定夺(root, id, 决定, 方向, 裁决人) {
   const t = store.find(root, id);
   if (!t) return { ok: false, error: '不存在' };
   if (t.state !== '待定夺') return { ok: false, error: `当前不在待定夺（${t.state}）` };
@@ -73,7 +74,12 @@ function 定夺(root, id, 决定) {
   const to = map[决定];
   if (!to) return { ok: false, error: `未知决定：${决定}` };
   const r = store.move(root, id, '待定夺', to, null, nowIso());
-  if (r.ok) journal.append(root, `待定夺裁决 ${id}：${决定}（待定夺→${to}）`);
+  if (r.ok) {
+    if (决定 === '给方向' && 方向) {
+      store.update(root, id, (fm, t2) => ({ body: (t2.body || '') + `\n\n## 定夺方向（${裁决人 || '制作人'} · ${nowIso().slice(0, 10)}）\n${String(方向).slice(0, 2000)}\n` }));
+    }
+    journal.append(root, `待定夺裁决 ${id}：${决定}（待定夺→${to}${裁决人 ? ' · ' + 裁决人 : ''}）`);
+  }
   return r;
 }
 

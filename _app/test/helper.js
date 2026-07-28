@@ -41,6 +41,8 @@ function seed(root, state, opts = {}) {
   if (opts.依据) fm.依据 = opts.依据;
   if (opts.主办) fm.主办 = opts.主办;
   if (opts.领单时间) fm.领单时间 = opts.领单时间;
+  // 其余字段透传（代裁/自修次数/预计时间/阶段/执行池…）——白名单曾吞掉新字段导致测试假阳
+  for (const k of Object.keys(opts)) if (!(k in fm) && k !== 'body' && opts[k] !== undefined) fm[k] = opts[k];
   fs.writeFileSync(store.ticketPath(root, state, id), store.serialize(fm, opts.body || '## 范围\n做 ' + id), 'utf8');
   return id;
 }
