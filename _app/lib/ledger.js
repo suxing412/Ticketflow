@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 
-const DIRS = ['草稿', '待投', '池', '在途', '质检', '待验收', '待定夺', '执行失败', '完成', '已归档', '回执', 'journal', '风格库', '岗位协议'];
+const DIRS = ['草稿', '待投', '池', '在途', '质检', '待验收', '待定夺', '执行失败', '完成', '已归档', '回执', 'journal', '风格库', '岗位协议', '阶段标准.md'];
 
 function commitStudio(root, cb) {
   const done = (ok, note) => { if (cb) cb(ok, note); };

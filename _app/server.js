@@ -41,6 +41,7 @@ app.get('/api/board', (req, res) => {
   for (const s of store.STATES) out[s] = snap[s].map((t) => ({
     id: t.id, title: t.fm.title, 职能: t.fm.职能, 优先级: t.fm.优先级, 规模: t.fm.规模,
     QA: t.fm.QA, 验收方式: t.fm.验收方式, 主办: t.fm.主办 || null, 项目: t.fm.项目 || null, // D42 多项目视界按此归属
+    阶段: t.fm.阶段 || null, 预计时间: t.fm.预计时间 || null, // D43 流程视图用
     父单: t.fm.父单 || null, 依赖: t.fm.依赖 || null,
     领单时间: t.fm.领单时间 || null, 交付时间: t.fm.交付时间 || null, 滞留告警: !!t.fm.滞留告警,
   }));
@@ -416,9 +417,9 @@ app.post('/api/claim', async (req, res) => {
 app.post('/api/draft', (req, res) => {
   if (!ready(res)) return;
   const b = req.body || {};
-  if (!/^[A-Z0-9]+(?:-\d+)*$/.test(String(b.id || ''))) return res.status(400).json({ error: '编号格式非法' });
-  // R6：美术单不得整单标委托（主观段必须保留待用户签，守 D11）
-  if (b.职能 === '美术' && b.验收方式 === '委托') return res.status(400).json({ error: '美术单含主观判断，验收方式不得整单委托（客观段可委托、主观段须保留待你签）' });
+  // 中文项目名放行后，编号前缀也吃中文（如 甲-01）
+  if (!/^[A-Z0-9一-鿿]+(?:-\d+)*$/.test(String(b.id || ''))) return res.status(400).json({ error: '编号格式非法（前缀-数字，如 TK-13 / 甲-01）' });
+  // R6 已按 D43④ 修订：美术允许委托，首样保留是拆单纪律（每类首张 保留 定调）而非代码硬拦
   const fm = {
     id: b.id, title: b.title || '未命名', 职能: b.职能 || '策划', 产出物类型: b.产出物类型 || '文档',
     优先级: b.优先级 || 'P1', 规模: b.规模 || '单兵', QA: b.QA || '关', 验收方式: b.验收方式 || '保留',
@@ -426,6 +427,7 @@ app.post('/api/draft', (req, res) => {
     项目: b.项目 || (cfg.项目 && cfg.项目.默认) || '', // D32：执行 agent 据此定位目标仓库
     创建时间: b.创建时间 || new Date().toISOString().slice(0, 10), 更新时间: new Date().toISOString(),
   };
+  if (b.阶段) fm.阶段 = String(b.阶段); // D43 阶段章
   if (b.父单) fm.父单 = b.父单;
   if (b.依赖) fm.依赖 = b.依赖;
   if (b.依据) fm.依据 = b.依据;
@@ -540,6 +542,15 @@ app.post('/api/agent-model', (req, res) => {
   fs.writeFileSync(path.join(ROOT, 'studio.config.json'), JSON.stringify(cfg, null, 2) + '\n', 'utf8');
   journal.append(ROOT, `模型档调整：${id} → ${v || '（池默认）'}`);
   res.json({ ok: true, agents: cfg.agents });
+});
+
+// ---- 阶段字典与阶段标准（D43）：字典=项目可配默认 L0-L2；标准=阶段标准.md 明文（缺则落模板）----
+const stages = require('./lib/stages');
+app.get('/api/stages', (req, res) => {
+  if (!ready(res)) return;
+  if (stages.ensureStandards(ROOT)) journal.append(ROOT, '阶段标准.md 模板已落盘（D43 首次使用）');
+  const proj = String(req.query.项目 || '') || (cfg.项目 && cfg.项目.默认) || '';
+  res.json({ 阶段: stages.stagesFor(cfg, proj), 标准: stages.parseStandards(ROOT) });
 });
 
 // ---- 单个 agent 执行池切换：决定 CLI 归属与额度闸。切池清模型个体覆盖（旧池模型名对新池无意义）；

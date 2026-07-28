@@ -9,7 +9,7 @@ const FNHEX = { 策划: 'var(--fn-plan)', 程序: 'var(--fn-code)', 美术: 'var
 const FNCLS = { 策划: 'fn-plan', 程序: 'fn-code', 美术: 'fn-art', QA: 'fn-qa', 装配: 'fn-asm' };
 const STCLS = { 在途: 'st-doing', 质检: 'st-review', 待验收: 'st-accept', 完成: 'st-done', 待定夺: 'st-escal', 执行失败: 'st-escal', 草稿: 'mut', 已归档: 'mut', 待投: '', 池: '' };
 const STPCT = { 草稿: 0, 待投: 0, 池: 0, 在途: 60, 质检: 85, 待定夺: 70, 执行失败: 60, 待验收: 90, 完成: 100, 已归档: 0 };
-const NAV = [['总览', ''], ['工单池', 'board'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['风格库', 'stylelib']]; // 参数入口只走 ⚙
+const NAV = [['总览', ''], ['工单池', 'board'], ['流程', 'flow'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['风格库', 'stylelib']]; // 参数入口只走 ⚙
 function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1900); }
 // 数值跳字确认（步进器改完后调用）：重触发 animation
 function bump(el) { if (!el) return; el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
@@ -61,7 +61,8 @@ function shell(active, inner) {
   return `<div class="topbar">
       <div class="tleft"><a class="logohome" href="#/hub" title="回项目启动页"><img class="logo" src="favicon.ico" alt="监制台"/></a><div>
         <h1>监制台${p ? ` · ${esc(p)}` : ''}</h1><p class="tagline">布告栏 · 工单池 · 审批台——制作人的驾驶舱：你投池与拍板，agent 拉取执行</p></div></div>
-      <div class="tright"><div class="searchbox"><input id="gsearch" placeholder="搜索工单 编号 / 标题" autocomplete="off" oninput="gSearch(this.value)" onfocus="gSearch(this.value)" onkeydown="gEnter(event)"/><div id="gsr" class="gsr"></div></div></div></div>
+      <div class="tright"><div class="searchbox"><input id="gsearch" placeholder="搜索工单 编号 / 标题" autocomplete="off" oninput="gSearch(this.value)" onfocus="gSearch(this.value)" onkeydown="gEnter(event)"/><div id="gsr" class="gsr"></div></div>
+        <a class="gear" href="#/params" title="全局参数与额度（单项目不经启动页也能到）">⚙</a></div></div>
     <nav class="snav">${tabs}</nav>
     <div id="view">${inner}</div>`;
 }
@@ -277,6 +278,17 @@ function gatebarHtml(g) {
     <div class="backlog" style="margin-left:24px"><span class="glbl">待验收积压</span><br/><b id="backlogN">— / —</b></div></div>`;
 }
 window.togglePause = async (v) => { await post('/api/gate/pause', { scope: 'global', value: v }); gateCache = null; route(); };
+// D43 批量投池：当前项目语境的待投整批释放（人闸=这一次确认）
+window.releaseAll = async () => {
+  const { board } = await loadBoard();
+  const items = board['待投'] || [];
+  if (!items.length) return toast('待投区空');
+  if (!confirm(`整批投池 ${items.length} 张待投单？投池后执行器按依赖+优先级自动流转。`)) return;
+  let ok = 0, fail = 0;
+  for (const t of items) { const r = await post('/api/act/投池', { id: t.id }); r.ok ? ok++ : fail++; }
+  toast(`已投池 ${ok} 张${fail ? ` · 失败 ${fail} 张（看 journal）` : ''}`);
+  route();
+};
 async function viewBoard() {
   const { states, board } = await loadBoard();
   const conf = await api('/api/config').catch(() => ({ 闸值: {} }));
@@ -286,7 +298,9 @@ async function viewBoard() {
     const hot = s === '待验收' || s === '待定夺' || s === '执行失败';
     const head = s === '草稿'
       ? `<h4>${s}<a class="newdraft" href="#/draft">＋ 起草</a></h4>`
-      : `<h4>${s}<span class="cnt">${items.length}</span></h4>`;
+      : s === '待投' && items.length
+        ? `<h4>${s}<button class="newdraft" title="整批投池（D43：拆完一批不用一张张点，人闸就是这一下）" onclick="releaseAll()">⇧ 全投 ${items.length}</button></h4>`
+        : `<h4>${s}<span class="cnt">${items.length}</span></h4>`;
     const cards = items.map((t) => `<div class="bcard2" data-tid="${esc(t.id)}" onclick="location.hash='#/t/${t.id}'">
         <span class="cid">${esc(t.id)}</span>
         <span class="cpri ${t.优先级 === 'P0' ? 'p0' : ''}">${esc(t.优先级 || '')}</span>
@@ -324,6 +338,160 @@ async function viewBoard() {
   return `<div id="gatebar-slot">${gatebarHtml(gateCache)}</div><div class="board2" id="board2">${cols}</div>
     <div class="hsync" id="hsync"><div id="hsync-w" style="height:1px"></div></div>`;
 }
+
+/* ===== P12 流程（D43）：横轴=阶段 · 阶段内拓扑子列 · 泳道=系统（根祖先）· 红=关键路径 =====
+   兼任投池前排版台：草稿/待投也显示。父单（组织容器）不出节点，只当泳道。 */
+async function viewFlow() {
+  const [{ all }, stg] = await Promise.all([loadBoard(), api('/api/stages?项目=' + encodeURIComponent(curProj())).catch(() => ({ 阶段: [], 标准: {} }))]);
+  const STG = (stg.阶段 && stg.阶段.length) ? stg.阶段 : [{ 代号: 'L0', 名称: '原型' }, { 代号: 'L1', 名称: '正式化' }, { 代号: 'L2', 名称: '打磨' }];
+  const byId = Object.fromEntries(all.map((t) => [t.id, t]));
+  const hasKids = new Set(all.filter((t) => t.父单 && byId[t.父单]).map((t) => t.父单));
+  const depsOf = (t) => t.依赖 ? (Array.isArray(t.依赖) ? t.依赖 : String(t.依赖).split(/[，,\s]+/)).filter((d) => byId[d]) : [];
+  const rootOf = (t) => { let c = t, g = 0; while (c.父单 && byId[c.父单] && g++ < 10) c = byId[c.父单]; return c; };
+  const DONE = new Set(['完成', '已归档']);
+  // 节点=非容器单；无阶段章的旧单归第一阶段
+  const ns = all.filter((t) => !hasKids.has(t.id)).map((t) => ({
+    t, id: t.id, deps: depsOf(t), stg: STG.some((s) => s.代号 === t.阶段) ? t.阶段 : STG[0].代号,
+    h: parseFloat(t.预计时间) || 1, lane: rootOf(t).id === t.id ? '未归属' : (rootOf(t).title || rootOf(t).id),
+  }));
+  if (!ns.length) return `<div class="emptycard" style="margin-top:30px"><h5>流程空</h5><p>起草工单（选阶段、填依赖/父单）后，这里按 阶段×系统 铺出整个项目的流动。</p></div>`;
+  const nById = Object.fromEntries(ns.map((n) => [n.id, n]));
+  ns.forEach((n) => { n.deps = n.deps.filter((d) => nById[d]); });
+  const SIDX = Object.fromEntries(STG.map((s, i) => [s.代号, i]));
+  // 环检测
+  ns.forEach((n) => { n.cyc = false; });
+  { const st2 = {};
+    const visit = (id, stack) => {
+      if (st2[id] === 2) return false;
+      if (stack.has(id)) return true;
+      stack.add(id); let inC = false;
+      for (const d of nById[id].deps) if (visit(d, stack)) inC = true;
+      stack.delete(id); st2[id] = 2;
+      if (inC) nById[id].cyc = true;
+      return inC;
+    };
+    ns.forEach((n) => visit(n.id, new Set())); }
+  // 阶段内拓扑子深度（全阶段统一：同阶段依赖只向右，跨泳道不倒退）
+  ns.forEach((n) => { n.sub = 0; });
+  { let chg = true, g = 0;
+    while (chg && g++ < 120) { chg = false;
+      for (const n of ns) { if (n.cyc) continue;
+        const w = Math.max(0, ...n.deps.map((d) => nById[d]).filter((u) => u.stg === n.stg && !u.cyc).map((u) => u.sub + 1));
+        if (w !== n.sub) { n.sub = w; chg = true; } } } }
+  // 关键路径：未完成 · 预计时间加权
+  const memo = {};
+  const longest = (id) => {
+    if (memo[id]) return memo[id];
+    const n = nById[id];
+    if (!n || DONE.has(n.t.state) || n.cyc) return memo[id] = { len: 0, path: [] };
+    let best = { len: 0, path: [] };
+    for (const d of n.deps) { const r = longest(d); if (r.len > best.len) best = r; }
+    return memo[id] = { len: best.len + n.h, path: [...best.path, id] };
+  };
+  let cp = { len: 0, path: [] };
+  ns.forEach((n) => { const r = longest(n.id); if (r.len > cp.len) cp = r; });
+  const crit = new Set(cp.path);
+  const flCls = (n) => {
+    if (n.cyc) return 'cyc';
+    if (DONE.has(n.t.state)) return 'done';
+    if (n.t.state === '在途') return 'doing';
+    if (n.t.state === '质检') return 'review';
+    if (n.t.state === '待验收') return 'accept';
+    if (n.t.state === '执行失败') return 'failed';
+    if (n.t.state === '草稿' || n.t.state === '待投') return 'pre';
+    return n.deps.some((d) => !DONE.has(nById[d].t.state)) ? 'blocked' : 'ready';
+  };
+  // 主阶段 / 泳道阶段
+  const actCnt = {};
+  ns.forEach((n) => { if (!DONE.has(n.t.state)) actCnt[n.stg] = (actCnt[n.stg] || 0) + 1; });
+  const mainStage = (Object.entries(actCnt).sort((a, b) => b[1] - a[1])[0] || [STG[0].代号])[0];
+  // 布局
+  const NW = 146, NHh = 54, VG = 12, HGap = 22, X0 = 110, CELLPAD = 26;
+  const subMax = STG.map((s) => Math.max(0, ...ns.filter((n) => n.stg === s.代号).map((n) => n.sub)) + 1);
+  const stageX = []; let xa = X0;
+  STG.forEach((s, i) => { stageX[i] = xa; xa += CELLPAD + subMax[i] * (NW + HGap); });
+  const laneNames = [...new Set(ns.map((n) => n.lane))].sort((a, b) => (a === '未归属') - (b === '未归属'));
+  let yy = 30; const lanes = {};
+  for (const ln of laneNames) {
+    const mine = ns.filter((n) => n.lane === ln);
+    const stacks = {}; let depth = 0;
+    for (const n of mine) { const k = n.stg + '/' + n.sub; stacks[k] = stacks[k] || 0; n.row = stacks[k]++; depth = Math.max(depth, stacks[k]); }
+    lanes[ln] = { top: yy, mine }; yy += 42 + depth * (NHh + VG);
+  }
+  ns.forEach((n) => { n.x = stageX[SIDX[n.stg]] + n.sub * (NW + HGap); n.y = lanes[n.lane].top + 36 + n.row * (NHh + VG); });
+  const laneStage = (mine) => {
+    const act = mine.filter((n) => !DONE.has(n.t.state));
+    if (act.length) return act.reduce((m, n) => SIDX[n.stg] < SIDX[m] ? n.stg : m, act[0].stg);
+    return mine.reduce((m, n) => SIDX[n.stg] > SIDX[m] ? n.stg : m, mine[0].stg);
+  };
+  // 边：扇形锚点
+  const inE = {}, outE = {};
+  ns.forEach((n) => n.deps.forEach((d) => { (inE[n.id] = inE[n.id] || []).push(d); (outE[d] = outE[d] || []).push(n.id); }));
+  for (const k in inE) inE[k].sort((a, b) => nById[a].y - nById[b].y);
+  for (const k in outE) outE[k].sort((a, b) => nById[a].y - nById[b].y);
+  const aY = (n, list, o) => n.y + NHh * ((list.indexOf(o) + 1) / (list.length + 1));
+  let paths = '';
+  ns.forEach((n) => n.deps.forEach((d) => {
+    const u = nById[d];
+    const x1 = u.x + NW, y1 = aY(u, outE[u.id], n.id), x2 = n.x, y2 = aY(n, inE[n.id], u.id);
+    const dseg = x2 > x1
+      ? `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`
+      : `M ${x1} ${y1} C ${x1 + 30} ${Math.max(u.y, n.y) + NHh + 16}, ${x2 - 30} ${Math.max(u.y, n.y) + NHh + 16}, ${x2} ${y2}`;
+    paths += `<path class="fl-e${u.stg !== n.stg ? ' up' : ''}${crit.has(n.id) && crit.has(u.id) ? ' crit' : ''}" data-f="${esc(u.id)}" data-t="${esc(n.id)}" d="${dseg}"/>`;
+  }));
+  const heads = STG.map((s, i) => `<div class="fl-head" style="left:${stageX[i]}px;width:${subMax[i] * (NW + HGap)}px" title="阶段验收标准（${esc(s.代号)} ${esc(s.名称)}）&#10;${esc(Object.entries(stg.标准[s.代号] || {}).map(([f, v]) => f + '：' + v).join('\n'))}">
+      <b>${esc(s.代号)} ${esc(s.名称)}</b><span class="sn">${s.代号 === mainStage ? '项目主阶段 · ' : ''}悬停看验收标准 ⓘ</span></div>`
+    + (i ? `<div class="fl-col" style="left:${stageX[i] - CELLPAD / 2}px"></div>` : '')).join('');
+  const laneHtml = laneNames.map((ln) => {
+    const L = lanes[ln]; const ls = laneStage(L.mine); const misc = ln === '未归属';
+    const lag = !misc && SIDX[ls] < SIDX[mainStage] && L.mine.some((n) => !DONE.has(n.t.state));
+    const lead = !misc && SIDX[ls] > SIDX[mainStage];
+    const wait = L.mine.some((n) => n.t.state === '待验收' && n.t.验收方式 === '保留');
+    return `<div class="fl-lane" style="top:${L.top}px"></div>
+      <div class="fl-lab" style="top:${L.top}px">${esc(ln)}<span class="lst ${lag ? 'lag' : lead ? 'lead' : ''}">${esc(ls)}${lag ? ' 滞后' : lead ? ' 超前' : ''}</span>${wait ? '<span class="lst lag" style="background:var(--dangerbg);color:var(--danger);border-color:transparent">待你验收</span>' : ''}</div>`;
+  }).join('');
+  const nodeHtml = ns.map((n) => `<div class="fl-node ${flCls(n)}${crit.has(n.id) ? ' crit' : ''}" id="fl-${esc(n.id)}"
+      style="left:${n.x}px;top:${n.y}px;--fn:${FNHEX[n.t.职能] || 'var(--ink3)'}" data-nid="${esc(n.id)}"
+      onclick="location.hash='#/t/${encodeURIComponent(n.id)}'" onmouseenter="flChain('${esc(n.id)}')" onmouseleave="flChain(null)">
+      <span class="nid">${esc(n.id)}</span><span class="nst">${n.cyc ? '⚠环' : esc(n.t.state)}</span>
+      <div class="nt">${esc(n.t.title)}</div><span class="nh">${n.h}h</span></div>`).join('');
+  window._flData = { ns: ns.map((n) => ({ id: n.id, deps: n.deps })), done: ns.filter((n) => DONE.has(n.t.state)).map((n) => n.id) };
+  return `<div class="fl-bar">
+      <span class="subnote">横轴=阶段 · 泳道=系统 · 红=关键路径（预计时间加权）· 虚线=升阶链 · 点卡进详情</span>
+      <span class="sp"></span>
+      ${cp.len ? `<span class="fl-cp">关键路径 ${Math.round(cp.len * 10) / 10}h · ${cp.path.length} 单</span>` : ''}
+      <button class="btn h32" onclick="flFold(this)">折叠已完成</button></div>
+    <div class="fl-wrap"><div class="fl-stage" style="width:${xa + 20}px;height:${yy + 16}px">
+      <svg class="fl-svg" width="${xa + 20}" height="${yy + 16}">${paths}</svg>
+      ${heads}${laneHtml}${nodeHtml}</div></div>`;
+}
+window.flChain = (id) => {
+  const d = window._flData; if (!d) return;
+  let rel = null;
+  if (id) {
+    const upM = {}, dnM = {};
+    d.ns.forEach((n) => n.deps.forEach((x) => { (upM[n.id] = upM[n.id] || []).push(x); (dnM[x] = dnM[x] || []).push(n.id); }));
+    rel = new Set([id]);
+    const walk = (m, i) => (m[i] || []).forEach((x) => { if (!rel.has(x)) { rel.add(x); walk(m, x); } });
+    walk(upM, id); walk(dnM, id);
+  }
+  d.ns.forEach((n) => { const el = $('fl-' + n.id); if (!el) return;
+    el.classList.toggle('dimmed', !!rel && !rel.has(n.id));
+    el.classList.toggle('chain', !!rel && rel.has(n.id) && n.id !== id); });
+  document.querySelectorAll('path.fl-e').forEach((p) => {
+    const on = rel && rel.has(p.dataset.f) && rel.has(p.dataset.t);
+    p.classList.toggle('dimmed', !!rel && !on);
+    p.classList.toggle('chain', !!on && !p.classList.contains('crit')); });
+};
+window.flFold = (btn) => {
+  const d = window._flData; if (!d) return;
+  const fold = !btn.classList.contains('on');
+  btn.classList.toggle('on', fold); btn.textContent = fold ? '显示已完成' : '折叠已完成';
+  const doneSet = new Set(d.done);
+  d.done.forEach((id) => { const el = $('fl-' + id); if (el) el.style.display = fold ? 'none' : ''; });
+  document.querySelectorAll('path.fl-e').forEach((p) => {
+    p.style.display = (fold && (doneSet.has(p.dataset.f) || doneSet.has(p.dataset.t))) ? 'none' : ''; });
+};
 
 /* ===== P10 树形 ===== */
 let tState = { collapsed: new Set(JSON.parse(localStorage.getItem('studio.tree.collapsed') || '[]')), fn: '', st: 'active', expandAll: false };
@@ -900,6 +1068,9 @@ async function viewDraft(editId, parent) {
   const cfg = await cfgP;
   const names = Object.keys((cfg.项目 && cfg.项目.注册) || {});
   const dProj = curProj() || (cfg.项目 && cfg.项目.默认) || names[0] || ''; // 起草默认归当前项目语境
+  // D43 阶段字典+标准（选阶段自动带入该职能的验收标准）
+  const stg = await api('/api/stages?项目=' + encodeURIComponent(dProj)).catch(() => ({ 阶段: [], 标准: {} }));
+  window._dStd = stg.标准 || {};
   const fm = t ? t.fm : {};
   const sec = parseSections(t ? t.body : '');
   const opts = (arr, cur) => arr.map((x) => `<option ${x === cur ? 'selected' : ''}>${x}</option>`).join('');
@@ -916,7 +1087,10 @@ async function viewDraft(editId, parent) {
         <div class="f-field"><label>优先级</label><select id="d-pri">${opts(['P0', 'P1', 'P2', 'P3'], fm.优先级 || 'P1')}</select></div>
         <div class="f-field"><label>预计时间</label><input id="d-est" value="${esc(fm.预计时间 || '')}" placeholder="1.5h"/></div>
         <div class="f-field"><label>预计token</label><input id="d-tok" value="${esc(fm.预计token || '')}" placeholder="8万"/></div>
-        <div class="f-field"><label>项目</label><select id="d-proj">${opts(names.length ? names : [dProj || '未注册'], fm.项目 || dProj)}</select></div></div>
+        <div class="f-field"><label>项目</label><select id="d-proj">${opts(names.length ? names : [dProj || '未注册'], fm.项目 || dProj)}</select></div>
+        <div class="f-field"><label>阶段（D43）</label><select id="d-stg" onchange="dStgFill()">
+          <option value="" ${!fm.阶段 ? 'selected' : ''}>不分阶</option>
+          ${(stg.阶段 || []).map((s) => `<option value="${esc(s.代号)}" ${fm.阶段 === s.代号 ? 'selected' : ''}>${esc(s.代号)} ${esc(s.名称)}</option>`).join('')}</select></div></div>
       <div class="f-field"><label>依据链 · 策划案#锚号</label><input id="d-ref" class="mono" value="${esc(fm.依据 || '')}" placeholder="战斗系统#战斗-03"/></div>
       <div class="f-field"><label>父单 / 依赖</label><input id="d-par" class="mono" value="${esc(fm.父单 || parent || '')}" placeholder="父单编号"/></div>
     </div>
@@ -928,10 +1102,18 @@ async function viewDraft(editId, parent) {
       <div class="p7foot"><button class="btn h44" onclick="dSave(false)">存为待投</button>
         <button class="btn accent h44" onclick="dSave(true)">投池（释放）</button></div></div></div>`;
 }
+// D43：选阶段时，验收标准为空则自动带入 阶段标准.md 里该职能该阶段的口径
+window.dStgFill = () => {
+  const stgK = $('d-stg') ? $('d-stg').value : '';
+  const ta = $('d-s3'); if (!ta || !stgK) return;
+  const std = (window._dStd && window._dStd[stgK]) || {};
+  const fn = $('d-fn') ? $('d-fn').value : '';
+  if (!ta.value.trim() && std[fn]) { ta.value = `□ 【${stgK}·${fn}】${std[fn]}`; toast('已带入阶段标准，可增改'); }
+};
 window.dSave = async (release) => {
   const g = (id) => $(id).value.trim();
   const body = `## 范围\n${$('d-s1').value.trim()}\n\n## 不要做\n${$('d-s2').value.trim()}\n\n## 验收标准 · 要点清单\n${$('d-s3').value.trim()}\n\n## 完工要求\n${$('d-s4').value.trim()}\n`;
-  const payload = { id: g('d-id'), title: g('d-title'), 职能: g('d-fn'), 产出物类型: g('d-out'), 规模: g('d-sc'), QA: g('d-qa'), 验收方式: g('d-acc'), 优先级: g('d-pri'), 预计时间: g('d-est'), 预计token: g('d-tok'), 项目: g('d-proj'), 依据: g('d-ref'), 父单: g('d-par'), body };
+  const payload = { id: g('d-id'), title: g('d-title'), 职能: g('d-fn'), 产出物类型: g('d-out'), 规模: g('d-sc'), QA: g('d-qa'), 验收方式: g('d-acc'), 优先级: g('d-pri'), 预计时间: g('d-est'), 预计token: g('d-tok'), 项目: g('d-proj'), 阶段: g('d-stg'), 依据: g('d-ref'), 父单: g('d-par'), body };
   const r = await post('/api/draft', payload);
   if (!r.ok) return toast(r.error || '失败');
   const r2 = await post('/api/act/定稿', { id: payload.id });
@@ -1036,7 +1218,7 @@ window.artSubmit = async (id, btn) => {
 window.act3 = async (name, id, 决定) => { const r = await post('/api/act/' + name, { id, 决定 }); toast(r.ok ? `${决定} 完成` : (r.error || '失败')); route(); };
 
 /* ===== 路由 ===== */
-const ROUTES = { '': viewOverview, board: viewBoard, tree: viewTree, agents: viewAgents, decisions: viewDecisions, stylelib: viewStyleLib };
+const ROUTES = { '': viewOverview, board: viewBoard, flow: viewFlow, tree: viewTree, agents: viewAgents, decisions: viewDecisions, stylelib: viewStyleLib };
 const markIn = (key) => { if (window._lastViewKey !== key) { const v = $('view') || $('app').firstElementChild; if (v) v.classList.add('vin'); } window._lastViewKey = key; };
 async function route() {
   const h = location.hash.replace(/^#\//, '');

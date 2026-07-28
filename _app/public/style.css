@@ -338,6 +338,57 @@ a.gear { text-decoration:none; }
 .tlseg.on { outline:1.5px solid var(--ink); }
 .tlnow { position:absolute; top:0; width:0; border-left:1.5px dashed var(--danger); pointer-events:none; }
 
+/* ===== P12 流程（D43）：阶段横轴 · 拓扑子列 · 泳道=系统 ===== */
+.fl-bar { display:flex; align-items:center; gap:14px; margin-top:22px; }
+.fl-bar .sp { flex:1; }
+.fl-cp { font-size:12px; background:var(--dangerbg); color:var(--danger); border-radius:999px; padding:5px 14px; font-weight:500; }
+.fl-wrap { overflow-x:auto; margin-top:12px; padding-bottom:8px; }
+.fl-stage { position:relative; }
+.fl-svg { position:absolute; inset:0; pointer-events:none; }
+.fl-col { position:absolute; top:0; bottom:0; border-left:1px dashed var(--line); }
+.fl-head { position:absolute; top:0; text-align:center; cursor:help; }
+.fl-head b { font-size:13px; }
+.fl-head .sn { display:block; font-size:10px; color:var(--ink3); font-weight:400; }
+.fl-lane { position:absolute; left:0; right:0; border-top:1px solid var(--line); }
+.fl-lab { position:absolute; left:0; font-size:11px; font-weight:700; color:var(--ink2); background:var(--sect);
+  padding:3px 10px; border-radius:8px; transform:translateY(8px); display:flex; gap:8px; align-items:center; z-index:3; }
+.fl-lab .lst { font-family:var(--mono); font-size:9px; font-weight:500; padding:1px 7px; border-radius:999px; background:var(--chip); color:var(--ink2); }
+.fl-lab .lst.lag { background:var(--gatebg); color:var(--gatetx); border:1px solid var(--gateln); }
+.fl-lab .lst.lead { background:var(--okbg); color:var(--ok); }
+.fl-node { position:absolute; width:146px; height:54px; background:var(--card); border:1px solid var(--line); border-radius:10px;
+  padding:7px 10px 6px 13px; cursor:pointer; box-shadow:var(--shadow-sm); z-index:2;
+  transition:box-shadow 150ms var(--ease-out), transform 150ms var(--ease-out), opacity 200ms var(--ease-out); }
+.fl-node::before { content:''; position:absolute; left:0; top:0; bottom:0; width:4px; border-radius:2px 0 0 2px; background:var(--fn, var(--ink3)); }
+.fl-node .nid { font-family:var(--mono); font-size:10px; color:var(--ink3); }
+.fl-node .nt { font-size:11.5px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
+.fl-node .nst { position:absolute; top:6px; right:8px; font-size:9px; padding:1px 7px; border-radius:999px; background:var(--chip); color:var(--ink2); }
+.fl-node .nh { position:absolute; bottom:5px; right:9px; font-family:var(--mono); font-size:9px; color:var(--ink3); }
+.fl-node:hover { box-shadow:var(--shadow-md); transform:translateY(-2px); border-color:var(--ink3); z-index:5; }
+.fl-node.done { opacity:.35; }
+.fl-node.doing { border-color:var(--accent); }
+.fl-node.doing .nst { background:var(--ink); color:var(--paper); }
+.fl-node.review .nst { background:var(--st-review-bg); color:var(--paper); }
+.fl-node.accept .nst { background:var(--okbg); color:var(--ok); }
+.fl-node.pre .nst { background:var(--sect); color:var(--ink3); } /* 草稿/待投：排版台阶段 */
+.fl-node.pre { border-style:dashed; }
+.fl-node.blocked { background:var(--sect); opacity:.75; }
+.fl-node.blocked .nst { background:var(--chip); color:var(--ink3); }
+.fl-node.ready { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-glow), var(--shadow-sm); }
+.fl-node.ready .nst { background:var(--accent); color:var(--on-accent); }
+.fl-node.failed { border-color:var(--danger); }
+.fl-node.failed .nst { background:var(--dangerbg); color:var(--danger); }
+.fl-node.cyc { border-color:var(--gateln); background:var(--gatebg); }
+.fl-node.crit { border-color:var(--danger); }
+.fl-node.crit::before { background:var(--danger); }
+.fl-node.dimmed { opacity:.15; }
+.fl-node.chain { box-shadow:0 0 0 3px var(--mask), var(--shadow-md); z-index:6; }
+path.fl-e { fill:none; stroke:var(--line); stroke-width:1.5; }
+path.fl-e.up { stroke:var(--ink3); stroke-dasharray:5 4; }
+path.fl-e.crit { stroke:var(--danger); stroke-width:2; stroke-dasharray:none; }
+path.fl-e.chain { stroke:var(--ink2); stroke-width:2; }
+path.fl-e.dimmed { opacity:.12; }
+@media (prefers-reduced-motion: reduce) { .fl-node { transition-duration:.01s; } .fl-node:hover { transform:none; } }
+
 /* ===== P10 树形 ===== */
 .ttools { display:flex; gap:12px; align-items:center; margin-top:24px; }
 .ttools .cnt { margin-left:auto; font-family:var(--mono); font-size:12px; color:var(--ink3); font-weight:500; }
