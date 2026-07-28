@@ -61,7 +61,8 @@ function shell(active, inner) {
   return `<div class="topbar">
       <div class="tleft"><a class="logohome" href="#/hub" title="回项目启动页"><img class="logo" src="favicon.ico" alt="监制台"/></a><div>
         <h1>监制台${p ? ` · ${esc(p)}` : ''}</h1><p class="tagline">布告栏 · 工单池 · 审批台——制作人的驾驶舱：你投池与拍板，agent 拉取执行</p></div></div>
-      <div class="tright"><div class="searchbox"><input id="gsearch" placeholder="搜索工单 编号 / 标题" autocomplete="off" oninput="gSearch(this.value)" onfocus="gSearch(this.value)" onkeydown="gEnter(event)"/><div id="gsr" class="gsr"></div></div></div></div>
+      <div class="tright"><div class="searchbox"><input id="gsearch" placeholder="搜索工单 编号 / 标题" autocomplete="off" oninput="gSearch(this.value)" onfocus="gSearch(this.value)" onkeydown="gEnter(event)"/><div id="gsr" class="gsr"></div></div>
+        <a class="gear" href="#/params" title="全局参数与额度（单项目不经启动页也能到）">⚙</a></div></div>
     <nav class="snav">${tabs}</nav>
     <div id="view">${inner}</div>`;
 }
