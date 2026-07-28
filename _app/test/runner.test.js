@@ -166,6 +166,35 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.equal(store.find(root, 'P-21').state, '待验收', '保留单碰都不碰');
   });
 
+  await t('委托代裁（D43③）：待定夺自动裁给方向 → 回在途 + 方向进正文 + 代裁戳；已裁过不重裁', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'P-30.md'), '# 完工报告 P-30\n## QA 章节\n不过\n', 'utf8');
+    seed(root, '待定夺', { id: 'P-30', 职能: '程序', 主办: '程序-A', 自修次数: 3 });
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok((r.代裁 || []).includes('P-30'));
+    const cur = store.find(root, 'P-30');
+    assert.equal(cur.state, '在途', '给方向回在途');
+    assert.equal(cur.fm.代裁.结论, '给方向');
+    assert.ok(cur.body.includes('## 定夺方向'), '方向写入正文');
+    assert.ok(fs.readFileSync(path.join(root, '回执', 'P-30.md'), 'utf8').includes('## 委托代裁'));
+    // 已盖代裁章的单不再重裁（上呈态等用户）
+    const root2 = makeRoot(); on(root2);
+    seed(root2, '待定夺', { id: 'P-31', 职能: '程序', 主办: '程序-A', 代裁: { 结论: '上呈', 时间: 'x' } });
+    const r2 = await runner.tick(root2, CFG, UN);
+    assert.ok(!(r2.代裁 || []).length, '已裁过不重复');
+    assert.equal(store.find(root2, 'P-31').state, '待定夺');
+  });
+
+  await t('委托代裁失败不动单：留待定夺（判官失败不打整单同源约束）', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '待定夺', { id: 'P-32', 职能: '程序', 主办: '程序-A' });
+    const t2 = store.find(root, 'P-32');
+    await runner.startWork(root, CFG, t2, '委托代裁', '代裁', { failWith: '网络抖动' });
+    assert.equal(store.find(root, 'P-32').state, '待定夺', '失败不动单');
+    assert.ok(!store.find(root, 'P-32').fm.代裁, '失败不盖章，下轮可重试');
+  });
+
   await t('待复核（D36）：标记后 池不可领/在途不起工/交产出被拒，解除后恢复', async () => {
     const root = makeRoot(); on(root);
     seed(root, '池', { id: 'P-22', 职能: '策划', 依据: '战斗系统#战斗-03' });

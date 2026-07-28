@@ -102,6 +102,18 @@ t('切池：agent 个体执行池覆盖职能默认，领单盖新池章', async
   assert.equal(store.find(root, 'A').fm.执行池, 'claude');
 });
 
+t('红链优先（D43⑤）：同优先级内关键路径单先被领；红链优先=false 时回退纯时间序', async () => {
+  const root = makeRoot();
+  // A 独行小单（先创建）；B 是长链头（B←C←D，加权 9h）——同 P1，红链应插队
+  seed(root, '池', { id: 'A', 职能: '策划', 优先级: 'P1', 预计时间: '1h', 创建时间: '2026-07-01' });
+  seed(root, '池', { id: 'B', 职能: '策划', 优先级: 'P1', 预计时间: '3h', 创建时间: '2026-07-02' });
+  seed(root, '待投', { id: 'C', 职能: '程序', 依赖: 'B', 预计时间: '4h' });
+  seed(root, '待投', { id: 'D', 职能: '装配', 依赖: 'C', 预计时间: '2h' });
+  assert.deepEqual(pool.listPool(root, CFG, '策划').map((x) => x.id), ['B', 'A'], '红链 B 插队');
+  const off = { ...CFG, 执行器: { ...(CFG.执行器 || {}), 红链优先: false } };
+  assert.deepEqual(pool.listPool(root, off, '策划').map((x) => x.id), ['A', 'B'], '关掉回退时间序');
+});
+
 t('原子领单竞态：跳过被抢走的，领下一张', async () => {
   const root = makeRoot();
   seed(root, '池', { id: 'A', 职能: '策划', 优先级: 'P0' });

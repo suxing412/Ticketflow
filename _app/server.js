@@ -105,7 +105,7 @@ app.post('/api/config/pool', (req, res) => {
 app.post('/api/config/model', (req, res) => {
   if (!ready(res)) return;
   const { key, value } = req.body || {};
-  if (!['codex默认', 'claude默认', '质检', '代核'].includes(key)) return res.status(400).json({ error: '不可调整：' + key });
+  if (!['codex默认', 'claude默认', '质检', '代核', '代裁'].includes(key)) return res.status(400).json({ error: '不可调整：' + key });
   const v = String(value || '').trim();
   cfg.模型 = cfg.模型 || {}; cfg.模型[key] = v; saveCfg();
   journal.append(ROOT, `模型档调整：${key} → ${v || '（CLI 默认）'}`);
