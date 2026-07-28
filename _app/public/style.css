@@ -399,6 +399,8 @@ path.fl-e.dimmed { opacity:.12; }
 .trow2.parent { background:var(--sect); height:60px; }
 .trow2.leaf { background:var(--card); border:1px solid var(--line); height:56px; }
 .trow2.lv1 { margin-left:48px; }
+.trow2.lv2 { margin-left:96px; } /* D43 三层：总单→阶段父单→碎单 */
+.trow2.lv3 { margin-left:144px; }
 .trow2 .twist2 { width:24px; color:var(--ink3); cursor:pointer; user-select:none; font-size:13px; flex-shrink:0; }
 .trow2 .twist2.none { color:var(--line); cursor:default; }
 .trow2 .tid2 { font-family:var(--mono); font-size:11.5px; color:var(--ink3); width:64px; flex-shrink:0; }

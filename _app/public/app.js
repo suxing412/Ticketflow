@@ -498,18 +498,23 @@ let tState = { collapsed: new Set(JSON.parse(localStorage.getItem('studio.tree.c
 function saveCollapsed() { localStorage.setItem('studio.tree.collapsed', JSON.stringify([...tState.collapsed])); }
 async function viewTree() {
   const { all } = await loadBoard();
-  const { kids, parents, topLeaves } = buildTree(all);
+  const { byId, kids, parents, topLeaves } = buildTree(all);
+  const parentSet = new Set(parents.map((p) => p.id));
   const stOk = (t) => tState.st === 'active' ? !['完成', '已归档'].includes(t.state) : true;
   const fnOk = (t) => !tState.fn || t.职能 === tState.fn;
+  // D43 三层结构（总单→阶段父单→碎单）：树递归渲染，父单进度=后代叶子均值（逐层聚合，不再被容器子单拉成 0%）
+  const pctOf = (t) => { const ch = kids[t.id]; if (!ch || !ch.length) return STPCT[t.state] ?? 0;
+    return Math.round(ch.reduce((a, c) => a + pctOf(c), 0) / ch.length); };
+  const anyVisible = (t) => (kids[t.id] || []).some((c) => parentSet.has(c.id) ? anyVisible(c) : (stOk(c) && fnOk(c)));
   const rowHtml = (t, lv, isParent, chn) => {
-    const pct = isParent ? Math.round(chn.reduce((a, c) => a + (STPCT[c.state] ?? 0), 0) / (chn.length || 1)) : (STPCT[t.state] ?? 0);
+    const pct = isParent ? pctOf(t) : (STPCT[t.state] ?? 0);
     const acceptN = isParent ? chn.filter((c) => c.state === '待验收').length : 0;
     const collapsed = tState.collapsed.has(t.id);
     const twist = isParent ? `<span class="twist2" onclick="event.stopPropagation();tToggle('${esc(t.id)}')">${collapsed ? '▸' : '▾'}</span>`
       : (lv === 0 ? '<span class="twist2 none">▸</span>' : '<span class="twist2 none">·</span>');
-    return `<div class="trow2 ${isParent ? 'parent' : 'leaf'} ${lv ? 'lv1' : ''} ${acceptN ? 'hasaccept' : ''}" onclick="location.hash='#/t/${t.id}'">
+    return `<div class="trow2 ${isParent ? 'parent' : 'leaf'} ${lv ? 'lv' + Math.min(lv, 3) : ''} ${acceptN ? 'hasaccept' : ''}" onclick="location.hash='#/t/${t.id}'">
       ${twist}<span class="tid2">${esc(t.id)}</span><span class="tt2">${esc(t.title)}</span>
-      ${isParent ? `<span class="kids">${chn.length} 子单</span>` : ''}
+      ${isParent ? `<span class="kids">${chn.length} 子单${t.阶段 ? ' · ' + esc(t.阶段) : ''}</span>` : ''}
       <span class="mid">${!isParent ? fnPill(t.职能) + stPill(t.state) : ''}</span>
       <div class="prog"><span class="bar"><i style="width:${pct}%"></i></span><span class="pv">${pct}%</span></div>
       ${acceptN ? `<button class="accept-mini" onclick="event.stopPropagation();tAcceptAll('${esc(t.id)}')">✓ 验收子单×${acceptN}</button>` : ''}
@@ -517,13 +522,21 @@ async function viewTree() {
     </div>`;
   };
   let html = ''; let count = 0, treeN = 0;
-  parents.forEach((p) => {
+  const renderSub = (p, lv) => {
     const chAll = kids[p.id] || [];
-    const ch = chAll.filter((c) => stOk(c) && fnOk(c));
-    if (!ch.length && !stOk(p)) return;
-    treeN++; count++;
-    html += rowHtml(p, 0, true, chAll);
-    if (!tState.collapsed.has(p.id)) ch.forEach((c) => { count++; html += rowHtml(c, 1, false, []); });
+    count++;
+    html += rowHtml(p, lv, true, chAll);
+    if (tState.collapsed.has(p.id)) return;
+    for (const c of chAll) {
+      if (parentSet.has(c.id)) { if (anyVisible(c) || stOk(c)) renderSub(c, lv + 1); }
+      else if (stOk(c) && fnOk(c)) { count++; html += rowHtml(c, lv + 1, false, []); }
+    }
+  };
+  // 只有根父单（自己没有在场父亲的）开树；中间层父单在递归里渲染——D42 前的单层写法曾把 TK-15 重复画成两棵树
+  const roots = parents.filter((p) => !(p.父单 && byId[p.父单]));
+  roots.forEach((p) => {
+    if (!anyVisible(p) && !stOk(p)) return;
+    treeN++; renderSub(p, 0);
   });
   topLeaves.filter((t) => stOk(t) && fnOk(t)).forEach((t) => { count++; html += rowHtml(t, 0, false, []); });
   const fns = ['', '策划', '程序', '美术', 'QA'];
