@@ -80,7 +80,7 @@ function charter(root, 职能) {
 }
 
 // 工单 → 执行提示词（岗位协议 + 范围/不要做/验收标准；中文走 stdin 防 argv 乱码）
-function buildPrompt(root, t, proj) {
+function buildPrompt(root, t, proj, cfg = {}) {
   const role = router.taskRole(t);
   const ch = charter(root, role);
   const ws = proj.workspace;
@@ -93,12 +93,20 @@ function buildPrompt(root, t, proj) {
     '', '=== 工单正文 ===', t.body || '（无正文）',
     '', '完成后按通用章程的回执格式输出完工报告，它会作为回执存档。',
   ];
-  if (role === 'orchestrator') lines.push('',
+  if (role === 'orchestrator') {
+    const maxTasks = Number((cfg.orchestration || {}).maxTasks || 20);
+    const allowedRoles = (Object.keys(cfg.roles || {}).length ? Object.keys(cfg.roles) : (cfg.职能 || []))
+      .filter((name) => name !== 'orchestrator' || (cfg.orchestration || {}).allowNested === true);
+    const planFile = orchestration.configuredPlanFile(cfg);
+    lines.push('',
     '=== 机器可读计划（必须输出）===',
-    '完成仓库分析后，在回复末尾输出一个 ```json 代码块，且必须符合以下结构：',
+    `最多 ${maxTasks} 张子任务；role 只能使用：${allowedRoles.join('、')}。不得发明 product、design、qa、security、fullstack 等未注册角色；复合工作必须拆分或选择最接近的已注册角色。`,
+    `完成仓库分析后，把完整 JSON 写入项目内 ${planFile}，并在最终回复末尾原样输出同一份 \`\`\`json 代码块。两处至少一处必须成功。`,
+    'JSON 必须符合以下结构：',
     '{"summary":"计划摘要","tasks":[{"key":"contract","title":"任务标题","role":"backend","description":"范围","dependsOn":[],"requiredCapabilities":["coding"],"writeScope":["server/**"],"acceptance":["可客观验证的标准"]}]}',
     'key 只用英文字母开头的字母/数字/下划线/横线；dependsOn 只能引用本计划内 key；不要创建新的 orchestrator 子任务。',
     '前后端并行时优先先建接口契约任务；共享文件交给 integrator 或通过依赖串行化。');
+  }
   if (ws && ws.integration) {
     const merged = [...(ws.integration.merged || []), ...(ws.integration.already || [])]
       .map((x) => `${x.id}@${String(x.commit).slice(0, 10)}`).join('、') || '无';
@@ -233,6 +241,13 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       }
     } else {
       if (!cur || cur.state !== '在途') return; // 期间被收回/废弃，不硬交
+      let resolvedPlan = null;
+      if (routeRole === 'orchestrator') {
+        const rawPath = path.join(root, '回执', `${t.id}.provider-output.md`);
+        fs.mkdirSync(path.dirname(rawPath), { recursive: true });
+        fs.writeFileSync(rawPath, String(note || ''), 'utf8');
+        resolvedPlan = orchestration.resolvePlan(cfg, note, entry.workspace && entry.workspace.path);
+      }
       if (entry.workspace && entry.workspace.isolated) {
         const checkpoint = worktrees.checkpoint(cfg, entry.workspace, cur);
         entry.workspace = { ...entry.workspace, ...checkpoint, commit: checkpoint.commit || entry.workspace.commit, completedAt: new Date().toISOString() };
@@ -240,8 +255,8 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
         journal.append(root, `Git 检查点 ${t.id} → ${entry.workspace.commit ? String(entry.workspace.commit).slice(0, 10) : '未提交'}（${entry.workspace.branch}）`);
       }
       if (routeRole === 'orchestrator') {
-        const planned = orchestration.consume(root, cfg, cur, note);
-        journal.append(root, `Orchestrator 计划落盘 ${t.id} → ${planned.children.length} 张待投子单（${planned.children.join('、')}）`);
+        const planned = { ...resolvedPlan, ...orchestration.materialize(root, cfg, cur, resolvedPlan.plan) };
+        journal.append(root, `Orchestrator 计划落盘 ${t.id} → ${planned.children.length} 张待投子单（来源：${planned.source}；${planned.children.join('、')}）`);
       }
       const r = lifecycle.交产出(root, t.id, note);
       if (r.ok) journal.append(root, `执行完成 ${t.id}（${agentId} · ${kind}）`);
@@ -329,7 +344,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   const prompt = kind === '质检' ? buildQaPrompt(root, t, proj, receiptPath)
     : kind === '代核' ? buildAuditPrompt(root, t, proj, receiptPath)
     : kind === '代裁' ? buildArbPrompt(root, t, proj, receiptPath)
-    : buildPrompt(root, t, proj);
+    : buildPrompt(root, t, proj, cfg);
   let child;
   try {
     child = spawn(cmd, args, {

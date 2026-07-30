@@ -1157,6 +1157,8 @@ async function viewDetail(id) {
   if (d.state === '在途') ops.push(['收回', '从执行方取回在途单', `act2('收回','${id}')`]);
   if (fm.待复核) ops.push(['解除复核', `上游 ${esc(fm.待复核.锚号 || '')} 已核对新版`, `act2('解除复核','${id}')`]); // D36
   if (d.state === '执行失败') { // D31 分诊三出路（废弃在下方通用项）
+    if ((fm.role || fm.角色 || fm.职能) === 'orchestrator' && fm.workspace)
+      ops.push(['恢复计划', '从已保存的 .studio/plan.json 落子单，不再次调用模型', `act2('恢复计划','${id}')`]);
     ops.push(['重投', `清执行痕迹回池重领${fm.失败原因 ? '（' + esc(String(fm.失败原因).slice(0, 24)) + '）' : ''}`, `act3('失败分诊','${id}','重投')`]);
     ops.push(['上呈', '转待定夺，由你拍板', `act3('失败分诊','${id}','上呈')`]);
   }

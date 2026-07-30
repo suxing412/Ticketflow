@@ -294,6 +294,17 @@ const waitUntil = async (fn, timeout = 8000) => {
     assert.ok(p3.includes('工单正文'), '无章程目录也能组提示词');
   });
 
+  await t('Orchestrator 提示词明确计划文件、任务上限和允许角色', async () => {
+    const root = makeRoot();
+    const cfg = { roles: { orchestrator: {}, backend: {}, frontend: {}, reviewer: {}, integrator: {} }, orchestration: { maxTasks: 12 } };
+    const fake = { id: 'PLAN-1', fm: { role: 'orchestrator', 职能: 'orchestrator', title: '拆计划' }, body: '## 范围\n规划' };
+    const prompt = runner.buildPrompt(root, fake, { name: 'TK', path: 'D:/x' }, cfg);
+    assert.ok(prompt.includes('.studio/plan.json'));
+    assert.ok(prompt.includes('最多 12 张子任务'));
+    assert.ok(prompt.includes('backend、frontend、reviewer、integrator'));
+    assert.ok(prompt.includes('不得发明 product'));
+  });
+
   await t('模型分级（D38）：个体覆盖 > 池默认 > CLI 默认；质检/代核走裁判档', async () => {
     const cfgM = { ...CFG, 模型: { codex默认: '', claude默认: 'sonnet', 质检: 'opus', 代核: 'opus' } };
     assert.equal(runner.pickModel(cfgM, '执行', { 模型: 'haiku' }, 'claude'), 'haiku', '个体覆盖优先');

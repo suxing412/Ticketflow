@@ -1,6 +1,8 @@
 // providers.test.js — Provider Adapter 注册、旧 CLI 兼容与通用厂商命令。
 const assert = require('node:assert');
 const registry = require('../lib/providers/registry');
+const codexProvider = require('../lib/providers/codex-cli');
+const claudeProvider = require('../lib/providers/claude-cli');
 
 let passed = 0; const t = (name, fn) => { fn(); passed++; console.log('  ✓ ' + name); };
 console.log('providers Provider Adapter 测试');
@@ -15,6 +17,19 @@ t('Codex Adapter 保持 stdin 与模型参数协议', () => {
   const run = registry.create(cfg, 'codex').buildInvocation({ model: 'gpt-x' });
   assert.deepEqual(run.args.slice(-3), ['-m', 'gpt-x', '-']);
   assert.equal(run.promptMode, 'stdin');
+});
+
+t('Provider CLI 支持跨机器环境变量显式定位', () => {
+  const oldCodex = process.env.CODEX_CLI_PATH; const oldClaude = process.env.CLAUDE_CLI_PATH;
+  process.env.CODEX_CLI_PATH = process.execPath;
+  process.env.CLAUDE_CLI_PATH = process.execPath;
+  try {
+    assert.equal(codexProvider.defaultCommand(), process.execPath);
+    assert.equal(claudeProvider.defaultCommand(), process.execPath);
+  } finally {
+    if (oldCodex == null) delete process.env.CODEX_CLI_PATH; else process.env.CODEX_CLI_PATH = oldCodex;
+    if (oldClaude == null) delete process.env.CLAUDE_CLI_PATH; else process.env.CLAUDE_CLI_PATH = oldClaude;
+  }
 });
 
 t('通用 command-cli 可接入 Kimi 等后续厂商', () => {

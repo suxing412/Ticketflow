@@ -74,7 +74,8 @@
   },
   "orchestration": {
     "maxTasks": 20,
-    "allowNested": false
+    "allowNested": false,
+    "planFile": ".studio/plan.json"
   },
   "workspace": {
     "mode": "worktree",
@@ -99,7 +100,7 @@
   },
   "闸值": { "待验收积压闸": 8, "QA自修上限": 2, "滞留超时小时": 4 },
   "推荐": { "精力档": "高", "速度窗口小时": 2, "每档处理数": 2 },
-  "网络": { "代理默认": "http://127.0.0.1:7890" },
+  "网络": { "代理默认": "" },
   "执行器": {
     "间隔秒": 15,
     "试跑耗时秒下限": 3,

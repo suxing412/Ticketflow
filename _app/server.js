@@ -19,7 +19,7 @@ const worktrees = require('./lib/workspace/worktree');
 
 const ROOT = config.resolveRoot();
 let cfg = null; let initError = null;
-if (!ROOT) initError = '未找到监制台仓库（缺 studio.config.json）。';
+if (!ROOT) initError = '未找到运行目录（缺 studio.config.json）。请先运行分发套件中的“部署.bat”，不要直接启动 _app\\dist 里的裸 EXE；源码运行请设置 STUDIO_ROOT。';
 else { try { cfg = config.load(ROOT); store.ensureDirs(ROOT); } catch (e) { initError = '读配置失败：' + e.message; } }
 
 const app = express();
@@ -255,7 +255,7 @@ app.get('/api/env', async (req, res) => {
     item('node', '绿', process.version),
     ...probeRows.map(({ provider, result }) => item(`${provider.name} · ${provider.adapter}`, result.ok ? '绿' : '黄', result.note + (result.ok ? '' : `（${provider.name} 实弹不可用）`))),
     // 探针标准=运行时标准：启动已按 环境→注册表→config默认 注入，这里报有效值+来源
-    item('代理', proxy ? '绿' : '黄', proxy ? proxy + '（' + (process.env.__STUDIO_PROXY_SRC || '环境变量') + '）' : '未解析到（环境/注册表/config 均空）'),
+    item('网络', '绿', proxy ? `应用层代理 ${proxy}（${process.env.__STUDIO_PROXY_SRC || '环境变量'}）` : '系统直连/VPN（未配置应用层代理）'),
   ];
 
   // 组2 凭据与额度链路：只检查实际启用且已有专用探针的 Provider。
@@ -451,6 +451,30 @@ const ACTIONS = {
   定夺: (b) => life.定夺(ROOT, b.id, b.决定),
   验收: (b) => life.验收(ROOT, b.id, !!b.通过),
   失败分诊: (b) => life.失败分诊(ROOT, b.id, b.决定), // D31：重投/上呈（废弃走通用废弃）
+  恢复计划: (b) => {
+    const t = store.find(ROOT, b.id);
+    if (!t) return { ok: false, error: '不存在' };
+    if (t.state !== '执行失败') return { ok: false, error: `当前不在执行失败（${t.state}）` };
+    const role = t.fm.role || t.fm.角色 || t.fm.职能;
+    if (role !== 'orchestrator') return { ok: false, error: '只有 Orchestrator 工单可恢复计划' };
+    const workspacePath = t.fm.workspace && t.fm.workspace.path;
+    const rawPath = path.join(ROOT, '回执', `${t.id}.provider-output.md`);
+    const raw = fs.existsSync(rawPath) ? fs.readFileSync(rawPath, 'utf8') : '';
+    const resolved = orchestration.resolvePlan(cfg, raw, workspacePath);
+    let parent = t;
+    if (t.fm.workspace && t.fm.workspace.isolated) {
+      const checkpoint = worktrees.checkpoint(cfg, t.fm.workspace, t);
+      const workspace = { ...t.fm.workspace, ...checkpoint, commit: checkpoint.commit || t.fm.workspace.commit, completedAt: new Date().toISOString() };
+      store.update(ROOT, t.id, (fm) => { fm.workspace = workspace; });
+      parent = store.find(ROOT, t.id);
+    }
+    const planned = { ...resolved, ...orchestration.materialize(ROOT, cfg, parent, resolved.plan) };
+    const receipt = raw || `# Orchestrator 计划恢复 ${t.id}\n\n结构化计划来源：${planned.source}\n\n子工单：${planned.children.join('、')}\n`;
+    const moved = life.恢复计划产出(ROOT, t.id, receipt);
+    if (!moved.ok) return moved;
+    journal.append(ROOT, `Orchestrator 无模型恢复 ${t.id} → ${planned.children.length} 张待投子单（来源：${planned.source}；检查点：${parent.fm.workspace && parent.fm.workspace.commit || '无'}）`);
+    return { ok: true, source: planned.source, children: planned.children };
+  },
   解除复核: (b) => life.解除待复核(ROOT, b.id, b.说明), // D36：核对新版后解除
 };
 app.post('/api/act/:name', (req, res) => {

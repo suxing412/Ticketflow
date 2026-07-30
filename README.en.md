@@ -37,8 +37,8 @@ failure triage, bookkeeping and notifications are all automatic.
 3. **The only acceptance criterion: the "环境" (environment) light on the overview page reads 就绪 (Ready).**
    Behind it is a four-group full-pipeline self-check; degraded/blocked states list concrete fixes per item.
 
-Prerequisites: Windows 10/11, codex CLI, Claude Code CLI (logged in), and a proxy if your
-network needs one (auto-resolved and injected at boot).
+Prerequisites: Windows 10/11 x64 and at least one installed and authenticated Provider CLI.
+Direct connections and system VPNs do not require an application-level proxy.
 
 ## Concepts in 30 seconds
 

@@ -49,9 +49,14 @@ Provider Adapter 只负责生成进程调用，不参与工单状态、角色判
 
 ### Orchestrator 与确定性 DAG
 
-Orchestrator 的自然语言回复末尾必须带一个 JSON 计划。AI 负责提出拆分；内核负责验证角色、任务数量、
-依赖引用、循环依赖、写入范围和递归 Orchestrator 禁令。验证全部通过后才会创建稳定编号的待投子工单；
-重规划不会覆盖已经开工的子单。
+Orchestrator 必须把同一份 JSON 计划写入项目内 `.studio/plan.json`，并尽量在自然语言回复末尾附带
+JSON 代码块。内核优先读取回复，回复被 CLI 截断或遗漏 JSON 时自动从计划文件恢复。Provider 原始回复
+会另存到监制台 `回执/<工单号>.provider-output.md`，解析失败后仍可诊断，不必盲目重跑。
+
+提示词会明确列出本次允许的角色与 `maxTasks`，禁止模型发明未注册角色。AI 负责提出拆分；内核负责
+验证角色、任务数量、依赖引用、循环依赖、写入范围和递归 Orchestrator 禁令。验证全部通过后才会创建
+稳定编号的待投子工单；重规划不会覆盖已经开工的子单。所有子单自动依赖父 Orchestrator 工单，使父单
+验收完成后，计划文档和契约检查点能在下游 worktree 开工前被合并。
 
 ```json
 {
@@ -116,7 +121,8 @@ worktree 是并发写隔离，不是安全沙箱。Provider CLI 仍拥有本机�
   },
   "orchestration": {
     "maxTasks": 20,
-    "allowNested": false
+    "allowNested": false,
+    "planFile": ".studio/plan.json"
   },
   "workspace": {
     "mode": "worktree",

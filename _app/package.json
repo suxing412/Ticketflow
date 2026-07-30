@@ -24,8 +24,9 @@
     "appId": "local.studio.console",
     "productName": "监制台",
     "directories": {
-      "output": "D:/studio-build/dist"
+      "output": "dist"
     },
+    "electronDist": "node_modules/electron/dist",
     "files": [
       "main.js",
       "server.js",

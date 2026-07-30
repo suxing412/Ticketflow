@@ -5,6 +5,18 @@ const { app, BrowserWindow, shell, dialog, ipcMain, Notification } = require('el
 const { start } = require('./server');
 
 let win = null;
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  });
+}
 
 async function createWindow() {
   const { port, initError } = await start();
@@ -81,8 +93,9 @@ ipcMain.handle('page:capture', async () => {
   } catch (e) { return { ok: false, error: String(e) }; }
 });
 
-app.whenReady().then(createWindow).catch((e) => {
+if (hasSingleInstanceLock) app.whenReady().then(createWindow).catch((e) => {
   console.error('启动失败：', e.message);
+  dialog.showErrorBox('监制台启动失败', String(e && e.message || e));
   app.quit();
 });
 app.on('window-all-closed', () => app.quit()); // 关窗即退出

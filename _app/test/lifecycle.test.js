@@ -33,6 +33,16 @@ t('交产出写回执文件', () => {
   assert.ok(require('fs').existsSync(require('path').join(root, '回执', 'P-03.md')));
 });
 
+t('Orchestrator 解析失败后可从已保存计划恢复到待验收', () => {
+  const root = makeRoot();
+  seed(root, '执行失败', { id: 'PLAN-RECOVER', role: 'orchestrator', 职能: 'orchestrator', 失败原因: '缺少 JSON' });
+  const r = life.恢复计划产出(root, 'PLAN-RECOVER', '# 已从结构化计划恢复');
+  assert.ok(r.ok);
+  assert.equal(st(root, 'PLAN-RECOVER'), '待验收');
+  assert.ok(store.find(root, 'PLAN-RECOVER').fm.计划恢复时间);
+  assert.ok(require('fs').existsSync(require('path').join(root, '回执', 'PLAN-RECOVER.md')));
+});
+
 t('QA 自修循环：不过→在途(自修+1)，达上限→待定夺', () => {
   const root = makeRoot();
   seed(root, '质检', { id: 'P-04', QA: '开', 主办: 'A' });

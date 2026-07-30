@@ -6,10 +6,11 @@ const path = require('path');
 function defaultCommand() {
   const home = os.homedir();
   const candidates = [
-    path.join(home, 'AppData', 'Roaming', 'npm', 'claude.cmd'),
+    process.env.CLAUDE_CLI_PATH,
+    process.env.APPDATA && path.join(process.env.APPDATA, 'npm', 'claude.cmd'),
     path.join(home, '.local', 'bin', 'claude.exe'),
     'claude',
-  ];
+  ].filter(Boolean);
   return candidates.find((candidate) => candidate === 'claude' || fs.existsSync(candidate));
 }
 

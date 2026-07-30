@@ -1,5 +1,7 @@
 // orchestration/plan.js — Orchestrator 输出协议、DAG 校验与子工单物化。
 // AI 只提出计划；确定性内核负责校验角色、依赖、数量和写区后才允许落盘。
+const fs = require('fs');
+const path = require('path');
 const store = require('../core/store');
 
 const arr = (value) => Array.isArray(value) ? value : value == null || value === '' ? [] : [value];
@@ -20,6 +22,30 @@ function extractJson(text) {
     } catch { /* 尝试下一个候选 */ }
   }
   throw new Error('Orchestrator 输出中未找到合法的 JSON 计划（需要 tasks 数组）');
+}
+
+function configuredPlanFile(cfg) {
+  const value = (cfg.orchestration || {}).planFile || '.studio/plan.json';
+  const clean = String(value).trim().replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!clean || path.isAbsolute(clean) || clean.split('/').includes('..')) throw new Error('orchestration.planFile 必须是项目内相对路径');
+  return clean;
+}
+
+function resolvePlan(cfg, output, workspacePath) {
+  const sources = [{ name: 'Provider 最终回复', text: String(output || '') }];
+  const relative = configuredPlanFile(cfg);
+  const filePath = workspacePath ? path.resolve(workspacePath, relative) : null;
+  if (filePath && fs.existsSync(filePath)) {
+    sources.push({ name: relative, text: fs.readFileSync(filePath, 'utf8'), filePath });
+  }
+  const errors = [];
+  for (const source of sources) {
+    try {
+      const parsed = extractJson(source.text);
+      return { plan: normalizePlan(cfg, parsed), source: source.name, filePath: source.filePath || null };
+    } catch (e) { errors.push(`${source.name}：${e.message}`); }
+  }
+  throw new Error(`Orchestrator 计划不可用；${errors.join('；')}`);
 }
 
 function normalizePlan(cfg, value) {
@@ -101,7 +127,8 @@ function materialize(root, cfg, parent, plan) {
       父单: parent.id, 规划来源: parent.id, 规划Key: task.key,
       创建时间: new Date().toISOString().slice(0, 10), 更新时间: new Date().toISOString(),
     };
-    const deps = task.dependsOn.map((key) => idByKey[key]);
+    // 所有子单都依赖父 Orchestrator：父单验收完成后才可领单，并自动合并父单的计划/契约检查点。
+    const deps = [parent.id, ...task.dependsOn.map((key) => idByKey[key])];
     if (deps.length) fm.依赖 = deps;
     if (task.requiredCapabilities.length) fm.required_capabilities = task.requiredCapabilities;
     if (task.writeScope.length) fm.write_scope = task.writeScope;
@@ -127,10 +154,9 @@ function materialize(root, cfg, parent, plan) {
   return { ok: true, children, created, updated, retained, idByKey };
 }
 
-function consume(root, cfg, parent, output) {
-  const parsed = extractJson(output);
-  const plan = normalizePlan(cfg, parsed);
-  return { plan, ...materialize(root, cfg, parent, plan) };
+function consume(root, cfg, parent, output, options = {}) {
+  const resolved = resolvePlan(cfg, output, options.workspacePath);
+  return { ...resolved, ...materialize(root, cfg, parent, resolved.plan) };
 }
 
-module.exports = { extractJson, normalizePlan, bodyOf, materialize, consume };
+module.exports = { extractJson, configuredPlanFile, resolvePlan, normalizePlan, bodyOf, materialize, consume };

@@ -182,6 +182,23 @@ function 失败分诊(root, id, 决定) {
   return { ok: false, error: `未知决定：${决定}（重投/上呈，废弃走通用废弃）` };
 }
 
+// Orchestrator 已完成仓库工作、仅结构化解析失败时，从保存的计划文件恢复，不再次调用 Provider。
+function 恢复计划产出(root, id, receipt) {
+  const t = store.find(root, id);
+  if (!t) return { ok: false, error: '不存在' };
+  if (t.state !== '执行失败') return { ok: false, error: `当前不在执行失败（${t.state}）` };
+  const role = t.fm.role || t.fm.角色 || t.fm.职能;
+  if (role !== 'orchestrator') return { ok: false, error: '只有 Orchestrator 工单可恢复结构化计划' };
+  fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+  fs.writeFileSync(path.join(root, '回执', `${id}.md`), String(receipt || '# Orchestrator 计划恢复\n'), 'utf8');
+  const r = store.move(root, id, '执行失败', '待验收', (fm) => {
+    fm.交付时间 = nowIso();
+    fm.计划恢复时间 = nowIso();
+  }, nowIso());
+  if (r.ok) journal.append(root, `Orchestrator 计划恢复 ${id}（执行失败→待验收 · 未再次调用 Provider）`);
+  return r;
+}
+
 // 上游改动标记（复查#8 = D36）：策划案锚号改版 → 引用它的未完成单全部标待复核。
 // 被标记的单：池中不可领、在途不起新执行、交产出被拒——直到核对新版后解除。
 function 标记待复核(root, 锚号, 说明) {
@@ -216,6 +233,6 @@ function 返工(root, oldId, newId, fm, body) {
 }
 
 module.exports = {
-  定稿, 投池, 交产出, QA裁定, 定夺, 验收, 撤回, 废弃, 收回, 滞留检查, 返工, 执行失败, 失败分诊,
+  定稿, 投池, 交产出, QA裁定, 定夺, 验收, 撤回, 废弃, 收回, 滞留检查, 返工, 执行失败, 失败分诊, 恢复计划产出,
   标记待复核, 解除待复核,
 };
