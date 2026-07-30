@@ -2,10 +2,13 @@
 // 领单 = store.move(池→在途)，改名的原子性保证并发同抢只有一个成功。
 const store = require('./core/store');
 const gates = require('./gates');
+const router = require('./routing/router');
 
 const PRI = { P0: 0, P1: 1, P2: 2, P3: 3 };
 
 function poolFor(cfg, 职能) {
+  const roleCfg = cfg.roles && cfg.roles[职能];
+  if (roleCfg && roleCfg.defaultProvider) return roleCfg.defaultProvider;
   for (const [pool, c] of Object.entries(cfg.执行池 || {})) {
     if ((c.职能 || []).includes(职能)) return pool;
   }
@@ -41,7 +44,7 @@ function criticalSet(root) {
 // 在池单，可选按职能过滤。排序：优先级 > 红链（D43⑤ 同优先级内关键路径先走，可用 执行器.红链优先=false 关）> 创建时间。
 function listPool(root, cfg, 职能) {
   let items = store.list(root, '池');
-  if (职能) items = items.filter((t) => t.fm.职能 === 职能);
+  if (职能) items = items.filter((t) => router.taskRole(t) === 职能);
   const crit = (cfg && cfg.执行器 && cfg.执行器.红链优先 === false) ? new Set() : criticalSet(root);
   items.sort((a, b) => (PRI[a.fm.优先级] ?? 9) - (PRI[b.fm.优先级] ?? 9)
     || (crit.has(b.id) ? 1 : 0) - (crit.has(a.id) ? 1 : 0)
@@ -66,12 +69,8 @@ async function claim(root, cfg, agentId, now) {
   const agent = (cfg.agents || []).find((a) => a.id === agentId);
   if (!agent) return { ok: false, error: `agent 未注册：${agentId}` };
   if (agent.上线 === false) return { ok: false, error: `${agentId} 未上线` };
-  const 职能 = agent.职能;
-  const poolName = agent.执行池 || poolFor(cfg, 职能);
-  if (!poolName) return { ok: false, error: `${职能} 未绑定执行池` };
-
-  const gate = await gates.canPull(root, cfg, poolName);
-  if (!gate.allowed) return { ok: false, error: gate.reason, resetAt: gate.resetAt, gated: true };
+  const 职能 = router.agentRole(agent);
+  if (!职能) return { ok: false, error: `${agentId} 未绑定角色` };
 
   const fl = inFlight(root);
   // 一人一张（D3b）：该 agent 已持单是唯一的数量约束——
@@ -79,15 +78,30 @@ async function claim(root, cfg, agentId, now) {
   if (fl.some((t) => t.fm.主办 === agentId)) return { ok: false, error: `${agentId} 已持有在途单（一人一张）`, full: true };
 
   const nowIso = now || new Date().toISOString();
+  let lastGate = null;
   for (const t of listPool(root, cfg, 职能)) {
     if (!depsSatisfied(root, t)) continue;
     if (t.fm.待复核) continue; // D36：上游改版未核对的单不派活
+    const candidates = router.rankProviders(root, cfg, { agent, task: t, kind: '执行' });
+    let selected = null;
+    for (const candidate of candidates) {
+      const gate = await gates.canPull(root, cfg, candidate.name);
+      if (gate.allowed) { selected = candidate; break; }
+      lastGate = { ...gate, provider: candidate.name };
+    }
+    if (!selected) continue;
+    const poolName = selected.name;
     const r = store.move(root, t.id, '池', '在途', (fm) => {
-      fm.主办 = agentId; fm.执行池 = poolName; fm.领单时间 = nowIso;
+      fm.主办 = agentId;
+      fm.provider = poolName;       // V2：角色与厂商解耦后的实际路由结果
+      fm.执行池 = poolName;          // 兼容旧 UI / 旧工单读取
+      fm.路由分 = selected.score === Infinity ? '固定' : selected.score;
+      fm.领单时间 = nowIso;
     }, nowIso);
-    if (r.ok) return { ok: true, id: t.id, agent: agentId, 执行池: poolName };
+    if (r.ok) return { ok: true, id: t.id, agent: agentId, provider: poolName, 执行池: poolName, route: selected };
     // r 失败多为被并发抢走 → 试队列下一张
   }
+  if (lastGate) return { ok: false, error: lastGate.reason, resetAt: lastGate.resetAt, provider: lastGate.provider, gated: true };
   return { ok: false, error: '无可领单（池空 / 依赖未满足 / 都被抢走）', empty: true };
 }
 

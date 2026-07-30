@@ -12,6 +12,10 @@ const life = require('./lib/lifecycle');
 const trace = require('./lib/trace');
 const quota = require('./lib/quota');
 const journal = require('./lib/journal');
+const providerRegistry = require('./lib/providers/registry');
+const providerRouter = require('./lib/routing/router');
+const providerHistory = require('./lib/routing/history');
+const worktrees = require('./lib/workspace/worktree');
 
 const ROOT = config.resolveRoot();
 let cfg = null; let initError = null;
@@ -39,10 +43,12 @@ app.get('/api/board', (req, res) => {
   const snap = store.snapshot(ROOT);
   const out = {};
   for (const s of store.STATES) out[s] = snap[s].map((t) => ({
-    id: t.id, title: t.fm.title, 职能: t.fm.职能, 优先级: t.fm.优先级, 规模: t.fm.规模,
+    id: t.id, title: t.fm.title, 职能: t.fm.职能, role: t.fm.role || t.fm.角色 || t.fm.职能,
+    provider: t.fm.provider || t.fm.供应商 || t.fm.执行池 || null, 优先级: t.fm.优先级, 规模: t.fm.规模,
     QA: t.fm.QA, 验收方式: t.fm.验收方式, 主办: t.fm.主办 || null, 项目: t.fm.项目 || null, // D42 多项目视界按此归属
     阶段: t.fm.阶段 || null, 预计时间: t.fm.预计时间 || null, // D43 流程视图用
     父单: t.fm.父单 || null, 依赖: t.fm.依赖 || null,
+    workspace: t.fm.workspace ? { mode: t.fm.workspace.mode, branch: t.fm.workspace.branch || null, commit: t.fm.workspace.commit || null, isolated: !!t.fm.workspace.isolated } : null,
     领单时间: t.fm.领单时间 || null, 交付时间: t.fm.交付时间 || null, 滞留告警: !!t.fm.滞留告警,
   }));
   res.json({ states: store.STATES, board: out });
@@ -92,11 +98,17 @@ const saveCfg = () => fs.writeFileSync(path.join(ROOT, 'studio.config.json'), JS
 app.post('/api/config/pool', (req, res) => {
   if (!ready(res)) return;
   const { pool, key, value } = req.body || {};
-  if (!['codex', 'claude'].includes(pool)) return res.status(400).json({ error: '未知池：' + pool });
+  const known = providerRegistry.configs(cfg);
+  if (!known[pool]) return res.status(400).json({ error: '未知 Provider：' + pool });
   if (!['阈值', '周阈值'].includes(key)) return res.status(400).json({ error: '不可调整：' + key });
   const v = Number(value);
   if (!Number.isInteger(v) || v < 1 || v > 100) return res.status(400).json({ error: '取值须在 1–100' });
-  cfg.执行池[pool][key] = v; saveCfg();
+  if (cfg.providers && cfg.providers[pool]) {
+    cfg.providers[pool].quota = cfg.providers[pool].quota || {};
+    cfg.providers[pool].quota[key] = v;
+  }
+  if (cfg.执行池 && cfg.执行池[pool]) cfg.执行池[pool][key] = v;
+  saveCfg();
   journal.append(ROOT, `执行池阈值调整：${pool}.${key} → ${v}%`);
   res.json({ ok: true, 执行池: cfg.执行池 });
 });
@@ -114,7 +126,7 @@ app.post('/api/config/model', (req, res) => {
 app.post('/api/config/model-add', (req, res) => {
   if (!ready(res)) return;
   const { pool, name } = req.body || {};
-  if (!['codex', 'claude'].includes(pool)) return res.status(400).json({ error: '未知池：' + pool });
+  if (!providerRegistry.configs(cfg)[pool]) return res.status(400).json({ error: '未知 Provider：' + pool });
   const v = String(name || '').trim();
   if (!/^[\w.\-]{2,40}$/.test(v)) return res.status(400).json({ error: '模型名只允许字母数字点横线（2–40 位）' });
   cfg.模型 = cfg.模型 || {}; cfg.模型.可选 = cfg.模型.可选 || {};
@@ -230,37 +242,47 @@ app.get('/api/env', async (req, res) => {
   });
   const item = (名称, 级别, note) => ({ 名称, 级别, note }); // 级别: 绿/黄/红
 
-  // 组1 运行时与 CLI（探针标准=实弹标准：claude 走执行器同款绝对路径解析）
-  const claudeCmd = runner.resolveCli('claude').cmd;
-  const [codexP, claudeP] = await Promise.all([probe('codex', ['--version']), probe(claudeCmd, ['--version'])]);
+  // 组1 运行时与 CLI：按已启用 Provider 动态探测，不再假定系统永远只有 Codex/Claude。
+  const enabledProviders = providerRegistry.list(cfg).filter((provider) => provider.enabled !== false);
+  const probeRows = await Promise.all(enabledProviders.map(async (provider) => {
+    try {
+      const invocation = providerRegistry.create(cfg, provider.name).buildInvocation({ model: provider.defaultModel || '' });
+      return { provider, result: await probe(provider.probeCommand || invocation.cmd, provider.probeArgs || ['--version']) };
+    } catch (e) { return { provider, result: { ok: false, note: e.message } }; }
+  }));
   const proxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || null;
   const 运行时 = [
     item('node', '绿', process.version),
-    item('codex CLI', codexP.ok ? '绿' : '黄', codexP.note + (codexP.ok ? '' : '（codex 池实弹不可用）')),
-    item('claude CLI', claudeP.ok ? '绿' : '黄', claudeP.note + (claudeP.ok ? (claudeCmd !== 'claude' ? '（~/.local/bin，免 PATH）' : '') : '（claude 池实弹不可用）')),
+    ...probeRows.map(({ provider, result }) => item(`${provider.name} · ${provider.adapter}`, result.ok ? '绿' : '黄', result.note + (result.ok ? '' : `（${provider.name} 实弹不可用）`))),
     // 探针标准=运行时标准：启动已按 环境→注册表→config默认 注入，这里报有效值+来源
     item('代理', proxy ? '绿' : '黄', proxy ? proxy + '（' + (process.env.__STUDIO_PROXY_SRC || '环境变量') + '）' : '未解析到（环境/注册表/config 均空）'),
   ];
 
-  // 组2 凭据与额度链路（2026-07-11 限流风波的直接教训）
+  // 组2 凭据与额度链路：只检查实际启用且已有专用探针的 Provider。
   const 凭据额度 = [];
-  try {
-    const cred = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', '.credentials.json'), 'utf8')).claudeAiOauth;
-    if (!cred || !cred.accessToken) 凭据额度.push(item('claude 凭据', '红', '凭据文件无 token——claude auth login'));
-    else if (cred.expiresAt > Date.now()) 凭据额度.push(item('claude 凭据', '绿', 'token 有效至 ' + new Date(cred.expiresAt).toTimeString().slice(0, 5)));
-    else if (cred.refreshToken) 凭据额度.push(item('claude 凭据', '黄', 'token 过期，待自动续期（有 refresh）'));
-    else 凭据额度.push(item('claude 凭据', '红', 'token 过期且无 refresh——claude auth login'));
-  } catch { 凭据额度.push(item('claude 凭据', '红', '未登录（无凭据文件）——claude auth login')); }
-  try {
-    const th = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', '.studio-usage-throttle.json'), 'utf8'));
-    const minMs = Math.max(120, Number((cfg.quota || {}).claudeMinIntervalSeconds) > 0 ? Number(cfg.quota.claudeMinIntervalSeconds) : 300) * 1000;
-    if (th.lastGood && Date.now() - th.lastGood.at < minMs * 3) 凭据额度.push(item('claude 额度读数', '绿', new Date(th.lastGood.at).toTimeString().slice(0, 5) + ' 读数 · 5h ' + Math.round(th.lastGood.data.fiveHour.utilization) + '%'));
-    else if (th.lastGood) 凭据额度.push(item('claude 额度读数', '黄', '读数陈旧（' + new Date(th.lastGood.at).toTimeString().slice(0, 5) + '）' + (th.backoffMs > minMs ? ' · 失败退避中 ' + Math.round(th.backoffMs / 60000) + 'min' : '')));
-    else 凭据额度.push(item('claude 额度读数', '黄', '尚无成功读数' + (th.backoffMs > minMs ? '（退避中 ' + Math.round(th.backoffMs / 60000) + 'min）' : '')));
-  } catch { 凭据额度.push(item('claude 额度读数', '黄', '尚未查询过')); }
-  const rl = await require('./lib/quota').getRateLimits(cfg).catch(() => null);
-  凭据额度.push(rl ? item('codex 登录态', '绿', 'app-server 正常 · 5h ' + (rl.primary && rl.primary.usedPercent != null ? Math.round(rl.primary.usedPercent) + '%' : '—'))
-    : item('codex 登录态', '黄', 'app-server 无响应（未登录或未装，codex 额度盲飞）'));
+  const enabledNames = new Set(enabledProviders.map((provider) => provider.name));
+  if (enabledNames.has('claude')) {
+    try {
+      const cred = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', '.credentials.json'), 'utf8')).claudeAiOauth;
+      if (!cred || !cred.accessToken) 凭据额度.push(item('claude 凭据', '红', '凭据文件无 token——claude auth login'));
+      else if (cred.expiresAt > Date.now()) 凭据额度.push(item('claude 凭据', '绿', 'token 有效至 ' + new Date(cred.expiresAt).toTimeString().slice(0, 5)));
+      else if (cred.refreshToken) 凭据额度.push(item('claude 凭据', '黄', 'token 过期，待自动续期（有 refresh）'));
+      else 凭据额度.push(item('claude 凭据', '红', 'token 过期且无 refresh——claude auth login'));
+    } catch { 凭据额度.push(item('claude 凭据', '红', '未登录（无凭据文件）——claude auth login')); }
+    try {
+      const th = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', '.studio-usage-throttle.json'), 'utf8'));
+      const minMs = Math.max(120, Number((cfg.quota || {}).claudeMinIntervalSeconds) > 0 ? Number(cfg.quota.claudeMinIntervalSeconds) : 300) * 1000;
+      if (th.lastGood && Date.now() - th.lastGood.at < minMs * 3) 凭据额度.push(item('claude 额度读数', '绿', new Date(th.lastGood.at).toTimeString().slice(0, 5) + ' 读数 · 5h ' + Math.round(th.lastGood.data.fiveHour.utilization) + '%'));
+      else if (th.lastGood) 凭据额度.push(item('claude 额度读数', '黄', '读数陈旧（' + new Date(th.lastGood.at).toTimeString().slice(0, 5) + '）' + (th.backoffMs > minMs ? ' · 失败退避中 ' + Math.round(th.backoffMs / 60000) + 'min' : '')));
+      else 凭据额度.push(item('claude 额度读数', '黄', '尚无成功读数' + (th.backoffMs > minMs ? '（退避中 ' + Math.round(th.backoffMs / 60000) + 'min）' : '')));
+    } catch { 凭据额度.push(item('claude 额度读数', '黄', '尚未查询过')); }
+  }
+  if (enabledNames.has('codex')) {
+    const rl = await require('./lib/quota').getRateLimits(cfg).catch(() => null);
+    凭据额度.push(rl ? item('codex 登录态', '绿', 'app-server 正常 · 5h ' + (rl.primary && rl.primary.usedPercent != null ? Math.round(rl.primary.usedPercent) + '%' : '—'))
+      : item('codex 登录态', '黄', 'app-server 无响应（未登录或未装，codex 额度盲飞）'));
+  }
+  if (!凭据额度.length) 凭据额度.push(item('Provider 凭据', '绿', '由各 Provider CLI 自行管理登录态'));
 
   // 组3 项目与目录
   const 项目目录 = [];
@@ -279,15 +301,23 @@ app.get('/api/env', async (req, res) => {
 
   // 组4 协议资产与配置完整性
   const 协议配置 = [];
-  const charters = ['通用', '策划', '程序', '美术', 'QA', '装配'];
-  const missing = charters.filter((n) => !fs.existsSync(path.join(ROOT, '岗位协议', n + '.md')));
-  协议配置.push(missing.length ? item('岗位协议', '黄', '缺：' + missing.join('、')) : item('岗位协议', '绿', charters.length + ' 份齐全'));
+  const roleNames = Object.keys(cfg.roles || {});
+  const genericDir = path.join(ROOT, '角色协议');
+  const legacyDir = path.join(ROOT, '岗位协议');
+  const protocolDir = fs.existsSync(genericDir) ? genericDir : legacyDir;
+  const commonName = fs.existsSync(path.join(protocolDir, 'common.md')) ? 'common' : '通用';
+  const charters = roleNames.length ? [commonName, ...roleNames] : ['通用', '策划', '程序', '美术', 'QA', '装配'];
+  const missing = charters.filter((n) => !fs.existsSync(path.join(protocolDir, n + '.md')));
+  协议配置.push(missing.length ? item('角色协议', '黄', '缺：' + missing.join('、')) : item('角色协议', '绿', charters.length + ' 份齐全'));
   const lint = [];
-  for (const fn of cfg.职能 || []) if (!pool.poolFor(cfg, fn)) lint.push(`职能「${fn}」无执行池归属（领单会失败）`);
-  for (const a of cfg.agents || []) if (!(cfg.职能 || []).includes(a.职能)) lint.push(`agent ${a.id} 的职能不在职能表`);
+  for (const fn of cfg.职能 || []) {
+    const candidates = providerRouter.rankProviders(ROOT, cfg, { role: fn, kind: '执行' });
+    if (!candidates.length) lint.push(`角色「${fn}」无可用 Provider（领单会失败）`);
+  }
+  for (const a of cfg.agents || []) if (!(cfg.职能 || []).includes(providerRouter.agentRole(a))) lint.push(`agent ${a.id} 的角色不在角色表`);
   if (cfg.项目 && cfg.项目.默认 && !reg[cfg.项目.默认]) lint.push('默认项目未注册');
   协议配置.push(lint.length ? item('config 完整性', lint.some((x) => x.includes('领单会失败')) ? '红' : '黄', lint.join('；'))
-    : item('config 完整性', '绿', '职能↔池映射 / agents / 默认项目 全部合法'));
+    : item('config 完整性', '绿', '角色↔Provider 路由 / agents / 默认项目 全部合法'));
 
   // 总灯：有红=阻断；无红有黄=降级；全绿=就绪
   const all = [...运行时, ...凭据额度, ...项目目录, ...协议配置];
@@ -340,7 +370,11 @@ app.get('/api/agents', (req, res) => {
   if (!ready(res)) return;
   const fl = pool.inFlight(ROOT);
   const byAgent = {};
-  for (const t of fl) if (t.fm.主办) byAgent[t.fm.主办] = { id: t.id, title: t.fm.title, state: t.state, 职能: t.fm.职能, 领单时间: t.fm.领单时间 };
+  for (const t of fl) if (t.fm.主办) byAgent[t.fm.主办] = {
+    id: t.id, title: t.fm.title, state: t.state, 职能: t.fm.职能, role: t.fm.role || t.fm.职能,
+    provider: t.fm.provider || t.fm.供应商 || t.fm.执行池 || null, 领单时间: t.fm.领单时间,
+    workspace: t.fm.workspace ? { branch: t.fm.workspace.branch || null, commit: t.fm.workspace.commit || null, isolated: !!t.fm.workspace.isolated } : null,
+  };
   const agents = (cfg.agents || []).map((a) => ({ ...a, 手持: byAgent[a.id] || null }));
   const 滞留 = fl.filter((t) => t.fm.滞留告警).map((t) => ({ id: t.id, state: t.state, 时长h: t.fm.滞留时长h }));
   res.json({ agents, 在途数: fl.length, 上限: require('./lib/staff').onlineCount(cfg), 滞留告警: 滞留 });
@@ -358,6 +392,25 @@ app.get('/api/ticket', (req, res) => {
   res.json({ id, state: t.state, fm: t.fm, body: t.body, html: mdHtml(t.body), 链: trace.chains(ROOT, id), 回执 });
 });
 
+// 完成的 Integrator 工单由用户手动发布。只做 fast-forward；主分支前进或有脏改动时拒绝。
+app.post('/api/workspace/publish', (req, res) => {
+  if (!ready(res)) return;
+  const id = String((req.body || {}).id || '');
+  const t = store.find(ROOT, id);
+  if (!t) return res.status(404).json({ error: '工单不存在' });
+  if (t.state !== '完成' || providerRouter.taskRole(t) !== 'integrator')
+    return res.status(400).json({ error: '只有已完成的 Integrator 工单可以发布' });
+  const project = runner.projectPath(cfg, t);
+  if (!project) return res.status(400).json({ error: '项目未注册或路径不存在' });
+  try {
+    const result = worktrees.publish(project, t.fm.workspace);
+    const at = new Date().toISOString();
+    store.update(ROOT, id, (fm) => { fm.workspace = { ...fm.workspace, publishedAt: at, publishedCommit: result.commit }; });
+    journal.append(ROOT, `发布集成结果 ${id} → ${result.commit.slice(0, 10)}（fast-forward）`);
+    res.json(result);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // ---- 决策台（P4）：待验收 + 待定夺 ----
 app.get('/api/decisions', (req, res) => {
   if (!ready(res)) return;
@@ -371,14 +424,16 @@ app.get('/api/gates', async (req, res) => {
   if (!ready(res)) return;
   try {
     const locks = await gates.allLocks(cfg);
-    const rec = require('./lib/recommend').recommend(ROOT, cfg, { codex: locks.codex, claude: locks.claude });
-    res.json({ paused: require('./lib/core/state').read(ROOT).paused, locks: { codex: locks.codex, claude: locks.claude }, 推荐: rec });
+    const providerLocks = {};
+    for (const name of Object.keys(providerRegistry.configs(cfg))) providerLocks[name] = locks[name];
+    const rec = require('./lib/recommend').recommend(ROOT, cfg, providerLocks);
+    res.json({ paused: require('./lib/core/state').read(ROOT).paused, locks: providerLocks, 推荐: rec });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/gate/pause', (req, res) => {
   if (!ready(res)) return;
   const { scope, value } = req.body || {};
-  if (!['global', 'codex', 'claude'].includes(scope)) return res.status(400).json({ error: '非法 scope' });
+  if (!['global', ...Object.keys(providerRegistry.configs(cfg))].includes(scope)) return res.status(400).json({ error: '非法 scope' });
   const p = gates.setPaused(ROOT, scope, value);
   journal.append(ROOT, `暂停闸门：${scope} → ${value ? '合' : '开'}`);
   res.json({ ok: true, paused: p });
@@ -420,8 +475,9 @@ app.post('/api/draft', (req, res) => {
   // 中文项目名放行后，编号前缀也吃中文（如 甲-01）
   if (!/^[A-Z0-9一-鿿]+(?:-\d+)*$/.test(String(b.id || ''))) return res.status(400).json({ error: '编号格式非法（前缀-数字，如 TK-13 / 甲-01）' });
   // R6 已按 D43④ 修订：美术允许委托，首样保留是拆单纪律（每类首张 保留 定调）而非代码硬拦
+  const role = b.role || b.角色 || b.职能 || (cfg.职能 && cfg.职能[0]) || 'generalist';
   const fm = {
-    id: b.id, title: b.title || '未命名', 职能: b.职能 || '策划', 产出物类型: b.产出物类型 || '文档',
+    id: b.id, title: b.title || '未命名', role, 职能: role, 产出物类型: b.产出物类型 || '文档',
     优先级: b.优先级 || 'P1', 规模: b.规模 || '单兵', QA: b.QA || '关', 验收方式: b.验收方式 || '保留',
     预计时间: b.预计时间 || '', 预计token: b.预计token || '',
     项目: b.项目 || (cfg.项目 && cfg.项目.默认) || '', // D32：执行 agent 据此定位目标仓库
@@ -431,6 +487,9 @@ app.post('/api/draft', (req, res) => {
   if (b.父单) fm.父单 = b.父单;
   if (b.依赖) fm.依赖 = b.依赖;
   if (b.依据) fm.依据 = b.依据;
+  if (b.required_capabilities || b.所需能力) fm.required_capabilities = b.required_capabilities || b.所需能力;
+  if (b.write_scope || b.写入范围) fm.write_scope = b.write_scope || b.写入范围;
+  if (b.routing || b.路由) fm.routing = b.routing || b.路由;
   const exist = store.find(ROOT, b.id);
   if (exist) {
     if (exist.state !== '草稿') return res.status(400).json({ error: `只有草稿可编辑（当前 ${exist.state}）` });
@@ -452,7 +511,11 @@ app.post('/api/anchor/migrate', (req, res) => {
 });
 
 // ---- 参数与额度（P6）----
-app.get('/api/config', (req, res) => { if (!ready(res)) return; res.json({ 闸值: cfg.闸值, 执行池: cfg.执行池, agents: cfg.agents, 职能: cfg.职能, 推荐: cfg.推荐 || {}, 项目: cfg.项目 || {}, 模型: cfg.模型 || {}, 执行器: cfg.执行器 || {}, quota: cfg.quota || {}, server: cfg.server || {} }); });
+app.get('/api/config', (req, res) => { if (!ready(res)) return; res.json({
+  闸值: cfg.闸值, 执行池: cfg.执行池, providers: cfg.providers || {}, roles: cfg.roles || {}, routing: cfg.routing || {},
+  agents: cfg.agents, 职能: cfg.职能, 推荐: cfg.推荐 || {}, 项目: cfg.项目 || {}, 模型: cfg.模型 || {},
+  执行器: cfg.执行器 || {}, quota: cfg.quota || {}, server: cfg.server || {}, profile: cfg.profile || 'game-studio',
+}); });
 app.get('/api/quota', async (req, res) => {
   if (!ready(res)) return;
   const [rl, cu] = await Promise.all([quota.getRateLimits(cfg), quota.getClaudeUsage(cfg)]);
@@ -525,10 +588,36 @@ app.get('/api/models', (req, res) => {
   const claudeCli = fs.existsSync(path.join(os.homedir(), '.local', 'bin', 'claude.exe'))
     || fs.existsSync(path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd'));
   const uniq = (arr) => [...new Set(arr.filter(Boolean))];
-  res.json({
+  const result = {
     codex: { 检测: codexDetect, 可选: uniq([codexDetect, ...(opt.codex || [])]) },
     claude: { cli: claudeCli, 可选: uniq(opt.claude || ['sonnet', 'opus', 'haiku']) },
-  });
+  };
+  for (const provider of providerRegistry.list(cfg)) {
+    result[provider.name] = result[provider.name] || {};
+    result[provider.name].adapter = provider.adapter;
+    result[provider.name].enabled = provider.enabled !== false;
+    result[provider.name].可选 = uniq([...(result[provider.name].可选 || []), ...(provider.models || []), ...(opt[provider.name] || [])]);
+    if (provider.defaultModel) result[provider.name].默认 = provider.defaultModel;
+  }
+  res.json(result);
+});
+
+// ---- Provider / 动态路由快照：UI 与诊断只读，不暴露凭据环境变量的值 ----
+app.get('/api/providers', (req, res) => {
+  if (!ready(res)) return;
+  const roles = Object.keys(cfg.roles || {}).length ? Object.keys(cfg.roles) : (cfg.职能 || []);
+  const providers = providerRegistry.list(cfg).map((provider) => ({
+    name: provider.name,
+    adapter: provider.adapter,
+    enabled: provider.enabled !== false,
+    capabilities: provider.capabilities || [],
+    defaultModel: provider.defaultModel || '',
+    roles: provider.roles || [],
+    scores: provider.scores || {},
+  }));
+  const routes = {};
+  for (const role of roles) routes[role] = providerRouter.rankProviders(ROOT, cfg, { role, kind: role === 'reviewer' ? '质检' : '执行' });
+  res.json({ providers, roles, routes, recent: providerHistory.read(ROOT, 50) });
 });
 
 // ---- 单个 agent 模型档调整（D38）：空 = 清覆盖回池默认 ----
@@ -548,7 +637,7 @@ app.post('/api/agent-model', (req, res) => {
 const stages = require('./lib/stages');
 app.get('/api/stages', (req, res) => {
   if (!ready(res)) return;
-  if (stages.ensureStandards(ROOT)) journal.append(ROOT, '阶段标准.md 模板已落盘（D43 首次使用）');
+  if (stages.ensureStandards(ROOT, cfg)) journal.append(ROOT, '阶段标准.md 模板已落盘（首次使用）');
   const proj = String(req.query.项目 || '') || (cfg.项目 && cfg.项目.默认) || '';
   res.json({ 阶段: stages.stagesFor(cfg, proj), 标准: stages.parseStandards(ROOT) });
 });
@@ -561,12 +650,20 @@ app.post('/api/agent-pool', (req, res) => {
   const a = (cfg.agents || []).find((x) => x.id === id);
   if (!a) return res.status(400).json({ error: 'agent 不存在：' + id });
   const v = String(池 || '').trim();
-  if (!cfg.执行池 || !cfg.执行池[v]) return res.status(400).json({ error: '未知池：' + v });
-  if (a.执行池 !== v) {
-    const hadModel = !!a.模型;
-    a.执行池 = v; delete a.模型;
+  if (v === 'auto') {
+    delete a.provider; delete a.供应商; delete a.执行池; delete a.模型;
+    a.routing = { ...(a.routing || {}), mode: 'auto' };
     saveCfg();
-    journal.append(ROOT, `执行池切换：${id} → ${v} 池${hadModel ? '（模型覆盖已清，回池默认）' : ''}`);
+    journal.append(ROOT, `Provider 路由切换：${id} → 自动择优`);
+    return res.json({ ok: true, agents: cfg.agents });
+  }
+  if (!providerRegistry.configs(cfg)[v]) return res.status(400).json({ error: '未知 Provider：' + v });
+  if ((a.provider || a.供应商 || a.执行池) !== v) {
+    const hadModel = !!a.模型;
+    a.provider = v; delete a.供应商; delete a.执行池; delete a.模型;
+    a.routing = { ...(a.routing || {}), mode: 'pin' };
+    saveCfg();
+    journal.append(ROOT, `Provider 路由切换：${id} → ${v}${hadModel ? '（模型覆盖已清，回 Provider 默认）' : ''}`);
   }
   res.json({ ok: true, agents: cfg.agents });
 });

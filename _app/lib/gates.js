@@ -8,19 +8,20 @@ function isPaused(root, pool) {
   return !!(s.paused.global || (pool && s.paused[pool]));
 }
 
-// scope: 'global' | 'codex' | 'claude'
+// scope: 'global' | 任意 Provider 名称
 function setPaused(root, scope, val) {
   return state.update(root, (s) => { s.paused[scope] = !!val; return s.paused; });
 }
 
 // 单池额度锁判定。rl=codex rateLimits，cu=claude usage。
 function poolLock(cfg, pool, rl, cu) {
-  const pc = (cfg.执行池 && cfg.执行池[pool]) || {};
-  const th = pc.阈值 || 70;
-  const wth = pc.周阈值 || 90;
+  const providerCfg = cfg.providers && cfg.providers[pool] || {};
+  const pc = (cfg.执行池 && cfg.执行池[pool]) || providerCfg.quota || providerCfg;
+  const th = pc.阈值 || pc.fiveHourThreshold || 70;
+  const wth = pc.周阈值 || pc.weeklyThreshold || 90;
   let five = null; let week = null;
   if (pool === 'codex') { const ws = quota.windowsOf(rl); five = ws[0] || null; week = ws[1] || null; }
-  else { const ws = quota.claudeWindows(cu); five = ws.find((w) => w.label === '5小时') || null; week = ws.find((w) => w.label === '周') || null; }
+  else if (pool === 'claude') { const ws = quota.claudeWindows(cu); five = ws.find((w) => w.label === '5小时') || null; week = ws.find((w) => w.label === '周') || null; }
   const fivePct = five ? five.pct : null;
   const weekPct = week ? week.pct : null;
   let locked = false; let reason = null; let resetAt = null;
@@ -33,11 +34,14 @@ function poolLock(cfg, pool, rl, cu) {
 
 // 双池锁快照（并发查，任一查询失败 fail-open 视为不锁）。
 async function allLocks(cfg) {
+  const names = Object.keys((cfg.providers && Object.keys(cfg.providers).length) ? cfg.providers : (cfg.执行池 || {}));
   const [rl, cu] = await Promise.all([
-    quota.getRateLimits(cfg).catch(() => null),
-    quota.getClaudeUsage(cfg).catch(() => null),
+    names.includes('codex') ? quota.getRateLimits(cfg).catch(() => null) : null,
+    names.includes('claude') ? quota.getClaudeUsage(cfg).catch(() => null) : null,
   ]);
-  return { codex: poolLock(cfg, 'codex', rl, cu), claude: poolLock(cfg, 'claude', rl, cu), rl, cu };
+  const out = { rl, cu };
+  for (const name of names) out[name] = poolLock(cfg, name, rl, cu);
+  return out;
 }
 
 // 领单前置：该池能否拉单（暂停闸门 + 额度锁）。

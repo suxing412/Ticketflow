@@ -14,12 +14,13 @@ if "%TARGET%"=="" set "TARGET=%DEFAULT_DIR%"
 echo.
 echo [1/4] 建目录并铺骨架 ...
 if not exist "%TARGET%" mkdir "%TARGET%"
-if not exist "%TARGET%\岗位协议" xcopy /e /i /y "%~dp0骨架\岗位协议" "%TARGET%\岗位协议" >nul
 if not exist "%TARGET%\风格库" xcopy /e /i /y "%~dp0骨架\风格库" "%TARGET%\风格库" >nul
 if exist "%TARGET%\studio.config.json" (
   echo     已有配置，保留不覆盖（升级模式）
+  if not exist "%TARGET%\岗位协议" xcopy /e /i /y "%~dp0骨架\岗位协议" "%TARGET%\岗位协议" >nul
 ) else (
   copy /y "%~dp0骨架\studio.config.json" "%TARGET%\studio.config.json" >nul
+  if not exist "%TARGET%\角色协议" xcopy /e /i /y "%~dp0骨架\角色协议" "%TARGET%\角色协议" >nul
 )
 
 echo [2/4] 复制监制台 exe ...

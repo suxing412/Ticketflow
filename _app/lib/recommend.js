@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const store = require('./core/store');
 const state = require('./core/state');
+const router = require('./routing/router');
 
 // 制作人决策动作（journal 行前缀）——处理速度只数"要制作人动脑拍板"的条目，
 // agent 侧动作（领单/交产出/QA 裁定）不计入。
@@ -47,7 +48,12 @@ function recommend(root, cfg, locks, nowMs) {
   const lockedPools = new Set();
   if (locks) for (const [k, l] of Object.entries(locks)) if (l && l.locked) lockedPools.add(k);
   for (const [k, v] of Object.entries(paused)) if (k !== 'global' && v) lockedPools.add(k);
-  const avail = agents.filter((a) => !lockedPools.has(a.执行池));
+  const avail = agents.filter((a) => {
+    const pinned = a.provider || a.供应商 || a.执行池;
+    if (pinned) return !lockedPools.has(pinned);
+    return router.rankProviders(root, cfg, { agent: a, role: router.agentRole(a), kind: '执行' })
+      .some((candidate) => !lockedPools.has(candidate.name));
+  });
   const 池注 = lockedPools.size ? `，${[...lockedPools].join('/')} 池不可用，可用 ${avail.length}/${agents.length}` : `，可用 ${avail.length}/${agents.length}`;
 
   const backlog = store.list(root, '待验收').length;

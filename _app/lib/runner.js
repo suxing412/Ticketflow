@@ -7,13 +7,17 @@
 // 由 Claude 会话分诊（重投/上呈/废弃）。停止=不领新单，执行中跑完（同 D26 暂停语义）。
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
 const { spawn } = require('child_process');
 const store = require('./core/store');
 const state = require('./core/state');
 const pool = require('./pool');
 const lifecycle = require('./lifecycle');
 const journal = require('./journal');
+const providers = require('./providers/registry');
+const router = require('./routing/router');
+const routeHistory = require('./routing/history');
+const orchestration = require('./orchestration/plan');
+const worktrees = require('./workspace/worktree');
 
 // 内存态：正在执行的工作（agentId → { id, kind, startedAt, timer, child }）。
 // exe 重启即清空，tick 为"在途/质检有主办但无执行记录"的单重新拉起（断点恢复）。
@@ -37,25 +41,18 @@ function projectPath(cfg, t) {
 // 解析顺序：agent 个体覆盖(config.agents[].模型) > 工种/池默认(config.模型) > CLI 自带默认(空)
 function pickModel(cfg, kind, agentCfg, poolName) {
   const m = cfg.模型 || {};
-  if (kind === '质检') return m.质检 || m.claude默认 || '';
-  if (kind === '代核') return m.代核 || m.claude默认 || '';
-  if (kind === '代裁') return m.代裁 || m.代核 || m.claude默认 || ''; // D43③ 裁判档
-  return (agentCfg && agentCfg.模型) || m[poolName + '默认'] || '';
+  const providerCfg = cfg.providers && cfg.providers[poolName] || {};
+  const reviewRole = kind === '质检' ? 'reviewer' : kind === '代核' ? 'auditor' : kind === '代裁' ? 'arbitrator' : null;
+  const roleModel = reviewRole && cfg.roles && cfg.roles[reviewRole] && cfg.roles[reviewRole].model;
+  if (kind === '质检') return roleModel || m.质检 || providerCfg.defaultModel || m[poolName + '默认'] || '';
+  if (kind === '代核') return roleModel || m.代核 || providerCfg.defaultModel || m[poolName + '默认'] || '';
+  if (kind === '代裁') return roleModel || m.代裁 || m.代核 || providerCfg.defaultModel || m[poolName + '默认'] || ''; // D43③ 裁判档
+  return (agentCfg && (agentCfg.model || agentCfg.模型)) || providerCfg.defaultModel || m[poolName + '默认'] || '';
 }
 
 // ---- 实弹 CLI 定位：exe 的 GUI 进程 PATH 不全（探针实证），按候选绝对路径解析 ----
 function resolveCli(poolName, model) {
-  if (poolName === 'codex') {
-    return { cmd: 'codex', args: ['exec', '--dangerously-bypass-approvals-and-sandbox', ...(model ? ['-m', model] : []), '-'] };
-  }
-  const home = os.homedir();
-  const candidates = [
-    path.join(home, 'AppData', 'Roaming', 'npm', 'claude.cmd'),
-    path.join(home, '.local', 'bin', 'claude.exe'),
-    'claude',
-  ];
-  const cmd = candidates.find((c) => c === 'claude' || fs.existsSync(c));
-  return { cmd, args: ['-p', '--permission-mode', 'acceptEdits', ...(model ? ['--model', model] : [])] };
+  return providers.resolveLegacy(poolName, model);
 }
 
 // 代理注入（中台验证过的坑：claude 无头调用必须带代理 env）。
@@ -70,25 +67,48 @@ function proxyEnv(cfg) {
 // 岗位协议（用户定稿的 agent 章程）：通用 + 职能特化，组提示词时自动前置。
 // 明文 .md 是唯一事实源——章程改了下一单立即生效，不用改代码。
 function charter(root, 职能) {
-  const dir = path.join(root, '岗位协议');
+  const dirs = ['角色协议', '岗位协议'].map((name) => path.join(root, name));
+  const dir = dirs.find((candidate) => fs.existsSync(candidate)) || dirs[1];
   const parts = [];
-  for (const f of ['通用.md', `${职能}.md`]) {
-    try { parts.push(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { /* 缺章程不阻塞执行 */ }
+  const roleFiles = [`${职能}.md`];
+  if (职能 === 'reviewer') roleFiles.push('QA.md'); // 旧游戏 Profile 兼容
+  for (const candidates of [['通用.md', 'common.md'], roleFiles]) {
+    const file = candidates.find((f) => fs.existsSync(path.join(dir, f)));
+    try { if (file) parts.push(fs.readFileSync(path.join(dir, file), 'utf8')); } catch { /* 缺章程不阻塞执行 */ }
   }
   return parts.join('\n\n---\n\n');
 }
 
 // 工单 → 执行提示词（岗位协议 + 范围/不要做/验收标准；中文走 stdin 防 argv 乱码）
 function buildPrompt(root, t, proj) {
-  const ch = charter(root, t.fm.职能);
-  return [
+  const role = router.taskRole(t);
+  const ch = charter(root, role);
+  const ws = proj.workspace;
+  const lines = [
     ch ? `=== 岗位协议（必须遵守）===\n${ch}\n` : '',
-    `你是「${t.fm.职能}」职能执行 agent，领到工单 ${t.id}：${t.fm.title}`,
+    `你是「${role}」角色的执行 agent，领到工单 ${t.id}：${t.fm.title}`,
     `工作目录（项目仓库）：${proj.path}`,
+    ws && ws.isolated ? `当前是隔离工作区，分支：${ws.branch}。不要切换分支、删除 worktree 或推送远端；系统会在完工时自动形成 Git 检查点。` : '',
     '只做工单范围内的事，遵守「不要做」，产出满足全部验收标准。',
     '', '=== 工单正文 ===', t.body || '（无正文）',
     '', '完成后按通用章程的回执格式输出完工报告，它会作为回执存档。',
-  ].filter(Boolean).join('\n');
+  ];
+  if (role === 'orchestrator') lines.push('',
+    '=== 机器可读计划（必须输出）===',
+    '完成仓库分析后，在回复末尾输出一个 ```json 代码块，且必须符合以下结构：',
+    '{"summary":"计划摘要","tasks":[{"key":"contract","title":"任务标题","role":"backend","description":"范围","dependsOn":[],"requiredCapabilities":["coding"],"writeScope":["server/**"],"acceptance":["可客观验证的标准"]}]}',
+    'key 只用英文字母开头的字母/数字/下划线/横线；dependsOn 只能引用本计划内 key；不要创建新的 orchestrator 子任务。',
+    '前后端并行时优先先建接口契约任务；共享文件交给 integrator 或通过依赖串行化。');
+  if (ws && ws.integration) {
+    const merged = [...(ws.integration.merged || []), ...(ws.integration.already || [])]
+      .map((x) => `${x.id}@${String(x.commit).slice(0, 10)}`).join('、') || '无';
+    lines.push('', '=== 依赖集成现场 ===', `已纳入的依赖检查点：${merged}`);
+    if ((ws.integration.skipped || []).length) lines.push(`未自动纳入：${ws.integration.skipped.map((x) => `${x.id}（${x.reason}）`).join('、')}`);
+    if (role === 'integrator' && (ws.integration.conflicts || []).length) lines.push(
+      `Git 合并已停在冲突现场：${ws.integration.conflicts.join('、')}`,
+      '你被明确授权在当前隔离分支解决这些冲突；保留两侧已通过的验收条件，解决后运行测试。不要中止合并或改写其他分支。');
+  }
+  return lines.filter(Boolean).join('\n');
 }
 // 委托代核提示词（D34）：Claude 按验收标准逐条只读核验，结论行机器可读
 function buildAuditPrompt(root, t, proj, receiptPath) {
@@ -117,12 +137,13 @@ function buildArbPrompt(root, t, proj, receiptPath) {
 }
 function buildQaPrompt(root, t, proj, receiptPath) {
   const receipt = fs.existsSync(receiptPath) ? fs.readFileSync(receiptPath, 'utf8') : '（无回执）';
-  const ch = charter(root, 'QA');
+  const ch = charter(root, 'reviewer');
   return [
     ch ? `=== 岗位协议（必须遵守）===\n${ch}\n` : '',
     `你是 QA 复核 agent，对工单 ${t.id}（${t.fm.title}）做质检：只读复核，不改实现（D20）。`,
     `项目仓库：${proj.path}`,
     '对照工单验收标准逐条核验主办的产出与回执，按章程格式输出核验结论。',
+    '最后单独一行输出机器可读结论：「结论：通过」或「结论：不过」。',
     '', '=== 工单正文 ===', t.body || '', '', '=== 主办回执 ===', receipt,
   ].filter(Boolean).join('\n');
 }
@@ -131,13 +152,38 @@ function buildQaPrompt(root, t, proj, receiptPath) {
 async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   if (!agentId || running.has(agentId) || busyTickets().has(t.id)) return false;
   const rc = cfg.执行器 || {};
-  const entry = { id: t.id, kind, startedAt: opts.nowIso || new Date().toISOString() };
+  const agentCfg = (cfg.agents || []).find((a) => a.id === agentId);
+  const routeRole = kind === '执行' ? router.taskRole(t)
+    : kind === '质检' ? 'reviewer' : kind === '代核' ? 'auditor' : 'arbitrator';
+  const assignedProvider = kind === '执行' && (t.fm.provider || t.fm.供应商 || t.fm.执行池);
+  const route = assignedProvider
+    ? { name: assignedProvider, role: routeRole, score: t.fm.路由分 || null, reasons: ['领单时已分配'] }
+    : router.chooseProvider(root, cfg, { agent: agentCfg, task: t, role: routeRole, kind });
+  if (!route) {
+    journal.append(root, `无法执行 ${t.id}（${agentId} · ${kind}）：没有可用 Provider`);
+    return false;
+  }
+  const providerName = route.name;
+  const model = pickModel(cfg, kind, agentCfg, providerName);
+  const entry = { id: t.id, kind, role: routeRole, provider: providerName, model, route, startedAt: opts.nowIso || new Date().toISOString() };
   running.set(agentId, entry);
+  const recordResult = (ok, reason) => {
+    if (entry.recorded) return;
+    entry.recorded = true;
+    routeHistory.append(root, {
+      ticket: t.id, agent: agentId, kind, role: routeRole, provider: providerName, model,
+      ok, reason: reason ? String(reason).slice(0, 300) : undefined,
+      outcome: 'execution',
+      dry: isDry(root), durationMs: Math.max(0, Date.now() - Date.parse(entry.startedAt)),
+      routeScore: route.score, routeReasons: route.reasons,
+    });
+  };
   const finishOk = (note, verdict) => {
     try { finishOkInner(note, verdict); } catch (e) {
       // 定时器回调里的异常会成为主进程未捕获异常 → 整个 app 弹窗崩掉（0.9.1 YAML 实测）。
       // 单张单的收尾失败只准伤自己：记账 + 尝试入执行失败，绝不外抛。
       running.delete(agentId);
+      recordResult(false, '完工收尾异常：' + e.message);
       journal.append(root, `完工收尾异常 ${t.id}：${String(e.message).slice(0, 100)}——单未流转，待分诊`);
       try { lifecycle.执行失败(root, t.id, '完工收尾异常：' + String(e.message).slice(0, 80)); } catch { /* 尽力 */ }
     }
@@ -149,7 +195,13 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     if (kind === '质检') {
       if (!cur || cur.state !== '质检') return;
       store.update(root, t.id, (fm) => { fm.质检人 = agentId; delete fm.质检失败次数; });
-      const r = lifecycle.QA裁定(root, cfg, t.id, true);
+      const passed = verdict !== false;
+      const originalProvider = cur.fm.provider || cur.fm.供应商 || cur.fm.执行池;
+      if (originalProvider) routeHistory.append(root, {
+        ticket: t.id, agent: cur.fm.主办, kind: '评审结果', role: router.taskRole(cur), provider: originalProvider,
+        reviewerProvider: providerName, qualityPassed: passed, outcome: 'quality', dry: isDry(root),
+      });
+      const r = lifecycle.QA裁定(root, cfg, t.id, passed);
       if (r.ok) journal.append(root, `质检执行完成 ${t.id}（${agentId} · ${note}）`);
     } else if (kind === '代裁') {
       // D43③：解析裁判档结论。给方向→定夺给方向（方向文本进正文，主办重执行能读到）；
@@ -175,15 +227,26 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       store.update(root, t.id, (fm) => { fm.代核 = { 结论: verdict ? '通过' : '不过', 时间: new Date().toISOString() }; });
       if (verdict) {
         const r = lifecycle.验收(root, t.id, true);
-        if (r.ok) journal.append(root, `委托代核通过 ${t.id} → 验收完成（Claude 代劳，D11/D34）`);
+        if (r.ok) journal.append(root, `委托代核通过 ${t.id} → 验收完成（${providerName} 代劳）`);
       } else {
         journal.append(root, `委托代核不过 ${t.id}：留在待验收，附核验报告等你裁（不自动打回）`);
       }
     } else {
       if (!cur || cur.state !== '在途') return; // 期间被收回/废弃，不硬交
+      if (entry.workspace && entry.workspace.isolated) {
+        const checkpoint = worktrees.checkpoint(cfg, entry.workspace, cur);
+        entry.workspace = { ...entry.workspace, ...checkpoint, commit: checkpoint.commit || entry.workspace.commit, completedAt: new Date().toISOString() };
+        store.update(root, t.id, (fm) => { fm.workspace = entry.workspace; });
+        journal.append(root, `Git 检查点 ${t.id} → ${entry.workspace.commit ? String(entry.workspace.commit).slice(0, 10) : '未提交'}（${entry.workspace.branch}）`);
+      }
+      if (routeRole === 'orchestrator') {
+        const planned = orchestration.consume(root, cfg, cur, note);
+        journal.append(root, `Orchestrator 计划落盘 ${t.id} → ${planned.children.length} 张待投子单（${planned.children.join('、')}）`);
+      }
       const r = lifecycle.交产出(root, t.id, note);
       if (r.ok) journal.append(root, `执行完成 ${t.id}（${agentId} · ${kind}）`);
     }
+    recordResult(true);
   };
   const failLocal = (why) => {
     try { failLocalInner(why); } catch (e) {
@@ -193,6 +256,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   };
   const failLocalInner = (why) => { // D31：失败入位为纯本地操作，任何网络状况下都能落位
     running.delete(agentId);
+    recordResult(false, why);
     if (kind === '代核') { // 代核失败不动单（待验收无失败转移）：记账后待下轮/人工
       journal.append(root, `委托代核失败 ${t.id}（${String(why).slice(0, 80)}）——单留待验收`);
       return;
@@ -226,21 +290,41 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     const durMs = opts.durMs ?? (lo + Math.random() * Math.max(0, hi - lo)) * 1000;
     const sec = Math.round(durMs / 1000);
     const receipt = `# 完工报告 ${t.id}（试跑）\n工单编号：${t.id}\n## 做了什么\n试跑模拟${kind}（零额度）\n## QA 章节\n${kind === '质检' ? '模拟复核通过' : '（试跑占位）'}\n## 实际消耗\n模拟 ${sec}s · 0 token\n## 异议\n无\n`;
+    const dryWorkerRole = Object.keys(cfg.roles || {}).find((role) => !['orchestrator', 'reviewer', 'integrator'].includes(role)) || (cfg.职能 || []).find((role) => role !== 'orchestrator') || 'generalist';
+    const dryPlan = JSON.stringify({ summary: '试跑生成一张演示子单', tasks: [{
+      key: 'demo', title: '验证 Orchestrator 子单链路', role: dryWorkerRole,
+      description: '验证结构化计划可以落成待投工单', acceptance: ['子工单进入待投且父子链完整'],
+      writeScope: ['docs/**'], dependsOn: [],
+    }] }, null, 2);
     const fin = () => finishOk(kind === '质检' ? `模拟复核 ${sec}s`
       : kind === '代核' ? `（试跑模拟）逐条对照验收标准：全部通过\n结论：通过`
       : kind === '代裁' ? `（试跑模拟）失败原因明确，可修复。\n结论：给方向\n方向：按验收标准逐条补齐缺失项（试跑演示）`
+      : routeRole === 'orchestrator' ? `${receipt}\n\n\`\`\`json\n${dryPlan}\n\`\`\``
       : receipt, true);
     if (durMs <= 0) fin(); else { entry.timer = setTimeout(fin, durMs); if (entry.timer.unref) entry.timer.unref(); }
     return true;
   }
 
   // ---- 实弹（D32）：真调无头 CLI。经济后果由 实弹解锁 开关把门（server 侧已拦） ----
-  const proj = projectPath(cfg, t);
-  if (!proj) { failLocal('项目未注册或路径不存在（config.项目）'); return true; }
-  const poolName = t.fm.执行池 || 'claude';
-  const agentCfg = (cfg.agents || []).find((a) => a.id === agentId);
-  const model = pickModel(cfg, kind, agentCfg, poolName);
-  const { cmd, args } = resolveCli(kind === '执行' ? poolName : 'claude', model); // 质检/代核都走 claude
+  const baseProject = projectPath(cfg, t);
+  if (!baseProject) { failLocal('项目未注册或路径不存在（config.项目）'); return true; }
+  let proj = baseProject;
+  try {
+    const dependencies = kind === '执行' ? worktrees.dependencyTickets(root, t, store) : [];
+    const workspace = worktrees.prepare(root, cfg, t, baseProject, { role: routeRole, dependencies });
+    entry.workspace = workspace;
+    proj = { ...baseProject, path: workspace.path, workspace };
+    if (workspace.isolated || workspace.warning) {
+      store.update(root, t.id, (fm) => { fm.workspace = workspace; });
+      journal.append(root, workspace.isolated
+        ? `隔离工作区就绪 ${t.id} → ${workspace.branch}（${workspace.path}）`
+        : `工作区降级 ${t.id}：${workspace.warning}`);
+    }
+  } catch (e) { failLocal('工作区准备失败：' + e.message); return true; }
+  let invocation;
+  try { invocation = providers.create(cfg, providerName).buildInvocation({ model, kind, role: routeRole }); }
+  catch (e) { failLocal('Provider 配置错误：' + e.message); return true; }
+  const { cmd, args } = invocation;
   const receiptPath = path.join(root, '回执', `${t.id}.md`);
   const prompt = kind === '质检' ? buildQaPrompt(root, t, proj, receiptPath)
     : kind === '代核' ? buildAuditPrompt(root, t, proj, receiptPath)
@@ -248,11 +332,16 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     : buildPrompt(root, t, proj);
   let child;
   try {
-    child = spawn(cmd, args, { cwd: proj.path, env: proxyEnv(cfg), windowsHide: true, shell: cmd.endsWith('.cmd'), stdio: ['pipe', 'pipe', 'pipe'] });
+    child = spawn(cmd, args, {
+      cwd: proj.path,
+      env: { ...proxyEnv(cfg), ...(invocation.env || {}) },
+      windowsHide: true,
+      shell: invocation.shell ?? String(cmd).toLowerCase().endsWith('.cmd'),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
   } catch (e) { failLocal('CLI 启动失败：' + e.message); return true; }
   entry.child = child;
-  const cliPool = kind === '执行' ? poolName : 'claude'; // 质检/代核实际走 claude，流水如实记
-  journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name}）`);
+  journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${providerName}${model ? '/' + model : ''} → ${proj.name}）`);
   let out = '', errout = '';
   child.stdout.on('data', (d) => { out += d; if (out.length > 400000) out = out.slice(-200000); });
   child.stderr.on('data', (d) => { errout += d; if (errout.length > 20000) errout = errout.slice(-10000); });
@@ -269,7 +358,8 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     if (code === 0) {
       const text = (String(out).trim().slice(-8000)) || `# 完工报告 ${t.id}\n（CLI 无输出）`;
       // 代核结论机器可读行：找不到"结论：通过"一律按不过处理（保守，不误自动完成）
-      finishOk(text, kind === '代核' ? /结论[:：]\s*通过/.test(text) : true);
+      const parsedVerdict = kind === '代核' || kind === '质检' ? /结论[:：]\s*通过/.test(text) : true;
+      finishOk(text, parsedVerdict);
     } else {
       // 失败原因优先 stderr，空则兜底 stdout 尾部——claude CLI 的 "API Error: ..." 打在 stdout，
       // 只看 stderr 会落库成空白的「CLI 退出码 1：」（另会话实测）
@@ -314,8 +404,8 @@ async function tick(root, cfg, opts = {}) {
     } else if (r.gated) { result.拒因.push(r.error); }
   }
 
-  // ③ 质检执行：派给空闲在岗 QA agent（QA 只裁不开单，D10）
-  const qaFree = agents.filter((a) => a.职能 === 'QA' && !running.has(a.id) && !lockedPools.has(a.执行池)
+  // ③ 质检执行：派给空闲 reviewer（旧配置 QA 继续兼容）
+  const qaFree = agents.filter((a) => ['reviewer', 'QA'].includes(router.agentRole(a)) && !running.has(a.id) && !lockedPools.has(a.provider || a.供应商 || a.执行池)
     && !pool.inFlight(root).some((x) => x.fm.主办 === a.id));
   for (const t of store.list(root, '质检')) {
     if (busyTickets().has(t.id)) continue;
@@ -324,7 +414,7 @@ async function tick(root, cfg, opts = {}) {
     if (await startWork(root, cfg, t, qa.id, '质检', opts)) result.质检.push(t.id);
   }
 
-  // ④ 委托代核（D34）：待验收且验收方式=委托、未核过的单，Claude 代劳核验（一次一张，保守）
+  // ④ 委托代核（D34）：待验收且验收方式=委托、未核过的单，动态选择 auditor Provider
   if (!running.has('委托代核')) {
     const t = store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !x.fm.代核 && !busyTickets().has(x.id));
     if (t && await startWork(root, cfg, t, '委托代核', '代核', opts)) (result.代核 = result.代核 || []).push(t.id);
@@ -369,7 +459,10 @@ function status(root, cfg) {
     运行: !!st.运行, 试跑: st.试跑 !== false,
     实弹解锁: !!(cfg.执行器 && cfg.执行器.实弹解锁),
     间隔秒: (cfg.执行器 || {}).间隔秒 ?? 15,
-    执行中: [...running.entries()].map(([agent, e]) => ({ agent, id: e.id, kind: e.kind, startedAt: e.startedAt })),
+    执行中: [...running.entries()].map(([agent, e]) => ({
+      agent, id: e.id, kind: e.kind, role: e.role, provider: e.provider, model: e.model, startedAt: e.startedAt,
+      workspace: e.workspace ? { path: e.workspace.path, branch: e.workspace.branch, isolated: e.workspace.isolated } : null,
+    })),
     执行失败数: store.list(root, '执行失败').length,
     上轮: lastTick,
   };

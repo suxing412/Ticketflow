@@ -1,12 +1,15 @@
 // runner.test.js — 执行器 D30/D31/D32：领单执行/QA质检执行/执行失败入位与分诊/闸门/断点恢复/实弹门
 const assert = require('node:assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const runner = require('../lib/runner');
 const life = require('../lib/lifecycle');
 const state = require('../lib/core/state');
 const store = require('../lib/core/store');
 const gates = require('../lib/gates');
+const worktrees = require('../lib/workspace/worktree');
 const { makeRoot, seed, CFG } = require('./helper');
 
 let passed = 0; const t = async (n, f) => { await f(); passed++; console.log('  ✓ ' + n); };
@@ -14,6 +17,16 @@ console.log('runner 执行器测试（D30/D31/D32）');
 const UN = { durMs: 0 }; // 同步完成模拟执行
 const on = (root) => state.update(root, (s) => { s.执行器 = { 运行: true, 试跑: true }; });
 const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
+const git = (cwd, args) => {
+  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true });
+  if (r.status !== 0) throw new Error(r.stderr || r.stdout);
+  return String(r.stdout || '').trim();
+};
+const waitUntil = async (fn, timeout = 8000) => {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) { if (fn()) return; await new Promise((resolve) => setTimeout(resolve, 25)); }
+  throw new Error('等待异步执行完成超时');
+};
 
 (async () => {
   await t('未启动 → tick 跳过，不领单', async () => {
@@ -34,6 +47,57 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.equal(cur.fm.主办, '策划-A');
     assert.ok(cur.fm.交付时间);
     assert.ok(fs.existsSync(path.join(root, '回执', 'P-01.md')));
+  });
+
+  await t('V2 Orchestrator 试跑：结构化计划自动生成待投子单', async () => {
+    const root = makeRoot(); on(root);
+    const cfg = {
+      ...CFG,
+      roles: { orchestrator: {}, backend: {} },
+      providers: { local: { adapter: 'command-cli', command: 'local-agent', capabilities: ['planning', 'coding', 'backend'] } },
+      agents: [
+        { id: 'orchestrator-A', role: 'orchestrator', 职能: 'orchestrator', routing: { mode: 'auto' } },
+        { id: 'backend-A', role: 'backend', 职能: 'backend', routing: { mode: 'auto' } },
+      ],
+      职能: ['orchestrator', 'backend'],
+    };
+    seed(root, '池', { id: 'REQ-1', role: 'orchestrator', 职能: 'orchestrator', QA: '关' });
+    const r = await runner.tick(root, cfg, UN);
+    assert.ok(r.执行.includes('REQ-1'));
+    assert.equal(store.find(root, 'REQ-1').state, '待验收');
+    assert.equal(store.find(root, 'REQ-1-1').state, '待投');
+    assert.equal(store.find(root, 'REQ-1-1').fm.父单, 'REQ-1');
+  });
+
+  await t('实弹 Runner 在隔离 worktree 执行并自动记录检查点', async () => {
+    const top = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-wt-'));
+    const root = path.join(top, 'monitor'); const repo = path.join(top, 'project');
+    fs.mkdirSync(root); fs.mkdirSync(repo); store.ensureDirs(root);
+    git(repo, ['init']); fs.writeFileSync(path.join(repo, 'README.md'), '# base\n'); git(repo, ['add', '.']);
+    git(repo, ['-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-m', 'base']);
+    const script = "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{require('fs').writeFileSync('agent.txt','isolated\\n');console.log('# 完工报告 LIVE-1\\n## 做了什么\\n写入隔离文件')})";
+    const cfg = {
+      roles: { backend: { requiredCapabilities: ['coding'] } }, 职能: ['backend'],
+      providers: { local: { adapter: 'command-cli', command: process.execPath, args: ['-e', script], capabilities: ['coding'] } },
+      agents: [{ id: 'backend-A', role: 'backend', 职能: 'backend', routing: { mode: 'auto' } }],
+      routing: {}, workspace: { mode: 'worktree', root: 'workspaces', autoCommit: true },
+      项目: { 默认: 'Demo', 注册: { Demo: { 路径: repo } } },
+      执行器: { 实弹解锁: true, 执行超时分钟: 1 }, 闸值: { 待验收积压闸: 8 },
+    };
+    state.update(root, (s) => { s.执行器 = { 运行: true, 试跑: false }; });
+    seed(root, '池', { id: 'LIVE-1', role: 'backend', 职能: 'backend', 项目: 'Demo', QA: '关' });
+    try {
+      await runner.tick(root, cfg, {});
+      await waitUntil(() => store.find(root, 'LIVE-1').state === '待验收');
+      const done = store.find(root, 'LIVE-1');
+      assert.equal(done.fm.workspace.isolated, true);
+      assert.match(done.fm.workspace.commit, /^[0-9a-f]{40}$/);
+      assert.ok(fs.existsSync(path.join(done.fm.workspace.path, 'agent.txt')));
+      assert.equal(fs.existsSync(path.join(repo, 'agent.txt')), false, '主项目未被并行执行直接改写');
+    } finally {
+      try { for (const row of worktrees.worktreeList(repo)) if (path.resolve(row.path) !== path.resolve(repo)) git(repo, ['worktree', 'remove', '--force', row.path]); } catch { /* 尽力清理 */ }
+      fs.rmSync(top, { recursive: true, force: true });
+    }
   });
 
   await t('QA 开 + 有 QA agent：同轮走完 执行→质检→QA复核→待验收，落 质检人', async () => {

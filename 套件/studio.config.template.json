@@ -1,36 +1,105 @@
 {
-  "server": {
-    "port": 4270
-  },
-  "职能": ["策划", "程序", "美术", "QA", "装配"],
-  "优先级": ["P0", "P1", "P2", "P3"],
-  "产出物类型": ["代码", "文档", "资产", "规格"],
-  "执行池": {
-    "codex": {
-      "职能": ["程序"],
-      "阈值": 70,
-      "周阈值": 90,
-      "优先": true
+  "schemaVersion": 2,
+  "profile": "software-project",
+  "server": { "port": 4270 },
+  "职能": ["orchestrator", "backend", "frontend", "reviewer", "integrator"],
+  "roles": {
+    "orchestrator": {
+      "label": "Orchestrator",
+      "requiredCapabilities": ["planning", "repository-navigation"]
     },
-    "claude": {
-      "职能": ["策划", "美术", "QA", "装配"],
-      "阈值": 50,
-      "周阈值": 90
+    "backend": {
+      "label": "后端",
+      "requiredCapabilities": ["coding", "backend"]
+    },
+    "frontend": {
+      "label": "前端",
+      "requiredCapabilities": ["coding", "frontend"]
+    },
+    "reviewer": {
+      "label": "评审",
+      "requiredCapabilities": ["code-review"]
+    },
+    "integrator": {
+      "label": "集成",
+      "requiredCapabilities": ["coding", "repository-navigation"]
     }
   },
-  "闸值": {
-    "待验收积压闸": 8,
-    "QA自修上限": 2,
-    "滞留超时小时": 4
+  "providers": {
+    "codex": {
+      "adapter": "codex-cli",
+      "enabled": true,
+      "defaultModel": "",
+      "capabilities": ["planning", "repository-navigation", "coding", "backend", "frontend", "code-review"],
+      "scores": {
+        "default": { "quality": 70, "latency": 50, "cost": 50 }
+      },
+      "quota": { "阈值": 70, "周阈值": 90 }
+    },
+    "claude": {
+      "adapter": "claude-cli",
+      "enabled": true,
+      "defaultModel": "sonnet",
+      "capabilities": ["planning", "repository-navigation", "coding", "backend", "frontend", "code-review"],
+      "scores": {
+        "default": { "quality": 70, "latency": 50, "cost": 50 }
+      },
+      "quota": { "阈值": 50, "周阈值": 90 }
+    },
+    "kimi": {
+      "adapter": "command-cli",
+      "enabled": false,
+      "command": "kimi",
+      "args": [],
+      "modelArgs": ["--model", "{model}"],
+      "defaultModel": "",
+      "models": [],
+      "capabilities": ["planning", "repository-navigation", "coding", "backend", "frontend", "code-review"],
+      "scores": {
+        "default": { "quality": 50, "latency": 50, "cost": 50 }
+      },
+      "quota": { "阈值": 70, "周阈值": 90 }
+    }
   },
-  "推荐": {
-    "精力档": "高",
-    "速度窗口小时": 2,
-    "每档处理数": 2
+  "routing": {
+    "crossProviderReview": true,
+    "weights": { "quality": 0.5, "success": 0.3, "latency": 0.1, "cost": 0.1 },
+    "roles": {
+      "orchestrator": { "prefer": ["codex", "claude"] },
+      "backend": { "prefer": ["codex", "claude"] },
+      "frontend": { "prefer": ["claude", "codex"] },
+      "reviewer": { "prefer": ["claude", "codex"] },
+      "integrator": { "prefer": ["codex", "claude"] }
+    }
   },
-  "网络": {
-    "代理默认": "http://127.0.0.1:7890"
+  "orchestration": {
+    "maxTasks": 20,
+    "allowNested": false
   },
+  "workspace": {
+    "mode": "worktree",
+    "root": "workspaces",
+    "branchPrefix": "studio",
+    "baseRef": "HEAD",
+    "autoCommit": true,
+    "integrateDependencies": true,
+    "allowMissingDependencies": false,
+    "requireGit": false
+  },
+  "stages": [
+    { "代号": "PLAN", "名称": "规划与契约" },
+    { "代号": "BUILD", "名称": "实现" },
+    { "代号": "VERIFY", "名称": "评审与集成" }
+  ],
+  "优先级": ["P0", "P1", "P2", "P3"],
+  "产出物类型": ["代码", "文档", "接口契约", "测试", "配置"],
+  "执行池": {
+    "codex": { "职能": [], "阈值": 70, "周阈值": 90 },
+    "claude": { "职能": [], "阈值": 50, "周阈值": 90 }
+  },
+  "闸值": { "待验收积压闸": 8, "QA自修上限": 2, "滞留超时小时": 4 },
+  "推荐": { "精力档": "高", "速度窗口小时": 2, "每档处理数": 2 },
+  "网络": { "代理默认": "http://127.0.0.1:7890" },
   "执行器": {
     "间隔秒": 15,
     "试跑耗时秒下限": 3,
@@ -41,28 +110,20 @@
     "质检耗时秒下限": 2,
     "质检耗时秒上限": 5
   },
-  "quota": {
-    "claudeMinIntervalSeconds": 300
-  },
+  "quota": { "claudeMinIntervalSeconds": 300 },
   "模型": {
     "codex默认": "",
     "claude默认": "sonnet",
-    "质检": "opus",
-    "代核": "opus",
-    "可选": {
-      "codex": [],
-      "claude": ["sonnet", "opus", "haiku"]
-    }
+    "质检": "",
+    "代核": "",
+    "可选": { "codex": [], "claude": ["sonnet", "opus", "haiku"], "kimi": [] }
   },
-  "项目": {
-    "默认": "",
-    "注册": {}
-  },
+  "项目": { "默认": "", "注册": {} },
   "agents": [
-    { "id": "策划-A", "职能": "策划", "执行池": "claude" },
-    { "id": "程序-A", "职能": "程序", "执行池": "codex" },
-    { "id": "美术-A", "职能": "美术", "执行池": "claude" },
-    { "id": "QA-A", "职能": "QA", "执行池": "claude" },
-    { "id": "装配-A", "职能": "装配", "执行池": "claude" }
+    { "id": "orchestrator-A", "role": "orchestrator", "职能": "orchestrator", "routing": { "mode": "auto" } },
+    { "id": "backend-A", "role": "backend", "职能": "backend", "routing": { "mode": "auto" } },
+    { "id": "frontend-A", "role": "frontend", "职能": "frontend", "routing": { "mode": "auto" } },
+    { "id": "reviewer-A", "role": "reviewer", "职能": "reviewer", "routing": { "mode": "auto" } },
+    { "id": "integrator-A", "role": "integrator", "职能": "integrator", "routing": { "mode": "auto" } }
   ]
 }

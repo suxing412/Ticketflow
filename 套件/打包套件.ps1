@@ -14,6 +14,7 @@ if (-not (Test-Path $exe)) { throw "找不到 $exe —— 先在 _app 下 npm ru
 $stage = Join-Path $env:TEMP "aistudio-suite-stage"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force "$stage\骨架\岗位协议" | Out-Null
+New-Item -ItemType Directory -Force "$stage\骨架\角色协议" | Out-Null
 New-Item -ItemType Directory -Force "$stage\骨架\风格库\美术库" | Out-Null
 
 # 装配件
@@ -21,7 +22,8 @@ Copy-Item $exe "$stage\监制台 $ver.exe"
 Copy-Item (Join-Path $repo '套件\部署.bat') "$stage\部署.bat"
 Copy-Item (Join-Path $repo '套件\SETUP.md') "$stage\SETUP.md"
 Copy-Item (Join-Path $repo '套件\studio.config.template.json') "$stage\骨架\studio.config.json"
-# 岗位协议用通用模板（不打包本工作室的 TK 定制版——发布纪律：套件内容全部通用默认）
+# 新安装默认走通用软件项目角色；旧游戏安装升级时仍可补齐原岗位协议。
+Copy-Item (Join-Path $repo '套件\角色协议模板\*.md') "$stage\骨架\角色协议\"
 Copy-Item (Join-Path $repo '套件\岗位协议模板\*.md') "$stage\骨架\岗位协议\"
 # 风格库空模板（新部署不继承本项目的公理）
 Set-Content -Encoding UTF8 "$stage\骨架\风格库\策划标杆.md" "# 策划标杆（提炼式设计公理）`n"

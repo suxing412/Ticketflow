@@ -5,13 +5,21 @@ You do exactly three things — release tickets into the pool, arbitrate dispute
 taste approval. Drafting assistance, claiming, execution, QA review, delegated acceptance,
 failure triage, bookkeeping and notifications are all automatic.
 
+> V2 is underway: roles are decoupled from model vendors and routed dynamically across enabled
+> providers. New installations default to Orchestrator, Backend, Frontend, Reviewer, and Integrator;
+> the original game-studio workflow remains available as a compatibility profile. Structured DAG
+> planning, per-ticket Git worktrees, checkpoint commits, and dependency-aware integration are wired end to end.
+
 [中文文档（主）](README.md) · [Setup Guide](套件/SETUP.md) · [Design & Protocol](docs/设计与协议.md)
 
 ## ⚠️ Read before use (security disclosure)
 
-1. **In live-fire mode, agents get full write access to the repos you register.** The runner
+1. **In live-fire mode, agents retain local-process access to the repos you register.** Git projects
+   use a separate worktree and branch per ticket to prevent concurrent agents from overwriting one
+   another, but this is not a security sandbox. The runner
    spawns headless CLIs (`codex exec --dangerously-bypass-approvals-and-sandbox`,
-   `claude -p --permission-mode acceptEdits`) with cwd set to your project repo. Register only
+   `claude -p --permission-mode acceptEdits`) with cwd set to the isolated worktree (or the project
+   directory when Git isolation is unavailable). Register only
    repos you are willing to let agents modify, and keep git history for rollback. Live fire is
    **locked by default**; unlocking is an explicit, confirmed action.
 2. **This tool reads and writes your CLI credential files**: it reads
@@ -37,6 +45,10 @@ network needs one (auto-resolved and injected at boot).
 - **Directories are the state machine**: a ticket is a plaintext .md living in one of ten state
   folders; changing state = an atomic rename. Plaintext is the single source of truth.
 - **Pull model**: agents auto-claim the next ticket when free; headcount = concurrency cap.
+- **Dynamic providers**: roles are independent from vendors; capability and recent reviewed quality
+  determine which enabled provider handles each new ticket.
+- **DAG + worktrees**: validated Orchestrator plans become dependent tickets, each executed on an
+  isolated branch; Integrator merges their checkpoints before publication.
 - **Two gates**: a manual pause gate plus automatic quota locks per CLI pool.
 - **Model tiering**: cheap models do the labor, expensive models sit as judges (QA review /
   delegated acceptance).

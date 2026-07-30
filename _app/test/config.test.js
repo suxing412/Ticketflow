@@ -27,4 +27,16 @@ t('resolveRoot：从子目录向上找到含配置的根', () => {
   assert.equal(config.resolveRoot(sub), d);
 });
 
+t('V2 通用模板是合法 JSON，包含角色、Provider 与自动路由', () => {
+  const file = path.resolve(__dirname, '..', '..', '套件', 'studio.config.template.json');
+  const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(cfg.schemaVersion, 2);
+  assert.ok(cfg.roles.orchestrator && cfg.roles.backend && cfg.roles.frontend);
+  assert.ok(cfg.providers.codex && cfg.providers.claude && cfg.providers.kimi);
+  assert.equal(cfg.agents.every((agent) => agent.routing.mode === 'auto'), true);
+  assert.equal(cfg.workspace.mode, 'worktree');
+  assert.equal(cfg.workspace.autoCommit, true);
+  assert.equal(cfg.orchestration.allowNested, false);
+});
+
 console.log(`全部通过：${passed} 项`);

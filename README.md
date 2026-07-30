@@ -1,8 +1,13 @@
 # 监制台（Producer Console）
 
-**把软件生产流程交给 AI agent 流水线的驾驶舱。**
+**把软件生产流程交给可动态选择厂商的多 Agent 流水线。**
 你只负责三件事——投池放行、争议拍板、品味终审；起草辅助、领单、执行、质检、
 委托验收、失败兜底、记账、通知，全部自动。
+
+> V2 重构已启动：新安装默认提供 Orchestrator、Backend、Frontend、Reviewer、Integrator，
+> 角色与 Codex/Claude/Kimi 等 Provider 解耦并按能力与历史质量动态路由。游戏工作室流程继续作为
+> 兼容 Profile 保留。结构化 DAG、独立 Git worktree、检查点提交和 Integrator 依赖合并已经接通。
+> 详见 [V2 通用多 Agent 重构](docs/V2通用多Agent重构.md)。
 
 [English](README.en.md) · [安装指南](套件/SETUP.md) · [设计与协议](docs/设计与协议.md)
 
@@ -19,9 +24,10 @@
 
 ## ⚠️ 使用前必读（安全披露）
 
-1. **实弹模式下 agent 对你注册的项目仓库有完全写权限**：执行器以
+1. **实弹模式下 agent 对你注册的项目仍有本机进程级访问能力**：Git 项目默认给每张工单创建独立
+   worktree 和分支，避免并行 Agent 互相覆盖；但这不是安全沙箱。执行器以
    `codex exec --dangerously-bypass-approvals-and-sandbox` / `claude -p --permission-mode acceptEdits`
-   启动无头 CLI 并把工作目录指向你的项目仓库。请只注册你愿意让 agent 写入的仓库，
+   启动无头 CLI 并把工作目录指向隔离 worktree。请只注册你愿意让 agent 访问的仓库，
    并保持仓库有 git 历史可回滚。实弹默认**锁定**，解锁是显式操作（参数页开关，二次确认）。
 2. **本工具会读写你的 CLI 凭据文件**：为显示订阅额度，会读取
    `~/.claude/.credentials.json` 并在 token 过期时自动续期（与官方 CLI 同一 OAuth 流程，
@@ -47,11 +53,18 @@ claude CLI（Claude Code）已登录、代理（如你的网络需要，自动�
 | 字段 | 默认 | 说明 | UI 位置 |
 |---|---|---|---|
 | `server.port` | 4270 | 本地服务端口（仅监听 127.0.0.1） | 参数页·服务端口（重启生效） |
-| `职能` | 策划/程序/美术/QA/装配 | 职能全集；职能由**产出写区**决定 | —（协议级，改配置） |
-| `执行池.codex.职能` | [程序] | 走 codex CLI 的职能 | —（协议级） |
-| `执行池.claude.职能` | [策划,美术,QA,装配] | 走 claude CLI 的职能 | —（协议级） |
-| `执行池.*.阈值` | codex 70 / claude 50 | 5h 用量 ≥N% 自动冻结该池领单（额度锁） | 参数页·执行池阈值 |
-| `执行池.*.周阈值` | 90 | 周用量阀门，烧穿周额度是灾难级 | 参数页·执行池阈值 |
+| `providers.*` | codex / claude；kimi 关闭 | Provider Adapter、模型、能力、质量/延迟/成本初始分 | 配置 + 参数页 |
+| `routing.weights` | 0.5/0.3/0.1/0.1 | 质量、近期成功率、延迟、成本的动态路由权重 | 改配置 |
+| `routing.crossProviderReview` | true | Reviewer 优先避开实现所用厂商 | 改配置 |
+| `orchestration.maxTasks` | 20 | 单次 Orchestrator 计划允许的最大子任务数 | 改配置 |
+| `workspace.mode` | worktree | 每张实弹执行单独立 Git 工作区；非 Git 项目降级为 direct | 改配置 |
+| `workspace.autoCommit` | true | Agent 完工时由系统形成分支检查点提交 | 改配置 |
+| `workspace.integrateDependencies` | true | 下游任务开工前自动合并依赖工单检查点 | 改配置 |
+| `workspace.allowMissingDependencies` | false | 依赖缺少 Git 检查点时拒绝启动，避免在旧基线上工作 | 改配置 |
+| `职能` / `roles` | orchestrator/backend/frontend/reviewer/integrator | 通用项目角色全集与硬能力要求 | —（协议级，改配置） |
+| `执行池.*` | codex / claude | V1 兼容字段；V2 以 `providers.*` 为准 | 参数页·Provider 阈值 |
+| `providers.*.quota.阈值` | codex 70 / claude 50 | 5h 用量 ≥N% 自动冻结该 Provider 领单 | 参数页·Provider 阈值 |
+| `providers.*.quota.周阈值` | 90 | 周用量阀门，烧穿周额度是灾难级 | 参数页·Provider 阈值 |
 | `闸值.待验收积压闸` | 8 | 待验收 ≥N 停止建议投放 | 参数页·参数闸值 |
 | `闸值.QA自修上限` | 2 | QA 不过自修轮数，超则上交人裁 | 参数页·参数闸值 |
 | `闸值.滞留超时小时` | 4 | 在途单超时告警（只告警不撤回） | 参数页·参数闸值 |
@@ -65,7 +78,7 @@ claude CLI（Claude Code）已登录、代理（如你的网络需要，自动�
 | `执行器.试跑耗时秒*` | 3–8 | 试跑模拟执行的耗时区间 | 改配置 |
 | `quota.claudeMinIntervalSeconds` | 300 | 额度查询最小间隔（防限流硬保证，下限 120） | 参数页·额度刷新间隔 |
 | `模型.claude默认` / `codex默认` | sonnet / 空 | 执行体力档（空=CLI 自带默认） | 参数页·模型档 |
-| `模型.质检` / `代核` | opus | 裁判档（判断活用强模型） | 参数页·模型档 |
+| `模型.质检` / `代核` | 空（Provider 默认） | 裁判档；可固定为当前最强评审模型 | 参数页·模型档 |
 | `模型.可选.*` | — | 模型下拉的候选清单（自动监测+手动增补） | 参数页·可选模型增补 |
 | `项目.注册` | {} | 项目名 → 仓库路径（agent 的写入目标） | 参数页·项目注册 |
 | `项目.默认` | — | 起草时的默认项目 | 参数页·项目注册 |
@@ -80,7 +93,8 @@ AI工作室/
   草稿/ 待投/ 池/ 在途/ 质检/ 待验收/ 待定夺/ 执行失败/ 完成/ 已归档/
                        ← 目录即状态机：工单 = 状态文件夹里的 .md
   回执/                ← 每单的完工报告
-  岗位协议/            ← 各职能 agent 章程（md 明文，改了下一单生效）
+  角色协议/            ← 通用项目各角色章程（md 明文，改了下一单生效）
+  workspaces/          ← 每张实弹工单的独立 Git worktree（同仓部署时自动移到临时目录）
   风格库/              ← 精选标杆与美术范本（验收后人工入库）
   journal/             ← 只追加的操作流水
 ```
@@ -88,6 +102,8 @@ AI工作室/
 ## 核心概念
 
 - **目录即状态机**：工单状态 = 所在文件夹，改状态 = 原子改名；明文 .md 是唯一事实源
+- **角色与厂商解耦**：角色描述工作边界，Provider 按能力、配置评分和近期评审质量动态选择
+- **DAG + worktree**：Orchestrator 计划经内核校验后落单；并行任务各自分支，Integrator 按依赖合并
 - **拉取制**：agent 干完自动领下一张；编制人数 = 并发上限
 - **双闸**：暂停闸门（手动）+ 额度锁（用量超阈自动冻结领单）
 - **模型分级**：便宜模型干体力（执行），贵模型当裁判（QA 复核/委托代核）
@@ -112,7 +128,7 @@ AI工作室/
 ```
 cd _app
 npm install          # electron 下载慢可用镜像
-npm test             # 77 项测试
+npm test             # 100+ 项测试
 npm run dist         # 产出便携 exe（见 package.json build.directories.output）
 powershell -ExecutionPolicy Bypass -File ..\套件\打包套件.ps1   # 打分发包
 ```
