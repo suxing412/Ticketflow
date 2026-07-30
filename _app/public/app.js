@@ -636,6 +636,9 @@ async function viewDecisions() {
   // D42：决策台按当前项目过滤（积压计数是全局闸，保持全局读数）
   const p = projActive();
   if (p) { await loadCfg(); d.待验收 = d.待验收.filter((t) => projOf(t) === p); d.待定夺 = d.待定夺.filter((t) => projOf(t) === p); }
+  // 默认标签没有内容时，直接切到真正需要用户处理的队列，避免把裁决按钮藏在空面板后面。
+  if (dTab === 'accept' && !d.待验收.length && d.待定夺.length) dTab = 'escal';
+  else if (dTab === 'escal' && !d.待定夺.length && d.待验收.length) dTab = 'accept';
   const cur = dTab === 'accept' ? (d.待验收[0] || null) : (d.待定夺[0] || null);
   let main = '<div class="dmain card r16"><p class="dim">没有待处理项</p></div>';
   if (cur) {
@@ -657,8 +660,8 @@ async function viewDecisions() {
         <button class="btn h36" onclick="dReject('${esc(cur.id)}')">打回</button></div></div>`
       : `<div class="dsign"><span>QA 修不好 · 呈你我裁决</span><div class="btns">
         <button class="btn h36" onclick="dAct('定夺','${esc(cur.id)}',null,'接受')">接受</button>
-        <button class="btn h36" onclick="dAct('定夺','${esc(cur.id)}',null,'给方向')">给方向</button>
-        <button class="btn danger-o h36" onclick="dAct('定夺','${esc(cur.id)}',null,'打回')">打回</button></div></div>`}</div>`;
+        <button class="btn h36" onclick="dGiveDirection('${esc(cur.id)}')">给方向</button>
+        <button class="btn danger-o h36" onclick="dDecideReject('${esc(cur.id)}')">打回</button></div></div>`}</div>`;
   }
   const q1 = d.待验收.map((t) => `<div class="qitem" onclick="dTab='accept';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2">${esc(t.title)} · ${esc(t.验收方式 || '保留')}</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>';
   return `<div class="dtabs">
@@ -670,6 +673,13 @@ async function viewDecisions() {
         ${d.待定夺.map((t) => `<div class="qitem" onclick="dTab='escal';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2">${esc(t.title)} · QA 未过</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>'}</div></div></div>`;
 }
 window.dAct = async (name, id, 通过, 决定) => { const r = await post('/api/act/' + name, { id, 通过, 决定 }); toast(r.ok ? '已处理' : (r.error || '失败')); route(); };
+window.dGiveDirection = async (id) => {
+  const 方向 = prompt('写下返工方向；执行 Agent 会在工单正文中看到：');
+  if (!方向 || !方向.trim()) return;
+  const r = await post('/api/act/定夺', { id, 决定: '给方向', 方向: 方向.trim(), 裁决人: '制作人' });
+  toast(r.ok ? '已附方向并重新执行' : (r.error || '失败')); route();
+};
+window.dDecideReject = (id) => { if (confirm('打回会归档这张旧单；需要另开角色正确的新工单。确认？')) dAct('定夺', id, null, '打回'); };
 window.dReject = (id) => { if (confirm('打回将归档旧单，需另开新单重走流程。确认？')) dAct('验收', id, false); };
 
 /* ===== P5 风格库 ===== */
@@ -1194,6 +1204,11 @@ async function viewDetail(id) {
       ops.push(['恢复计划', '从已保存的 .studio/plan.json 落子单，不再次调用模型', `act2('恢复计划','${id}')`]);
     ops.push(['重投', `清执行痕迹回池重领${fm.失败原因 ? '（' + esc(String(fm.失败原因).slice(0, 24)) + '）' : ''}`, `act3('失败分诊','${id}','重投')`]);
     ops.push(['上呈', '转待定夺，由你拍板', `act3('失败分诊','${id}','上呈')`]);
+  }
+  if (d.state === '待定夺') {
+    ops.push(['接受', '忽略 QA 异议，转入待验收', `dAct('定夺','${id}',null,'接受')`]);
+    ops.push(['给方向', '附上明确返工意见后重新执行', `dGiveDirection('${id}')`]);
+    ops.push(['打回', '归档旧单，另开角色正确的新单', `dDecideReject('${id}')`]);
   }
   if (d.state === '草稿') ops.push(['定稿', '草稿 → 待投', `act2('定稿','${id}')`]);
   if (d.state === '待投') ops.push(['投池', '释放进池（人闸）', `act2('投池','${id}')`]);
