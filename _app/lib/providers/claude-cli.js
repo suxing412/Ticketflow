@@ -24,10 +24,14 @@ function create(config = {}) {
         cmd: config.command || defaultCommand(),
         args: [
           '-p',
+          '--output-format', 'stream-json',
+          '--verbose',
+          '--include-partial-messages',
           ...(config.permissionArgs || ['--permission-mode', 'acceptEdits']),
           ...(model ? ['--model', model] : []),
         ],
         promptMode: 'stdin',
+        outputFormat: 'claude-stream-json',
       };
     },
   };

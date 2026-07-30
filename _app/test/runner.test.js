@@ -94,6 +94,9 @@ const waitUntil = async (fn, timeout = 8000) => {
       assert.match(done.fm.workspace.commit, /^[0-9a-f]{40}$/);
       assert.ok(fs.existsSync(path.join(done.fm.workspace.path, 'agent.txt')));
       assert.equal(fs.existsSync(path.join(repo, 'agent.txt')), false, '主项目未被并行执行直接改写');
+      const trace = runner.traceFor('LIVE-1');
+      assert.equal(trace.status, 'completed');
+      assert.match(trace.output, /完工报告 LIVE-1/);
     } finally {
       try { for (const row of worktrees.worktreeList(repo)) if (path.resolve(row.path) !== path.resolve(repo)) git(repo, ['worktree', 'remove', '--force', row.path]); } catch { /* 尽力清理 */ }
       fs.rmSync(top, { recursive: true, force: true });
@@ -313,10 +316,32 @@ const waitUntil = async (fn, timeout = 8000) => {
     assert.equal(runner.pickModel(cfgM, '质检', { 模型: 'haiku' }, 'claude'), 'opus', '质检走裁判档，个体不覆盖');
     assert.equal(runner.pickModel(cfgM, '代核', {}, 'claude'), 'opus');
     const c1 = runner.resolveCli('codex', 'gpt-x');
-    assert.deepEqual(c1.args.slice(-3), ['-m', 'gpt-x', '-'], 'codex -m 注入且 stdin 标记殿后');
+    assert.ok(c1.args.includes('-m') && c1.args.includes('gpt-x'), 'codex -m 注入');
+    assert.deepEqual(c1.args.slice(-2), ['--json', '-'], 'Codex JSONL 且 stdin 标记殿后');
     const c2 = runner.resolveCli('claude', 'opus');
     assert.ok(c2.args.includes('--model') && c2.args.includes('opus'));
     assert.ok(!runner.resolveCli('claude', '').args.includes('--model'), '空模型不加旗标');
+  });
+
+  await t('Claude 实时事件转可读轨迹，内部 thinking 不透出，最终结果可提取', async () => {
+    const trace = {};
+    const hidden = runner.renderClaudeEvent(trace, JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '秘密推理' } } }));
+    const visible = runner.renderClaudeEvent(trace, JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '正在检查接口' } } }));
+    assert.ok(!hidden.includes('秘密推理'));
+    assert.match(hidden, /内部思维链不展示/);
+    assert.equal(visible, '正在检查接口');
+    const raw = [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: '草稿' }] } }), JSON.stringify({ type: 'result', result: '最终回执' })].join('\n');
+    assert.equal(runner.finalProviderText({ outputFormat: 'claude-stream-json' }, raw), '最终回执');
+  });
+
+  await t('Codex JSONL 事件显示命令与最终消息，不展示 reasoning 内容', async () => {
+    const trace = {};
+    const hidden = runner.renderCodexEvent(trace, JSON.stringify({ type: 'item.completed', item: { type: 'reasoning', text: '秘密推理' } }));
+    const command = runner.renderCodexEvent(trace, JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'npm test' } }));
+    assert.ok(!hidden.includes('秘密推理'));
+    assert.match(command, /npm test/);
+    const raw = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: '最终报告' } });
+    assert.equal(runner.finalProviderText({ outputFormat: 'codex-jsonl' }, raw), '最终报告');
   });
 
   await t('项目定位（D32）：注册表解析路径，未注册返回 null', async () => {

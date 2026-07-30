@@ -28,9 +28,11 @@ function create(config = {}) {
           'exec',
           ...(config.permissionArgs || ['--dangerously-bypass-approvals-and-sandbox']),
           ...(model ? ['-m', model] : []),
+          '--json',
           '-',
         ],
         promptMode: 'stdin',
+        outputFormat: 'codex-jsonl',
       };
     },
   };

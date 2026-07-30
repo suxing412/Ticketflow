@@ -15,8 +15,17 @@ t('旧执行池可自动映射为 Codex/Claude Adapter', () => {
 t('Codex Adapter 保持 stdin 与模型参数协议', () => {
   const cfg = { providers: { codex: { adapter: 'codex-cli' } } };
   const run = registry.create(cfg, 'codex').buildInvocation({ model: 'gpt-x' });
-  assert.deepEqual(run.args.slice(-3), ['-m', 'gpt-x', '-']);
+  assert.ok(run.args.includes('-m') && run.args.includes('gpt-x'));
+  assert.deepEqual(run.args.slice(-2), ['--json', '-']);
+  assert.equal(run.outputFormat, 'codex-jsonl');
   assert.equal(run.promptMode, 'stdin');
+});
+
+t('Claude Adapter 使用官方实时 JSON 事件流', () => {
+  const run = claudeProvider.create({}).buildInvocation({ model: 'sonnet' });
+  assert.equal(run.outputFormat, 'claude-stream-json');
+  assert.ok(run.args.includes('stream-json'));
+  assert.ok(run.args.includes('--include-partial-messages'));
 });
 
 t('Provider CLI 支持跨机器环境变量显式定位', () => {

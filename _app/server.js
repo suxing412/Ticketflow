@@ -72,6 +72,14 @@ app.post('/api/config/gate', (req, res) => {
 // ---- 执行器（D30）：内嵌拉取循环 = 监制台版监听器。试跑默认，实弹待接入 ----
 const runner = require('./lib/runner');
 app.get('/api/runner', (req, res) => { if (!ready(res)) return; res.json(runner.status(ROOT, cfg)); });
+app.get('/api/runner/trace', (req, res) => {
+  if (!ready(res)) return;
+  const id = String(req.query.id || '');
+  if (!id || !store.find(ROOT, id)) return res.status(404).json({ error: '工单不存在' });
+  const trace = runner.traceFor(id);
+  if (!trace) return res.json({ id, status: 'unavailable', output: '', stderr: '', message: '本次启动尚无执行轨迹；应用重启前的 CLI 输出不会落盘。' });
+  res.json(trace);
+});
 app.post('/api/runner/start', (req, res) => {
   if (!ready(res)) return;
   runner.start(ROOT, () => cfg);

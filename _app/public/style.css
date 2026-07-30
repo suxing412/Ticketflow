@@ -587,6 +587,20 @@ path.fl-e.dimmed { opacity:.12; }
 .oprow2:hover { border-color:var(--ink3); }
 .oprow2 b { font-size:13px; }
 .oprow2 span { font-size:11px; color:var(--ink3); }
+.tracecard { padding:0; overflow:hidden; }
+.tracecard summary { list-style:none; cursor:pointer; padding:18px 22px; display:flex; align-items:center; justify-content:space-between;
+  border-bottom:1px solid var(--line); font-size:13px; font-weight:650; }
+.tracecard summary::-webkit-details-marker { display:none; }
+.tracecard summary > span { display:flex; align-items:center; gap:9px; }
+.trace-live { width:8px; height:8px; border-radius:50%; background:var(--ink3); display:inline-block; }
+.trace-live.on { background:var(--ok); box-shadow:0 0 0 4px color-mix(in srgb, var(--ok) 16%, transparent); animation:breathe 1.7s ease-in-out infinite; }
+.trace-note { padding:12px 22px 0; color:var(--ink3); font-size:10.5px; }
+.trace-meta { padding:10px 22px 12px; display:flex; flex-wrap:wrap; gap:8px 14px; color:var(--ink3); font:11px var(--mono); }
+.trace-status { color:var(--ink); font-weight:700; }
+.trace-status.running, .trace-status.starting { color:var(--ok); }
+.trace-status.failed, .trace-status.timed_out { color:var(--danger); }
+.trace-output { margin:0 14px 16px; min-height:180px; max-height:440px; overflow:auto; border-radius:12px; padding:16px 18px;
+  background:var(--ink); color:var(--bg); white-space:pre-wrap; overflow-wrap:anywhere; font:11.5px/1.65 var(--mono); tab-size:2; }
 
 /* ===== P9b 排期弹窗 ===== */
 .modal-mask { position:fixed; inset:0; background:var(--mask-strong); z-index:40; }

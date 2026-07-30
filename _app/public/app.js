@@ -1139,8 +1139,41 @@ window.dSave = async (release) => {
 };
 
 /* ===== P8 详情 ===== */
+const traceStatusText = (s) => ({ starting: '正在启动', running: '执行中', completed: '已完成', failed: '执行失败', timed_out: '已超时', unavailable: '暂无轨迹' }[s] || s || '暂无轨迹');
+function traceBodyText(t) {
+  const out = String(t.output || ''); const err = String(t.stderr || '');
+  if (!out && !err) return t.message || (t.status === 'running' || t.status === 'starting' ? '等待 Provider 返回首个事件…' : '本次执行没有文字输出。');
+  return out + (err ? `\n\n── stderr / 错误输出 ──\n${err}` : '');
+}
+function traceMetaHtml(t) {
+  const elapsed = t.startedAt ? fmtElapsed((t.endedAt ? Date.parse(t.endedAt) : Date.now()) - Date.parse(t.startedAt)) : '—';
+  const idle = t.lastActivityAt ? fmtElapsed(Date.now() - Date.parse(t.lastActivityAt)) : '—';
+  return `<span class="trace-status ${esc(t.status || '')}">${esc(traceStatusText(t.status))}</span>
+    <span>${esc(t.provider || '—')}${t.model ? '/' + esc(t.model) : ''}</span><span>${esc(t.agent || '—')}</span>
+    <span>运行 ${elapsed}</span><span>距上次输出 ${idle}</span>${t.truncated ? '<span class="warn">前段已截断</span>' : ''}`;
+}
+function traceCardHtml(id, t) {
+  return `<details class="p8main card tracecard r16" open id="trace-panel">
+    <summary><span><i class="trace-live ${['starting', 'running'].includes(t.status) ? 'on' : ''}"></i>AI 实时输出与工具轨迹</span><span class="dim">点击收起/展开</span></summary>
+    <div class="trace-note">展示 Provider 实际返回的文本、工具事件和错误；未公开的内部思维链不展示。</div>
+    <div class="trace-meta" id="trace-meta">${traceMetaHtml(t)}</div>
+    <pre class="trace-output" id="trace-output">${esc(traceBodyText(t))}</pre>
+  </details>`;
+}
+async function refreshTrace(id) {
+  const t = await api('/api/runner/trace?id=' + encodeURIComponent(id));
+  const meta = $('trace-meta'), out = $('trace-output'); if (!meta || !out) return;
+  meta.innerHTML = traceMetaHtml(t);
+  const text = traceBodyText(t); const follow = out.scrollTop + out.clientHeight >= out.scrollHeight - 48;
+  if (out.textContent !== text) out.textContent = text;
+  if (follow) out.scrollTop = out.scrollHeight;
+  const live = document.querySelector('#trace-panel .trace-live'); if (live) live.classList.toggle('on', ['starting', 'running'].includes(t.status));
+}
 async function viewDetail(id) {
-  const d = await api('/api/ticket?id=' + encodeURIComponent(id));
+  const [d, trace] = await Promise.all([
+    api('/api/ticket?id=' + encodeURIComponent(id)),
+    api('/api/runner/trace?id=' + encodeURIComponent(id)).catch(() => ({ status: 'unavailable', output: '', stderr: '' })),
+  ]);
   if (d.error) return `<p class="err" style="margin-top:30px">${esc(d.error)}</p>`;
   const fm = d.fm, c = d.链 || { 父子: { 父: null, 子: [] }, 依赖: [] };
   const chainRow = (k, v, cls) => `<div class="crow"><span class="ck">${k}</span><span class="cv ${cls || ''}">${v || '—'}</span></div>`;
@@ -1172,6 +1205,7 @@ async function viewDetail(id) {
     if (fm.职能 === '策划') ops.push(['入标杆', '提炼进设计公理（审批点④）', `axModal('${id}')`]);
     if (fm.职能 === '美术' || fm.职能 === '装配') ops.push(['入美术库', '产出精选进风格库（审批点④）', `artModal('${id}')`]);
   }
+  setTimeout(() => { refreshTrace(id).catch(() => {}); pollLoop('trace-panel', 1000, () => refreshTrace(id)); }, 0);
   return `<div class="p8grid"><div>
       <div class="p8main card r16"><h2>${esc(id)} · ${esc(fm.title)}</h2>
         <div class="chipsrow">${fnPill(fm.职能)}<span class="pill mut">${esc(fm.产出物类型 || '')}</span>
@@ -1187,6 +1221,7 @@ async function viewDetail(id) {
           ${fm.workspace ? chainRow('工作区', fm.workspace.isolated
             ? `${esc(fm.workspace.branch || '隔离分支')} · ${esc(String(fm.workspace.commit || '').slice(0, 10) || '待检查点')}${fm.workspace.publishedAt ? ' · 已发布' : ''}`
             : esc(fm.workspace.warning || '直接目录模式')) : ''}</div></div>
+      ${traceCardHtml(id, trace)}
       <div class="p8main card r16"><b style="font-size:13px">正文</b><div class="doc2">${d.html || '<p class="dim">无正文</p>'}</div></div>
     </div><div>
       <div class="rside card r16"><h3>回执 · 完工报告</h3>${rsecs || '<p class="dim" style="margin-top:10px">尚无回执（完工后生成）</p>'}</div>

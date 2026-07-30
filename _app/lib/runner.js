@@ -22,8 +22,121 @@ const worktrees = require('./workspace/worktree');
 // 内存态：正在执行的工作（agentId → { id, kind, startedAt, timer, child }）。
 // exe 重启即清空，tick 为"在途/质检有主办但无执行记录"的单重新拉起（断点恢复）。
 const running = new Map();
+// 最近一次执行轨迹（工单 id → trace）。只保存在本机内存，避免把可能含敏感上下文的 CLI 输出落盘。
+const traces = new Map();
+const TRACE_MAX_CHARS = 200000;
 let loopTimer = null;
 let lastTick = null;
+
+function redactTrace(value) {
+  return String(value || '')
+    .replace(/\b(?:sk|api)[-_][A-Za-z0-9_-]{16,}\b/g, '[REDACTED]')
+    .replace(/((?:api[_-]?key|authorization|access[_-]?token|secret)\s*[:=]\s*)[^\s,;}]+/ig, '$1[REDACTED]');
+}
+function beginTrace(id, meta) {
+  const now = meta.startedAt || new Date().toISOString();
+  const trace = { id, ...meta, status: 'starting', startedAt: now, lastActivityAt: now, endedAt: null, output: '', stderr: '', truncated: false };
+  traces.delete(id); traces.set(id, trace);
+  while (traces.size > 100) traces.delete(traces.keys().next().value);
+  return trace;
+}
+function appendTrace(trace, value, channel = 'output') {
+  if (!trace || value === undefined || value === null || value === '') return;
+  const key = channel === 'stderr' ? 'stderr' : 'output';
+  trace[key] += redactTrace(value);
+  if (trace[key].length > TRACE_MAX_CHARS) { trace[key] = trace[key].slice(-TRACE_MAX_CHARS); trace.truncated = true; }
+  trace.lastActivityAt = new Date().toISOString();
+}
+function endTrace(trace, status, reason, exitCode) {
+  if (!trace) return;
+  trace.status = status; trace.endedAt = new Date().toISOString(); trace.lastActivityAt = trace.endedAt;
+  if (reason) appendTrace(trace, `\n[系统] ${reason}\n`, status === 'completed' ? 'output' : 'stderr');
+  if (exitCode !== undefined) trace.exitCode = exitCode;
+}
+function traceFor(id) {
+  const trace = traces.get(String(id || ''));
+  if (!trace) return null;
+  const { id: ticket, agent, kind, role, provider, model, status, startedAt, lastActivityAt, endedAt, output, stderr, truncated, exitCode, workspace } = trace;
+  return { id: ticket, agent, kind, role, provider, model, status, startedAt, lastActivityAt, endedAt, output, stderr, truncated, exitCode,
+    workspace: workspace ? { path: workspace.path, branch: workspace.branch, isolated: workspace.isolated } : null };
+}
+
+function renderClaudeEvent(trace, line) {
+  let event; try { event = JSON.parse(line); } catch { return line + '\n'; }
+  if (event.type === 'system') return `[系统] Claude ${event.subtype || 'session'}${event.model ? ` · ${event.model}` : ''}\n`;
+  if (event.type === 'stream_event') {
+    const ev = event.event || {};
+    if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') return `\n[工具] ${ev.content_block.name || '调用'}\n`;
+    if (ev.type === 'content_block_start' && /thinking/.test(ev.content_block?.type || '')) {
+      if (trace._thinkingNotice) return '';
+      trace._thinkingNotice = true; return '\n[分析] 模型正在分析（内部思维链不展示）\n';
+    }
+    if (ev.type === 'content_block_delta') {
+      if (ev.delta?.type === 'text_delta') { trace._sawStreamText = true; return ev.delta.text || ''; }
+      if (ev.delta?.type === 'input_json_delta') return ev.delta.partial_json || '';
+      if (/thinking/.test(ev.delta?.type || '')) {
+        if (trace._thinkingNotice) return '';
+        trace._thinkingNotice = true; return '\n[分析] 模型正在分析（内部思维链不展示）\n';
+      }
+    }
+    if (ev.type === 'content_block_stop') return '\n';
+    return '';
+  }
+  if (event.type === 'assistant' && !trace._sawStreamText) {
+    return (event.message?.content || []).filter((x) => x.type === 'text').map((x) => x.text).join('') || '';
+  }
+  if (event.type === 'user') {
+    const blocks = event.message?.content || [];
+    return blocks.filter((x) => x.type === 'tool_result').map((x) => {
+      const content = typeof x.content === 'string' ? x.content : JSON.stringify(x.content || '');
+      return `\n[工具结果] ${content.slice(0, 4000)}\n`;
+    }).join('');
+  }
+  if (event.type === 'result') return `\n[系统] Claude 执行结束${event.is_error ? '（失败）' : ''}\n`;
+  return '';
+}
+function renderCodexEvent(trace, line) {
+  let event; try { event = JSON.parse(line); } catch { return line + '\n'; }
+  if (event.type === 'thread.started') return `[系统] Codex 线程 ${event.thread_id || '已启动'}\n`;
+  if (event.type === 'turn.started') return '[系统] Codex 开始执行\n';
+  if (event.type === 'error' || event.type === 'turn.failed') return `\n[错误] ${event.message || event.error?.message || JSON.stringify(event.error || event)}\n`;
+  if (event.type === 'turn.completed') {
+    const u = event.usage || {};
+    return `\n[系统] Codex 执行结束${u.input_tokens != null ? ` · input ${u.input_tokens} · output ${u.output_tokens || 0}` : ''}\n`;
+  }
+  if (!/^item\./.test(event.type || '') || !event.item) return '';
+  const item = event.item;
+  if (item.type === 'reasoning') {
+    if (trace._thinkingNotice) return '';
+    trace._thinkingNotice = true; return '\n[分析] 模型正在分析（内部思维链不展示）\n';
+  }
+  if (item.type === 'agent_message') return event.type === 'item.completed' ? `${item.text || ''}\n` : '';
+  if (item.type === 'command_execution') {
+    const output = event.type === 'item.completed' ? (item.aggregated_output || item.output || '') : '';
+    return `\n[命令] ${item.command || ''}${output ? `\n${String(output).slice(-6000)}` : ''}\n`;
+  }
+  if (item.type === 'file_change') return `\n[文件变更] ${item.path || item.file || JSON.stringify(item.changes || item)}\n`;
+  if (item.type === 'mcp_tool_call') return `\n[MCP 工具] ${item.server || ''}${item.tool ? '/' + item.tool : ''}\n`;
+  if (item.type === 'web_search') return `\n[搜索] ${item.query || ''}\n`;
+  if (/plan|todo/.test(item.type || '')) return `\n[计划] ${item.text || JSON.stringify(item.items || item)}\n`;
+  return event.type === 'item.started' ? `\n[事件] ${item.type}\n` : '';
+}
+function renderProviderEvent(trace, line, format) {
+  if (format === 'claude-stream-json') return renderClaudeEvent(trace, line);
+  if (format === 'codex-jsonl') return renderCodexEvent(trace, line);
+  return line + '\n';
+}
+function finalProviderText(invocation, raw) {
+  if (!['claude-stream-json', 'codex-jsonl'].includes(invocation?.outputFormat)) return String(raw || '').trim();
+  let result = ''; const assistant = [];
+  for (const line of String(raw || '').split(/\r?\n/).filter(Boolean)) {
+    let event; try { event = JSON.parse(line); } catch { continue; }
+    if (event.type === 'result' && typeof event.result === 'string') result = event.result;
+    if (event.type === 'assistant') assistant.push(...(event.message?.content || []).filter((x) => x.type === 'text').map((x) => x.text));
+    if (event.type === 'item.completed' && event.item?.type === 'agent_message' && event.item.text) result = event.item.text;
+  }
+  return String(result || assistant.join('\n') || '').trim();
+}
 
 const busyTickets = () => new Set([...running.values()].map((e) => e.id));
 function isOn(root) { return !!state.read(root).执行器?.运行; }
@@ -174,6 +287,8 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   const providerName = route.name;
   const model = pickModel(cfg, kind, agentCfg, providerName);
   const entry = { id: t.id, kind, role: routeRole, provider: providerName, model, route, startedAt: opts.nowIso || new Date().toISOString() };
+  entry.trace = beginTrace(t.id, { agent: agentId, kind, role: routeRole, provider: providerName, model, startedAt: entry.startedAt });
+  appendTrace(entry.trace, `[系统] ${agentId} 开始${kind} · ${providerName}${model ? '/' + model : ''}\n`);
   running.set(agentId, entry);
   const recordResult = (ok, reason) => {
     if (entry.recorded) return;
@@ -187,13 +302,17 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     });
   };
   const finishOk = (note, verdict) => {
-    try { finishOkInner(note, verdict); } catch (e) {
+    try {
+      finishOkInner(note, verdict);
+      if (['starting', 'running'].includes(entry.trace.status)) endTrace(entry.trace, 'completed', 'Provider 执行结束', 0);
+    } catch (e) {
       // 定时器回调里的异常会成为主进程未捕获异常 → 整个 app 弹窗崩掉（0.9.1 YAML 实测）。
       // 单张单的收尾失败只准伤自己：记账 + 尝试入执行失败，绝不外抛。
       running.delete(agentId);
       recordResult(false, '完工收尾异常：' + e.message);
       journal.append(root, `完工收尾异常 ${t.id}：${String(e.message).slice(0, 100)}——单未流转，待分诊`);
       try { lifecycle.执行失败(root, t.id, '完工收尾异常：' + String(e.message).slice(0, 80)); } catch { /* 尽力 */ }
+      endTrace(entry.trace, 'failed', '完工收尾异常：' + e.message);
     }
   };
   const finishOkInner = (note, verdict) => {
@@ -266,11 +385,13 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   const failLocal = (why) => {
     try { failLocalInner(why); } catch (e) {
       running.delete(agentId);
+      endTrace(entry.trace, 'failed', `失败入位异常：${e.message}`);
       try { journal.append(root, `失败入位异常 ${t.id}：${String(e.message).slice(0, 100)}`); } catch { /* 尽力 */ }
     }
   };
   const failLocalInner = (why) => { // D31：失败入位为纯本地操作，任何网络状况下都能落位
     running.delete(agentId);
+    endTrace(entry.trace, /超时/.test(String(why)) ? 'timed_out' : 'failed', why);
     recordResult(false, why);
     if (kind === '代核') { // 代核失败不动单（待验收无失败转移）：记账后待下轮/人工
       journal.append(root, `委托代核失败 ${t.id}（${String(why).slice(0, 80)}）——单留待验收`);
@@ -305,6 +426,8 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     const durMs = opts.durMs ?? (lo + Math.random() * Math.max(0, hi - lo)) * 1000;
     const sec = Math.round(durMs / 1000);
     const receipt = `# 完工报告 ${t.id}（试跑）\n工单编号：${t.id}\n## 做了什么\n试跑模拟${kind}（零额度）\n## QA 章节\n${kind === '质检' ? '模拟复核通过' : '（试跑占位）'}\n## 实际消耗\n模拟 ${sec}s · 0 token\n## 异议\n无\n`;
+    entry.trace.status = 'running';
+    appendTrace(entry.trace, `[试跑] 模拟执行中，预计 ${sec}s，不调用 Provider。\n`);
     const dryWorkerRole = Object.keys(cfg.roles || {}).find((role) => !['orchestrator', 'reviewer', 'integrator'].includes(role)) || (cfg.职能 || []).find((role) => role !== 'orchestrator') || 'generalist';
     const dryPlan = JSON.stringify({ summary: '试跑生成一张演示子单', tasks: [{
       key: 'demo', title: '验证 Orchestrator 子单链路', role: dryWorkerRole,
@@ -328,6 +451,8 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     const dependencies = kind === '执行' ? worktrees.dependencyTickets(root, t, store) : [];
     const workspace = worktrees.prepare(root, cfg, t, baseProject, { role: routeRole, dependencies });
     entry.workspace = workspace;
+    entry.trace.workspace = workspace;
+    appendTrace(entry.trace, `[工作区] ${workspace.path}${workspace.branch ? ` · ${workspace.branch}` : ''}\n`);
     proj = { ...baseProject, path: workspace.path, workspace };
     if (workspace.isolated || workspace.warning) {
       store.update(root, t.id, (fm) => { fm.workspace = workspace; });
@@ -356,10 +481,19 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     });
   } catch (e) { failLocal('CLI 启动失败：' + e.message); return true; }
   entry.child = child;
+  entry.trace.status = 'running';
+  appendTrace(entry.trace, `[进程] CLI 已启动 · PID ${child.pid || '—'}\n`);
   journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${providerName}${model ? '/' + model : ''} → ${proj.name}）`);
   let out = '', errout = '';
-  child.stdout.on('data', (d) => { out += d; if (out.length > 400000) out = out.slice(-200000); });
-  child.stderr.on('data', (d) => { errout += d; if (errout.length > 20000) errout = errout.slice(-10000); });
+  let jsonBuffer = '';
+  child.stdout.on('data', (d) => {
+    const chunk = String(d); out += chunk; if (out.length > 400000) out = out.slice(-200000);
+    if (['claude-stream-json', 'codex-jsonl'].includes(invocation.outputFormat)) {
+      jsonBuffer += chunk; const lines = jsonBuffer.split(/\r?\n/); jsonBuffer = lines.pop() || '';
+      for (const line of lines) appendTrace(entry.trace, renderProviderEvent(entry.trace, line, invocation.outputFormat));
+    } else appendTrace(entry.trace, chunk);
+  });
+  child.stderr.on('data', (d) => { const chunk = String(d); errout += chunk; if (errout.length > 20000) errout = errout.slice(-10000); appendTrace(entry.trace, chunk, 'stderr'); });
   const timeoutMs = (rc.执行超时分钟 ?? 30) * 60000;
   const killer = setTimeout(() => { // 超时树杀（中台同款）：整棵进程树掐掉再标失败
     try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch { /* 尽力 */ }
@@ -370,8 +504,9 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   child.on('close', (code) => {
     clearTimeout(killer);
     if (!running.has(agentId)) return; // 已被超时处理
+    if (jsonBuffer && ['claude-stream-json', 'codex-jsonl'].includes(invocation.outputFormat)) appendTrace(entry.trace, renderProviderEvent(entry.trace, jsonBuffer, invocation.outputFormat));
     if (code === 0) {
-      const text = (String(out).trim().slice(-8000)) || `# 完工报告 ${t.id}\n（CLI 无输出）`;
+      const text = (finalProviderText(invocation, out).slice(-8000)) || `# 完工报告 ${t.id}\n（CLI 无输出）`;
       // 代核结论机器可读行：找不到"结论：通过"一律按不过处理（保守，不误自动完成）
       const parsedVerdict = kind === '代核' || kind === '质检' ? /结论[:：]\s*通过/.test(text) : true;
       finishOk(text, parsedVerdict);
@@ -476,6 +611,7 @@ function status(root, cfg) {
     间隔秒: (cfg.执行器 || {}).间隔秒 ?? 15,
     执行中: [...running.entries()].map(([agent, e]) => ({
       agent, id: e.id, kind: e.kind, role: e.role, provider: e.provider, model: e.model, startedAt: e.startedAt,
+      lastActivityAt: e.trace && e.trace.lastActivityAt,
       workspace: e.workspace ? { path: e.workspace.path, branch: e.workspace.branch, isolated: e.workspace.isolated } : null,
     })),
     执行失败数: store.list(root, '执行失败').length,
@@ -483,4 +619,5 @@ function status(root, cfg) {
   };
 }
 
-module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, isDry, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt };
+module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, traceFor, traces, renderClaudeEvent, renderCodexEvent, finalProviderText,
+  running, isOn, isDry, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt };
