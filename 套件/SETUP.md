@@ -7,6 +7,9 @@
 已启用的 Codex、Claude、Kimi 等 Provider 中按能力、配置评分和近期评审通过率动态选择。旧游戏流程
 配置仍可使用 `studio.config.game.template.json`。
 
+源码启动、Provider 接入、动态路由、worktree、完整生产流程和故障排查见
+[部署、调试与完整使用手册](../docs/部署调试与完整使用手册.md)。
+
 ## 前置要求
 
 | 项 | 说明 |

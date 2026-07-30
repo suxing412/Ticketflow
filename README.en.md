@@ -10,7 +10,7 @@ failure triage, bookkeeping and notifications are all automatic.
 > the original game-studio workflow remains available as a compatibility profile. Structured DAG
 > planning, per-ticket Git worktrees, checkpoint commits, and dependency-aware integration are wired end to end.
 
-[中文文档（主）](README.md) · [Setup Guide](套件/SETUP.md) · [Design & Protocol](docs/设计与协议.md)
+[中文文档（主）](README.md) · [完整部署与调试手册](docs/部署调试与完整使用手册.md) · [Setup Guide](套件/SETUP.md) · [Design & Protocol](docs/设计与协议.md)
 
 ## ⚠️ Read before use (security disclosure)
 

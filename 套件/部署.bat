@@ -25,6 +25,7 @@ if exist "%TARGET%\studio.config.json" (
 
 echo [2/4] 复制监制台 exe ...
 for %%F in ("%~dp0监制台 *.exe") do copy /y "%%F" "%TARGET%\" >nul
+if exist "%~dp0完整使用手册.md" copy /y "%~dp0完整使用手册.md" "%TARGET%\完整使用手册.md" >nul
 
 echo [3/4] 注册第一个项目（执行 agent 的目标仓库；可留空，稍后在 参数页-项目注册 里加）
 set "PNAME="

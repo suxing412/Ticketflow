@@ -9,7 +9,7 @@
 > 兼容 Profile 保留。结构化 DAG、独立 Git worktree、检查点提交和 Integrator 依赖合并已经接通。
 > 详见 [V2 通用多 Agent 重构](docs/V2通用多Agent重构.md)。
 
-[English](README.en.md) · [安装指南](套件/SETUP.md) · [设计与协议](docs/设计与协议.md)
+[English](README.en.md) · [完整使用手册](docs/部署调试与完整使用手册.md) · [安装指南](套件/SETUP.md) · [设计与协议](docs/设计与协议.md)
 
 ```
 你（制作人）          监制台（本工具）                agent（codex / claude 无头进程）

@@ -21,6 +21,11 @@ New-Item -ItemType Directory -Force "$stage\骨架\风格库\美术库" | Out-Nu
 Copy-Item $exe "$stage\监制台 $ver.exe"
 Copy-Item (Join-Path $repo '套件\部署.bat') "$stage\部署.bat"
 Copy-Item (Join-Path $repo '套件\SETUP.md') "$stage\SETUP.md"
+Copy-Item (Join-Path $repo 'docs\部署调试与完整使用手册.md') "$stage\完整使用手册.md"
+# 仓库内 SETUP 从套件目录链接到 ../docs；分发包里手册与 SETUP 同级，打包时修正链接。
+$setupFile = "$stage\SETUP.md"
+$setupText = Get-Content -Raw -Encoding UTF8 $setupFile
+$setupText.Replace('../docs/部署调试与完整使用手册.md', '完整使用手册.md') | Set-Content -Encoding UTF8 $setupFile
 Copy-Item (Join-Path $repo '套件\studio.config.template.json') "$stage\骨架\studio.config.json"
 # 新安装默认走通用软件项目角色；旧游戏安装升级时仍可补齐原岗位协议。
 Copy-Item (Join-Path $repo '套件\角色协议模板\*.md') "$stage\骨架\角色协议\"
