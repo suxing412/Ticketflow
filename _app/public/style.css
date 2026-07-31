@@ -292,6 +292,8 @@ a.gear { text-decoration:none; }
 .gatebar2 { height:64px; border-radius:12px; display:flex; align-items:center; padding:0 24px; gap:20px; margin-top:24px; font-size:13px; }
 .gatebar2 .gsec .glbl { display:block; font-size:11px; color:var(--ink3); font-weight:500; }
 .gatebar2 .gv { display:flex; align-items:center; gap:8px; margin-top:2px; }
+.gatebar2 .pause-after-btn { flex:0 0 auto; margin-left:-12px; }
+.gatebar2 .pause-after-btn.armed { border-color:var(--warn); color:var(--warn); }
 .gatebar2 .dot { width:7px; height:7px; border-radius:4px; background:var(--ok); display:inline-block; }
 .gatebar2 .vdiv { width:1px; height:32px; background:var(--line); }
 .gatebar2 .minibar { width:54px; height:6px; background:var(--line); border-radius:3px; overflow:hidden; display:inline-block; }
@@ -603,6 +605,18 @@ path.fl-e.dimmed { opacity:.12; }
 .trace-status.failed, .trace-status.timed_out { color:var(--danger); }
 .trace-output { margin:0 14px 16px; min-height:180px; max-height:440px; overflow:auto; border-radius:12px; padding:16px 18px;
   border:1px solid var(--terminal-line); background:var(--terminal-bg); color:var(--terminal-fg); white-space:pre-wrap; overflow-wrap:anywhere; font:11.5px/1.65 var(--mono); tab-size:2; }
+.review-card { border-left:3px solid var(--line); }
+.review-card.passed { border-left-color:var(--ok); }
+.review-card.failed { border-left-color:var(--danger); }
+.review-head { display:flex; align-items:center; gap:8px; margin:10px 0 14px; font-size:11px; color:var(--ink3); }
+.review-sec { margin-top:13px; }
+.review-sec > b { font-size:11px; color:var(--ink2); }
+.review-sec ul { margin:6px 0 0; padding-left:18px; }
+.review-sec li { margin:4px 0; font-size:12px; line-height:1.5; }
+.review-sec p { margin:6px 0 0; font-size:11px; }
+.review-raw { margin-top:14px; border-top:1px solid var(--line); padding-top:10px; }
+.review-raw summary { cursor:pointer; font-size:11px; color:var(--ink3); }
+.review-raw pre { white-space:pre-wrap; overflow-wrap:anywhere; font:10.5px/1.55 var(--mono); color:var(--ink2); max-height:260px; overflow:auto; }
 
 /* ===== P9b 排期弹窗 ===== */
 .modal-mask { position:fixed; inset:0; background:var(--mask-strong); z-index:40; }

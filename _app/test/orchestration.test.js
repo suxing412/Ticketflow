@@ -50,6 +50,21 @@ t('DAG 校验拒绝未知角色、未知依赖、递归 Orchestrator 和环', ()
   assert.throws(() => plan.normalizePlan(CFG, cyclic), /成环/);
 });
 
+t('reviewer 只读边界拒绝实现目录和编码能力', () => {
+  assert.throws(() => plan.normalizePlan(CFG, { tasks: [{
+    key: 'review_impl', title: '实现申请评审', role: 'reviewer',
+    writeScope: ['server/review/**'], acceptance: ['评审可运行'],
+  }] }), /reviewer 是只读角色/);
+  assert.throws(() => plan.normalizePlan(CFG, { tasks: [{
+    key: 'review_test', title: '编写评测', role: 'reviewer',
+    requiredCapabilities: ['coding'], acceptance: ['测试通过'],
+  }] }), /reviewer 不能要求编码能力/);
+  assert.doesNotThrow(() => plan.normalizePlan(CFG, { tasks: [{
+    key: 'qa', title: '只读复核产出', role: 'reviewer',
+    requiredCapabilities: ['code-review'], acceptance: ['逐条给出证据'],
+  }] }));
+});
+
 t('有效计划物化为待投子单，编号和依赖转换稳定', () => {
   const root = makeRoot();
   seed(root, '在途', { id: 'REQ-1', role: 'orchestrator', 职能: 'orchestrator', 项目: 'DEMO', 主办: 'orchestrator-A' });

@@ -8,7 +8,7 @@ const path = require('path');
 const STATE_FILE = '.studio-state.json';
 const LOCK_DIR = '.studio-state.lock';
 
-const DEFAULT = { paused: { global: false, codex: false, claude: false }, quotaGate: {}, 执行器: { 运行: false, 试跑: true } };
+const DEFAULT = { paused: { global: false, codex: false, claude: false }, quotaGate: {}, 执行器: { 运行: false, 试跑: true, 完成后暂停: false } };
 
 function read(root) {
   try { return { ...DEFAULT, ...JSON.parse(fs.readFileSync(path.join(root, STATE_FILE), 'utf8')) }; }

@@ -259,8 +259,10 @@ app.get('/api/env', async (req, res) => {
     } catch (e) { return { provider, result: { ok: false, note: e.message } }; }
   }));
   const proxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || null;
+  const agentToolchain = require('./lib/toolchain').resolve(ROOT, cfg);
   const 运行时 = [
-    item('node', '绿', process.version),
+    item('监制台运行时', '绿', process.version + '（Electron 内置）'),
+    item('Agent Node/npm', agentToolchain.ok ? '绿' : '黄', agentToolchain.ok ? agentToolchain.dir : '未安装统一工具链；Agent 可编码但无法可靠运行 JS 测试'),
     ...probeRows.map(({ provider, result }) => item(`${provider.name} · ${provider.adapter}`, result.ok ? '绿' : '黄', result.note + (result.ok ? '' : `（${provider.name} 实弹不可用）`))),
     // 探针标准=运行时标准：启动已按 环境→注册表→config默认 注入，这里报有效值+来源
     item('网络', '绿', proxy ? `应用层代理 ${proxy}（${process.env.__STUDIO_PROXY_SRC || '环境变量'}）` : '系统直连/VPN（未配置应用层代理）'),
@@ -394,10 +396,11 @@ app.get('/api/ticket', (req, res) => {
   const id = String(req.query.id || '');
   const t = store.find(ROOT, id);
   if (!t) return res.status(404).json({ error: '工单不存在' });
-  let 回执 = null;
+  let 回执 = null; let receiptRaw = '';
   const rp = path.join(ROOT, '回执', `${id}.md`);
-  if (fs.existsSync(rp)) 回执 = { raw: fs.readFileSync(rp, 'utf8'), html: mdHtml(fs.readFileSync(rp, 'utf8')) };
-  res.json({ id, state: t.state, fm: t.fm, body: t.body, html: mdHtml(t.body), 链: trace.chains(ROOT, id), 回执 });
+  if (fs.existsSync(rp)) { receiptRaw = fs.readFileSync(rp, 'utf8'); 回执 = { raw: receiptRaw, html: mdHtml(receiptRaw) }; }
+  const 评审意见 = require('./lib/review-opinion').fromTicket(t, receiptRaw);
+  res.json({ id, state: t.state, fm: t.fm, body: t.body, html: mdHtml(t.body), 链: trace.chains(ROOT, id), 回执, 评审意见 });
 });
 
 // 完成的 Integrator 工单由用户手动发布。只做 fast-forward；主分支前进或有脏改动时拒绝。
@@ -419,6 +422,48 @@ app.post('/api/workspace/publish', (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+function publishableWorkspaces(projectName) {
+  return store.list(ROOT, '完成')
+    .filter((t) => providerRouter.taskRole(t) === 'integrator')
+    .filter((t) => !projectName || t.fm.项目 === projectName)
+    .filter((t) => t.fm.workspace && t.fm.workspace.isolated && t.fm.workspace.commit && !t.fm.workspace.publishedAt)
+    .sort((a, b) => String(a.fm.交付时间 || a.fm.更新时间 || '').localeCompare(String(b.fm.交付时间 || b.fm.更新时间 || ''))
+      || a.id.localeCompare(b.id));
+}
+
+app.get('/api/workspace/publishable', (req, res) => {
+  if (!ready(res)) return;
+  const projectName = String(req.query.项目 || '');
+  const items = publishableWorkspaces(projectName).map((t) => ({
+    id: t.id, title: t.fm.title, 项目: t.fm.项目,
+    branch: t.fm.workspace.branch, commit: t.fm.workspace.commit,
+  }));
+  res.json({ count: items.length, items });
+});
+
+// 流程页的一键发布：仍坚持 Integrator 唯一发布者和逐项 fast-forward，
+// 某项分叉/脏目录失败时保留现场，并继续报告其余项，不做隐式合并。
+app.post('/api/workspace/publish-all', (req, res) => {
+  if (!ready(res)) return;
+  const projectName = String((req.body || {}).项目 || '');
+  const candidates = publishableWorkspaces(projectName);
+  const results = [];
+  for (const t of candidates) {
+    const project = runner.projectPath(cfg, t);
+    if (!project) { results.push({ id: t.id, ok: false, error: '项目未注册或路径不存在' }); continue; }
+    try {
+      const result = worktrees.publish(project, t.fm.workspace);
+      const at = new Date().toISOString();
+      store.update(ROOT, t.id, (fm) => { fm.workspace = { ...fm.workspace, publishedAt: at, publishedCommit: result.commit }; });
+      journal.append(ROOT, `一键发布集成结果 ${t.id} → ${result.commit.slice(0, 10)}（fast-forward）`);
+      results.push({ id: t.id, ok: true, commit: result.commit, path: result.path });
+    } catch (e) { results.push({ id: t.id, ok: false, error: e.message }); }
+  }
+  const published = results.filter((x) => x.ok).length;
+  const failed = results.length - published;
+  res.json({ ok: failed === 0, total: results.length, published, failed, results });
+});
+
 // ---- 决策台（P4）：待验收 + 待定夺 ----
 app.get('/api/decisions', (req, res) => {
   if (!ready(res)) return;
@@ -435,7 +480,8 @@ app.get('/api/gates', async (req, res) => {
     const providerLocks = {};
     for (const name of Object.keys(providerRegistry.configs(cfg))) providerLocks[name] = locks[name];
     const rec = require('./lib/recommend').recommend(ROOT, cfg, providerLocks);
-    res.json({ paused: require('./lib/core/state').read(ROOT).paused, locks: providerLocks, 推荐: rec });
+    const current = require('./lib/core/state').read(ROOT);
+    res.json({ paused: current.paused, 完成后暂停: !!(current.执行器 || {}).完成后暂停, locks: providerLocks, 推荐: rec });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/gate/pause', (req, res) => {
@@ -445,6 +491,11 @@ app.post('/api/gate/pause', (req, res) => {
   const p = gates.setPaused(ROOT, scope, value);
   journal.append(ROOT, `暂停闸门：${scope} → ${value ? '合' : '开'}`);
   res.json({ ok: true, paused: p });
+});
+app.post('/api/gate/pause-after-current', (req, res) => {
+  if (!ready(res)) return;
+  const result = runner.pauseAfterCurrent(ROOT, cfg, (req.body || {}).value !== false);
+  res.json({ ok: true, 完成后暂停: result.armed, paused: result.paused });
 });
 
 // ---- 生命周期动作（P4/P8 按钮）----
@@ -525,7 +576,17 @@ app.post('/api/draft', (req, res) => {
   const exist = store.find(ROOT, b.id);
   if (exist) {
     if (exist.state !== '草稿') return res.status(400).json({ error: `只有草稿可编辑（当前 ${exist.state}）` });
-    const r = store.update(ROOT, b.id, (f) => { Object.assign(f, fm); return { body: b.body != null ? b.body : undefined }; });
+    const r = store.update(ROOT, b.id, (f) => {
+      Object.assign(f, fm);
+      // 草稿可能来自一次失败/定夺后的重编。重新发布必须像新执行一样路由，
+      // 否则旧主办、旧 provider、QA 自修次数和 workspace 会污染下一轮。
+      for (const key of [
+        '主办', 'provider', '执行池', '路由分', '领单时间', '交付时间', '质检人',
+        '自修次数', '代裁', 'workspace', '失败原因', '失败次数', '失败时间',
+        '滞留告警', '滞留时长h', '归档原因',
+      ]) delete f[key];
+      return { body: b.body != null ? b.body : undefined };
+    });
     return res.json({ ...r, edited: true });
   }
   const r = store.create(ROOT, b.id, fm, b.body || '## 范围\n\n## 不要做\n\n## 验收标准\n\n## 完工要求\n');

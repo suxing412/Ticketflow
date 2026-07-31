@@ -111,6 +111,8 @@ const waitUntil = async (fn, timeout = 8000) => {
     const cur = store.find(root, 'P-02');
     assert.equal(cur.state, '待验收');
     assert.equal(cur.fm.质检人, 'QA-A');
+    assert.equal(cur.fm.最新评审.结论, '通过');
+    assert.ok(cur.fm.最新评审.风险.length, '通过也应保留潜在风险');
   });
 
   await t('QA 开 + 无 QA agent：停在质检等复核（不越权）', async () => {
@@ -192,6 +194,20 @@ const waitUntil = async (fn, timeout = 8000) => {
     assert.equal(store.find(root, 'P-09').state, '待验收');
     await runner.tick(root, cfg4, UN);
     assert.equal(store.find(root, 'P-10').state, '待验收');
+  });
+
+  await t('当前单完成后暂停：当前链路收尾、不领下一张、随后合上全局闸门', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '在途', { id: 'P-40', 职能: '程序', QA: '关', 验收方式: '保留', 主办: '程序-A', 领单时间: new Date().toISOString() });
+    seed(root, '池', { id: 'P-41', 职能: '程序', QA: '关' });
+    const armed = runner.pauseAfterCurrent(root, CFG, true);
+    assert.equal(armed.armed, true);
+    await runner.tick(root, CFG, UN);
+    assert.equal(store.find(root, 'P-40').state, '待验收');
+    assert.equal(store.find(root, 'P-41').state, '池', '预约后不得领取下一张');
+    const s = state.read(root);
+    assert.equal(s.paused.global, true, '当前单收尾后自动暂停');
+    assert.equal(s.执行器.完成后暂停, false, '预约完成后自动清除');
   });
 
   await t('暂停闸门合上 → 不领单', async () => {
@@ -297,6 +313,28 @@ const waitUntil = async (fn, timeout = 8000) => {
     assert.ok(p3.includes('工单正文'), '无章程目录也能组提示词');
   });
 
+  await t('QA 自修提示词注入最新阻断意见，首轮执行不注入', async () => {
+    const root = makeRoot();
+    const project = { name: 'TK', path: 'D:/x' };
+    const first = runner.buildPrompt(root, { id: 'R-1', fm: { 职能: '程序', title: 't' }, body: '## 范围\nx' }, project);
+    assert.ok(!first.includes('上一轮 QA 返工意见'));
+
+    const repair = runner.buildPrompt(root, {
+      id: 'R-2',
+      fm: {
+        职能: '程序', title: 't', 自修次数: 2,
+        最新评审: {
+          结论: '不过', 问题: ['授权事实顺序影响结果'], 风险: [], 证据: ['reviewers.ts:142'],
+          原文: '## 阻断问题\n- 授权事实顺序影响结果\n\n结论：不过',
+        },
+      },
+      body: '## 范围\nx',
+    }, project);
+    assert.match(repair, /第 2 轮自修/);
+    assert.match(repair, /授权事实顺序影响结果/);
+    assert.match(repair, /不得只重跑测试/);
+  });
+
   await t('Orchestrator 提示词明确计划文件、任务上限和允许角色', async () => {
     const root = makeRoot();
     const cfg = { roles: { orchestrator: {}, backend: {}, frontend: {}, reviewer: {}, integrator: {} }, orchestration: { maxTasks: 12 } };
@@ -340,6 +378,9 @@ const waitUntil = async (fn, timeout = 8000) => {
     const command = runner.renderCodexEvent(trace, JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'npm test' } }));
     assert.ok(!hidden.includes('秘密推理'));
     assert.match(command, /npm test/);
+    const warning = runner.renderCodexEvent(trace, JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'npm test', exit_code: 1, aggregated_output: 'tests failed' } }));
+    assert.match(warning, /过程告警/);
+    assert.equal(trace.metrics.warnings, 1);
     const raw = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: '最终报告' } });
     assert.equal(runner.finalProviderText({ outputFormat: 'codex-jsonl' }, raw), '最终报告');
   });

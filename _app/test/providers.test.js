@@ -26,6 +26,7 @@ t('Claude Adapter 使用官方实时 JSON 事件流', () => {
   assert.equal(run.outputFormat, 'claude-stream-json');
   assert.ok(run.args.includes('stream-json'));
   assert.ok(run.args.includes('--include-partial-messages'));
+  assert.ok(run.args.includes('--dangerously-skip-permissions'), '无头执行不应卡在交互式命令审批');
 });
 
 t('Provider CLI 支持跨机器环境变量显式定位', () => {

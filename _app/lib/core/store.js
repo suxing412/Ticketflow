@@ -80,7 +80,9 @@ function isLegal(from, to) {
 }
 
 // 状态转移：校验合法性 → 更新 frontmatter（updated + mutator）→ 原子改名到目标目录。
-// mutator(fm) 可改 frontmatter（如写入 主办/领单时间）。返回 { ok, id, from, to, file } 或 { ok:false, error }。
+// mutator(fm, ticket) 可改 frontmatter（如写入 主办/领单时间），也可返回
+// { body }，让正文更新与状态迁移落在同一次目标文件写入中。
+// 返回 { ok, id, from, to, file } 或 { ok:false, error }。
 // 原子性：目标已存在则拒绝；源不存在（已被并发移走）→ ENOENT → { ok:false, error:'源不存在（已被抢走或已流转）' }。
 function move(root, id, from, to, mutator, nowIso) {
   if (!STATES.includes(to)) return { ok: false, error: `非法目标状态：${to}` };
@@ -91,7 +93,11 @@ function move(root, id, from, to, mutator, nowIso) {
   let parsed;
   try { parsed = parse(src); } catch { return { ok: false, error: '源不存在（已被抢走或已流转）' }; }
   const fm = { ...parsed.fm, 更新时间: nowIso || parsed.fm.更新时间 || new Date().toISOString() };
-  if (mutator) mutator(fm);
+  let body = parsed.body;
+  if (mutator) {
+    const changed = mutator(fm, { id, state: from, file: src, fm: parsed.fm, body: parsed.body });
+    if (changed && typeof changed.body === 'string') body = changed.body;
+  }
   // 先写目标（带更新后的 fm），再删源；用 rename 保证原子——但要先落盘更新的 fm。
   // 策略：把更新后的内容写进目标临时文件，再 rename 源→占位、目标 tmp→目标，最后删源。
   // 简化且保持原子领单语义：用 renameSync 抢占源（原子），成功后再改写内容。
@@ -102,7 +108,7 @@ function move(root, id, from, to, mutator, nowIso) {
     return { ok: false, error: '源不存在（已被抢走或已流转）' };
   }
   try {
-    fs.writeFileSync(dst, serialize(fm, parsed.body), 'utf8');
+    fs.writeFileSync(dst, serialize(fm, body), 'utf8');
     fs.unlinkSync(claimTmp);
     return { ok: true, id, from, to, file: dst };
   } catch (e) {

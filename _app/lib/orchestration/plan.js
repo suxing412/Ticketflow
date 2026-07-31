@@ -67,7 +67,7 @@ function normalizePlan(cfg, value) {
     if (!title || title.length > 100) throw new Error(`子任务 ${key} 标题为空或超过 100 字`);
     const acceptance = arr(raw.acceptance || raw.验收标准).map(String).map((x) => x.trim()).filter(Boolean);
     if (!acceptance.length) throw new Error(`子任务 ${key} 缺少客观验收标准`);
-    return {
+    const task = {
       key, title, role,
       description: String(raw.description || raw.scope || raw.范围 || '').trim(),
       doNot: arr(raw.doNot || raw.不要做).map(String).map((x) => x.trim()).filter(Boolean),
@@ -81,6 +81,13 @@ function normalizePlan(cfg, value) {
       acceptanceMode: raw.acceptanceMode || raw.验收方式 || '委托',
       routing: raw.routing || raw.路由 || null,
     };
+    if (role === 'reviewer' && task.writeScope.length) {
+      throw new Error(`子任务 ${key} 的 reviewer 是只读角色，不能声明 writeScope；实现评审功能请用 backend，编写集成测试/报告请用 integrator`);
+    }
+    if (role === 'reviewer' && task.requiredCapabilities.some((cap) => ['coding', 'backend', 'frontend'].includes(cap))) {
+      throw new Error(`子任务 ${key} 的 reviewer 不能要求编码能力；请改用 backend、frontend 或 integrator`);
+    }
+    return task;
   });
 
   for (const task of tasks) for (const dep of task.dependsOn) {

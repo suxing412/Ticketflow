@@ -265,12 +265,14 @@ function gatebarHtml(g) {
   const mini = (l) => { const p = l && l.fivePct != null ? l.fivePct : 0; const hot = l && l.locked;
     return `<span class="minibar"><i class="${hot ? 'hot' : ''}" style="width:${p}%"></i></span> <b class="mono" style="font-size:12px;${hot ? 'color:var(--danger)' : ''}">${l && l.fivePct != null ? l.fivePct + '%' : '··%'}</b>`; };
   const paused = g && g.paused.global;
+  const pauseAfter = g && g.完成后暂停;
   const lockNote = g && (g.locks.codex.locked || g.locks.claude.locked)
     ? `<span class="err" style="font-size:11px;font-weight:500">●锁${esc((g.locks.codex.locked ? g.locks.codex : g.locks.claude).resetAt || '')} 解冻</span>` : '';
   return `<div class="gatebar2 card">
     <div class="gsec"><span class="glbl">暂停闸门</span><span class="gv"><span class="dot" style="${paused ? 'background:var(--danger)' : ''}"></span>
       <b style="font-size:13px">${g ? (paused ? '已暂停' : '运行中') : '查询中'}</b>
       <button class="btn h32" style="height:28px" onclick="togglePause(${g ? !g.paused.global : true})" ${g ? '' : 'disabled'}>${paused ? '恢复' : '暂停'}</button></span></div>
+      <button class="btn h32 pause-after-btn ${pauseAfter ? 'armed' : ''}" onclick="togglePauseAfter(${pauseAfter ? 'false' : 'true'})" ${g || pauseAfter ? '' : 'disabled'} title="停止领取新工单；当前执行、质检、自动修复和委托核验完成后自动暂停">${pauseAfter ? '取消完成后暂停' : '当前单完成后暂停'}</button>
     <div class="vdiv"></div>
     <div class="gsec"><span class="glbl">额度锁</span><span class="gv"><span class="mono" style="font-size:11px;color:var(--ink2)">codex</span> ${mini(g && g.locks.codex)}
       <span class="mono" style="font-size:11px;color:var(--ink2);margin-left:10px">claude</span> ${mini(g && g.locks.claude)} ${lockNote}</span></div>
@@ -278,6 +280,7 @@ function gatebarHtml(g) {
     <div class="backlog" style="margin-left:24px"><span class="glbl">待验收积压</span><br/><b id="backlogN">— / —</b></div></div>`;
 }
 window.togglePause = async (v) => { await post('/api/gate/pause', { scope: 'global', value: v }); gateCache = null; route(); };
+window.togglePauseAfter = async (v) => { await post('/api/gate/pause-after-current', { value: v }); gateCache = null; route(); };
 // D43 批量投池：当前项目语境的待投整批释放（人闸=这一次确认）
 window.releaseAll = async () => {
   const { board } = await loadBoard();
@@ -310,7 +313,7 @@ async function viewBoard() {
   const fillBar = async () => {
     const g = await api('/api/gates'); gateCache = g;
     const gb = $('gatebar-slot');
-    if (gb) { const key = JSON.stringify([g.paused, g.locks.codex, g.locks.claude, g.推荐 && g.推荐.推荐]);
+    if (gb) { const key = JSON.stringify([g.paused, g.完成后暂停, g.locks.codex, g.locks.claude, g.推荐 && g.推荐.推荐]);
       if (gb.dataset.k !== key) { gb.dataset.k = key; gb.innerHTML = gatebarHtml(g); } }
     const bn = $('backlogN'); if (bn) bn.textContent = `${(board['待验收'] || []).length} / ${conf.闸值?.待验收积压闸 ?? 8}`;
   };
@@ -342,7 +345,11 @@ async function viewBoard() {
 /* ===== P12 流程（D43）：横轴=阶段 · 阶段内拓扑子列 · 泳道=系统（根祖先）· 红=关键路径 =====
    兼任投池前排版台：草稿/待投也显示。父单（组织容器）不出节点，只当泳道。 */
 async function viewFlow() {
-  const [{ all }, stg] = await Promise.all([loadBoard(), api('/api/stages?项目=' + encodeURIComponent(curProj())).catch(() => ({ 阶段: [], 标准: {} }))]);
+  const [{ all }, stg, pub] = await Promise.all([
+    loadBoard(),
+    api('/api/stages?项目=' + encodeURIComponent(curProj())).catch(() => ({ 阶段: [], 标准: {} })),
+    api('/api/workspace/publishable?项目=' + encodeURIComponent(curProj())).catch(() => ({ count: 0, items: [] })),
+  ]);
   const STG = (stg.阶段 && stg.阶段.length) ? stg.阶段 : [{ 代号: 'L0', 名称: '原型' }, { 代号: 'L1', 名称: '正式化' }, { 代号: 'L2', 名称: '打磨' }];
   const byId = Object.fromEntries(all.map((t) => [t.id, t]));
   const hasKids = new Set(all.filter((t) => t.父单 && byId[t.父单]).map((t) => t.父单));
@@ -460,6 +467,7 @@ async function viewFlow() {
       <span class="subnote">横轴=阶段 · 泳道=系统 · 红=关键路径（预计时间加权）· 虚线=升阶链 · 点卡进详情</span>
       <span class="sp"></span>
       ${cp.len ? `<span class="fl-cp">关键路径 ${Math.round(cp.len * 10) / 10}h · ${cp.path.length} 单</span>` : ''}
+      <button class="btn h32 ${pub.count ? 'accent' : ''}" onclick="publishAllWorkspaces()" ${pub.count ? '' : 'disabled'} title="按完成时间依次快进发布已完成的 Integrator 隔离检查点">一键发布${pub.count ? ` · ${pub.count}` : ''}</button>
       <button class="btn h32" onclick="flFold(this)">折叠已完成</button></div>
     <div class="fl-wrap"><div class="fl-stage" style="width:${xa + 20}px;height:${yy + 16}px">
       <svg class="fl-svg" width="${xa + 20}" height="${yy + 16}">${paths}</svg>
@@ -491,6 +499,17 @@ window.flFold = (btn) => {
   d.done.forEach((id) => { const el = $('fl-' + id); if (el) el.style.display = fold ? 'none' : ''; });
   document.querySelectorAll('path.fl-e').forEach((p) => {
     p.style.display = (fold && (doneSet.has(p.dataset.f) || doneSet.has(p.dataset.t))) ? 'none' : ''; });
+};
+window.publishAllWorkspaces = async () => {
+  const project = curProj();
+  if (!confirm(`把${project ? '项目“' + project + '”' : '当前流程'}中所有可发布的 Integrator 隔离检查点依次快进到主项目？\n\n主目录有未提交改动或分支不能快进时，系统会拒绝对应项，不会自动合并。`)) return;
+  const r = await post('/api/workspace/publish-all', { 项目: project });
+  const failed = (r.results || []).filter((x) => !x.ok);
+  if (failed.length) {
+    const detail = failed.slice(0, 3).map((x) => `${x.id}：${x.error}`).join('；');
+    toast(`已发布 ${r.published || 0}，失败 ${r.failed || failed.length} · ${detail}`);
+  } else toast(r.total ? `一键发布完成，共 ${r.published} 个检查点` : '没有可发布的隔离检查点');
+  route();
 };
 
 /* ===== P10 树形 ===== */
@@ -1158,9 +1177,12 @@ function traceBodyText(t) {
 function traceMetaHtml(t) {
   const elapsed = t.startedAt ? fmtElapsed((t.endedAt ? Date.parse(t.endedAt) : Date.now()) - Date.parse(t.startedAt)) : '—';
   const idle = t.lastActivityAt ? fmtElapsed(Date.now() - Date.parse(t.lastActivityAt)) : '—';
+  const m = t.metrics || {};
   return `<span class="trace-status ${esc(t.status || '')}">${esc(traceStatusText(t.status))}</span>
     <span>${esc(t.provider || '—')}${t.model ? '/' + esc(t.model) : ''}</span><span>${esc(t.agent || '—')}</span>
-    <span>运行 ${elapsed}</span><span>距上次输出 ${idle}</span>${t.truncated ? '<span class="warn">前段已截断</span>' : ''}`;
+    <span>运行 ${elapsed}</span><span>距上次输出 ${idle}</span><span>命令 ${m.commands || 0}</span>
+    ${m.warnings ? `<span class="warn">过程告警 ${m.warnings}</span>` : '<span class="okc">过程告警 0</span>'}
+    ${m.fatalErrors ? `<span class="err">致命错误 ${m.fatalErrors}</span>` : '<span class="okc">致命错误 0</span>'}${t.truncated ? '<span class="warn">前段已截断</span>' : ''}`;
 }
 function traceCardHtml(id, t) {
   return `<details class="p8main card tracecard r16" open id="trace-panel">
@@ -1205,6 +1227,20 @@ async function viewDetail(id) {
     ops.push(['重投', `清执行痕迹回池重领${fm.失败原因 ? '（' + esc(String(fm.失败原因).slice(0, 24)) + '）' : ''}`, `act3('失败分诊','${id}','重投')`]);
     ops.push(['上呈', '转待定夺，由你拍板', `act3('失败分诊','${id}','上呈')`]);
   }
+  const reviews = Array.isArray(d.评审意见) ? d.评审意见 : [];
+  const reviewHtml = reviews.slice().reverse().map((rv, index) => {
+    const passed = rv.结论 === '通过';
+    const list = (title, values, empty) => `<div class="review-sec"><b>${title}</b>${values && values.length
+      ? `<ul>${values.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : `<p class="dim">${empty}</p>`}</div>`;
+    return `<div class="rside card r16 review-card ${passed ? 'passed' : 'failed'}">
+      <h3>AI 评审意见 ${index ? `<span class="dim">· 历史 ${reviews.length - index}</span>` : ''}</h3>
+      <div class="review-head"><span class="pill ${passed ? 'ok' : 'red'}">${esc(rv.结论 || '未知')}</span>
+        <span>${esc(rv.类型 || '评审')} · ${esc(rv.provider || rv.评审人 || 'AI')}</span></div>
+      ${list('阻断问题', rv.问题, passed ? '无阻断问题' : '评审未提供结构化问题，请查看原文')}
+      ${list('潜在风险与漏洞', rv.风险, '评审未列出额外风险')}
+      ${list('验收证据', rv.证据, '未提供结构化证据')}
+      ${rv.原文 ? `<details class="review-raw"><summary>查看评审原文</summary><pre>${esc(rv.原文)}</pre></details>` : ''}</div>`;
+  }).join('');
   if (d.state === '待定夺') {
     ops.push(['接受', '忽略 QA 异议，转入待验收', `dAct('定夺','${id}',null,'接受')`]);
     ops.push(['给方向', '附上明确返工意见后重新执行', `dGiveDirection('${id}')`]);
@@ -1238,7 +1274,7 @@ async function viewDetail(id) {
             : esc(fm.workspace.warning || '直接目录模式')) : ''}</div></div>
       ${traceCardHtml(id, trace)}
       <div class="p8main card r16"><b style="font-size:13px">正文</b><div class="doc2">${d.html || '<p class="dim">无正文</p>'}</div></div>
-    </div><div>
+    </div><div>${reviewHtml}
       <div class="rside card r16"><h3>回执 · 完工报告</h3>${rsecs || '<p class="dim" style="margin-top:10px">尚无回执（完工后生成）</p>'}</div>
       <div class="rside card r16"><h3>操作</h3>
         ${ops.map(([b, s, fn]) => `<button class="oprow2" onclick="${fn}"><b>${b}</b><span>${s}</span></button>`).join('')}

@@ -73,11 +73,17 @@ function 定夺(root, id, 决定, 方向, 裁决人) {
   const map = { 接受: '待验收', 给方向: '在途', 打回: '已归档' };
   const to = map[决定];
   if (!to) return { ok: false, error: `未知决定：${决定}` };
-  const r = store.move(root, id, '待定夺', to, null, nowIso());
+  const direction = String(方向 || '').trim();
+  if (决定 === '给方向' && !direction) {
+    return { ok: false, error: '给方向必须填写具体返工意见；工单仍留在待定夺' };
+  }
+  const decidedAt = nowIso();
+  const r = store.move(root, id, '待定夺', to, 决定 === '给方向'
+    ? (_fm, current) => ({
+      body: (current.body || '') + `\n\n## 定夺方向（${裁决人 || '制作人'} · ${decidedAt.slice(0, 10)}）\n${direction.slice(0, 2000)}\n`,
+    })
+    : null, decidedAt);
   if (r.ok) {
-    if (决定 === '给方向' && 方向) {
-      store.update(root, id, (fm, t2) => ({ body: (t2.body || '') + `\n\n## 定夺方向（${裁决人 || '制作人'} · ${nowIso().slice(0, 10)}）\n${String(方向).slice(0, 2000)}\n` }));
-    }
     journal.append(root, `待定夺裁决 ${id}：${决定}（待定夺→${to}${裁决人 ? ' · ' + 裁决人 : ''}）`);
   }
   return r;

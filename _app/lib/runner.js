@@ -18,6 +18,8 @@ const router = require('./routing/router');
 const routeHistory = require('./routing/history');
 const orchestration = require('./orchestration/plan');
 const worktrees = require('./workspace/worktree');
+const toolchain = require('./toolchain');
+const reviewOpinion = require('./review-opinion');
 
 // 内存态：正在执行的工作（agentId → { id, kind, startedAt, timer, child }）。
 // exe 重启即清空，tick 为"在途/质检有主办但无执行记录"的单重新拉起（断点恢复）。
@@ -35,7 +37,8 @@ function redactTrace(value) {
 }
 function beginTrace(id, meta) {
   const now = meta.startedAt || new Date().toISOString();
-  const trace = { id, ...meta, status: 'starting', startedAt: now, lastActivityAt: now, endedAt: null, output: '', stderr: '', truncated: false };
+  const trace = { id, ...meta, status: 'starting', startedAt: now, lastActivityAt: now, endedAt: null, output: '', stderr: '', truncated: false,
+    metrics: { commands: 0, warnings: 0, fatalErrors: 0 } };
   traces.delete(id); traces.set(id, trace);
   while (traces.size > 100) traces.delete(traces.keys().next().value);
   return trace;
@@ -47,17 +50,22 @@ function appendTrace(trace, value, channel = 'output') {
   if (trace[key].length > TRACE_MAX_CHARS) { trace[key] = trace[key].slice(-TRACE_MAX_CHARS); trace.truncated = true; }
   trace.lastActivityAt = new Date().toISOString();
 }
+function traceMetrics(trace) {
+  if (!trace.metrics) trace.metrics = { commands: 0, warnings: 0, fatalErrors: 0 };
+  return trace.metrics;
+}
 function endTrace(trace, status, reason, exitCode) {
   if (!trace) return;
   trace.status = status; trace.endedAt = new Date().toISOString(); trace.lastActivityAt = trace.endedAt;
-  if (reason) appendTrace(trace, `\n[系统] ${reason}\n`, status === 'completed' ? 'output' : 'stderr');
+  if (status === 'failed') traceMetrics(trace).fatalErrors++;
+  if (reason) appendTrace(trace, `\n[${status === 'failed' ? '致命错误' : '系统'}] ${reason}\n`, status === 'completed' ? 'output' : 'stderr');
   if (exitCode !== undefined) trace.exitCode = exitCode;
 }
 function traceFor(id) {
   const trace = traces.get(String(id || ''));
   if (!trace) return null;
-  const { id: ticket, agent, kind, role, provider, model, status, startedAt, lastActivityAt, endedAt, output, stderr, truncated, exitCode, workspace } = trace;
-  return { id: ticket, agent, kind, role, provider, model, status, startedAt, lastActivityAt, endedAt, output, stderr, truncated, exitCode,
+  const { id: ticket, agent, kind, role, provider, model, status, startedAt, lastActivityAt, endedAt, output, stderr, truncated, exitCode, workspace, metrics } = trace;
+  return { id: ticket, agent, kind, role, provider, model, status, startedAt, lastActivityAt, endedAt, output, stderr, truncated, exitCode, metrics,
     workspace: workspace ? { path: workspace.path, branch: workspace.branch, isolated: workspace.isolated } : null };
 }
 
@@ -89,7 +97,8 @@ function renderClaudeEvent(trace, line) {
     const blocks = event.message?.content || [];
     return blocks.filter((x) => x.type === 'tool_result').map((x) => {
       const content = typeof x.content === 'string' ? x.content : JSON.stringify(x.content || '');
-      return `\n[工具结果] ${content.slice(0, 4000)}\n`;
+      if (x.is_error) traceMetrics(trace).warnings++;
+      return `\n[${x.is_error ? '过程告警' : '工具结果'}] ${content.slice(0, 3000)}\n`;
     }).join('');
   }
   if (event.type === 'result') return `\n[系统] Claude 执行结束${event.is_error ? '（失败）' : ''}\n`;
@@ -99,7 +108,10 @@ function renderCodexEvent(trace, line) {
   let event; try { event = JSON.parse(line); } catch { return line + '\n'; }
   if (event.type === 'thread.started') return `[系统] Codex 线程 ${event.thread_id || '已启动'}\n`;
   if (event.type === 'turn.started') return '[系统] Codex 开始执行\n';
-  if (event.type === 'error' || event.type === 'turn.failed') return `\n[错误] ${event.message || event.error?.message || JSON.stringify(event.error || event)}\n`;
+  if (event.type === 'error' || event.type === 'turn.failed') {
+    traceMetrics(trace).fatalErrors++;
+    return `\n[致命错误] ${event.message || event.error?.message || JSON.stringify(event.error || event)}\n`;
+  }
   if (event.type === 'turn.completed') {
     const u = event.usage || {};
     return `\n[系统] Codex 执行结束${u.input_tokens != null ? ` · input ${u.input_tokens} · output ${u.output_tokens || 0}` : ''}\n`;
@@ -112,8 +124,13 @@ function renderCodexEvent(trace, line) {
   }
   if (item.type === 'agent_message') return event.type === 'item.completed' ? `${item.text || ''}\n` : '';
   if (item.type === 'command_execution') {
+    if (event.type === 'item.started') { traceMetrics(trace).commands++; return `\n[命令] ${item.command || ''}\n`; }
     const output = event.type === 'item.completed' ? (item.aggregated_output || item.output || '') : '';
-    return `\n[命令] ${item.command || ''}${output ? `\n${String(output).slice(-6000)}` : ''}\n`;
+    const code = item.exit_code ?? item.exitCode;
+    const failed = code != null ? Number(code) !== 0 : item.status === 'failed';
+    if (failed) traceMetrics(trace).warnings++;
+    if (!output && !failed) return '';
+    return `\n[${failed ? '过程告警' : '命令结果'}]${code != null ? ` 退出码 ${code}` : ''}${output ? `\n${String(output).slice(-4000)}` : ''}\n`;
   }
   if (item.type === 'file_change') return `\n[文件变更] ${item.path || item.file || JSON.stringify(item.changes || item)}\n`;
   if (item.type === 'mcp_tool_call') return `\n[MCP 工具] ${item.server || ''}${item.tool ? '/' + item.tool : ''}\n`;
@@ -192,18 +209,49 @@ function charter(root, 职能) {
   return parts.join('\n\n---\n\n');
 }
 
+// QA 打回后的自修必须带上最新评审原文。优先使用 frontmatter
+// 中的结构化记录；兼容旧数据时再从回执提取，并限长防止提示词膨胀。
+function repairFeedback(root, t) {
+  const round = Number(t.fm && t.fm.自修次数) || 0;
+  if (round <= 0) return '';
+  let receipt = '';
+  try { receipt = fs.readFileSync(path.join(root, '回执', `${t.id}.md`), 'utf8'); } catch { /* 旧单可能没回执 */ }
+  const reviews = reviewOpinion.fromTicket(t, receipt);
+  const latest = reviews.slice().reverse().find((review) => review && review.结论 === '不过');
+  if (!latest) {
+    return [
+      `=== QA 自修上下文（第 ${round} 轮）===`,
+      '平台未找到上一轮 QA 原文。不要盲目重跑测试；先对照工单验收标准和当前实现找出未满足项，并在回执中说明。',
+    ].join('\n');
+  }
+  const original = String(latest.原文 || '').trim().slice(0, 6000);
+  const fallback = [
+    ...(latest.问题 || []).map((item) => `- 阻断：${item}`),
+    ...(latest.风险 || []).map((item) => `- 风险：${item}`),
+    ...(latest.证据 || []).map((item) => `- 证据：${item}`),
+  ].join('\n');
+  return [
+    `=== 上一轮 QA 返工意见（第 ${round} 轮自修，必须优先处理）===`,
+    original || fallback || '评审结论为不过，但未提供结构化问题。',
+    '不得只重跑测试或重复上一轮回执；逐条修复上述问题，补回归测试，并在新回执中对应说明。',
+  ].join('\n');
+}
+
 // 工单 → 执行提示词（岗位协议 + 范围/不要做/验收标准；中文走 stdin 防 argv 乱码）
 function buildPrompt(root, t, proj, cfg = {}) {
   const role = router.taskRole(t);
   const ch = charter(root, role);
   const ws = proj.workspace;
+  const repair = repairFeedback(root, t);
   const lines = [
     ch ? `=== 岗位协议（必须遵守）===\n${ch}\n` : '',
     `你是「${role}」角色的执行 agent，领到工单 ${t.id}：${t.fm.title}`,
     `工作目录（项目仓库）：${proj.path}`,
     ws && ws.isolated ? `当前是隔离工作区，分支：${ws.branch}。不要切换分支、删除 worktree 或推送远端；系统会在完工时自动形成 Git 检查点。` : '',
+    `=== 平台执行环境（必须遵守）===\n${toolchain.guidance(root, cfg)}`,
     '只做工单范围内的事，遵守「不要做」，产出满足全部验收标准。',
     '', '=== 工单正文 ===', t.body || '（无正文）',
+    repair ? `\n${repair}` : '',
     '', '完成后按通用章程的回执格式输出完工报告，它会作为回执存档。',
   ];
   if (role === 'orchestrator') {
@@ -214,6 +262,7 @@ function buildPrompt(root, t, proj, cfg = {}) {
     lines.push('',
     '=== 机器可读计划（必须输出）===',
     `最多 ${maxTasks} 张子任务；role 只能使用：${allowedRoles.join('、')}。不得发明 product、design、qa、security、fullstack 等未注册角色；复合工作必须拆分或选择最接近的已注册角色。`,
+    '角色边界：reviewer 仅用于只读质检，不能声明 writeScope，也不能实现名为 review/评审/审核的产品功能；评审功能后端实现用 backend，评审界面用 frontend，需要编写集成测试或 QA 报告的验收任务用 integrator。',
     `完成仓库分析后，把完整 JSON 写入项目内 ${planFile}，并在最终回复末尾原样输出同一份 \`\`\`json 代码块。两处至少一处必须成功。`,
     'JSON 必须符合以下结构：',
     '{"summary":"计划摘要","tasks":[{"key":"contract","title":"任务标题","role":"backend","description":"范围","dependsOn":[],"requiredCapabilities":["coding"],"writeScope":["server/**"],"acceptance":["可客观验证的标准"]}]}',
@@ -232,22 +281,28 @@ function buildPrompt(root, t, proj, cfg = {}) {
   return lines.filter(Boolean).join('\n');
 }
 // 委托代核提示词（D34）：Claude 按验收标准逐条只读核验，结论行机器可读
-function buildAuditPrompt(root, t, proj, receiptPath) {
+function buildAuditPrompt(root, t, proj, receiptPath, cfg = {}) {
   const receipt = fs.existsSync(receiptPath) ? fs.readFileSync(receiptPath, 'utf8') : '（无回执）';
   return [
     `你代制作人层核验委托验收单 ${t.id}（${t.fm.title}）。只读核验，不改任何文件。`,
     `项目仓库：${proj.path}`,
-    '对照工单验收标准逐条核验产出与回执，输出核验报告；',
+    `平台执行环境：\n${toolchain.guidance(root, cfg)}`,
+    '对照工单验收标准逐条核验产出与回执，并严格使用以下 Markdown 小节：',
+    '## 评审结论（简述是否满足验收）',
+    '## 阻断问题（不过时逐条列出；通过时写“无”）',
+    '## 潜在风险与漏洞（即使通过也尽量列出边界、未覆盖场景、安全或维护风险）',
+    '## 验收证据（文件、测试命令、结果或具体位置）',
     '最后单独一行输出机器可读结论：「结论：通过」或「结论：不过」。',
     '', '=== 工单正文 ===', t.body || '', '', '=== 主办回执 ===', receipt,
   ].join('\n');
 }
 // 委托代裁提示词（D43③）：QA 三振上呈的单，裁判档裁「给方向/上呈」；打回级判断永远留给制作人
-function buildArbPrompt(root, t, proj, receiptPath) {
+function buildArbPrompt(root, t, proj, receiptPath, cfg = {}) {
   const receipt = fs.existsSync(receiptPath) ? fs.readFileSync(receiptPath, 'utf8') : '（无回执）';
   return [
     `你代制作人层裁决 QA 三振上呈的工单 ${t.id}（${t.fm.title}，自修 ${t.fm.自修次数 || 0} 轮未过）。只读分析，不改任何文件。`,
     `项目仓库：${proj.path}`,
+    `平台执行环境：\n${toolchain.guidance(root, cfg)}`,
     '结合工单验收标准、主办回执与 QA 章节判断：',
     '· 若失败原因明确、给出具体修复方向后主办有望修复 → 裁「给方向」，并写出可执行的方向（改什么、往哪改、以什么为准）；',
     '· 若属于需求含糊/方向存疑/该推倒重来等需要制作人裁量的情况 → 裁「上呈」（打回销毁工作量的判断只有制作人能做）。',
@@ -256,14 +311,19 @@ function buildArbPrompt(root, t, proj, receiptPath) {
     '', '=== 工单正文 ===', t.body || '', '', '=== 主办回执（含 QA 章节）===', receipt,
   ].join('\n');
 }
-function buildQaPrompt(root, t, proj, receiptPath) {
+function buildQaPrompt(root, t, proj, receiptPath, cfg = {}) {
   const receipt = fs.existsSync(receiptPath) ? fs.readFileSync(receiptPath, 'utf8') : '（无回执）';
   const ch = charter(root, 'reviewer');
   return [
     ch ? `=== 岗位协议（必须遵守）===\n${ch}\n` : '',
     `你是 QA 复核 agent，对工单 ${t.id}（${t.fm.title}）做质检：只读复核，不改实现（D20）。`,
     `项目仓库：${proj.path}`,
-    '对照工单验收标准逐条核验主办的产出与回执，按章程格式输出核验结论。',
+    `平台执行环境：\n${toolchain.guidance(root, cfg)}`,
+    '对照工单验收标准逐条核验主办的产出与回执，并严格使用以下 Markdown 小节：',
+    '## 评审结论（简述是否满足验收）',
+    '## 阻断问题（不过时逐条列出；通过时写“无”）',
+    '## 潜在风险与漏洞（即使通过也尽量列出边界、未覆盖场景、安全或维护风险）',
+    '## 验收证据（文件、测试命令、结果或具体位置）',
     '最后单独一行输出机器可读结论：「结论：通过」或「结论：不过」。',
     '', '=== 工单正文 ===', t.body || '', '', '=== 主办回执 ===', receipt,
   ].filter(Boolean).join('\n');
@@ -321,8 +381,11 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     const cur = store.find(root, t.id);
     if (kind === '质检') {
       if (!cur || cur.state !== '质检') return;
-      store.update(root, t.id, (fm) => { fm.质检人 = agentId; delete fm.质检失败次数; });
       const passed = verdict !== false;
+      const review = reviewOpinion.parse(note, passed, { 类型: 'QA质检', 评审人: agentId, provider: providerName, model });
+      store.update(root, t.id, (fm) => { fm.质检人 = agentId; delete fm.质检失败次数; reviewOpinion.append(fm, review); });
+      const rp = path.join(root, '回执', `${t.id}.md`);
+      try { fs.appendFileSync(rp, `\n\n## QA 评审意见\n${String(note).slice(0, 8000)}\n`, 'utf8'); } catch { /* 回执缺失不阻塞状态流转 */ }
       const originalProvider = cur.fm.provider || cur.fm.供应商 || cur.fm.执行池;
       if (originalProvider) routeHistory.append(root, {
         ticket: t.id, agent: cur.fm.主办, kind: '评审结果', role: router.taskRole(cur), provider: originalProvider,
@@ -351,7 +414,11 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       // 核验报告追加进回执；通过→自动验收完成（D11 委托代劳），不过→留在待验收等用户裁
       const rp = path.join(root, '回执', `${t.id}.md`);
       try { fs.appendFileSync(rp, `\n\n## 委托代核\n${String(note).slice(0, 6000)}\n`, 'utf8'); } catch { /* 无回执文件也不阻塞 */ }
-      store.update(root, t.id, (fm) => { fm.代核 = { 结论: verdict ? '通过' : '不过', 时间: new Date().toISOString() }; });
+      const review = reviewOpinion.parse(note, verdict, { 类型: '委托代核', 评审人: agentId, provider: providerName, model });
+      store.update(root, t.id, (fm) => {
+        fm.代核 = { 结论: verdict ? '通过' : '不过', 时间: new Date().toISOString() };
+        reviewOpinion.append(fm, review);
+      });
       if (verdict) {
         const r = lifecycle.验收(root, t.id, true);
         if (r.ok) journal.append(root, `委托代核通过 ${t.id} → 验收完成（${providerName} 代劳）`);
@@ -426,6 +493,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     const durMs = opts.durMs ?? (lo + Math.random() * Math.max(0, hi - lo)) * 1000;
     const sec = Math.round(durMs / 1000);
     const receipt = `# 完工报告 ${t.id}（试跑）\n工单编号：${t.id}\n## 做了什么\n试跑模拟${kind}（零额度）\n## QA 章节\n${kind === '质检' ? '模拟复核通过' : '（试跑占位）'}\n## 实际消耗\n模拟 ${sec}s · 0 token\n## 异议\n无\n`;
+    const dryReview = '## 评审结论\n试跑核验满足验收。\n\n## 阻断问题\n- 无\n\n## 潜在风险与漏洞\n- 试跑不执行真实测试，实弹仍需复核。\n\n## 验收证据\n- 试跑状态机流转成功。\n\n结论：通过';
     entry.trace.status = 'running';
     appendTrace(entry.trace, `[试跑] 模拟执行中，预计 ${sec}s，不调用 Provider。\n`);
     const dryWorkerRole = Object.keys(cfg.roles || {}).find((role) => !['orchestrator', 'reviewer', 'integrator'].includes(role)) || (cfg.职能 || []).find((role) => role !== 'orchestrator') || 'generalist';
@@ -434,8 +502,8 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       description: '验证结构化计划可以落成待投工单', acceptance: ['子工单进入待投且父子链完整'],
       writeScope: ['docs/**'], dependsOn: [],
     }] }, null, 2);
-    const fin = () => finishOk(kind === '质检' ? `模拟复核 ${sec}s`
-      : kind === '代核' ? `（试跑模拟）逐条对照验收标准：全部通过\n结论：通过`
+    const fin = () => finishOk(kind === '质检' ? dryReview
+      : kind === '代核' ? dryReview
       : kind === '代裁' ? `（试跑模拟）失败原因明确，可修复。\n结论：给方向\n方向：按验收标准逐条补齐缺失项（试跑演示）`
       : routeRole === 'orchestrator' ? `${receipt}\n\n\`\`\`json\n${dryPlan}\n\`\`\``
       : receipt, true);
@@ -466,15 +534,15 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   catch (e) { failLocal('Provider 配置错误：' + e.message); return true; }
   const { cmd, args } = invocation;
   const receiptPath = path.join(root, '回执', `${t.id}.md`);
-  const prompt = kind === '质检' ? buildQaPrompt(root, t, proj, receiptPath)
-    : kind === '代核' ? buildAuditPrompt(root, t, proj, receiptPath)
-    : kind === '代裁' ? buildArbPrompt(root, t, proj, receiptPath)
+  const prompt = kind === '质检' ? buildQaPrompt(root, t, proj, receiptPath, cfg)
+    : kind === '代核' ? buildAuditPrompt(root, t, proj, receiptPath, cfg)
+    : kind === '代裁' ? buildArbPrompt(root, t, proj, receiptPath, cfg)
     : buildPrompt(root, t, proj, cfg);
   let child;
   try {
     child = spawn(cmd, args, {
       cwd: proj.path,
-      env: { ...proxyEnv(cfg), ...(invocation.env || {}) },
+      env: { ...toolchain.env(root, cfg, proxyEnv(cfg)), ...(invocation.env || {}) },
       windowsHide: true,
       shell: invocation.shell ?? String(cmd).toLowerCase().endsWith('.cmd'),
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -530,6 +598,14 @@ async function tick(root, cfg, opts = {}) {
   const agents = (cfg.agents || []).filter((a) => a.上线 !== false);
   if (!armed) { result.拒因.push('实弹未解锁（config.执行器.实弹解锁），仅试跑可执行'); lastTick = result; return result; }
 
+  // 预约暂停在没有待收尾工作时落成真正的全局暂停。待验收/待定夺只有仍需
+  // 自动代核/代裁的单才算当前工作，人工按钮不会无限拖住预约。
+  if (settlePauseAfterCurrent(root, cfg)) {
+    result.拒因.push('当前工单已收尾，执行器进入全局暂停');
+    lastTick = result;
+    return result;
+  }
+
   const st = state.read(root);
   const lockedPools = new Set();
   for (const [k, v] of Object.entries(st.paused || {})) if (k !== 'global' && v) lockedPools.add(k);
@@ -577,6 +653,8 @@ async function tick(root, cfg, opts = {}) {
     if (t && await startWork(root, cfg, t, '委托代裁', '代裁', opts)) (result.代裁 = result.代裁 || []).push(t.id);
   }
 
+  settlePauseAfterCurrent(root, cfg);
+
   lastTick = result;
   return result;
 }
@@ -598,15 +676,51 @@ function start(root, getCfg) {
   startLoop(root, getCfg);
 }
 function stop(root) {
-  state.update(root, (s) => { s.执行器 = { ...(s.执行器 || {}), 运行: false }; });
+  state.update(root, (s) => { s.执行器 = { ...(s.执行器 || {}), 运行: false, 完成后暂停: false }; });
   stopLoop();
   journal.append(root, '执行器停止（执行中的单跑完为止，不再领新单）');
+}
+
+function pendingAutomaticWork(root, cfg) {
+  if (running.size || store.list(root, '在途').length || store.list(root, '质检').length) return true;
+  if (store.list(root, '待验收').some((t) => t.fm.验收方式 === '委托' && !t.fm.代核)) return true;
+  if ((cfg.执行器 || {}).代裁 !== false && store.list(root, '待定夺').some((t) => !t.fm.代裁)) return true;
+  return false;
+}
+
+function settlePauseAfterCurrent(root, cfg) {
+  const armed = !!(state.read(root).执行器 || {}).完成后暂停;
+  if (!armed || pendingAutomaticWork(root, cfg)) return false;
+  state.update(root, (s) => {
+    s.执行器 = { ...(s.执行器 || {}), 完成后暂停: false };
+    s.paused = { ...(s.paused || {}), global: true };
+  });
+  journal.append(root, '当前工单已完成收尾：预约暂停生效（全局闸门已合）');
+  return true;
+}
+
+function pauseAfterCurrent(root, cfg, value) {
+  if (!value) {
+    state.update(root, (s) => { s.执行器 = { ...(s.执行器 || {}), 完成后暂停: false }; });
+    journal.append(root, '取消当前工单完成后暂停');
+    return { armed: false, paused: state.read(root).paused };
+  }
+  state.update(root, (s) => {
+    s.执行器 = { ...(s.执行器 || {}), 完成后暂停: true };
+    // 预约模式本身不是立即暂停；canPull 会单独阻止新工单。
+    s.paused = { ...(s.paused || {}), global: false };
+  });
+  journal.append(root, '预约当前工单完成后暂停（停止领新单，当前链路继续收尾）');
+  settlePauseAfterCurrent(root, cfg);
+  const current = state.read(root);
+  return { armed: !!(current.执行器 || {}).完成后暂停, paused: current.paused };
 }
 
 function status(root, cfg) {
   const st = state.read(root).执行器 || {};
   return {
     运行: !!st.运行, 试跑: st.试跑 !== false,
+    完成后暂停: !!st.完成后暂停,
     实弹解锁: !!(cfg.执行器 && cfg.执行器.实弹解锁),
     间隔秒: (cfg.执行器 || {}).间隔秒 ?? 15,
     执行中: [...running.entries()].map(([agent, e]) => ({
@@ -619,5 +733,5 @@ function status(root, cfg) {
   };
 }
 
-module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, traceFor, traces, renderClaudeEvent, renderCodexEvent, finalProviderText,
-  running, isOn, isDry, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt };
+module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, pauseAfterCurrent, settlePauseAfterCurrent, pendingAutomaticWork, traceFor, traces, renderClaudeEvent, renderCodexEvent, finalProviderText,
+  running, isOn, isDry, projectPath, resolveCli, pickModel, charter, repairFeedback, buildPrompt, buildQaPrompt, buildArbPrompt };

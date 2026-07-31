@@ -1,6 +1,7 @@
 // gates.test.js — 两道闸：暂停闸门 + 额度锁（双池独立）
 const assert = require('node:assert');
 const gates = require('../lib/gates');
+const state = require('../lib/core/state');
 const quota = require('../lib/quota');
 const pool = require('../lib/pool');
 const { makeRoot, seed, CFG } = require('./helper');
@@ -27,6 +28,15 @@ t('暂停闸门按池：暂停 codex 不影响 claude', async () => {
   gates.setPaused(root, 'codex', true);
   assert.equal((await gates.canPull(root, CFG, 'codex')).allowed, false);
   assert.equal((await gates.canPull(root, CFG, 'claude')).allowed, true);
+});
+
+t('完成后暂停预约会立即阻止领取新工单', async () => {
+  const root = makeRoot();
+  quota.getRateLimits = async () => null; quota.getClaudeUsage = async () => null;
+  state.update(root, (s) => { s.执行器 = { ...(s.执行器 || {}), 完成后暂停: true }; });
+  const r = await gates.canPull(root, CFG, 'codex');
+  assert.equal(r.allowed, false);
+  assert.ok(r.reason.includes('完成后暂停'));
 });
 
 t('额度锁：claude 5h 超阈值 → claude 锁、codex 不锁（双池独立）', async () => {

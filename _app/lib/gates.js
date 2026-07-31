@@ -10,7 +10,11 @@ function isPaused(root, pool) {
 
 // scope: 'global' | 任意 Provider 名称
 function setPaused(root, scope, val) {
-  return state.update(root, (s) => { s.paused[scope] = !!val; return s.paused; });
+  return state.update(root, (s) => {
+    s.paused[scope] = !!val;
+    if (scope === 'global') s.执行器 = { ...(s.执行器 || {}), 完成后暂停: false };
+    return s.paused;
+  });
 }
 
 // 单池额度锁判定。rl=codex rateLimits，cu=claude usage。
@@ -46,8 +50,12 @@ async function allLocks(cfg) {
 
 // 领单前置：该池能否拉单（暂停闸门 + 额度锁）。
 async function canPull(root, cfg, pool) {
+  const current = state.read(root);
+  if (current.执行器 && current.执行器.完成后暂停) {
+    return { allowed: false, reason: '已预约当前工单完成后暂停：不再领取新工单' };
+  }
   if (isPaused(root, pool)) {
-    const s = state.read(root);
+    const s = current;
     return { allowed: false, reason: '暂停闸门：' + (s.paused.global ? '全局暂停' : `${pool} 池暂停`) };
   }
   const locks = await allLocks(cfg);

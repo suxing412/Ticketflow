@@ -27,7 +27,9 @@ function create(config = {}) {
           '--output-format', 'stream-json',
           '--verbose',
           '--include-partial-messages',
-          ...(config.permissionArgs || ['--permission-mode', 'acceptEdits']),
+          // 无头 -p 会话无法弹出权限确认；acceptEdits 只放行编辑，测试命令仍会反复被拒。
+          // 工单已运行在独立 worktree，且检查点会校验 write_scope，因此使用官方无头绕过开关。
+          ...(config.permissionArgs || ['--dangerously-skip-permissions']),
           ...(model ? ['--model', model] : []),
         ],
         promptMode: 'stdin',

@@ -58,10 +58,26 @@ t('QA 自修循环：不过→在途(自修+1)，达上限→待定夺', () => {
 });
 
 t('待定夺裁决：接受→待验收 / 给方向→在途 / 打回→已归档', () => {
-  const mk = (dec) => { const root = makeRoot(); seed(root, '待定夺', { id: 'D' }); life.定夺(root, 'D', dec); return st(root, 'D'); };
+  const mk = (dec) => { const root = makeRoot(); seed(root, '待定夺', { id: 'D' }); life.定夺(root, 'D', dec, dec === '给方向' ? '修复边界测试' : null, '制作人'); return st(root, 'D'); };
   assert.equal(mk('接受'), '待验收');
   assert.equal(mk('给方向'), '在途');
   assert.equal(mk('打回'), '已归档');
+});
+
+t('给方向必须有文字，且方向与状态迁移同步落盘', () => {
+  const root = makeRoot();
+  seed(root, '待定夺', { id: 'D-DIR' }, '## 范围\n原始正文');
+  const missing = life.定夺(root, 'D-DIR', '给方向', '   ', '制作人');
+  assert.equal(missing.ok, false);
+  assert.match(missing.error, /必须填写/);
+  assert.equal(st(root, 'D-DIR'), '待定夺', '空方向不得移动工单');
+
+  const decided = life.定夺(root, 'D-DIR', '给方向', '修复授权冲突并补回归测试', '制作人');
+  assert.equal(decided.ok, true);
+  const current = store.find(root, 'D-DIR');
+  assert.equal(current.state, '在途');
+  assert.match(current.body, /## 定夺方向/);
+  assert.match(current.body, /修复授权冲突并补回归测试/);
 });
 
 t('验收不过 → 已归档', () => {
