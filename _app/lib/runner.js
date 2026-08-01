@@ -127,6 +127,29 @@ function buildQaPrompt(root, t, proj, receiptPath) {
   ].filter(Boolean).join('\n');
 }
 
+// ---- 收线裁决（TK-21 实测修复）：CLI 正常退出但 stdout 为空，对判官类工作（质检/代核/代裁）
+// 不是有效裁决——多为 CLI 异常静默吞输出。此前空输出落进「找不到结论行=不过」被误盖章，
+// 需人工清 fm.代核 才能重审；现按判官执行失败走（不动单不盖章，下轮重试）。
+// 执行类保留「（CLI 无输出）」占位回执照常交单——产出好坏后面有质检/验收把关。
+const JUDGE_KINDS = new Set(['质检', '代核', '代裁']);
+function settleClose(kind, code, out, errout, ticketId, finishOk, failLocal) {
+  const text = String(out).trim();
+  if (code !== 0) {
+    // 失败原因优先 stderr，空则兜底 stdout 尾部——claude CLI 的 "API Error: ..." 打在 stdout，
+    // 只看 stderr 会落库成空白的「CLI 退出码 1：」（另会话实测）
+    const src = String(errout).trim() || text;
+    failLocal(`CLI 退出码 ${code}：${src.split(/\r?\n/).filter(Boolean).slice(-2).join(' ').slice(0, 150)}`);
+    return;
+  }
+  if (JUDGE_KINDS.has(kind) && !text) {
+    failLocal('CLI 退出码 0 但输出为空——判官空输出不作数，按执行失败重试');
+    return;
+  }
+  const tail = text.slice(-8000) || `# 完工报告 ${ticketId}\n（CLI 无输出）`;
+  // 代核结论机器可读行：找不到"结论：通过"一律按不过处理（保守，不误自动完成）
+  finishOk(tail, kind === '代核' ? /结论[:：]\s*通过/.test(tail) : true);
+}
+
 // ---- 执行一份工作（在途执行 / 质检复核）。opts.durMs=0 供测试同步完成；opts.failWith 注入失败 ----
 async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   if (!agentId || running.has(agentId) || busyTickets().has(t.id)) return false;
@@ -160,7 +183,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       try { fs.appendFileSync(rp, `\n\n## 委托代裁\n${text.slice(0, 6000)}\n`, 'utf8'); } catch { /* 无回执不阻塞 */ }
       const give = /结论[:：]\s*给方向/.test(text);
       const dir = give ? (text.match(/方向[:：]\s*([\s\S]{1,2000})/) || [])[1] : null;
-      store.update(root, t.id, (fm) => { fm.代裁 = { 结论: give ? '给方向' : '上呈', 时间: new Date().toISOString() }; });
+      store.update(root, t.id, (fm) => { fm.代裁 = { 结论: give ? '给方向' : '上呈', 时间: new Date().toISOString() }; delete fm.代裁失败次数; });
       if (give && dir) {
         const r = lifecycle.定夺(root, t.id, '给方向', dir.trim(), '代裁·裁判档');
         if (r.ok) journal.append(root, `委托代裁 ${t.id} → 给方向回在途（D43③，方向已写入正文）`);
@@ -172,7 +195,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       // 核验报告追加进回执；通过→自动验收完成（D11 委托代劳），不过→留在待验收等用户裁
       const rp = path.join(root, '回执', `${t.id}.md`);
       try { fs.appendFileSync(rp, `\n\n## 委托代核\n${String(note).slice(0, 6000)}\n`, 'utf8'); } catch { /* 无回执文件也不阻塞 */ }
-      store.update(root, t.id, (fm) => { fm.代核 = { 结论: verdict ? '通过' : '不过', 时间: new Date().toISOString() }; });
+      store.update(root, t.id, (fm) => { fm.代核 = { 结论: verdict ? '通过' : '不过', 时间: new Date().toISOString() }; delete fm.代核失败次数; });
       if (verdict) {
         const r = lifecycle.验收(root, t.id, true);
         if (r.ok) journal.append(root, `委托代核通过 ${t.id} → 验收完成（Claude 代劳，D11/D34）`);
@@ -193,26 +216,34 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   };
   const failLocalInner = (why) => { // D31：失败入位为纯本地操作，任何网络状况下都能落位
     running.delete(agentId);
-    if (kind === '代核') { // 代核失败不动单（待验收无失败转移）：记账后待下轮/人工
-      journal.append(root, `委托代核失败 ${t.id}（${String(why).slice(0, 80)}）——单留待验收`);
-      return;
-    }
-    if (kind === '代裁') { // 代裁失败同理不动单：留待定夺，下轮重试或用户手裁
-      journal.append(root, `委托代裁失败 ${t.id}（${String(why).slice(0, 80)}）——单留待定夺`);
+    const cap = rc.判官重试上限 ?? 3; // 判官类（质检/代核/代裁）失败重试封顶，可配
+    if (kind === '代核' || kind === '代裁') {
+      // 判官失败不动单不盖章（TK-21：空输出/网络抖动都走这里）：计失败次数，
+      // 封顶前 tick 下轮自动重试，封顶后停拉等人工（清计数字段即可重启重审）
+      const 场 = kind === '代核' ? '待验收' : '待定夺';
+      const field = kind === '代核' ? '代核失败次数' : '代裁失败次数';
+      const cur0 = store.find(root, t.id);
+      if (cur0 && cur0.state === 场) {
+        const n = (Number(cur0.fm[field]) || 0) + 1;
+        store.update(root, t.id, (fm) => { fm[field] = n; });
+        journal.append(root, `委托${kind}失败 ${t.id} 第 ${n}/${cap} 次（${String(why).slice(0, 80)}）——单留${场}${n >= cap ? `，重试封顶等你裁（清 ${field} 可重审）` : '，下轮重试'}`);
+      } else {
+        journal.append(root, `委托${kind}失败 ${t.id}（${String(why).slice(0, 80)}）——单已不在${场}，不计`);
+      }
       return;
     }
     if (kind === '质检') {
-      // 判官阶段失败（多为网络抖动）不打整单：留在质检原地重试，3 次封顶再入执行失败
+      // 判官阶段失败（多为网络抖动）不打整单：留在质检原地重试，封顶再入执行失败
       // ——整单失败后重投会连"执行"一起重跑，白烧一遍额度
       const cur0 = store.find(root, t.id);
       if (!cur0 || cur0.state !== '质检') return;
       const n = (Number(cur0.fm.质检失败次数) || 0) + 1;
-      if (n < 3) {
+      if (n < cap) {
         store.update(root, t.id, (fm) => { fm.质检失败次数 = n; });
-        journal.append(root, `质检执行失败 ${t.id} 第 ${n}/3 次（${String(why).slice(0, 60)}）——留质检下轮重试`);
+        journal.append(root, `质检执行失败 ${t.id} 第 ${n}/${cap} 次（${String(why).slice(0, 60)}）——留质检下轮重试`);
         return;
       }
-      journal.append(root, `质检执行连败 3 次 ${t.id} → 执行失败分诊`);
+      journal.append(root, `质检执行连败 ${cap} 次 ${t.id} → 执行失败分诊`);
     }
     const cur = store.find(root, t.id);
     if (cur && (cur.state === '在途' || cur.state === '质检')) lifecycle.执行失败(root, t.id, why);
@@ -266,16 +297,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   child.on('close', (code) => {
     clearTimeout(killer);
     if (!running.has(agentId)) return; // 已被超时处理
-    if (code === 0) {
-      const text = (String(out).trim().slice(-8000)) || `# 完工报告 ${t.id}\n（CLI 无输出）`;
-      // 代核结论机器可读行：找不到"结论：通过"一律按不过处理（保守，不误自动完成）
-      finishOk(text, kind === '代核' ? /结论[:：]\s*通过/.test(text) : true);
-    } else {
-      // 失败原因优先 stderr，空则兜底 stdout 尾部——claude CLI 的 "API Error: ..." 打在 stdout，
-      // 只看 stderr 会落库成空白的「CLI 退出码 1：」（另会话实测）
-      const src = String(errout).trim() || String(out).trim();
-      failLocal(`CLI 退出码 ${code}：${src.split(/\r?\n/).filter(Boolean).slice(-2).join(' ').slice(0, 150)}`);
-    }
+    settleClose(kind, code, out, errout, t.id, finishOk, failLocal);
   });
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 事件兜底 */ }
   return true;
@@ -324,16 +346,21 @@ async function tick(root, cfg, opts = {}) {
     if (await startWork(root, cfg, t, qa.id, '质检', opts)) result.质检.push(t.id);
   }
 
+  // ④⑤ 判官失败封顶（TK-21）：失败计数到上限的单不再自动拉，等人工（清计数字段可重审）
+  const 判官上限 = (cfg.执行器 || {}).判官重试上限 ?? 3;
+
   // ④ 委托代核（D34）：待验收且验收方式=委托、未核过的单，Claude 代劳核验（一次一张，保守）
   if (!running.has('委托代核')) {
-    const t = store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !x.fm.代核 && !busyTickets().has(x.id));
+    const t = store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !x.fm.代核
+      && (Number(x.fm.代核失败次数) || 0) < 判官上限 && !busyTickets().has(x.id));
     if (t && await startWork(root, cfg, t, '委托代核', '代核', opts)) (result.代核 = result.代核 || []).push(t.id);
   }
 
   // ⑤ 委托代裁（D43③）：待定夺且未裁过的单，裁判档裁「给方向/上呈」（一次一张）；
   // 打回级判断永远留给用户；执行器.代裁=false 可整体关闭
   if ((cfg.执行器 || {}).代裁 !== false && !running.has('委托代裁')) {
-    const t = store.list(root, '待定夺').find((x) => !x.fm.代裁 && !busyTickets().has(x.id));
+    const t = store.list(root, '待定夺').find((x) => !x.fm.代裁
+      && (Number(x.fm.代裁失败次数) || 0) < 判官上限 && !busyTickets().has(x.id));
     if (t && await startWork(root, cfg, t, '委托代裁', '代裁', opts)) (result.代裁 = result.代裁 || []).push(t.id);
   }
 
@@ -375,4 +402,4 @@ function status(root, cfg) {
   };
 }
 
-module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, isDry, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt };
+module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, isDry, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose };

@@ -544,6 +544,13 @@ app.post('/api/agent-model', (req, res) => {
   res.json({ ok: true, agents: cfg.agents });
 });
 
+// ---- 消耗报表（停车场老待办落地）：明文事实源只读聚合，项目过滤走查询参数 ----
+const report = require('./lib/report');
+app.get('/api/report', (req, res) => {
+  if (!ready(res)) return;
+  res.json(report.aggregate(ROOT));
+});
+
 // ---- 阶段字典与阶段标准（D43）：字典=项目可配默认 L0-L2；标准=阶段标准.md 明文（缺则落模板）----
 const stages = require('./lib/stages');
 app.get('/api/stages', (req, res) => {

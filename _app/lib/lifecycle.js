@@ -203,6 +203,8 @@ function 解除待复核(root, id, 确认说明) {
 }
 
 // 返工（D6）：归档旧单 + 建新草稿（带返工自回链）。旧单永不复活。
+// 下游依赖自动接续：引用旧单的未终态单，依赖改指新单——否则它们会永远等一张已归档的单
+// （地图 L0 实战教训：TK-19 返工后 TK-21 卡死，当时靠手工 撤回→改→重投 解救）。
 function 返工(root, oldId, newId, fm, body) {
   const old = store.find(root, oldId);
   if (!old) return { ok: false, error: '旧单不存在' };
@@ -211,8 +213,22 @@ function 返工(root, oldId, newId, fm, body) {
   }
   const nfm = { ...fm, 返工自: oldId, 创建时间: fm.创建时间 || nowIso().slice(0, 10), 更新时间: nowIso() };
   const r = store.create(root, newId, nfm, body);
-  if (r.ok) journal.append(root, `返工 ${oldId} → 新单 ${newId}（归档旧 + 开新草稿）`);
-  return r;
+  if (!r.ok) return r;
+  const 接续 = [];
+  for (const s of store.STATES) {
+    if (store.TERMINAL.includes(s)) continue;
+    for (const t of store.list(root, s)) {
+      const deps = t.fm.依赖;
+      if (!deps) continue;
+      const arr = Array.isArray(deps) ? deps.map(String) : String(deps).split(/[，,\s]+/).filter(Boolean);
+      if (!arr.includes(oldId)) continue;
+      const next = arr.map((d) => (d === oldId ? newId : d)).join('，');
+      store.update(root, t.id, (f) => { f.依赖 = next; });
+      接续.push(t.id);
+    }
+  }
+  journal.append(root, `返工 ${oldId} → 新单 ${newId}（归档旧 + 开新草稿${接续.length ? ` · 下游依赖接续：${接续.join('/')}` : ''}）`);
+  return { ...r, 依赖接续: 接续 };
 }
 
 module.exports = {

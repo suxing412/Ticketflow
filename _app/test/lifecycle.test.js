@@ -71,6 +71,20 @@ t('返工：归档旧单 + 建新草稿（带返工自回链）', () => {
   assert.equal(store.find(root, 'P-07').fm.返工自, 'P-06');
 });
 
+t('返工下游依赖接续：引用旧单的未终态单自动改指新单，终态单不动', () => {
+  const root = makeRoot();
+  seed(root, '待验收', { id: 'R-01' });
+  seed(root, '池', { id: 'R-02', 依赖: 'R-01' });
+  seed(root, '待投', { id: 'R-03', 依赖: 'R-01，R-02' });
+  seed(root, '完成', { id: 'R-04', 依赖: 'R-01' });
+  const r = life.返工(root, 'R-01', 'R-11', { id: 'R-11', title: '重做', 职能: '策划' }, '## 范围');
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.依赖接续.sort(), ['R-02', 'R-03']);
+  assert.equal(store.find(root, 'R-02').fm.依赖, 'R-11');
+  assert.equal(store.find(root, 'R-03').fm.依赖, 'R-11，R-02');
+  assert.equal(store.find(root, 'R-04').fm.依赖, 'R-01', '完成单历史不动');
+});
+
 t('撤回：在池→草稿；废弃：任意非终态→已归档；收回：在途→池清主办', () => {
   const root = makeRoot();
   seed(root, '池', { id: 'A' }); life.撤回(root, 'A'); assert.equal(st(root, 'A'), '草稿');

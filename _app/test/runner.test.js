@@ -195,6 +195,78 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.ok(!store.find(root, 'P-32').fm.代裁, '失败不盖章，下轮可重试');
   });
 
+  await t('判官空输出不作数（TK-21）：exit 0 + 空 stdout → 失败路径，不当有效裁决', async () => {
+    const calls = [];
+    const fin = (note, v) => calls.push({ path: 'ok', note, v });
+    const fail = (why) => calls.push({ path: 'fail', why });
+    for (const k of ['质检', '代核', '代裁']) {
+      calls.length = 0;
+      runner.settleClose(k, 0, '  \n ', '', 'X-1', fin, fail);
+      assert.equal(calls[0].path, 'fail', k + ' 空输出走执行失败');
+      assert.ok(calls[0].why.includes('输出为空'));
+    }
+    // 执行类空输出照旧占位回执交单（后面有质检/验收把关）
+    calls.length = 0;
+    runner.settleClose('执行', 0, '', '', 'X-1', fin, fail);
+    assert.equal(calls[0].path, 'ok');
+    assert.ok(calls[0].note.includes('CLI 无输出'));
+    // 有输出的代核照旧解析结论行：有「结论：通过」→通过，缺结论行仍保守判不过
+    calls.length = 0;
+    runner.settleClose('代核', 0, '逐条核过\n结论：通过', '', 'X-1', fin, fail);
+    assert.deepEqual([calls[0].path, calls[0].v], ['ok', true]);
+    calls.length = 0;
+    runner.settleClose('代核', 0, '有输出但没写结论行', '', 'X-1', fin, fail);
+    assert.deepEqual([calls[0].path, calls[0].v], ['ok', false], '有输出缺结论行仍按不过');
+    // 非零退出照走失败，原因优先 stderr
+    calls.length = 0;
+    runner.settleClose('代核', 1, '', 'boom', 'X-1', fin, fail);
+    assert.equal(calls[0].path, 'fail');
+    assert.ok(calls[0].why.includes('boom'));
+  });
+
+  await t('委托代核失败重试封顶：封顶前留待验收下轮重试且不盖章，封顶后停拉、清计数可重审', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '待验收', { id: 'P-40', 职能: '程序', 验收方式: '委托' });
+    for (let i = 1; i <= 3; i++) {
+      const r = await runner.tick(root, CFG, { ...UN, failWith: 'CLI 退出码 0 但输出为空' });
+      assert.ok((r.代核 || []).includes('P-40'), `第 ${i} 次仍自动拉起`);
+      const cur = store.find(root, 'P-40');
+      assert.equal(cur.state, '待验收', '失败不动单');
+      assert.ok(!cur.fm.代核, '失败不盖章');
+      assert.equal(cur.fm.代核失败次数, i);
+    }
+    const r4 = await runner.tick(root, CFG, { ...UN, failWith: 'x' });
+    assert.ok(!(r4.代核 || []).length, '封顶后不再自动重试');
+    assert.equal(store.find(root, 'P-40').fm.代核失败次数, 3, '计数不再涨');
+    // 人工清计数 → 恢复重审；成功后计数清除
+    store.update(root, 'P-40', (fm) => { fm.代核失败次数 = 2; });
+    const r5 = await runner.tick(root, CFG, UN);
+    assert.ok((r5.代核 || []).includes('P-40'));
+    const ok = store.find(root, 'P-40');
+    assert.equal(ok.state, '完成');
+    assert.ok(!ok.fm.代核失败次数, '成功清计数');
+  });
+
+  await t('委托代裁失败重试封顶：留待定夺不盖章，封顶后停拉；上限可配 判官重试上限', async () => {
+    const root = makeRoot(); on(root);
+    const cfg2 = { ...CFG, 执行器: { 判官重试上限: 2 } };
+    seed(root, '待定夺', { id: 'P-41', 职能: '程序', 主办: '程序-A' });
+    for (let i = 1; i <= 2; i++) {
+      await runner.tick(root, cfg2, { ...UN, failWith: '空输出' });
+      const cur = store.find(root, 'P-41');
+      assert.equal(cur.state, '待定夺', '失败不动单');
+      assert.ok(!cur.fm.代裁, '失败不盖章');
+      assert.equal(cur.fm.代裁失败次数, i);
+    }
+    const r3 = await runner.tick(root, cfg2, { ...UN, failWith: 'x' });
+    assert.ok(!(r3.代裁 || []).length, '配置上限 2 次即封顶');
+    // 默认上限 3：同样计数下默认配置还会再试
+    const r4 = await runner.tick(root, CFG, UN);
+    assert.ok((r4.代裁 || []).includes('P-41'), '默认上限 3 未封顶');
+    assert.equal(store.find(root, 'P-41').state, '在途', '试跑代裁给方向回在途');
+    assert.ok(!store.find(root, 'P-41').fm.代裁失败次数, '成功清计数');
+  });
+
   await t('待复核（D36）：标记后 池不可领/在途不起工/交产出被拒，解除后恢复', async () => {
     const root = makeRoot(); on(root);
     seed(root, '池', { id: 'P-22', 职能: '策划', 依据: '战斗系统#战斗-03' });

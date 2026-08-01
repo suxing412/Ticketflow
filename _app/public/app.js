@@ -9,7 +9,7 @@ const FNHEX = { 策划: 'var(--fn-plan)', 程序: 'var(--fn-code)', 美术: 'var
 const FNCLS = { 策划: 'fn-plan', 程序: 'fn-code', 美术: 'fn-art', QA: 'fn-qa', 装配: 'fn-asm' };
 const STCLS = { 在途: 'st-doing', 质检: 'st-review', 待验收: 'st-accept', 完成: 'st-done', 待定夺: 'st-escal', 执行失败: 'st-escal', 草稿: 'mut', 已归档: 'mut', 待投: '', 池: '' };
 const STPCT = { 草稿: 0, 待投: 0, 池: 0, 在途: 60, 质检: 85, 待定夺: 70, 执行失败: 60, 待验收: 90, 完成: 100, 已归档: 0 };
-const NAV = [['总览', ''], ['工单池', 'board'], ['流程', 'flow'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['风格库', 'stylelib']]; // 参数入口只走 ⚙
+const NAV = [['总览', ''], ['工单池', 'board'], ['流程', 'flow'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['风格库', 'stylelib'], ['报表', 'report']]; // 参数入口只走 ⚙
 function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1900); }
 // 数值跳字确认（步进器改完后调用）：重触发 animation
 function bump(el) { if (!el) return; el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
@@ -498,18 +498,23 @@ let tState = { collapsed: new Set(JSON.parse(localStorage.getItem('studio.tree.c
 function saveCollapsed() { localStorage.setItem('studio.tree.collapsed', JSON.stringify([...tState.collapsed])); }
 async function viewTree() {
   const { all } = await loadBoard();
-  const { kids, parents, topLeaves } = buildTree(all);
+  const { byId, kids, parents, topLeaves } = buildTree(all);
+  const parentSet = new Set(parents.map((p) => p.id));
   const stOk = (t) => tState.st === 'active' ? !['完成', '已归档'].includes(t.state) : true;
   const fnOk = (t) => !tState.fn || t.职能 === tState.fn;
+  // D43 三层结构（总单→阶段父单→碎单）：树递归渲染，父单进度=后代叶子均值（逐层聚合，不再被容器子单拉成 0%）
+  const pctOf = (t) => { const ch = kids[t.id]; if (!ch || !ch.length) return STPCT[t.state] ?? 0;
+    return Math.round(ch.reduce((a, c) => a + pctOf(c), 0) / ch.length); };
+  const anyVisible = (t) => (kids[t.id] || []).some((c) => parentSet.has(c.id) ? anyVisible(c) : (stOk(c) && fnOk(c)));
   const rowHtml = (t, lv, isParent, chn) => {
-    const pct = isParent ? Math.round(chn.reduce((a, c) => a + (STPCT[c.state] ?? 0), 0) / (chn.length || 1)) : (STPCT[t.state] ?? 0);
+    const pct = isParent ? pctOf(t) : (STPCT[t.state] ?? 0);
     const acceptN = isParent ? chn.filter((c) => c.state === '待验收').length : 0;
     const collapsed = tState.collapsed.has(t.id);
     const twist = isParent ? `<span class="twist2" onclick="event.stopPropagation();tToggle('${esc(t.id)}')">${collapsed ? '▸' : '▾'}</span>`
       : (lv === 0 ? '<span class="twist2 none">▸</span>' : '<span class="twist2 none">·</span>');
-    return `<div class="trow2 ${isParent ? 'parent' : 'leaf'} ${lv ? 'lv1' : ''} ${acceptN ? 'hasaccept' : ''}" onclick="location.hash='#/t/${t.id}'">
+    return `<div class="trow2 ${isParent ? 'parent' : 'leaf'} ${lv ? 'lv' + Math.min(lv, 3) : ''} ${acceptN ? 'hasaccept' : ''}" onclick="location.hash='#/t/${t.id}'">
       ${twist}<span class="tid2">${esc(t.id)}</span><span class="tt2">${esc(t.title)}</span>
-      ${isParent ? `<span class="kids">${chn.length} 子单</span>` : ''}
+      ${isParent ? `<span class="kids">${chn.length} 子单${t.阶段 ? ' · ' + esc(t.阶段) : ''}</span>` : ''}
       <span class="mid">${!isParent ? fnPill(t.职能) + stPill(t.state) : ''}</span>
       <div class="prog"><span class="bar"><i style="width:${pct}%"></i></span><span class="pv">${pct}%</span></div>
       ${acceptN ? `<button class="accept-mini" onclick="event.stopPropagation();tAcceptAll('${esc(t.id)}')">✓ 验收子单×${acceptN}</button>` : ''}
@@ -517,13 +522,21 @@ async function viewTree() {
     </div>`;
   };
   let html = ''; let count = 0, treeN = 0;
-  parents.forEach((p) => {
+  const renderSub = (p, lv) => {
     const chAll = kids[p.id] || [];
-    const ch = chAll.filter((c) => stOk(c) && fnOk(c));
-    if (!ch.length && !stOk(p)) return;
-    treeN++; count++;
-    html += rowHtml(p, 0, true, chAll);
-    if (!tState.collapsed.has(p.id)) ch.forEach((c) => { count++; html += rowHtml(c, 1, false, []); });
+    count++;
+    html += rowHtml(p, lv, true, chAll);
+    if (tState.collapsed.has(p.id)) return;
+    for (const c of chAll) {
+      if (parentSet.has(c.id)) { if (anyVisible(c) || stOk(c)) renderSub(c, lv + 1); }
+      else if (stOk(c) && fnOk(c)) { count++; html += rowHtml(c, lv + 1, false, []); }
+    }
+  };
+  // 只有根父单（自己没有在场父亲的）开树；中间层父单在递归里渲染——D42 前的单层写法曾把 TK-15 重复画成两棵树
+  const roots = parents.filter((p) => !(p.父单 && byId[p.父单]));
+  roots.forEach((p) => {
+    if (!anyVisible(p) && !stOk(p)) return;
+    treeN++; renderSub(p, 0);
   });
   topLeaves.filter((t) => stOk(t) && fnOk(t)).forEach((t) => { count++; html += rowHtml(t, 0, false, []); });
   const fns = ['', '策划', '程序', '美术', 'QA'];
@@ -707,6 +720,46 @@ window.artRemove = async (name) => {
   const r = await post('/api/stylelib/art-remove', { name });
   toast(r.ok ? '已移出' : (r.error || '失败')); if (r.ok) route();
 };
+
+/* ===== P13 消耗报表（停车场老待办落地）===== */
+async function viewReport() {
+  const [d] = await Promise.all([api('/api/report'), loadCfg()]);
+  const p = projActive();
+  // D42 项目语境：明细/分组按项目过滤（服务端全量，客户端切片——报表数据量小）
+  const rows = p ? d.明细.filter((r) => (r.项目 || projDefault()) === p) : d.明细;
+  const o = d.总览;
+  const stat = (l, v, c) => `<div class="grp"><span class="lbl">${l}</span><span class="num ${c || ''}">${v}</span></div>`;
+  const strip = [
+    stat('完成', o.完成), stat('归档', o.已归档), stat('实际工时', o.实际h合计 + 'h'),
+    stat('预估偏差', o.预估偏差pct == null ? '—' : o.预估偏差pct + '%', o.预估偏差pct > 150 ? 'err' : o.预估偏差pct != null && o.预估偏差pct <= 110 ? 'okc' : ''),
+    stat('自修轮次', o.自修总轮, o.自修总轮 ? 'warnc' : ''),
+    stat('代核 过/不过', o.代核通过 + '/' + o.代核不过),
+    stat('代裁 向/呈', o.代裁给方向 + '/' + o.代裁上呈),
+    stat('token(agent自报)', o.token估计合计 ? o.token估计合计.toLocaleString() : '—'),
+  ].join('<div class="vdiv"></div>');
+  const gtable = (title, rows2, note) => `<div class="rp-card card r14"><h4>${title}<span class="subnote" style="margin-left:10px">${note || ''}</span></h4>
+    <table class="rp-t"><tr><th></th><th>单数</th><th>合计h</th><th>均h</th><th>自修</th></tr>
+    ${rows2.map((g) => `<tr><td>${esc(g.名)}</td><td>${g.单数}</td><td>${g.实际h合计}</td><td>${g.平均h}</td><td class="${g.自修合计 ? 'warnc' : 'dim'}">${g.自修合计}</td></tr>`).join('') || '<tr><td colspan="5" class="dim">无数据</td></tr>'}</table></div>`;
+  const dayMax = Math.max(1, ...d.每日.map((x) => x.交付));
+  const daysHtml = d.每日.map((x) => `<div class="rp-day" title="${esc(x.日)} · 交付 ${x.交付} 单 · ${x.实际h}h">
+      <i style="height:${Math.round(x.交付 / dayMax * 46) + 4}px"></i><span>${esc(x.日.slice(5))}</span></div>`).join('') || '<p class="dim">暂无交付</p>';
+  const detail = rows.slice(0, 40).map((r) => `<tr onclick="location.hash='#/t/${encodeURIComponent(r.id)}'" style="cursor:pointer">
+      <td class="mono">${esc(r.id)}</td><td>${fnPill(r.职能)}</td><td>${esc(r.阶段 || '—')}</td>
+      <td>${r.预计h == null ? '—' : r.预计h + 'h'}</td><td>${r.实际h == null ? '—' : r.实际h + 'h'}</td>
+      <td class="${r.预计h && r.实际h > r.预计h * 1.5 ? 'err' : ''}">${r.预计h && r.实际h != null ? Math.round(r.实际h / r.预计h * 100) + '%' : '—'}</td>
+      <td class="${r.自修次数 ? 'warnc' : 'dim'}">${r.自修次数 || ''}</td>
+      <td class="dim" title="${esc(r.实际消耗 || '')}">${esc((r.实际消耗 || '—').slice(0, 26))}</td></tr>`).join('');
+  return `<div class="stat-strip card r14">${strip}</div>
+    <div class="rp-grid">
+      <div>${gtable('按职能', d.按职能)}${gtable('按主办', d.按主办)}${gtable('按执行池', d.按池, '订阅额度去向')}</div>
+      <div><div class="rp-card card r14"><h4>每日交付<span class="subnote" style="margin-left:10px">近 14 天</span></h4>
+        <div class="rp-days">${daysHtml}</div></div>
+        ${gtable('按项目', d.按项目)}</div>
+    </div>
+    <div class="rp-card card r14" style="margin-top:20px"><h4>工单明细${p ? `<span class="subnote" style="margin-left:10px">项目 ${esc(p)}</span>` : ''}</h4>
+      <table class="rp-t"><tr><th>编号</th><th>职能</th><th>阶段</th><th>预计</th><th>实际</th><th>偏差</th><th>自修</th><th>agent 自报消耗</th></tr>${detail || '<tr><td colspan="8" class="dim">无数据</td></tr>'}</table>
+      <p class="subnote" style="margin-top:10px">实际=交付-领单的墙钟时长 · token 为 agent 回执自报（参考值）· 点行进详情</p></div>`;
+}
 
 /* ===== P6 参数与额度 =====
    铁律：视图保持渲染——首屏立即画（额度先占位后原地填），调参只原地改数字，绝不整页重载 */
@@ -1218,7 +1271,7 @@ window.artSubmit = async (id, btn) => {
 window.act3 = async (name, id, 决定) => { const r = await post('/api/act/' + name, { id, 决定 }); toast(r.ok ? `${决定} 完成` : (r.error || '失败')); route(); };
 
 /* ===== 路由 ===== */
-const ROUTES = { '': viewOverview, board: viewBoard, flow: viewFlow, tree: viewTree, agents: viewAgents, decisions: viewDecisions, stylelib: viewStyleLib };
+const ROUTES = { '': viewOverview, board: viewBoard, flow: viewFlow, tree: viewTree, agents: viewAgents, decisions: viewDecisions, stylelib: viewStyleLib, report: viewReport };
 const markIn = (key) => { if (window._lastViewKey !== key) { const v = $('view') || $('app').firstElementChild; if (v) v.classList.add('vin'); } window._lastViewKey = key; };
 async function route() {
   const h = location.hash.replace(/^#\//, '');
