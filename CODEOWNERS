@@ -1,0 +1,13 @@
+# Papercrew 疆界（D45）——PR 触碰以下路径时自动请求属主评审
+# apps/studio 与协议文档：suxing412 全权（协议 D 系列只经制作人逐条决议修改）
+/apps/studio/    @suxing412
+/套件/           @suxing412
+/docs/           @suxing412
+# apps/platform：robinwang2 全权
+/apps/platform/  @robinwang2
+# 共享地基：双签
+/packages/core/       @suxing412 @robinwang2
+/packages/providers/  @robinwang2 @suxing412
+# 治理文件本身：双签
+/CODEOWNERS      @suxing412 @robinwang2
+/README.md       @suxing412 @robinwang2
