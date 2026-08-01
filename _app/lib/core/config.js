@@ -12,6 +12,14 @@ function resolveRoot(from) {
     if (up === dir) break;
     dir = up;
   }
+  // 裸 EXE 可能位于构建目录；继续寻找部署版和默认开发运行目录。
+  const fallbacks = [
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'AIWorkflowStudio'),
+    process.env.USERPROFILE && path.join(process.env.USERPROFILE, 'AIStudioDev'),
+  ].filter(Boolean);
+  for (const candidate of fallbacks) {
+    if (fs.existsSync(path.join(candidate, 'studio.config.json'))) return path.resolve(candidate);
+  }
   return null;
 }
 

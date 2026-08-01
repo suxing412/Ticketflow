@@ -265,12 +265,14 @@ function gatebarHtml(g) {
   const mini = (l) => { const p = l && l.fivePct != null ? l.fivePct : 0; const hot = l && l.locked;
     return `<span class="minibar"><i class="${hot ? 'hot' : ''}" style="width:${p}%"></i></span> <b class="mono" style="font-size:12px;${hot ? 'color:var(--danger)' : ''}">${l && l.fivePct != null ? l.fivePct + '%' : '··%'}</b>`; };
   const paused = g && g.paused.global;
+  const pauseAfter = g && g.完成后暂停;
   const lockNote = g && (g.locks.codex.locked || g.locks.claude.locked)
     ? `<span class="err" style="font-size:11px;font-weight:500">●锁${esc((g.locks.codex.locked ? g.locks.codex : g.locks.claude).resetAt || '')} 解冻</span>` : '';
   return `<div class="gatebar2 card">
     <div class="gsec"><span class="glbl">暂停闸门</span><span class="gv"><span class="dot" style="${paused ? 'background:var(--danger)' : ''}"></span>
       <b style="font-size:13px">${g ? (paused ? '已暂停' : '运行中') : '查询中'}</b>
       <button class="btn h32" style="height:28px" onclick="togglePause(${g ? !g.paused.global : true})" ${g ? '' : 'disabled'}>${paused ? '恢复' : '暂停'}</button></span></div>
+      <button class="btn h32 pause-after-btn ${pauseAfter ? 'armed' : ''}" onclick="togglePauseAfter(${pauseAfter ? 'false' : 'true'})" ${g || pauseAfter ? '' : 'disabled'} title="停止领取新工单；当前执行、质检、自动修复和委托核验完成后自动暂停">${pauseAfter ? '取消完成后暂停' : '当前单完成后暂停'}</button>
     <div class="vdiv"></div>
     <div class="gsec"><span class="glbl">额度锁</span><span class="gv"><span class="mono" style="font-size:11px;color:var(--ink2)">codex</span> ${mini(g && g.locks.codex)}
       <span class="mono" style="font-size:11px;color:var(--ink2);margin-left:10px">claude</span> ${mini(g && g.locks.claude)} ${lockNote}</span></div>
@@ -278,6 +280,7 @@ function gatebarHtml(g) {
     <div class="backlog" style="margin-left:24px"><span class="glbl">待验收积压</span><br/><b id="backlogN">— / —</b></div></div>`;
 }
 window.togglePause = async (v) => { await post('/api/gate/pause', { scope: 'global', value: v }); gateCache = null; route(); };
+window.togglePauseAfter = async (v) => { await post('/api/gate/pause-after-current', { value: v }); gateCache = null; route(); };
 // D43 批量投池：当前项目语境的待投整批释放（人闸=这一次确认）
 window.releaseAll = async () => {
   const { board } = await loadBoard();
@@ -310,7 +313,7 @@ async function viewBoard() {
   const fillBar = async () => {
     const g = await api('/api/gates'); gateCache = g;
     const gb = $('gatebar-slot');
-    if (gb) { const key = JSON.stringify([g.paused, g.locks.codex, g.locks.claude, g.推荐 && g.推荐.推荐]);
+    if (gb) { const key = JSON.stringify([g.paused, g.完成后暂停, g.locks.codex, g.locks.claude, g.推荐 && g.推荐.推荐]);
       if (gb.dataset.k !== key) { gb.dataset.k = key; gb.innerHTML = gatebarHtml(g); } }
     const bn = $('backlogN'); if (bn) bn.textContent = `${(board['待验收'] || []).length} / ${conf.闸值?.待验收积压闸 ?? 8}`;
   };
@@ -342,7 +345,11 @@ async function viewBoard() {
 /* ===== P12 流程（D43）：横轴=阶段 · 阶段内拓扑子列 · 泳道=系统（根祖先）· 红=关键路径 =====
    兼任投池前排版台：草稿/待投也显示。父单（组织容器）不出节点，只当泳道。 */
 async function viewFlow() {
-  const [{ all }, stg] = await Promise.all([loadBoard(), api('/api/stages?项目=' + encodeURIComponent(curProj())).catch(() => ({ 阶段: [], 标准: {} }))]);
+  const [{ all }, stg, pub] = await Promise.all([
+    loadBoard(),
+    api('/api/stages?项目=' + encodeURIComponent(curProj())).catch(() => ({ 阶段: [], 标准: {} })),
+    api('/api/workspace/publishable?项目=' + encodeURIComponent(curProj())).catch(() => ({ count: 0, items: [] })),
+  ]);
   const STG = (stg.阶段 && stg.阶段.length) ? stg.阶段 : [{ 代号: 'L0', 名称: '原型' }, { 代号: 'L1', 名称: '正式化' }, { 代号: 'L2', 名称: '打磨' }];
   const byId = Object.fromEntries(all.map((t) => [t.id, t]));
   const hasKids = new Set(all.filter((t) => t.父单 && byId[t.父单]).map((t) => t.父单));
@@ -460,6 +467,7 @@ async function viewFlow() {
       <span class="subnote">横轴=阶段 · 泳道=系统 · 红=关键路径（预计时间加权）· 虚线=升阶链 · 点卡进详情</span>
       <span class="sp"></span>
       ${cp.len ? `<span class="fl-cp">关键路径 ${Math.round(cp.len * 10) / 10}h · ${cp.path.length} 单</span>` : ''}
+      <button class="btn h32 ${pub.count ? 'accent' : ''}" onclick="publishAllWorkspaces()" ${pub.count ? '' : 'disabled'} title="按完成时间依次快进发布已完成的 Integrator 隔离检查点">一键发布${pub.count ? ` · ${pub.count}` : ''}</button>
       <button class="btn h32" onclick="flFold(this)">折叠已完成</button></div>
     <div class="fl-wrap"><div class="fl-stage" style="width:${xa + 20}px;height:${yy + 16}px">
       <svg class="fl-svg" width="${xa + 20}" height="${yy + 16}">${paths}</svg>
@@ -491,6 +499,17 @@ window.flFold = (btn) => {
   d.done.forEach((id) => { const el = $('fl-' + id); if (el) el.style.display = fold ? 'none' : ''; });
   document.querySelectorAll('path.fl-e').forEach((p) => {
     p.style.display = (fold && (doneSet.has(p.dataset.f) || doneSet.has(p.dataset.t))) ? 'none' : ''; });
+};
+window.publishAllWorkspaces = async () => {
+  const project = curProj();
+  if (!confirm(`把${project ? '项目“' + project + '”' : '当前流程'}中所有可发布的 Integrator 隔离检查点依次快进到主项目？\n\n主目录有未提交改动或分支不能快进时，系统会拒绝对应项，不会自动合并。`)) return;
+  const r = await post('/api/workspace/publish-all', { 项目: project });
+  const failed = (r.results || []).filter((x) => !x.ok);
+  if (failed.length) {
+    const detail = failed.slice(0, 3).map((x) => `${x.id}：${x.error}`).join('；');
+    toast(`已发布 ${r.published || 0}，失败 ${r.failed || failed.length} · ${detail}`);
+  } else toast(r.total ? `一键发布完成，共 ${r.published} 个检查点` : '没有可发布的隔离检查点');
+  route();
 };
 
 /* ===== P10 树形 ===== */
@@ -596,10 +615,11 @@ async function viewAgents() {
     const showId = h ? h.id : (w ? w.id : '—');
     const showTitle = h ? h.title : (w ? `${w.kind}中 · ${titleOf(w.id)}` : (a.上线 === false ? '未上线' : '空闲 · 等待领单'));
     const pill = h ? stPill(h.state === '质检' ? '质检' : '在途') : (w ? stPill('质检') : '<span class="pill mut">空闲</span>');
+    const provider = (h && h.provider) || (w && w.provider) || a.provider || a.供应商 || a.执行池 || '自动择优';
     return `<div class="arow2 card r14">
       <div class="av ${busy ? '' : 'idle'}" style="${busy ? 'background:' + (FNHEX[a.职能] || 'var(--ink3)') : ''}">${esc(a.id.slice(0, 2))}</div>
       <div class="who">${esc(a.id)}</div>
-      <span class="poolp pill sm fn ${a.执行池 === 'claude' ? 'pool-claude' : 'pool-codex'}">${esc(a.执行池)} 池</span>
+      <span class="poolp pill sm fn ${provider === 'claude' ? 'pool-claude' : provider === 'codex' ? 'pool-codex' : ''}">${esc(provider)}</span>
       <div class="mid2"><span class="aid">${esc(showId)}</span>
         <div class="at ${busy ? '' : 'dim2'}">${esc(showTitle)}</div></div>
       <div class="chips">${fnPill(a.职能)}${pill}</div>
@@ -635,6 +655,9 @@ async function viewDecisions() {
   // D42：决策台按当前项目过滤（积压计数是全局闸，保持全局读数）
   const p = projActive();
   if (p) { await loadCfg(); d.待验收 = d.待验收.filter((t) => projOf(t) === p); d.待定夺 = d.待定夺.filter((t) => projOf(t) === p); }
+  // 默认标签没有内容时，直接切到真正需要用户处理的队列，避免把裁决按钮藏在空面板后面。
+  if (dTab === 'accept' && !d.待验收.length && d.待定夺.length) dTab = 'escal';
+  else if (dTab === 'escal' && !d.待定夺.length && d.待验收.length) dTab = 'accept';
   const cur = dTab === 'accept' ? (d.待验收[0] || null) : (d.待定夺[0] || null);
   let main = '<div class="dmain card r16"><p class="dim">没有待处理项</p></div>';
   if (cur) {
@@ -656,8 +679,8 @@ async function viewDecisions() {
         <button class="btn h36" onclick="dReject('${esc(cur.id)}')">打回</button></div></div>`
       : `<div class="dsign"><span>QA 修不好 · 呈你我裁决</span><div class="btns">
         <button class="btn h36" onclick="dAct('定夺','${esc(cur.id)}',null,'接受')">接受</button>
-        <button class="btn h36" onclick="dAct('定夺','${esc(cur.id)}',null,'给方向')">给方向</button>
-        <button class="btn danger-o h36" onclick="dAct('定夺','${esc(cur.id)}',null,'打回')">打回</button></div></div>`}</div>`;
+        <button class="btn h36" onclick="dGiveDirection('${esc(cur.id)}')">给方向</button>
+        <button class="btn danger-o h36" onclick="dDecideReject('${esc(cur.id)}')">打回</button></div></div>`}</div>`;
   }
   const q1 = d.待验收.map((t) => `<div class="qitem" onclick="dTab='accept';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2">${esc(t.title)} · ${esc(t.验收方式 || '保留')}</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>';
   return `<div class="dtabs">
@@ -669,6 +692,13 @@ async function viewDecisions() {
         ${d.待定夺.map((t) => `<div class="qitem" onclick="dTab='escal';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2">${esc(t.title)} · QA 未过</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>'}</div></div></div>`;
 }
 window.dAct = async (name, id, 通过, 决定) => { const r = await post('/api/act/' + name, { id, 通过, 决定 }); toast(r.ok ? '已处理' : (r.error || '失败')); route(); };
+window.dGiveDirection = async (id) => {
+  const 方向 = prompt('写下返工方向；执行 Agent 会在工单正文中看到：');
+  if (!方向 || !方向.trim()) return;
+  const r = await post('/api/act/定夺', { id, 决定: '给方向', 方向: 方向.trim(), 裁决人: '制作人' });
+  toast(r.ok ? '已附方向并重新执行' : (r.error || '失败')); route();
+};
+window.dDecideReject = (id) => { if (confirm('打回会归档这张旧单；需要另开角色正确的新工单。确认？')) dAct('定夺', id, null, '打回'); };
 window.dReject = (id) => { if (confirm('打回将归档旧单，需另开新单重走流程。确认？')) dAct('验收', id, false); };
 
 /* ===== P5 风格库 ===== */
@@ -723,24 +753,28 @@ function poolCardHtml(name, l, cfg2) {
     <div class="pbar"><i class="${hot ? 'hot' : ''}" style="width:${pct || 0}%"></i></div>`;
 }
 function teamRowsHtml(agents) {
-  // D38：模型档可选——下拉 = 池默认 + 监测/配置的可选项（window._models 由参数页加载）
+  // V2：角色稳定，Provider 可自动择优或临时固定；旧执行池字段继续兼容。
   const m = (window._p6cfg && window._p6cfg.模型) || {};
   const av = window._models || {};
-  const pools = Object.keys((window._p6cfg && window._p6cfg.执行池) || { codex: 1, claude: 1 });
+  const cfg = window._p6cfg || {};
+  const declared = cfg.providers && Object.keys(cfg.providers).length ? cfg.providers : (cfg.执行池 || { codex: 1, claude: 1 });
+  const pools = Object.keys(declared).filter((name) => !declared[name] || declared[name].enabled !== false);
   return (agents || []).map((a) => {
-    const pool = a.执行池 || 'claude';
-    const poolDefault = m[pool + '默认'] || '';
-    const opts = ((av[pool] && av[pool].可选) || []);
-    const sel = `<select class="mselect mono" title="模型档：个体覆盖 > 池默认 > CLI 默认" onchange="aModel('${esc(a.id)}', this.value)">
-        <option value="" ${!a.模型 ? 'selected' : ''}>池默认${poolDefault ? '·' + esc(poolDefault) : ''}</option>
+    const pool = a.provider || a.供应商 || a.执行池 || 'auto';
+    const role = a.role || a.角色 || a.职能;
+    const poolDefault = pool === 'auto' ? '' : ((declared[pool] && declared[pool].defaultModel) || m[pool + '默认'] || '');
+    const opts = pool === 'auto' ? [] : ((av[pool] && av[pool].可选) || []);
+    const sel = `<select class="mselect mono" title="模型覆盖只适合固定 Provider；自动路由时由 Provider 默认模型决定" onchange="aModel('${esc(a.id)}', this.value)" ${pool === 'auto' ? 'disabled' : ''}>
+        <option value="" ${!a.模型 ? 'selected' : ''}>${pool === 'auto' ? '随 Provider 自动' : 'Provider 默认' + (poolDefault ? '·' + esc(poolDefault) : '')}</option>
         ${opts.map((o) => `<option value="${esc(o)}" ${a.模型 === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
         ${a.模型 && !opts.includes(a.模型) ? `<option value="${esc(a.模型)}" selected>${esc(a.模型)}</option>` : ''}
       </select>`;
-    const psel = `<select class="mselect mono" title="执行池：决定 CLI 归属与额度闸；切池清模型覆盖，下一单生效" onchange="aPool('${esc(a.id)}', this.value)">
-        ${pools.map((p) => `<option value="${esc(p)}" ${pool === p ? 'selected' : ''}>${esc(p)} 池</option>`).join('')}
+    const psel = `<select class="mselect mono" title="自动择优或临时固定 Provider；下一单生效" onchange="aPool('${esc(a.id)}', this.value)">
+        <option value="auto" ${pool === 'auto' ? 'selected' : ''}>自动择优</option>
+        ${pools.map((p) => `<option value="${esc(p)}" ${pool === p ? 'selected' : ''}>固定 · ${esc(p)}</option>`).join('')}
       </select>`;
     return `<div class="teamrow card" style="border-left-color:${FNHEX[a.职能] || 'var(--line)'}">
-      <b>${esc(a.id)}</b>${fnPill(a.职能)}${psel}${sel}
+      <b>${esc(a.id)}</b>${fnPill(role)}${psel}${sel}
       <span class="stpill pill sm ${a.上线 === false ? 'mut' : 'ok'}">${a.上线 === false ? '退役待归' : '在岗'}</span></div>`;
   }).join('');
 }
@@ -764,16 +798,18 @@ window.themeSet = (v) => {
 };
 if (window.studio && window.studio.setThemeBg) window.studio.setThemeBg(THEME_BG[window.curTheme()]);
 
-// 执行池切换：切池清模型覆盖（服务端保证），重画后模型下拉自动换成新池的可选清单
+// Provider 路由切换：自动择优 / 临时固定；切换会清模型覆盖。
 window.aPool = async (id, v) => {
   const r = await post('/api/agent-pool', { id, 池: v });
   if (!r.ok) return toast(r.error || '失败');
   if (window._p6cfg) window._p6cfg.agents = r.agents;
   const tl = $('team-list'); if (tl) tl.innerHTML = teamRowsHtml(r.agents);
-  toast(`${id} → ${v} 池 · 模型回池默认（下一单生效）`);
+  toast(`${id} → ${v === 'auto' ? '自动择优' : '固定 ' + v}（下一单生效）`);
 };
 async function viewParams() {
-  const [c, run, models] = await Promise.all([api('/api/config'), api('/api/runner'), api('/api/models').catch(() => ({}))]);
+  const [c, run, models, providerData] = await Promise.all([
+    api('/api/config'), api('/api/runner'), api('/api/models').catch(() => ({})), api('/api/providers').catch(() => ({ roles: [], routes: {} })),
+  ]);
   window._p6cfg = c;
   window._models = models;
   // 执行器（D30）：内嵌拉取循环的仪表与开关
@@ -799,15 +835,17 @@ async function viewParams() {
     return `<option value="" ${!cur ? 'selected' : ''}>CLI 默认</option>` + list.map((o) => `<option value="${esc(o)}" ${cur === o ? 'selected' : ''}>${esc(o)}</option>`).join('')
       + (cur && !list.includes(cur) ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''); };
   const mc = c.模型 || {};
-  const modelCards = [['claude默认', 'claude', 'claude 池体力档'], ['codex默认', 'codex', 'codex 池体力档'], ['质检', 'claude', 'QA 复核裁判档'], ['代核', 'claude', '委托代核裁判档'], ['代裁', 'claude', '待定夺代裁裁判档（D43，空=跟代核档）']]
+  const providerNames = Object.keys(c.providers && Object.keys(c.providers).length ? c.providers : (c.执行池 || {}));
+  const modelCards = [['claude默认', 'claude', 'Claude 兼容默认档'], ['codex默认', 'codex', 'Codex 兼容默认档'], ['质检', 'claude', '旧 QA 裁判档'], ['代核', 'claude', '旧委托代核档'], ['代裁', 'claude', '旧待定夺代裁档']]
+    .filter(([, pool]) => providerNames.includes(pool))
     .map(([k, pool, note]) => `<div class="paramcard card"><h4>${k}</h4><p class="pmeta">${note}</p>
       <div class="runbtn"><select class="mselect mono" onchange="mSet('${k}', this.value)">${mOpt(pool, mc[k] || '')}</select></div></div>`).join('')
     + `<div class="paramcard card"><h4>可选模型增补</h4><p class="pmeta">监测之外手动补（写进 config.模型.可选）</p>
-      <div class="runbtn"><input id="madd-codex" class="mono" placeholder="codex" style="width:90px;height:30px;padding:0 8px;font-size:11px"/><button class="btn h32" style="height:30px;margin:0 6px" onclick="mAdd('codex')">＋</button>
-      <input id="madd-claude" class="mono" placeholder="claude" style="width:90px;height:30px;padding:0 8px;font-size:11px"/><button class="btn h32" style="height:30px;margin-left:6px" onclick="mAdd('claude')">＋</button></div></div>`;
-  // 执行池阈值（额度锁的杆）
-  const poolCards = ['codex', 'claude'].flatMap((pool) => [['阈值', '5h 用量 ≥N% 冻结领单'], ['周阈值', '周用量 ≥N% 冻结领单']].map(([k, note]) => {
-    const v = (c.执行池 && c.执行池[pool] && c.执行池[pool][k]) || (k === '阈值' ? 70 : 90);
+      ${providerNames.map((pool) => `<div class="runbtn"><input id="madd-${esc(pool)}" class="mono" placeholder="${esc(pool)} 模型" style="width:150px;height:30px;padding:0 8px;font-size:11px"/><button class="btn h32" style="height:30px;margin-left:6px" onclick="mAdd('${esc(pool)}')">＋</button></div>`).join('')}</div>`;
+  // Provider 额度阈值；没有专用额度探针的厂商仍可用手动暂停闸。
+  const providerCfg = (name) => (c.providers && c.providers[name] && (c.providers[name].quota || c.providers[name])) || (c.执行池 && c.执行池[name]) || {};
+  const poolCards = providerNames.flatMap((pool) => [['阈值', '5h 用量 ≥N% 冻结领单'], ['周阈值', '周用量 ≥N% 冻结领单']].map(([k, note]) => {
+    const v = providerCfg(pool)[k] || (k === '阈值' ? 70 : 90);
     return `<div class="paramcard card" data-pl="${pool}.${k}"><h4>${pool} ${k}</h4><p class="pmeta">${note.replace('N', v)}</p>
       <div class="stepper"><button onclick="plStep('${pool}','${k}',-5)">−</button><span class="val">${v}</span><button onclick="plStep('${pool}','${k}',5)">＋</button></div></div>`;
   })).join('');
@@ -832,18 +870,24 @@ async function viewParams() {
     + [['速度窗口小时', rc.速度窗口小时 ?? 2], ['每档处理数', rc.每档处理数 ?? 2]].map(([k, v]) => `<div class="paramcard card" data-rkey="${k}"><h4>${esc(P6NAMES[k] || k)}</h4><p class="pmeta">${esc((P6META[k] || '').replace('N', v))}</p>
       <div class="stepper"><button onclick="rStep('${k}',-1)">−</button><span class="val">${v}</span><button onclick="rStep('${k}',1)">＋</button></div></div>`).join('');
   const team = teamRowsHtml(c.agents);
+  const routeCard = `<div class="envcard card"><div class="eg-head"><b>当前自动路由排序</b><span class="subnote" style="margin-left:auto">质量 + 评审通过率 + 延迟 + 成本</span></div>
+    ${(providerData.roles || []).map((role) => {
+      const candidates = (providerData.routes && providerData.routes[role]) || [];
+      return `<div class="projrow"><b>${esc(role)}</b><span class="mono" style="margin-left:auto">${candidates.length ? candidates.map((x, i) => `${i ? '' : '★ '}${esc(x.name)} ${Number.isFinite(x.score) ? x.score : '固定'}`).join('　') : '无可用 Provider'}</span></div>`;
+    }).join('')}</div>`;
   // 额度不阻塞首屏：先占位骨架，数据回来原地填（footprint 不变），随后 5s 活体轮询
   let lastPoolJson = '';
   const fillPools = async () => {
     const g = await api('/api/gates');
-    const key = JSON.stringify([g.locks.codex, g.locks.claude]);
+    const key = JSON.stringify(providerNames.map((name) => g.locks[name]));
     if (key === lastPoolJson) return;
     lastPoolJson = key;
-    const pc = $('pool-codex'); if (pc) pc.innerHTML = poolCardHtml('codex', g.locks.codex, c.执行池 && c.执行池.codex);
-    const pl = $('pool-claude'); if (pl) pl.innerHTML = poolCardHtml('claude', g.locks.claude, c.执行池 && c.执行池.claude);
+    for (const name of providerNames) {
+      const card = $('pool-' + name); if (card) card.innerHTML = poolCardHtml(name, g.locks[name], providerCfg(name));
+    }
   };
   setTimeout(() => { fillPools().catch(() => { /* 保持占位，不清空 */ }); }, 0);
-  pollLoop('pool-codex', 5000, fillPools);
+  pollLoop('provider-pools', 5000, fillPools);
   // 执行器活体轮询：留在参数页时每 5s 原地刷状态灯/执行中清单，离开视图自动停
   setTimeout(function pollRun() {
     if (!$('run-card')) return;
@@ -867,13 +911,13 @@ async function viewParams() {
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">参数闸值</h3><span class="subnote">监制台可调</span></div>${params}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">推荐在途</h3><span class="subnote">制作人精力参考 · 随处理速度调整</span></div>${recCards}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">模型档</h3><span class="subnote">贵裁判 · 贱体力（D38）</span></div>${modelCards}</div>
-    <div><div class="sec-h"><h3 class="h17">环境探针</h3><span class="subnote">实弹前置检查</span></div>${envCard}
+    <div><div class="sec-h"><h3 class="h17">动态路由</h3><span class="subnote">每张新工单重新选择</span></div>${routeCard}
+      <div class="sec-h" style="margin-top:26px"><h3 class="h17">环境探针</h3><span class="subnote">实弹前置检查</span></div>${envCard}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">项目注册</h3><span class="subnote">执行 agent 的目标仓库（D32）</span></div>${projCard}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">执行池阈值</h3><span class="subnote">额度锁的杆（D26）</span></div>${poolCards}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">额度双池</h3></div>
-      <div class="poolcard card" id="pool-codex">${poolCardHtml('codex', null, c.执行池 && c.执行池.codex)}</div>
-      <div class="poolcard card" id="pool-claude">${poolCardHtml('claude', null, c.执行池 && c.执行池.claude)}</div>
-      <div class="sec-h" style="margin-top:26px"><h3 style="font-size:15px;margin:0;font-weight:700">agent 编制 · 执行池</h3></div><div id="team-list">${team}</div></div></div>`;
+      <div class="sec-h" style="margin-top:26px"><h3 class="h17">Provider 阈值</h3><span class="subnote">额度锁的杆</span></div>${poolCards}
+      <div class="sec-h" style="margin-top:26px"><h3 class="h17">Provider 状态</h3></div>
+      <div id="provider-pools">${providerNames.map((name) => `<div class="poolcard card" id="pool-${esc(name)}">${poolCardHtml(name, null, providerCfg(name))}</div>`).join('')}</div>
+      <div class="sec-h" style="margin-top:26px"><h3 style="font-size:15px;margin:0;font-weight:700">Agent 编制 · 动态路由</h3></div><div id="team-list">${team}</div></div></div>`;
 }
 // 编制步进：POST 后原地更新该职能人数、在途上限推导值、右侧编制表——视图保持渲染，不整页重载
 window.sStep = async (fn, delta) => {
@@ -1124,8 +1168,44 @@ window.dSave = async (release) => {
 };
 
 /* ===== P8 详情 ===== */
+const traceStatusText = (s) => ({ starting: '正在启动', running: '执行中', completed: '已完成', failed: '执行失败', timed_out: '已超时', unavailable: '暂无轨迹' }[s] || s || '暂无轨迹');
+function traceBodyText(t) {
+  const out = String(t.output || ''); const err = String(t.stderr || '');
+  if (!out && !err) return t.message || (t.status === 'running' || t.status === 'starting' ? '等待 Provider 返回首个事件…' : '本次执行没有文字输出。');
+  return out + (err ? `\n\n── stderr / 错误输出 ──\n${err}` : '');
+}
+function traceMetaHtml(t) {
+  const elapsed = t.startedAt ? fmtElapsed((t.endedAt ? Date.parse(t.endedAt) : Date.now()) - Date.parse(t.startedAt)) : '—';
+  const idle = t.lastActivityAt ? fmtElapsed(Date.now() - Date.parse(t.lastActivityAt)) : '—';
+  const m = t.metrics || {};
+  return `<span class="trace-status ${esc(t.status || '')}">${esc(traceStatusText(t.status))}</span>
+    <span>${esc(t.provider || '—')}${t.model ? '/' + esc(t.model) : ''}</span><span>${esc(t.agent || '—')}</span>
+    <span>运行 ${elapsed}</span><span>距上次输出 ${idle}</span><span>命令 ${m.commands || 0}</span>
+    ${m.warnings ? `<span class="warn">过程告警 ${m.warnings}</span>` : '<span class="okc">过程告警 0</span>'}
+    ${m.fatalErrors ? `<span class="err">致命错误 ${m.fatalErrors}</span>` : '<span class="okc">致命错误 0</span>'}${t.truncated ? '<span class="warn">前段已截断</span>' : ''}`;
+}
+function traceCardHtml(id, t) {
+  return `<details class="p8main card tracecard r16" open id="trace-panel">
+    <summary><span><i class="trace-live ${['starting', 'running'].includes(t.status) ? 'on' : ''}"></i>AI 实时输出与工具轨迹</span><span class="dim">点击收起/展开</span></summary>
+    <div class="trace-note">展示 Provider 实际返回的文本、工具事件和错误；未公开的内部思维链不展示。</div>
+    <div class="trace-meta" id="trace-meta">${traceMetaHtml(t)}</div>
+    <pre class="trace-output" id="trace-output">${esc(traceBodyText(t))}</pre>
+  </details>`;
+}
+async function refreshTrace(id) {
+  const t = await api('/api/runner/trace?id=' + encodeURIComponent(id));
+  const meta = $('trace-meta'), out = $('trace-output'); if (!meta || !out) return;
+  meta.innerHTML = traceMetaHtml(t);
+  const text = traceBodyText(t); const follow = out.scrollTop + out.clientHeight >= out.scrollHeight - 48;
+  if (out.textContent !== text) out.textContent = text;
+  if (follow) out.scrollTop = out.scrollHeight;
+  const live = document.querySelector('#trace-panel .trace-live'); if (live) live.classList.toggle('on', ['starting', 'running'].includes(t.status));
+}
 async function viewDetail(id) {
-  const d = await api('/api/ticket?id=' + encodeURIComponent(id));
+  const [d, trace] = await Promise.all([
+    api('/api/ticket?id=' + encodeURIComponent(id)),
+    api('/api/runner/trace?id=' + encodeURIComponent(id)).catch(() => ({ status: 'unavailable', output: '', stderr: '' })),
+  ]);
   if (d.error) return `<p class="err" style="margin-top:30px">${esc(d.error)}</p>`;
   const fm = d.fm, c = d.链 || { 父子: { 父: null, 子: [] }, 依赖: [] };
   const chainRow = (k, v, cls) => `<div class="crow"><span class="ck">${k}</span><span class="cv ${cls || ''}">${v || '—'}</span></div>`;
@@ -1142,17 +1222,41 @@ async function viewDetail(id) {
   if (d.state === '在途') ops.push(['收回', '从执行方取回在途单', `act2('收回','${id}')`]);
   if (fm.待复核) ops.push(['解除复核', `上游 ${esc(fm.待复核.锚号 || '')} 已核对新版`, `act2('解除复核','${id}')`]); // D36
   if (d.state === '执行失败') { // D31 分诊三出路（废弃在下方通用项）
+    if ((fm.role || fm.角色 || fm.职能) === 'orchestrator' && fm.workspace)
+      ops.push(['恢复计划', '从已保存的 .studio/plan.json 落子单，不再次调用模型', `act2('恢复计划','${id}')`]);
     ops.push(['重投', `清执行痕迹回池重领${fm.失败原因 ? '（' + esc(String(fm.失败原因).slice(0, 24)) + '）' : ''}`, `act3('失败分诊','${id}','重投')`]);
     ops.push(['上呈', '转待定夺，由你拍板', `act3('失败分诊','${id}','上呈')`]);
+  }
+  const reviews = Array.isArray(d.评审意见) ? d.评审意见 : [];
+  const reviewHtml = reviews.slice().reverse().map((rv, index) => {
+    const passed = rv.结论 === '通过';
+    const list = (title, values, empty) => `<div class="review-sec"><b>${title}</b>${values && values.length
+      ? `<ul>${values.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : `<p class="dim">${empty}</p>`}</div>`;
+    return `<div class="rside card r16 review-card ${passed ? 'passed' : 'failed'}">
+      <h3>AI 评审意见 ${index ? `<span class="dim">· 历史 ${reviews.length - index}</span>` : ''}</h3>
+      <div class="review-head"><span class="pill ${passed ? 'ok' : 'red'}">${esc(rv.结论 || '未知')}</span>
+        <span>${esc(rv.类型 || '评审')} · ${esc(rv.provider || rv.评审人 || 'AI')}</span></div>
+      ${list('阻断问题', rv.问题, passed ? '无阻断问题' : '评审未提供结构化问题，请查看原文')}
+      ${list('潜在风险与漏洞', rv.风险, '评审未列出额外风险')}
+      ${list('验收证据', rv.证据, '未提供结构化证据')}
+      ${rv.原文 ? `<details class="review-raw"><summary>查看评审原文</summary><pre>${esc(rv.原文)}</pre></details>` : ''}</div>`;
+  }).join('');
+  if (d.state === '待定夺') {
+    ops.push(['接受', '忽略 QA 异议，转入待验收', `dAct('定夺','${id}',null,'接受')`]);
+    ops.push(['给方向', '附上明确返工意见后重新执行', `dGiveDirection('${id}')`]);
+    ops.push(['打回', '归档旧单，另开角色正确的新单', `dDecideReject('${id}')`]);
   }
   if (d.state === '草稿') ops.push(['定稿', '草稿 → 待投', `act2('定稿','${id}')`]);
   if (d.state === '待投') ops.push(['投池', '释放进池（人闸）', `act2('投池','${id}')`]);
   if (!['完成', '已归档'].includes(d.state)) ops.push(['废弃', '归档（非终态皆可）', `if(confirm('废弃并归档？'))act2('废弃','${id}')`]);
   if (d.state === '草稿') ops.push(['编辑', '打开起草页修改', `location.hash='#/draft?edit=${id}'`]);
   if (d.state === '完成') { // 审批点④：入库（D12 精选制，唯一写者=制作人层）
+    if ((fm.role || fm.角色 || fm.职能) === 'integrator' && fm.workspace && fm.workspace.isolated && fm.workspace.commit)
+      ops.push(['发布到项目', '仅在主项目可安全快进时发布', `publishWorkspace('${id}')`]);
     if (fm.职能 === '策划') ops.push(['入标杆', '提炼进设计公理（审批点④）', `axModal('${id}')`]);
     if (fm.职能 === '美术' || fm.职能 === '装配') ops.push(['入美术库', '产出精选进风格库（审批点④）', `artModal('${id}')`]);
   }
+  setTimeout(() => { refreshTrace(id).catch(() => {}); pollLoop('trace-panel', 1000, () => refreshTrace(id)); }, 0);
   return `<div class="p8grid"><div>
       <div class="p8main card r16"><h2>${esc(id)} · ${esc(fm.title)}</h2>
         <div class="chipsrow">${fnPill(fm.职能)}<span class="pill mut">${esc(fm.产出物类型 || '')}</span>
@@ -1164,15 +1268,25 @@ async function viewDetail(id) {
           ${chainRow('子单', kidsTxt)}
           ${chainRow('返工自', c.返工自 ? esc(c.返工自) : null)}
           ${chainRow('依据', c.依据 ? `<span style="color:var(--accent-ink)">${esc(c.依据)}</span>` : null)}
-          ${chainRow('依赖', (c.依赖 || []).map((x) => `${esc(x.id)}(${esc(x.state)})`).join('、'), 'okc')}</div></div>
+          ${chainRow('依赖', (c.依赖 || []).map((x) => `${esc(x.id)}(${esc(x.state)})`).join('、'), 'okc')}
+          ${fm.workspace ? chainRow('工作区', fm.workspace.isolated
+            ? `${esc(fm.workspace.branch || '隔离分支')} · ${esc(String(fm.workspace.commit || '').slice(0, 10) || '待检查点')}${fm.workspace.publishedAt ? ' · 已发布' : ''}`
+            : esc(fm.workspace.warning || '直接目录模式')) : ''}</div></div>
+      ${traceCardHtml(id, trace)}
       <div class="p8main card r16"><b style="font-size:13px">正文</b><div class="doc2">${d.html || '<p class="dim">无正文</p>'}</div></div>
-    </div><div>
+    </div><div>${reviewHtml}
       <div class="rside card r16"><h3>回执 · 完工报告</h3>${rsecs || '<p class="dim" style="margin-top:10px">尚无回执（完工后生成）</p>'}</div>
       <div class="rside card r16"><h3>操作</h3>
         ${ops.map(([b, s, fn]) => `<button class="oprow2" onclick="${fn}"><b>${b}</b><span>${s}</span></button>`).join('')}
         <div class="subnote" style="margin-top:14px">预计 ${esc(fm.预计时间 || '—')} · ${esc(fm.预计token || '—')} · 状态 ${esc(d.state)}</div></div></div></div>`;
 }
 window.act2 = async (name, id) => { const r = await post('/api/act/' + name, { id }); toast(r.ok ? '完成' : (r.error || '失败')); route(); };
+window.publishWorkspace = async (id) => {
+  if (!confirm(`把 ${id} 的集成结果快进发布到项目当前分支？\n若主项目已有新提交或未提交改动，系统会拒绝。`)) return;
+  const r = await post('/api/workspace/publish', { id });
+  toast(r.ok ? `已发布 ${String(r.commit || '').slice(0, 10)}` : (r.error || '发布失败'));
+  route();
+};
 // 入库弹窗（审批点④）
 function showModal(inner) {
   const w = document.createElement('div'); w.className = 'mwrap';

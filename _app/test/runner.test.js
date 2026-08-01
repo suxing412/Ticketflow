@@ -1,12 +1,15 @@
 // runner.test.js — 执行器 D30/D31/D32：领单执行/QA质检执行/执行失败入位与分诊/闸门/断点恢复/实弹门
 const assert = require('node:assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const runner = require('../lib/runner');
 const life = require('../lib/lifecycle');
 const state = require('../lib/core/state');
 const store = require('../lib/core/store');
 const gates = require('../lib/gates');
+const worktrees = require('../lib/workspace/worktree');
 const { makeRoot, seed, CFG } = require('./helper');
 
 let passed = 0; const t = async (n, f) => { await f(); passed++; console.log('  ✓ ' + n); };
@@ -14,6 +17,16 @@ console.log('runner 执行器测试（D30/D31/D32）');
 const UN = { durMs: 0 }; // 同步完成模拟执行
 const on = (root) => state.update(root, (s) => { s.执行器 = { 运行: true, 试跑: true }; });
 const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
+const git = (cwd, args) => {
+  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true });
+  if (r.status !== 0) throw new Error(r.stderr || r.stdout);
+  return String(r.stdout || '').trim();
+};
+const waitUntil = async (fn, timeout = 8000) => {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) { if (fn()) return; await new Promise((resolve) => setTimeout(resolve, 25)); }
+  throw new Error('等待异步执行完成超时');
+};
 
 (async () => {
   await t('未启动 → tick 跳过，不领单', async () => {
@@ -36,6 +49,60 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.ok(fs.existsSync(path.join(root, '回执', 'P-01.md')));
   });
 
+  await t('V2 Orchestrator 试跑：结构化计划自动生成待投子单', async () => {
+    const root = makeRoot(); on(root);
+    const cfg = {
+      ...CFG,
+      roles: { orchestrator: {}, backend: {} },
+      providers: { local: { adapter: 'command-cli', command: 'local-agent', capabilities: ['planning', 'coding', 'backend'] } },
+      agents: [
+        { id: 'orchestrator-A', role: 'orchestrator', 职能: 'orchestrator', routing: { mode: 'auto' } },
+        { id: 'backend-A', role: 'backend', 职能: 'backend', routing: { mode: 'auto' } },
+      ],
+      职能: ['orchestrator', 'backend'],
+    };
+    seed(root, '池', { id: 'REQ-1', role: 'orchestrator', 职能: 'orchestrator', QA: '关' });
+    const r = await runner.tick(root, cfg, UN);
+    assert.ok(r.执行.includes('REQ-1'));
+    assert.equal(store.find(root, 'REQ-1').state, '待验收');
+    assert.equal(store.find(root, 'REQ-1-1').state, '待投');
+    assert.equal(store.find(root, 'REQ-1-1').fm.父单, 'REQ-1');
+  });
+
+  await t('实弹 Runner 在隔离 worktree 执行并自动记录检查点', async () => {
+    const top = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-wt-'));
+    const root = path.join(top, 'monitor'); const repo = path.join(top, 'project');
+    fs.mkdirSync(root); fs.mkdirSync(repo); store.ensureDirs(root);
+    git(repo, ['init']); fs.writeFileSync(path.join(repo, 'README.md'), '# base\n'); git(repo, ['add', '.']);
+    git(repo, ['-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-m', 'base']);
+    const script = "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{require('fs').writeFileSync('agent.txt','isolated\\n');console.log('# 完工报告 LIVE-1\\n## 做了什么\\n写入隔离文件')})";
+    const cfg = {
+      roles: { backend: { requiredCapabilities: ['coding'] } }, 职能: ['backend'],
+      providers: { local: { adapter: 'command-cli', command: process.execPath, args: ['-e', script], capabilities: ['coding'] } },
+      agents: [{ id: 'backend-A', role: 'backend', 职能: 'backend', routing: { mode: 'auto' } }],
+      routing: {}, workspace: { mode: 'worktree', root: 'workspaces', autoCommit: true },
+      项目: { 默认: 'Demo', 注册: { Demo: { 路径: repo } } },
+      执行器: { 实弹解锁: true, 执行超时分钟: 1 }, 闸值: { 待验收积压闸: 8 },
+    };
+    state.update(root, (s) => { s.执行器 = { 运行: true, 试跑: false }; });
+    seed(root, '池', { id: 'LIVE-1', role: 'backend', 职能: 'backend', 项目: 'Demo', QA: '关' });
+    try {
+      await runner.tick(root, cfg, {});
+      await waitUntil(() => store.find(root, 'LIVE-1').state === '待验收');
+      const done = store.find(root, 'LIVE-1');
+      assert.equal(done.fm.workspace.isolated, true);
+      assert.match(done.fm.workspace.commit, /^[0-9a-f]{40}$/);
+      assert.ok(fs.existsSync(path.join(done.fm.workspace.path, 'agent.txt')));
+      assert.equal(fs.existsSync(path.join(repo, 'agent.txt')), false, '主项目未被并行执行直接改写');
+      const trace = runner.traceFor('LIVE-1');
+      assert.equal(trace.status, 'completed');
+      assert.match(trace.output, /完工报告 LIVE-1/);
+    } finally {
+      try { for (const row of worktrees.worktreeList(repo)) if (path.resolve(row.path) !== path.resolve(repo)) git(repo, ['worktree', 'remove', '--force', row.path]); } catch { /* 尽力清理 */ }
+      fs.rmSync(top, { recursive: true, force: true });
+    }
+  });
+
   await t('QA 开 + 有 QA agent：同轮走完 执行→质检→QA复核→待验收，落 质检人', async () => {
     const root = makeRoot(); on(root);
     seed(root, '池', { id: 'P-02', 职能: '程序', QA: '开' });
@@ -44,6 +111,8 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     const cur = store.find(root, 'P-02');
     assert.equal(cur.state, '待验收');
     assert.equal(cur.fm.质检人, 'QA-A');
+    assert.equal(cur.fm.最新评审.结论, '通过');
+    assert.ok(cur.fm.最新评审.风险.length, '通过也应保留潜在风险');
   });
 
   await t('QA 开 + 无 QA agent：停在质检等复核（不越权）', async () => {
@@ -125,6 +194,20 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.equal(store.find(root, 'P-09').state, '待验收');
     await runner.tick(root, cfg4, UN);
     assert.equal(store.find(root, 'P-10').state, '待验收');
+  });
+
+  await t('当前单完成后暂停：当前链路收尾、不领下一张、随后合上全局闸门', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '在途', { id: 'P-40', 职能: '程序', QA: '关', 验收方式: '保留', 主办: '程序-A', 领单时间: new Date().toISOString() });
+    seed(root, '池', { id: 'P-41', 职能: '程序', QA: '关' });
+    const armed = runner.pauseAfterCurrent(root, CFG, true);
+    assert.equal(armed.armed, true);
+    await runner.tick(root, CFG, UN);
+    assert.equal(store.find(root, 'P-40').state, '待验收');
+    assert.equal(store.find(root, 'P-41').state, '池', '预约后不得领取下一张');
+    const s = state.read(root);
+    assert.equal(s.paused.global, true, '当前单收尾后自动暂停');
+    assert.equal(s.执行器.完成后暂停, false, '预约完成后自动清除');
   });
 
   await t('暂停闸门合上 → 不领单', async () => {
@@ -230,6 +313,39 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.ok(p3.includes('工单正文'), '无章程目录也能组提示词');
   });
 
+  await t('QA 自修提示词注入最新阻断意见，首轮执行不注入', async () => {
+    const root = makeRoot();
+    const project = { name: 'TK', path: 'D:/x' };
+    const first = runner.buildPrompt(root, { id: 'R-1', fm: { 职能: '程序', title: 't' }, body: '## 范围\nx' }, project);
+    assert.ok(!first.includes('上一轮 QA 返工意见'));
+
+    const repair = runner.buildPrompt(root, {
+      id: 'R-2',
+      fm: {
+        职能: '程序', title: 't', 自修次数: 2,
+        最新评审: {
+          结论: '不过', 问题: ['授权事实顺序影响结果'], 风险: [], 证据: ['reviewers.ts:142'],
+          原文: '## 阻断问题\n- 授权事实顺序影响结果\n\n结论：不过',
+        },
+      },
+      body: '## 范围\nx',
+    }, project);
+    assert.match(repair, /第 2 轮自修/);
+    assert.match(repair, /授权事实顺序影响结果/);
+    assert.match(repair, /不得只重跑测试/);
+  });
+
+  await t('Orchestrator 提示词明确计划文件、任务上限和允许角色', async () => {
+    const root = makeRoot();
+    const cfg = { roles: { orchestrator: {}, backend: {}, frontend: {}, reviewer: {}, integrator: {} }, orchestration: { maxTasks: 12 } };
+    const fake = { id: 'PLAN-1', fm: { role: 'orchestrator', 职能: 'orchestrator', title: '拆计划' }, body: '## 范围\n规划' };
+    const prompt = runner.buildPrompt(root, fake, { name: 'TK', path: 'D:/x' }, cfg);
+    assert.ok(prompt.includes('.studio/plan.json'));
+    assert.ok(prompt.includes('最多 12 张子任务'));
+    assert.ok(prompt.includes('backend、frontend、reviewer、integrator'));
+    assert.ok(prompt.includes('不得发明 product'));
+  });
+
   await t('模型分级（D38）：个体覆盖 > 池默认 > CLI 默认；质检/代核走裁判档', async () => {
     const cfgM = { ...CFG, 模型: { codex默认: '', claude默认: 'sonnet', 质检: 'opus', 代核: 'opus' } };
     assert.equal(runner.pickModel(cfgM, '执行', { 模型: 'haiku' }, 'claude'), 'haiku', '个体覆盖优先');
@@ -238,10 +354,35 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.equal(runner.pickModel(cfgM, '质检', { 模型: 'haiku' }, 'claude'), 'opus', '质检走裁判档，个体不覆盖');
     assert.equal(runner.pickModel(cfgM, '代核', {}, 'claude'), 'opus');
     const c1 = runner.resolveCli('codex', 'gpt-x');
-    assert.deepEqual(c1.args.slice(-3), ['-m', 'gpt-x', '-'], 'codex -m 注入且 stdin 标记殿后');
+    assert.ok(c1.args.includes('-m') && c1.args.includes('gpt-x'), 'codex -m 注入');
+    assert.deepEqual(c1.args.slice(-2), ['--json', '-'], 'Codex JSONL 且 stdin 标记殿后');
     const c2 = runner.resolveCli('claude', 'opus');
     assert.ok(c2.args.includes('--model') && c2.args.includes('opus'));
     assert.ok(!runner.resolveCli('claude', '').args.includes('--model'), '空模型不加旗标');
+  });
+
+  await t('Claude 实时事件转可读轨迹，内部 thinking 不透出，最终结果可提取', async () => {
+    const trace = {};
+    const hidden = runner.renderClaudeEvent(trace, JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '秘密推理' } } }));
+    const visible = runner.renderClaudeEvent(trace, JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '正在检查接口' } } }));
+    assert.ok(!hidden.includes('秘密推理'));
+    assert.match(hidden, /内部思维链不展示/);
+    assert.equal(visible, '正在检查接口');
+    const raw = [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: '草稿' }] } }), JSON.stringify({ type: 'result', result: '最终回执' })].join('\n');
+    assert.equal(runner.finalProviderText({ outputFormat: 'claude-stream-json' }, raw), '最终回执');
+  });
+
+  await t('Codex JSONL 事件显示命令与最终消息，不展示 reasoning 内容', async () => {
+    const trace = {};
+    const hidden = runner.renderCodexEvent(trace, JSON.stringify({ type: 'item.completed', item: { type: 'reasoning', text: '秘密推理' } }));
+    const command = runner.renderCodexEvent(trace, JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'npm test' } }));
+    assert.ok(!hidden.includes('秘密推理'));
+    assert.match(command, /npm test/);
+    const warning = runner.renderCodexEvent(trace, JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'npm test', exit_code: 1, aggregated_output: 'tests failed' } }));
+    assert.match(warning, /过程告警/);
+    assert.equal(trace.metrics.warnings, 1);
+    const raw = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: '最终报告' } });
+    assert.equal(runner.finalProviderText({ outputFormat: 'codex-jsonl' }, raw), '最终报告');
   });
 
   await t('项目定位（D32）：注册表解析路径，未注册返回 null', async () => {

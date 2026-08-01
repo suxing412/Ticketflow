@@ -8,13 +8,13 @@
     "start": "node server.js",
     "desktop": "electron .",
     "dist": "electron-builder --win portable",
-    "test": "node test/store.test.js && node test/pool.test.js && node test/lifecycle.test.js && node test/gates.test.js && node test/trace.test.js && node test/recommend.test.js && node test/staff.test.js && node test/runner.test.js && node test/stylelib.test.js && node test/config.test.js && node test/ledger.test.js && node test/stages.test.js"
+    "test": "node test/store.test.js && node test/providers.test.js && node test/toolchain.test.js && node test/review-opinion.test.js && node test/routing.test.js && node test/orchestration.test.js && node test/worktree.test.js && node test/pool.test.js && node test/lifecycle.test.js && node test/gates.test.js && node test/trace.test.js && node test/recommend.test.js && node test/staff.test.js && node test/runner.test.js && node test/stylelib.test.js && node test/config.test.js && node test/ledger.test.js && node test/stages.test.js"
   },
   "dependencies": {
     "express": "^4.19.0",
     "gray-matter": "^4.0.3",
     "marked": "^12.0.0",
-    "sanitize-html": "^2.13.0"
+    "sanitize-html": "2.17.5"
   },
   "devDependencies": {
     "electron": "^30.5.1",
@@ -24,8 +24,9 @@
     "appId": "local.studio.console",
     "productName": "监制台",
     "directories": {
-      "output": "D:/studio-build/dist"
+      "output": "dist"
     },
+    "electronDist": "node_modules/electron/dist",
     "files": [
       "main.js",
       "server.js",

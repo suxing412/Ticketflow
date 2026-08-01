@@ -33,6 +33,16 @@ t('交产出写回执文件', () => {
   assert.ok(require('fs').existsSync(require('path').join(root, '回执', 'P-03.md')));
 });
 
+t('Orchestrator 解析失败后可从已保存计划恢复到待验收', () => {
+  const root = makeRoot();
+  seed(root, '执行失败', { id: 'PLAN-RECOVER', role: 'orchestrator', 职能: 'orchestrator', 失败原因: '缺少 JSON' });
+  const r = life.恢复计划产出(root, 'PLAN-RECOVER', '# 已从结构化计划恢复');
+  assert.ok(r.ok);
+  assert.equal(st(root, 'PLAN-RECOVER'), '待验收');
+  assert.ok(store.find(root, 'PLAN-RECOVER').fm.计划恢复时间);
+  assert.ok(require('fs').existsSync(require('path').join(root, '回执', 'PLAN-RECOVER.md')));
+});
+
 t('QA 自修循环：不过→在途(自修+1)，达上限→待定夺', () => {
   const root = makeRoot();
   seed(root, '质检', { id: 'P-04', QA: '开', 主办: 'A' });
@@ -48,10 +58,26 @@ t('QA 自修循环：不过→在途(自修+1)，达上限→待定夺', () => {
 });
 
 t('待定夺裁决：接受→待验收 / 给方向→在途 / 打回→已归档', () => {
-  const mk = (dec) => { const root = makeRoot(); seed(root, '待定夺', { id: 'D' }); life.定夺(root, 'D', dec); return st(root, 'D'); };
+  const mk = (dec) => { const root = makeRoot(); seed(root, '待定夺', { id: 'D' }); life.定夺(root, 'D', dec, dec === '给方向' ? '修复边界测试' : null, '制作人'); return st(root, 'D'); };
   assert.equal(mk('接受'), '待验收');
   assert.equal(mk('给方向'), '在途');
   assert.equal(mk('打回'), '已归档');
+});
+
+t('给方向必须有文字，且方向与状态迁移同步落盘', () => {
+  const root = makeRoot();
+  seed(root, '待定夺', { id: 'D-DIR' }, '## 范围\n原始正文');
+  const missing = life.定夺(root, 'D-DIR', '给方向', '   ', '制作人');
+  assert.equal(missing.ok, false);
+  assert.match(missing.error, /必须填写/);
+  assert.equal(st(root, 'D-DIR'), '待定夺', '空方向不得移动工单');
+
+  const decided = life.定夺(root, 'D-DIR', '给方向', '修复授权冲突并补回归测试', '制作人');
+  assert.equal(decided.ok, true);
+  const current = store.find(root, 'D-DIR');
+  assert.equal(current.state, '在途');
+  assert.match(current.body, /## 定夺方向/);
+  assert.match(current.body, /修复授权冲突并补回归测试/);
 });
 
 t('验收不过 → 已归档', () => {

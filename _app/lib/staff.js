@@ -17,7 +17,15 @@ function setStaff(root, cfg, 职能, count) {
   // 前 count 个：在岗（清掉 上线:false）；不够则补新人
   for (let i = 0; i < count; i++) {
     if (mine[i]) { const a = { ...mine[i] }; delete a.上线; next.push(a); }
-    else { const id = `${职能}-${LETTERS[i]}`; next.push({ id, 职能, 执行池: poolName }); 新增.push(id); }
+    else {
+      const id = `${职能}-${LETTERS[i]}`;
+      const a = { id, 职能 };
+      if (cfg.providers && Object.keys(cfg.providers).length) {
+        a.role = 职能;
+        a.routing = { mode: 'auto' };
+      } else a.执行池 = poolName;
+      next.push(a); 新增.push(id);
+    }
   }
   // 超编部分：忙着的标退役待归，空闲的直接移除
   for (let i = count; i < mine.length; i++) {

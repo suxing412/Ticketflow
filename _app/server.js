@@ -12,10 +12,14 @@ const life = require('./lib/lifecycle');
 const trace = require('./lib/trace');
 const quota = require('./lib/quota');
 const journal = require('./lib/journal');
+const providerRegistry = require('./lib/providers/registry');
+const providerRouter = require('./lib/routing/router');
+const providerHistory = require('./lib/routing/history');
+const worktrees = require('./lib/workspace/worktree');
 
 const ROOT = config.resolveRoot();
 let cfg = null; let initError = null;
-if (!ROOT) initError = '未找到监制台仓库（缺 studio.config.json）。';
+if (!ROOT) initError = '未找到运行目录（缺 studio.config.json）。请先运行分发套件中的“部署.bat”，不要直接启动 _app\\dist 里的裸 EXE；源码运行请设置 STUDIO_ROOT。';
 else { try { cfg = config.load(ROOT); store.ensureDirs(ROOT); } catch (e) { initError = '读配置失败：' + e.message; } }
 
 const app = express();
@@ -39,10 +43,12 @@ app.get('/api/board', (req, res) => {
   const snap = store.snapshot(ROOT);
   const out = {};
   for (const s of store.STATES) out[s] = snap[s].map((t) => ({
-    id: t.id, title: t.fm.title, 职能: t.fm.职能, 优先级: t.fm.优先级, 规模: t.fm.规模,
+    id: t.id, title: t.fm.title, 职能: t.fm.职能, role: t.fm.role || t.fm.角色 || t.fm.职能,
+    provider: t.fm.provider || t.fm.供应商 || t.fm.执行池 || null, 优先级: t.fm.优先级, 规模: t.fm.规模,
     QA: t.fm.QA, 验收方式: t.fm.验收方式, 主办: t.fm.主办 || null, 项目: t.fm.项目 || null, // D42 多项目视界按此归属
     阶段: t.fm.阶段 || null, 预计时间: t.fm.预计时间 || null, // D43 流程视图用
     父单: t.fm.父单 || null, 依赖: t.fm.依赖 || null,
+    workspace: t.fm.workspace ? { mode: t.fm.workspace.mode, branch: t.fm.workspace.branch || null, commit: t.fm.workspace.commit || null, isolated: !!t.fm.workspace.isolated } : null,
     领单时间: t.fm.领单时间 || null, 交付时间: t.fm.交付时间 || null, 滞留告警: !!t.fm.滞留告警,
   }));
   res.json({ states: store.STATES, board: out });
@@ -66,6 +72,14 @@ app.post('/api/config/gate', (req, res) => {
 // ---- 执行器（D30）：内嵌拉取循环 = 监制台版监听器。试跑默认，实弹待接入 ----
 const runner = require('./lib/runner');
 app.get('/api/runner', (req, res) => { if (!ready(res)) return; res.json(runner.status(ROOT, cfg)); });
+app.get('/api/runner/trace', (req, res) => {
+  if (!ready(res)) return;
+  const id = String(req.query.id || '');
+  if (!id || !store.find(ROOT, id)) return res.status(404).json({ error: '工单不存在' });
+  const trace = runner.traceFor(id);
+  if (!trace) return res.json({ id, status: 'unavailable', output: '', stderr: '', message: '本次启动尚无执行轨迹；应用重启前的 CLI 输出不会落盘。' });
+  res.json(trace);
+});
 app.post('/api/runner/start', (req, res) => {
   if (!ready(res)) return;
   runner.start(ROOT, () => cfg);
@@ -92,11 +106,17 @@ const saveCfg = () => fs.writeFileSync(path.join(ROOT, 'studio.config.json'), JS
 app.post('/api/config/pool', (req, res) => {
   if (!ready(res)) return;
   const { pool, key, value } = req.body || {};
-  if (!['codex', 'claude'].includes(pool)) return res.status(400).json({ error: '未知池：' + pool });
+  const known = providerRegistry.configs(cfg);
+  if (!known[pool]) return res.status(400).json({ error: '未知 Provider：' + pool });
   if (!['阈值', '周阈值'].includes(key)) return res.status(400).json({ error: '不可调整：' + key });
   const v = Number(value);
   if (!Number.isInteger(v) || v < 1 || v > 100) return res.status(400).json({ error: '取值须在 1–100' });
-  cfg.执行池[pool][key] = v; saveCfg();
+  if (cfg.providers && cfg.providers[pool]) {
+    cfg.providers[pool].quota = cfg.providers[pool].quota || {};
+    cfg.providers[pool].quota[key] = v;
+  }
+  if (cfg.执行池 && cfg.执行池[pool]) cfg.执行池[pool][key] = v;
+  saveCfg();
   journal.append(ROOT, `执行池阈值调整：${pool}.${key} → ${v}%`);
   res.json({ ok: true, 执行池: cfg.执行池 });
 });
@@ -114,7 +134,7 @@ app.post('/api/config/model', (req, res) => {
 app.post('/api/config/model-add', (req, res) => {
   if (!ready(res)) return;
   const { pool, name } = req.body || {};
-  if (!['codex', 'claude'].includes(pool)) return res.status(400).json({ error: '未知池：' + pool });
+  if (!providerRegistry.configs(cfg)[pool]) return res.status(400).json({ error: '未知 Provider：' + pool });
   const v = String(name || '').trim();
   if (!/^[\w.\-]{2,40}$/.test(v)) return res.status(400).json({ error: '模型名只允许字母数字点横线（2–40 位）' });
   cfg.模型 = cfg.模型 || {}; cfg.模型.可选 = cfg.模型.可选 || {};
@@ -230,37 +250,49 @@ app.get('/api/env', async (req, res) => {
   });
   const item = (名称, 级别, note) => ({ 名称, 级别, note }); // 级别: 绿/黄/红
 
-  // 组1 运行时与 CLI（探针标准=实弹标准：claude 走执行器同款绝对路径解析）
-  const claudeCmd = runner.resolveCli('claude').cmd;
-  const [codexP, claudeP] = await Promise.all([probe('codex', ['--version']), probe(claudeCmd, ['--version'])]);
+  // 组1 运行时与 CLI：按已启用 Provider 动态探测，不再假定系统永远只有 Codex/Claude。
+  const enabledProviders = providerRegistry.list(cfg).filter((provider) => provider.enabled !== false);
+  const probeRows = await Promise.all(enabledProviders.map(async (provider) => {
+    try {
+      const invocation = providerRegistry.create(cfg, provider.name).buildInvocation({ model: provider.defaultModel || '' });
+      return { provider, result: await probe(provider.probeCommand || invocation.cmd, provider.probeArgs || ['--version']) };
+    } catch (e) { return { provider, result: { ok: false, note: e.message } }; }
+  }));
   const proxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || null;
+  const agentToolchain = require('./lib/toolchain').resolve(ROOT, cfg);
   const 运行时 = [
-    item('node', '绿', process.version),
-    item('codex CLI', codexP.ok ? '绿' : '黄', codexP.note + (codexP.ok ? '' : '（codex 池实弹不可用）')),
-    item('claude CLI', claudeP.ok ? '绿' : '黄', claudeP.note + (claudeP.ok ? (claudeCmd !== 'claude' ? '（~/.local/bin，免 PATH）' : '') : '（claude 池实弹不可用）')),
+    item('监制台运行时', '绿', process.version + '（Electron 内置）'),
+    item('Agent Node/npm', agentToolchain.ok ? '绿' : '黄', agentToolchain.ok ? agentToolchain.dir : '未安装统一工具链；Agent 可编码但无法可靠运行 JS 测试'),
+    ...probeRows.map(({ provider, result }) => item(`${provider.name} · ${provider.adapter}`, result.ok ? '绿' : '黄', result.note + (result.ok ? '' : `（${provider.name} 实弹不可用）`))),
     // 探针标准=运行时标准：启动已按 环境→注册表→config默认 注入，这里报有效值+来源
-    item('代理', proxy ? '绿' : '黄', proxy ? proxy + '（' + (process.env.__STUDIO_PROXY_SRC || '环境变量') + '）' : '未解析到（环境/注册表/config 均空）'),
+    item('网络', '绿', proxy ? `应用层代理 ${proxy}（${process.env.__STUDIO_PROXY_SRC || '环境变量'}）` : '系统直连/VPN（未配置应用层代理）'),
   ];
 
-  // 组2 凭据与额度链路（2026-07-11 限流风波的直接教训）
+  // 组2 凭据与额度链路：只检查实际启用且已有专用探针的 Provider。
   const 凭据额度 = [];
-  try {
-    const cred = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', '.credentials.json'), 'utf8')).claudeAiOauth;
-    if (!cred || !cred.accessToken) 凭据额度.push(item('claude 凭据', '红', '凭据文件无 token——claude auth login'));
-    else if (cred.expiresAt > Date.now()) 凭据额度.push(item('claude 凭据', '绿', 'token 有效至 ' + new Date(cred.expiresAt).toTimeString().slice(0, 5)));
-    else if (cred.refreshToken) 凭据额度.push(item('claude 凭据', '黄', 'token 过期，待自动续期（有 refresh）'));
-    else 凭据额度.push(item('claude 凭据', '红', 'token 过期且无 refresh——claude auth login'));
-  } catch { 凭据额度.push(item('claude 凭据', '红', '未登录（无凭据文件）——claude auth login')); }
-  try {
-    const th = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', '.studio-usage-throttle.json'), 'utf8'));
-    const minMs = Math.max(120, Number((cfg.quota || {}).claudeMinIntervalSeconds) > 0 ? Number(cfg.quota.claudeMinIntervalSeconds) : 300) * 1000;
-    if (th.lastGood && Date.now() - th.lastGood.at < minMs * 3) 凭据额度.push(item('claude 额度读数', '绿', new Date(th.lastGood.at).toTimeString().slice(0, 5) + ' 读数 · 5h ' + Math.round(th.lastGood.data.fiveHour.utilization) + '%'));
-    else if (th.lastGood) 凭据额度.push(item('claude 额度读数', '黄', '读数陈旧（' + new Date(th.lastGood.at).toTimeString().slice(0, 5) + '）' + (th.backoffMs > minMs ? ' · 失败退避中 ' + Math.round(th.backoffMs / 60000) + 'min' : '')));
-    else 凭据额度.push(item('claude 额度读数', '黄', '尚无成功读数' + (th.backoffMs > minMs ? '（退避中 ' + Math.round(th.backoffMs / 60000) + 'min）' : '')));
-  } catch { 凭据额度.push(item('claude 额度读数', '黄', '尚未查询过')); }
-  const rl = await require('./lib/quota').getRateLimits(cfg).catch(() => null);
-  凭据额度.push(rl ? item('codex 登录态', '绿', 'app-server 正常 · 5h ' + (rl.primary && rl.primary.usedPercent != null ? Math.round(rl.primary.usedPercent) + '%' : '—'))
-    : item('codex 登录态', '黄', 'app-server 无响应（未登录或未装，codex 额度盲飞）'));
+  const enabledNames = new Set(enabledProviders.map((provider) => provider.name));
+  if (enabledNames.has('claude')) {
+    try {
+      const cred = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', '.credentials.json'), 'utf8')).claudeAiOauth;
+      if (!cred || !cred.accessToken) 凭据额度.push(item('claude 凭据', '红', '凭据文件无 token——claude auth login'));
+      else if (cred.expiresAt > Date.now()) 凭据额度.push(item('claude 凭据', '绿', 'token 有效至 ' + new Date(cred.expiresAt).toTimeString().slice(0, 5)));
+      else if (cred.refreshToken) 凭据额度.push(item('claude 凭据', '黄', 'token 过期，待自动续期（有 refresh）'));
+      else 凭据额度.push(item('claude 凭据', '红', 'token 过期且无 refresh——claude auth login'));
+    } catch { 凭据额度.push(item('claude 凭据', '红', '未登录（无凭据文件）——claude auth login')); }
+    try {
+      const th = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', '.studio-usage-throttle.json'), 'utf8'));
+      const minMs = Math.max(120, Number((cfg.quota || {}).claudeMinIntervalSeconds) > 0 ? Number(cfg.quota.claudeMinIntervalSeconds) : 300) * 1000;
+      if (th.lastGood && Date.now() - th.lastGood.at < minMs * 3) 凭据额度.push(item('claude 额度读数', '绿', new Date(th.lastGood.at).toTimeString().slice(0, 5) + ' 读数 · 5h ' + Math.round(th.lastGood.data.fiveHour.utilization) + '%'));
+      else if (th.lastGood) 凭据额度.push(item('claude 额度读数', '黄', '读数陈旧（' + new Date(th.lastGood.at).toTimeString().slice(0, 5) + '）' + (th.backoffMs > minMs ? ' · 失败退避中 ' + Math.round(th.backoffMs / 60000) + 'min' : '')));
+      else 凭据额度.push(item('claude 额度读数', '黄', '尚无成功读数' + (th.backoffMs > minMs ? '（退避中 ' + Math.round(th.backoffMs / 60000) + 'min）' : '')));
+    } catch { 凭据额度.push(item('claude 额度读数', '黄', '尚未查询过')); }
+  }
+  if (enabledNames.has('codex')) {
+    const rl = await require('./lib/quota').getRateLimits(cfg).catch(() => null);
+    凭据额度.push(rl ? item('codex 登录态', '绿', 'app-server 正常 · 5h ' + (rl.primary && rl.primary.usedPercent != null ? Math.round(rl.primary.usedPercent) + '%' : '—'))
+      : item('codex 登录态', '黄', 'app-server 无响应（未登录或未装，codex 额度盲飞）'));
+  }
+  if (!凭据额度.length) 凭据额度.push(item('Provider 凭据', '绿', '由各 Provider CLI 自行管理登录态'));
 
   // 组3 项目与目录
   const 项目目录 = [];
@@ -279,15 +311,23 @@ app.get('/api/env', async (req, res) => {
 
   // 组4 协议资产与配置完整性
   const 协议配置 = [];
-  const charters = ['通用', '策划', '程序', '美术', 'QA', '装配'];
-  const missing = charters.filter((n) => !fs.existsSync(path.join(ROOT, '岗位协议', n + '.md')));
-  协议配置.push(missing.length ? item('岗位协议', '黄', '缺：' + missing.join('、')) : item('岗位协议', '绿', charters.length + ' 份齐全'));
+  const roleNames = Object.keys(cfg.roles || {});
+  const genericDir = path.join(ROOT, '角色协议');
+  const legacyDir = path.join(ROOT, '岗位协议');
+  const protocolDir = fs.existsSync(genericDir) ? genericDir : legacyDir;
+  const commonName = fs.existsSync(path.join(protocolDir, 'common.md')) ? 'common' : '通用';
+  const charters = roleNames.length ? [commonName, ...roleNames] : ['通用', '策划', '程序', '美术', 'QA', '装配'];
+  const missing = charters.filter((n) => !fs.existsSync(path.join(protocolDir, n + '.md')));
+  协议配置.push(missing.length ? item('角色协议', '黄', '缺：' + missing.join('、')) : item('角色协议', '绿', charters.length + ' 份齐全'));
   const lint = [];
-  for (const fn of cfg.职能 || []) if (!pool.poolFor(cfg, fn)) lint.push(`职能「${fn}」无执行池归属（领单会失败）`);
-  for (const a of cfg.agents || []) if (!(cfg.职能 || []).includes(a.职能)) lint.push(`agent ${a.id} 的职能不在职能表`);
+  for (const fn of cfg.职能 || []) {
+    const candidates = providerRouter.rankProviders(ROOT, cfg, { role: fn, kind: '执行' });
+    if (!candidates.length) lint.push(`角色「${fn}」无可用 Provider（领单会失败）`);
+  }
+  for (const a of cfg.agents || []) if (!(cfg.职能 || []).includes(providerRouter.agentRole(a))) lint.push(`agent ${a.id} 的角色不在角色表`);
   if (cfg.项目 && cfg.项目.默认 && !reg[cfg.项目.默认]) lint.push('默认项目未注册');
   协议配置.push(lint.length ? item('config 完整性', lint.some((x) => x.includes('领单会失败')) ? '红' : '黄', lint.join('；'))
-    : item('config 完整性', '绿', '职能↔池映射 / agents / 默认项目 全部合法'));
+    : item('config 完整性', '绿', '角色↔Provider 路由 / agents / 默认项目 全部合法'));
 
   // 总灯：有红=阻断；无红有黄=降级；全绿=就绪
   const all = [...运行时, ...凭据额度, ...项目目录, ...协议配置];
@@ -340,7 +380,11 @@ app.get('/api/agents', (req, res) => {
   if (!ready(res)) return;
   const fl = pool.inFlight(ROOT);
   const byAgent = {};
-  for (const t of fl) if (t.fm.主办) byAgent[t.fm.主办] = { id: t.id, title: t.fm.title, state: t.state, 职能: t.fm.职能, 领单时间: t.fm.领单时间 };
+  for (const t of fl) if (t.fm.主办) byAgent[t.fm.主办] = {
+    id: t.id, title: t.fm.title, state: t.state, 职能: t.fm.职能, role: t.fm.role || t.fm.职能,
+    provider: t.fm.provider || t.fm.供应商 || t.fm.执行池 || null, 领单时间: t.fm.领单时间,
+    workspace: t.fm.workspace ? { branch: t.fm.workspace.branch || null, commit: t.fm.workspace.commit || null, isolated: !!t.fm.workspace.isolated } : null,
+  };
   const agents = (cfg.agents || []).map((a) => ({ ...a, 手持: byAgent[a.id] || null }));
   const 滞留 = fl.filter((t) => t.fm.滞留告警).map((t) => ({ id: t.id, state: t.state, 时长h: t.fm.滞留时长h }));
   res.json({ agents, 在途数: fl.length, 上限: require('./lib/staff').onlineCount(cfg), 滞留告警: 滞留 });
@@ -352,10 +396,72 @@ app.get('/api/ticket', (req, res) => {
   const id = String(req.query.id || '');
   const t = store.find(ROOT, id);
   if (!t) return res.status(404).json({ error: '工单不存在' });
-  let 回执 = null;
+  let 回执 = null; let receiptRaw = '';
   const rp = path.join(ROOT, '回执', `${id}.md`);
-  if (fs.existsSync(rp)) 回执 = { raw: fs.readFileSync(rp, 'utf8'), html: mdHtml(fs.readFileSync(rp, 'utf8')) };
-  res.json({ id, state: t.state, fm: t.fm, body: t.body, html: mdHtml(t.body), 链: trace.chains(ROOT, id), 回执 });
+  if (fs.existsSync(rp)) { receiptRaw = fs.readFileSync(rp, 'utf8'); 回执 = { raw: receiptRaw, html: mdHtml(receiptRaw) }; }
+  const 评审意见 = require('./lib/review-opinion').fromTicket(t, receiptRaw);
+  res.json({ id, state: t.state, fm: t.fm, body: t.body, html: mdHtml(t.body), 链: trace.chains(ROOT, id), 回执, 评审意见 });
+});
+
+// 完成的 Integrator 工单由用户手动发布。只做 fast-forward；主分支前进或有脏改动时拒绝。
+app.post('/api/workspace/publish', (req, res) => {
+  if (!ready(res)) return;
+  const id = String((req.body || {}).id || '');
+  const t = store.find(ROOT, id);
+  if (!t) return res.status(404).json({ error: '工单不存在' });
+  if (t.state !== '完成' || providerRouter.taskRole(t) !== 'integrator')
+    return res.status(400).json({ error: '只有已完成的 Integrator 工单可以发布' });
+  const project = runner.projectPath(cfg, t);
+  if (!project) return res.status(400).json({ error: '项目未注册或路径不存在' });
+  try {
+    const result = worktrees.publish(project, t.fm.workspace);
+    const at = new Date().toISOString();
+    store.update(ROOT, id, (fm) => { fm.workspace = { ...fm.workspace, publishedAt: at, publishedCommit: result.commit }; });
+    journal.append(ROOT, `发布集成结果 ${id} → ${result.commit.slice(0, 10)}（fast-forward）`);
+    res.json(result);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+function publishableWorkspaces(projectName) {
+  return store.list(ROOT, '完成')
+    .filter((t) => providerRouter.taskRole(t) === 'integrator')
+    .filter((t) => !projectName || t.fm.项目 === projectName)
+    .filter((t) => t.fm.workspace && t.fm.workspace.isolated && t.fm.workspace.commit && !t.fm.workspace.publishedAt)
+    .sort((a, b) => String(a.fm.交付时间 || a.fm.更新时间 || '').localeCompare(String(b.fm.交付时间 || b.fm.更新时间 || ''))
+      || a.id.localeCompare(b.id));
+}
+
+app.get('/api/workspace/publishable', (req, res) => {
+  if (!ready(res)) return;
+  const projectName = String(req.query.项目 || '');
+  const items = publishableWorkspaces(projectName).map((t) => ({
+    id: t.id, title: t.fm.title, 项目: t.fm.项目,
+    branch: t.fm.workspace.branch, commit: t.fm.workspace.commit,
+  }));
+  res.json({ count: items.length, items });
+});
+
+// 流程页的一键发布：仍坚持 Integrator 唯一发布者和逐项 fast-forward，
+// 某项分叉/脏目录失败时保留现场，并继续报告其余项，不做隐式合并。
+app.post('/api/workspace/publish-all', (req, res) => {
+  if (!ready(res)) return;
+  const projectName = String((req.body || {}).项目 || '');
+  const candidates = publishableWorkspaces(projectName);
+  const results = [];
+  for (const t of candidates) {
+    const project = runner.projectPath(cfg, t);
+    if (!project) { results.push({ id: t.id, ok: false, error: '项目未注册或路径不存在' }); continue; }
+    try {
+      const result = worktrees.publish(project, t.fm.workspace);
+      const at = new Date().toISOString();
+      store.update(ROOT, t.id, (fm) => { fm.workspace = { ...fm.workspace, publishedAt: at, publishedCommit: result.commit }; });
+      journal.append(ROOT, `一键发布集成结果 ${t.id} → ${result.commit.slice(0, 10)}（fast-forward）`);
+      results.push({ id: t.id, ok: true, commit: result.commit, path: result.path });
+    } catch (e) { results.push({ id: t.id, ok: false, error: e.message }); }
+  }
+  const published = results.filter((x) => x.ok).length;
+  const failed = results.length - published;
+  res.json({ ok: failed === 0, total: results.length, published, failed, results });
 });
 
 // ---- 决策台（P4）：待验收 + 待定夺 ----
@@ -371,17 +477,25 @@ app.get('/api/gates', async (req, res) => {
   if (!ready(res)) return;
   try {
     const locks = await gates.allLocks(cfg);
-    const rec = require('./lib/recommend').recommend(ROOT, cfg, { codex: locks.codex, claude: locks.claude });
-    res.json({ paused: require('./lib/core/state').read(ROOT).paused, locks: { codex: locks.codex, claude: locks.claude }, 推荐: rec });
+    const providerLocks = {};
+    for (const name of Object.keys(providerRegistry.configs(cfg))) providerLocks[name] = locks[name];
+    const rec = require('./lib/recommend').recommend(ROOT, cfg, providerLocks);
+    const current = require('./lib/core/state').read(ROOT);
+    res.json({ paused: current.paused, 完成后暂停: !!(current.执行器 || {}).完成后暂停, locks: providerLocks, 推荐: rec });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/gate/pause', (req, res) => {
   if (!ready(res)) return;
   const { scope, value } = req.body || {};
-  if (!['global', 'codex', 'claude'].includes(scope)) return res.status(400).json({ error: '非法 scope' });
+  if (!['global', ...Object.keys(providerRegistry.configs(cfg))].includes(scope)) return res.status(400).json({ error: '非法 scope' });
   const p = gates.setPaused(ROOT, scope, value);
   journal.append(ROOT, `暂停闸门：${scope} → ${value ? '合' : '开'}`);
   res.json({ ok: true, paused: p });
+});
+app.post('/api/gate/pause-after-current', (req, res) => {
+  if (!ready(res)) return;
+  const result = runner.pauseAfterCurrent(ROOT, cfg, (req.body || {}).value !== false);
+  res.json({ ok: true, 完成后暂停: result.armed, paused: result.paused });
 });
 
 // ---- 生命周期动作（P4/P8 按钮）----
@@ -393,9 +507,33 @@ const ACTIONS = {
   收回: (b) => life.收回(ROOT, b.id),
   交产出: (b) => life.交产出(ROOT, b.id, b.回执),
   QA裁定: (b) => life.QA裁定(ROOT, cfg, b.id, !!b.通过),
-  定夺: (b) => life.定夺(ROOT, b.id, b.决定),
+  定夺: (b) => life.定夺(ROOT, b.id, b.决定, b.方向, b.裁决人),
   验收: (b) => life.验收(ROOT, b.id, !!b.通过),
   失败分诊: (b) => life.失败分诊(ROOT, b.id, b.决定), // D31：重投/上呈（废弃走通用废弃）
+  恢复计划: (b) => {
+    const t = store.find(ROOT, b.id);
+    if (!t) return { ok: false, error: '不存在' };
+    if (t.state !== '执行失败') return { ok: false, error: `当前不在执行失败（${t.state}）` };
+    const role = t.fm.role || t.fm.角色 || t.fm.职能;
+    if (role !== 'orchestrator') return { ok: false, error: '只有 Orchestrator 工单可恢复计划' };
+    const workspacePath = t.fm.workspace && t.fm.workspace.path;
+    const rawPath = path.join(ROOT, '回执', `${t.id}.provider-output.md`);
+    const raw = fs.existsSync(rawPath) ? fs.readFileSync(rawPath, 'utf8') : '';
+    const resolved = orchestration.resolvePlan(cfg, raw, workspacePath);
+    let parent = t;
+    if (t.fm.workspace && t.fm.workspace.isolated) {
+      const checkpoint = worktrees.checkpoint(cfg, t.fm.workspace, t);
+      const workspace = { ...t.fm.workspace, ...checkpoint, commit: checkpoint.commit || t.fm.workspace.commit, completedAt: new Date().toISOString() };
+      store.update(ROOT, t.id, (fm) => { fm.workspace = workspace; });
+      parent = store.find(ROOT, t.id);
+    }
+    const planned = { ...resolved, ...orchestration.materialize(ROOT, cfg, parent, resolved.plan) };
+    const receipt = raw || `# Orchestrator 计划恢复 ${t.id}\n\n结构化计划来源：${planned.source}\n\n子工单：${planned.children.join('、')}\n`;
+    const moved = life.恢复计划产出(ROOT, t.id, receipt);
+    if (!moved.ok) return moved;
+    journal.append(ROOT, `Orchestrator 无模型恢复 ${t.id} → ${planned.children.length} 张待投子单（来源：${planned.source}；检查点：${parent.fm.workspace && parent.fm.workspace.commit || '无'}）`);
+    return { ok: true, source: planned.source, children: planned.children };
+  },
   解除复核: (b) => life.解除待复核(ROOT, b.id, b.说明), // D36：核对新版后解除
 };
 app.post('/api/act/:name', (req, res) => {
@@ -420,8 +558,9 @@ app.post('/api/draft', (req, res) => {
   // 中文项目名放行后，编号前缀也吃中文（如 甲-01）
   if (!/^[A-Z0-9一-鿿]+(?:-\d+)*$/.test(String(b.id || ''))) return res.status(400).json({ error: '编号格式非法（前缀-数字，如 TK-13 / 甲-01）' });
   // R6 已按 D43④ 修订：美术允许委托，首样保留是拆单纪律（每类首张 保留 定调）而非代码硬拦
+  const role = b.role || b.角色 || b.职能 || (cfg.职能 && cfg.职能[0]) || 'generalist';
   const fm = {
-    id: b.id, title: b.title || '未命名', 职能: b.职能 || '策划', 产出物类型: b.产出物类型 || '文档',
+    id: b.id, title: b.title || '未命名', role, 职能: role, 产出物类型: b.产出物类型 || '文档',
     优先级: b.优先级 || 'P1', 规模: b.规模 || '单兵', QA: b.QA || '关', 验收方式: b.验收方式 || '保留',
     预计时间: b.预计时间 || '', 预计token: b.预计token || '',
     项目: b.项目 || (cfg.项目 && cfg.项目.默认) || '', // D32：执行 agent 据此定位目标仓库
@@ -431,10 +570,23 @@ app.post('/api/draft', (req, res) => {
   if (b.父单) fm.父单 = b.父单;
   if (b.依赖) fm.依赖 = b.依赖;
   if (b.依据) fm.依据 = b.依据;
+  if (b.required_capabilities || b.所需能力) fm.required_capabilities = b.required_capabilities || b.所需能力;
+  if (b.write_scope || b.写入范围) fm.write_scope = b.write_scope || b.写入范围;
+  if (b.routing || b.路由) fm.routing = b.routing || b.路由;
   const exist = store.find(ROOT, b.id);
   if (exist) {
     if (exist.state !== '草稿') return res.status(400).json({ error: `只有草稿可编辑（当前 ${exist.state}）` });
-    const r = store.update(ROOT, b.id, (f) => { Object.assign(f, fm); return { body: b.body != null ? b.body : undefined }; });
+    const r = store.update(ROOT, b.id, (f) => {
+      Object.assign(f, fm);
+      // 草稿可能来自一次失败/定夺后的重编。重新发布必须像新执行一样路由，
+      // 否则旧主办、旧 provider、QA 自修次数和 workspace 会污染下一轮。
+      for (const key of [
+        '主办', 'provider', '执行池', '路由分', '领单时间', '交付时间', '质检人',
+        '自修次数', '代裁', 'workspace', '失败原因', '失败次数', '失败时间',
+        '滞留告警', '滞留时长h', '归档原因',
+      ]) delete f[key];
+      return { body: b.body != null ? b.body : undefined };
+    });
     return res.json({ ...r, edited: true });
   }
   const r = store.create(ROOT, b.id, fm, b.body || '## 范围\n\n## 不要做\n\n## 验收标准\n\n## 完工要求\n');
@@ -452,7 +604,11 @@ app.post('/api/anchor/migrate', (req, res) => {
 });
 
 // ---- 参数与额度（P6）----
-app.get('/api/config', (req, res) => { if (!ready(res)) return; res.json({ 闸值: cfg.闸值, 执行池: cfg.执行池, agents: cfg.agents, 职能: cfg.职能, 推荐: cfg.推荐 || {}, 项目: cfg.项目 || {}, 模型: cfg.模型 || {}, 执行器: cfg.执行器 || {}, quota: cfg.quota || {}, server: cfg.server || {} }); });
+app.get('/api/config', (req, res) => { if (!ready(res)) return; res.json({
+  闸值: cfg.闸值, 执行池: cfg.执行池, providers: cfg.providers || {}, roles: cfg.roles || {}, routing: cfg.routing || {},
+  agents: cfg.agents, 职能: cfg.职能, 推荐: cfg.推荐 || {}, 项目: cfg.项目 || {}, 模型: cfg.模型 || {},
+  执行器: cfg.执行器 || {}, quota: cfg.quota || {}, server: cfg.server || {}, profile: cfg.profile || 'game-studio',
+}); });
 app.get('/api/quota', async (req, res) => {
   if (!ready(res)) return;
   const [rl, cu] = await Promise.all([quota.getRateLimits(cfg), quota.getClaudeUsage(cfg)]);
@@ -525,10 +681,36 @@ app.get('/api/models', (req, res) => {
   const claudeCli = fs.existsSync(path.join(os.homedir(), '.local', 'bin', 'claude.exe'))
     || fs.existsSync(path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd'));
   const uniq = (arr) => [...new Set(arr.filter(Boolean))];
-  res.json({
+  const result = {
     codex: { 检测: codexDetect, 可选: uniq([codexDetect, ...(opt.codex || [])]) },
     claude: { cli: claudeCli, 可选: uniq(opt.claude || ['sonnet', 'opus', 'haiku']) },
-  });
+  };
+  for (const provider of providerRegistry.list(cfg)) {
+    result[provider.name] = result[provider.name] || {};
+    result[provider.name].adapter = provider.adapter;
+    result[provider.name].enabled = provider.enabled !== false;
+    result[provider.name].可选 = uniq([...(result[provider.name].可选 || []), ...(provider.models || []), ...(opt[provider.name] || [])]);
+    if (provider.defaultModel) result[provider.name].默认 = provider.defaultModel;
+  }
+  res.json(result);
+});
+
+// ---- Provider / 动态路由快照：UI 与诊断只读，不暴露凭据环境变量的值 ----
+app.get('/api/providers', (req, res) => {
+  if (!ready(res)) return;
+  const roles = Object.keys(cfg.roles || {}).length ? Object.keys(cfg.roles) : (cfg.职能 || []);
+  const providers = providerRegistry.list(cfg).map((provider) => ({
+    name: provider.name,
+    adapter: provider.adapter,
+    enabled: provider.enabled !== false,
+    capabilities: provider.capabilities || [],
+    defaultModel: provider.defaultModel || '',
+    roles: provider.roles || [],
+    scores: provider.scores || {},
+  }));
+  const routes = {};
+  for (const role of roles) routes[role] = providerRouter.rankProviders(ROOT, cfg, { role, kind: role === 'reviewer' ? '质检' : '执行' });
+  res.json({ providers, roles, routes, recent: providerHistory.read(ROOT, 50) });
 });
 
 // ---- 单个 agent 模型档调整（D38）：空 = 清覆盖回池默认 ----
@@ -548,7 +730,7 @@ app.post('/api/agent-model', (req, res) => {
 const stages = require('./lib/stages');
 app.get('/api/stages', (req, res) => {
   if (!ready(res)) return;
-  if (stages.ensureStandards(ROOT)) journal.append(ROOT, '阶段标准.md 模板已落盘（D43 首次使用）');
+  if (stages.ensureStandards(ROOT, cfg)) journal.append(ROOT, '阶段标准.md 模板已落盘（首次使用）');
   const proj = String(req.query.项目 || '') || (cfg.项目 && cfg.项目.默认) || '';
   res.json({ 阶段: stages.stagesFor(cfg, proj), 标准: stages.parseStandards(ROOT) });
 });
@@ -561,12 +743,20 @@ app.post('/api/agent-pool', (req, res) => {
   const a = (cfg.agents || []).find((x) => x.id === id);
   if (!a) return res.status(400).json({ error: 'agent 不存在：' + id });
   const v = String(池 || '').trim();
-  if (!cfg.执行池 || !cfg.执行池[v]) return res.status(400).json({ error: '未知池：' + v });
-  if (a.执行池 !== v) {
-    const hadModel = !!a.模型;
-    a.执行池 = v; delete a.模型;
+  if (v === 'auto') {
+    delete a.provider; delete a.供应商; delete a.执行池; delete a.模型;
+    a.routing = { ...(a.routing || {}), mode: 'auto' };
     saveCfg();
-    journal.append(ROOT, `执行池切换：${id} → ${v} 池${hadModel ? '（模型覆盖已清，回池默认）' : ''}`);
+    journal.append(ROOT, `Provider 路由切换：${id} → 自动择优`);
+    return res.json({ ok: true, agents: cfg.agents });
+  }
+  if (!providerRegistry.configs(cfg)[v]) return res.status(400).json({ error: '未知 Provider：' + v });
+  if ((a.provider || a.供应商 || a.执行池) !== v) {
+    const hadModel = !!a.模型;
+    a.provider = v; delete a.供应商; delete a.执行池; delete a.模型;
+    a.routing = { ...(a.routing || {}), mode: 'pin' };
+    saveCfg();
+    journal.append(ROOT, `Provider 路由切换：${id} → ${v}${hadModel ? '（模型覆盖已清，回 Provider 默认）' : ''}`);
   }
   res.json({ ok: true, agents: cfg.agents });
 });

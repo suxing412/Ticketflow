@@ -34,4 +34,13 @@ t('手工编辑容忍：自定义阶段名/中英冒号/· 列表符都能解析
   assert.equal(std.P0.程序, '技术可行性 demo');
   assert.equal(std.P1.美术, '概念稿三选一');
 });
+
+t('通用软件 Profile 使用 PLAN/BUILD/VERIFY，并落通用角色标准', () => {
+  const root = makeRoot();
+  const cfg = { profile: 'software-project' };
+  assert.deepEqual(stages.stagesFor(cfg, 'X').map((x) => x.代号), ['PLAN', 'BUILD', 'VERIFY']);
+  assert.equal(stages.ensureStandards(root, cfg), true);
+  const parsed = stages.parseStandards(root);
+  assert.ok(parsed.PLAN.orchestrator && parsed.VERIFY.integrator);
+});
 console.log(`全部通过：${passed} 项`);

@@ -1,0 +1,9 @@
+packages:
+  - "."
+
+# Electron Builder cannot package pnpm's isolated symlink tree reliably.
+nodeLinker: hoisted
+
+# pnpm 11 blocks dependency lifecycle scripts unless they are approved.
+allowBuilds:
+  electron: true

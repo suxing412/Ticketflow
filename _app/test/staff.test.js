@@ -47,4 +47,14 @@ t('非法输入：未知职能 / 越界人数被拒', () => {
   assert.equal(staff.setStaff(root, cfg, '策划', 99).ok, false);
 });
 
+t('V2 扩编创建自动路由角色，不再固化执行池', () => {
+  const root = makeRoot();
+  const cfg = { 职能: ['backend'], roles: { backend: {} }, providers: { codex: { adapter: 'codex-cli' } }, agents: [] };
+  const r = staff.setStaff(root, cfg, 'backend', 1);
+  assert.equal(r.ok, true);
+  assert.equal(cfg.agents[0].role, 'backend');
+  assert.equal(cfg.agents[0].routing.mode, 'auto');
+  assert.equal(cfg.agents[0].执行池, undefined);
+});
+
 console.log(`全部通过：${passed} 项`);
