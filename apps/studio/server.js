@@ -149,7 +149,7 @@ app.post('/api/config/live', (req, res) => {
 // 项目注册（加/改 同名覆盖；设默认；路径必须真实存在）
 app.post('/api/config/project', (req, res) => {
   if (!ready(res)) return;
-  const { 动作, 名称, 路径, 说明 } = req.body || {};
+  const { 动作, 名称, 路径, 说明, 引擎 } = req.body || {};
   cfg.项目 = cfg.项目 || { 默认: '', 注册: {} };
   if (动作 === '设默认') {
     if (!cfg.项目.注册[名称]) return res.status(400).json({ error: '项目未注册：' + 名称 });
@@ -162,10 +162,17 @@ app.post('/api/config/project', (req, res) => {
     if (!/^[\w一-鿿-]{1,24}$/.test(String(名称 || ''))) return res.status(400).json({ error: '项目名只允许中文、字母数字下划线横线（≤24 位）' });
     const p = String(路径 || '').trim();
     if (!p || !fs.existsSync(p)) return res.status(400).json({ error: '路径不存在：' + p.slice(0, 60) });
-    cfg.项目.注册[名称] = { 路径: p.replace(/\\/g, '/'), 说明: String(说明 || '').slice(0, 60) };
+    const entry = { 路径: p.replace(/\\/g, '/'), 说明: String(说明 || '').slice(0, 60) };
+    // 引擎档案：显式给了才写；同名覆盖时未提及则保留旧档案（设置页快捷改路径不应抹掉引擎）
+    const prev = cfg.项目.注册[名称];
+    if (引擎 && 引擎.类型) {
+      if (!require('./lib/engines').TYPES.includes(引擎.类型)) return res.status(400).json({ error: '引擎类型只允许 godot/unity/unreal' });
+      entry.引擎 = { 类型: 引擎.类型, ...(引擎.版本 ? { 版本: String(引擎.版本).slice(0, 24) } : {}) };
+    } else if (prev && prev.引擎 && 引擎 !== null) entry.引擎 = prev.引擎;
+    cfg.项目.注册[名称] = entry;
     if (!cfg.项目.默认) cfg.项目.默认 = 名称;
     saveCfg();
-    journal.append(ROOT, `项目注册：${名称} → ${p}`);
+    journal.append(ROOT, `项目注册：${名称} → ${p}${entry.引擎 ? `（引擎 ${entry.引擎.类型}${entry.引擎.版本 ? ' ' + entry.引擎.版本 : ''}）` : ''}`);
     return res.json({ ok: true, 项目: cfg.项目 });
   }
   if (动作 === '删除') {
@@ -265,10 +272,13 @@ app.get('/api/env', async (req, res) => {
   // 组3 项目与目录
   const 项目目录 = [];
   const reg = (cfg.项目 && cfg.项目.注册) || {};
+  const engines = require('./lib/engines');
   for (const [n, p] of Object.entries(reg)) {
     if (!fs.existsSync(p.路径)) 项目目录.push(item(`项目 ${n}`, '黄', '路径不存在：' + p.路径 + '（该项目实弹不可用）'));
     else if (!fs.existsSync(path.join(p.路径, '.git'))) 项目目录.push(item(`项目 ${n}`, '黄', p.路径 + '（非 git 仓库，产出无法落袋）'));
     else 项目目录.push(item(`项目 ${n}`, '绿', p.路径 + (cfg.项目.默认 === n ? ' · 默认' : '')));
+    const ec = engines.checkProject(p); // 引擎档案自检（无档案不出灯）
+    if (ec) 项目目录.push(item(`项目 ${n} 引擎`, ec.级别, ec.note));
   }
   if (!Object.keys(reg).length) 项目目录.push(item('项目注册', '黄', '空——实弹无目标仓库'));
   try {
