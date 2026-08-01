@@ -1,6 +1,23 @@
-# 监制台（Producer Console）
+# Papercrew
 
-**把软件生产流程交给 AI agent 流水线的驾驶舱。**
+**明文纸面工单（paper）驱动的 AI 班组（crew）**——一个信仰「磁盘上的 .md 工单是唯一
+事实源」的多 agent 生产工具家族。
+
+| 产品 | 位置 | 状态 | 主导 |
+|---|---|---|---|
+| **监制台 · 游戏工作室**（Producer Console）| `apps/studio/` | ✅ 可用（本 README 主体）| [@suxing412](https://github.com/suxing412) |
+| **通用多 Agent 协作平台** | `apps/platform/` | 🚧 迁入中 | [@robinwang2](https://github.com/robinwang2) |
+| 共享地基（状态机/池/闸/额度）| `packages/core/` | 抽取中 | 双签 |
+| CLI 厂商适配层 | `packages/providers/` | 迁入中 | 双签 |
+
+谱系：[ticket-hub（工单中台，封存）](https://github.com/suxing412/AIworkflow-TicketHub) → Papercrew。
+疆界与协作规则见 [CODEOWNERS](CODEOWNERS)。
+
+---
+
+# 监制台（Producer Console）· apps/studio
+
+**把游戏生产流程交给 AI agent 流水线的驾驶舱。**
 你只负责三件事——投池放行、争议拍板、品味终审；起草辅助、领单、执行、质检、
 委托验收、失败兜底、记账、通知，全部自动。
 
@@ -110,11 +127,11 @@ AI工作室/
 ## 从源码构建
 
 ```
-cd _app
+cd apps/studio
 npm install          # electron 下载慢可用镜像
-npm test             # 77 项测试
+npm test             # 95 项测试
 npm run dist         # 产出便携 exe（见 package.json build.directories.output）
-powershell -ExecutionPolicy Bypass -File ..\套件\打包套件.ps1   # 打分发包
+powershell -ExecutionPolicy Bypass -File ..\..\套件\打包套件.ps1   # 打分发包
 ```
 
 ## License

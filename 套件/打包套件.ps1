@@ -4,12 +4,13 @@
 # 前置：D:\studio-build\dist\ 下已有当前版本 exe（npm run dist 的产物）
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $MyInvocation.MyCommand.Path | Split-Path -Parent  # 仓库根
-# 布局自适应：私仓 = 监制台\_app；公开仓 = _app
-$appDir = if (Test-Path (Join-Path $repo '监制台\_app')) { Join-Path $repo '监制台\_app' } else { Join-Path $repo '_app' }
+# 布局自适应：Papercrew monorepo = apps\studio；历史布局 监制台\_app / _app 兜底
+$appDir = @('apps\studio', '监制台\_app', '_app') | ForEach-Object { Join-Path $repo $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $appDir) { throw '找不到 studio 应用目录（apps\studio）' }
 $pkg = Get-Content -Raw -Encoding UTF8 (Join-Path $appDir 'package.json') | ConvertFrom-Json
 $ver = $pkg.version
 $exe = "D:\studio-build\dist\监制台 $ver.exe"
-if (-not (Test-Path $exe)) { throw "找不到 $exe —— 先在 _app 下 npm run dist" }
+if (-not (Test-Path $exe)) { throw "找不到 $exe —— 先在 apps\studio 下 npm run dist" }
 
 $stage = Join-Path $env:TEMP "aistudio-suite-stage"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
