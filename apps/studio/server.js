@@ -162,13 +162,13 @@ app.post('/api/config/project', (req, res) => {
     if (!/^[\w一-鿿-]{1,24}$/.test(String(名称 || ''))) return res.status(400).json({ error: '项目名只允许中文、字母数字下划线横线（≤24 位）' });
     const p = String(路径 || '').trim();
     if (!p || !fs.existsSync(p)) return res.status(400).json({ error: '路径不存在：' + p.slice(0, 60) });
-    const entry = { 路径: p.replace(/\\/g, '/'), 说明: String(说明 || '').slice(0, 60) };
-    // 引擎档案：显式给了才写；同名覆盖时未提及则保留旧档案（设置页快捷改路径不应抹掉引擎）
-    const prev = cfg.项目.注册[名称];
+    // 同名覆盖 = 改路径/说明/引擎，其余档案字段（阶段等）原样保留——覆盖不是重建
+    const prev = cfg.项目.注册[名称] || {};
+    const entry = { ...prev, 路径: p.replace(/\\/g, '/'), 说明: String(说明 || '').slice(0, 60) };
     if (引擎 && 引擎.类型) {
       if (!require('./lib/engines').TYPES.includes(引擎.类型)) return res.status(400).json({ error: '引擎类型只允许 godot/unity/unreal' });
       entry.引擎 = { 类型: 引擎.类型, ...(引擎.版本 ? { 版本: String(引擎.版本).slice(0, 24) } : {}) };
-    } else if (prev && prev.引擎 && 引擎 !== null) entry.引擎 = prev.引擎;
+    } else if (引擎 === null) delete entry.引擎; // 显式 null = 清除档案
     cfg.项目.注册[名称] = entry;
     if (!cfg.项目.默认) cfg.项目.默认 = 名称;
     saveCfg();
