@@ -195,28 +195,32 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.ok(!store.find(root, 'P-32').fm.代裁, '失败不盖章，下轮可重试');
   });
 
-  await t('判官空输出不作数（TK-21）：exit 0 + 空 stdout → 失败路径，不当有效裁决', async () => {
+  await t('空输出不作数（TK-21/TK-31）：判官不盖章，执行不占位，一律失败分诊', async () => {
     const calls = [];
     const fin = (note, v) => calls.push({ path: 'ok', note, v });
     const fail = (why) => calls.push({ path: 'fail', why });
-    for (const k of ['质检', '代核', '代裁']) {
+    for (const k of ['质检', '代核', '代裁', '执行']) {
       calls.length = 0;
       runner.settleClose(k, 0, '  \n ', '', 'X-1', fin, fail);
       assert.equal(calls[0].path, 'fail', k + ' 空输出走执行失败');
       assert.ok(calls[0].why.includes('输出为空'));
     }
-    // 执行类空输出照旧占位回执交单（后面有质检/验收把关）
-    calls.length = 0;
-    runner.settleClose('执行', 0, '', '', 'X-1', fin, fail);
-    assert.equal(calls[0].path, 'ok');
-    assert.ok(calls[0].note.includes('CLI 无输出'));
     // 有输出的代核照旧解析结论行：有「结论：通过」→通过，缺结论行仍保守判不过
     calls.length = 0;
     runner.settleClose('代核', 0, '逐条核过\n结论：通过', '', 'X-1', fin, fail);
     assert.deepEqual([calls[0].path, calls[0].v], ['ok', true]);
     calls.length = 0;
-    runner.settleClose('代核', 0, '有输出但没写结论行', '', 'X-1', fin, fail);
-    assert.deepEqual([calls[0].path, calls[0].v], ['ok', false], '有输出缺结论行仍按不过');
+    runner.settleClose('代核', 0, '有输出但没写结论行——但这段话足够长足够像一份认真写过的核验记录，只是格式没带结论行，保守按不过盖章处理', '', 'X-1', fin, fail);
+    assert.deepEqual([calls[0].path, calls[0].v], ['ok', false], '有实质输出缺结论行仍按不过');
+    // 代核光板"不过"（TK-29 案）：有结论行但全文过薄 → 判官失败重试，不当有效裁决
+    calls.length = 0;
+    runner.settleClose('代核', 0, '结论：不过', '', 'X-1', fin, fail);
+    assert.equal(calls[0].path, 'fail', '光板不过按判官失败');
+    assert.ok(calls[0].why.includes('光板'));
+    // 光板保护不误伤实质"不过"：带逐条理由的长报告照常盖不过章
+    calls.length = 0;
+    runner.settleClose('代核', 0, '逐条核验：第1条 seat_pos 反序列化失败，103 郡治全部堆叠原点，阻断；第2条测试断言 InRange(0,1) 假绿未检出。修复指引：加预处理+断言硬化。\n结论：不过', '', 'X-1', fin, fail);
+    assert.deepEqual([calls[0].path, calls[0].v], ['ok', false], '实质不过照常盖章');
     // 非零退出照走失败，原因优先 stderr
     calls.length = 0;
     runner.settleClose('代核', 1, '', 'boom', 'X-1', fin, fail);
