@@ -127,10 +127,12 @@ function buildQaPrompt(root, t, proj, receiptPath) {
   ].filter(Boolean).join('\n');
 }
 
-// ---- 收线裁决（TK-21 实测修复）：CLI 正常退出但 stdout 为空，对判官类工作（质检/代核/代裁）
-// 不是有效裁决——多为 CLI 异常静默吞输出。此前空输出落进「找不到结论行=不过」被误盖章，
-// 需人工清 fm.代核 才能重审；现按判官执行失败走（不动单不盖章，下轮重试）。
-// 执行类保留「（CLI 无输出）」占位回执照常交单——产出好坏后面有质检/验收把关。
+// ---- 收线裁决（TK-21 实测修复 + TK-31/TK-29 两案加固）：
+// ① 判官（质检/代核/代裁）空输出不是有效裁决——按执行失败重试（TK-21）；
+// ② 执行类空输出同样不作数——曾以「（CLI 无输出）」占位回执照常交单，TK-31 实测
+//    空壳一路混过 QA 到待验收，产出真伪无据。现改执行失败分诊，绝不占位混关；
+// ③ 判官光板结论（有结论行但全文过薄、无逐条理由）＝摆烂不是裁决——TK-29 实测
+//    两字"不过"逼制作人层人工清章。按判官失败重试。
 const JUDGE_KINDS = new Set(['质检', '代核', '代裁']);
 function settleClose(kind, code, out, errout, ticketId, finishOk, failLocal) {
   const text = String(out).trim();
@@ -141,11 +143,16 @@ function settleClose(kind, code, out, errout, ticketId, finishOk, failLocal) {
     failLocal(`CLI 退出码 ${code}：${src.split(/\r?\n/).filter(Boolean).slice(-2).join(' ').slice(0, 150)}`);
     return;
   }
-  if (JUDGE_KINDS.has(kind) && !text) {
-    failLocal('CLI 退出码 0 但输出为空——判官空输出不作数，按执行失败重试');
+  if (!text) {
+    failLocal('CLI 退出码 0 但输出为空——空输出不作数（判官不盖章 / 执行不占位），按执行失败分诊');
     return;
   }
-  const tail = text.slice(-8000) || `# 完工报告 ${ticketId}\n（CLI 无输出）`;
+  if (kind === '代核' && /结论[:：]\s*不过/.test(text)
+    && text.replace(/结论[:：]\s*不过/g, '').replace(/[\s#\-—·]/g, '').length < 20) {
+    failLocal('代核光板结论（去掉结论行后无实质理由）——摆烂不是裁决，按判官失败重试');
+    return;
+  }
+  const tail = text.slice(-8000);
   // 代核结论机器可读行：找不到"结论：通过"一律按不过处理（保守，不误自动完成）
   finishOk(tail, kind === '代核' ? /结论[:：]\s*通过/.test(tail) : true);
 }
