@@ -86,6 +86,10 @@ function unityFor(project) {
   if (channel === 'unity-test') {
     const u = unityFor(proj);
     if (u.err) return out({ ok: false, error: u.err });
+    // 工程锁检测：编辑器开着同一工程时 batchmode 必败且报错难读——先给人话
+    if (fs.existsSync(path.join(proj, 'Temp', 'UnityLockfile'))) {
+      return out({ ok: false, error: '工程被 Unity 编辑器占用（Temp/UnityLockfile 存在）——请关闭编辑器后重试；此为环境占用非代码问题' });
+    }
     const xml = path.join(proj, 'enginectl-results.xml');
     const r = run(u.exe, ['-batchmode', '-nographics', '-projectPath', proj, '-runTests', '-testPlatform', String(args.platform || 'EditMode'), '-testResults', xml, '-logFile', path.join(proj, 'enginectl-test.log')], Number(args['timeout-min'] ?? 40));
     let passed = null, failed = null;
