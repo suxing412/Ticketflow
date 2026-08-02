@@ -105,8 +105,10 @@ async function viewHub() {
     const need = cnt(a, '待验收') + cnt(a, '待定夺');
     const counts = [['在途', cnt(a, '在途', '质检'), ''], ['在池', cnt(a, '池'), ''], ['待验收', cnt(a, '待验收'), ''],
       ['待定夺', cnt(a, '待定夺'), 'err'], ['失败', cnt(a, '执行失败'), 'err']];
+    const eng = reg[n] && reg[n].引擎;
     return `<div class="hubcard card r16" onclick="enterProj('${esc(n)}')">
       <div class="hn"><b>${esc(n)}</b>${n === def ? '<span class="pill sm mut">默认</span>' : ''}
+        ${eng ? `<span class="pill sm mut" title="引擎档案（探针按此自检）">${esc(eng.类型)}${eng.版本 ? ' ' + esc(eng.版本) : ''}</span>` : ''}
         ${need ? `<span class="pill sm red">需处理 ${need}</span>` : '<span class="pill sm ok">安好</span>'}</div>
       <div class="hpath mono" title="${esc((reg[n] && reg[n].路径) || '')}">${esc((reg[n] && reg[n].路径) || '')}</div>
       ${reg[n] && reg[n].说明 ? `<div class="hnote">${esc(reg[n].说明)}</div>` : ''}
@@ -150,6 +152,11 @@ function viewProjNew() {
       <div class="f-field"><label>仓库绝对路径（执行 agent 的目标仓库，目录必须已存在）</label>
         <input id="pn-path" class="mono" placeholder="D:\\GitHub\\MYGAME"/></div>
       <div class="f-field"><label>说明（可选，≤60 字）</label><input id="pn-note" placeholder="一句话说明这是什么项目"/></div>
+      <div class="f-field"><label>引擎（可选——游戏项目声明后，探针会自检引擎在位与版本匹配）</label>
+        <div style="display:flex;gap:8px"><select id="pn-eng" style="flex:0 0 130px">
+          <option value="">无 / 非游戏</option><option value="godot">godot</option>
+          <option value="unity">unity</option><option value="unreal">unreal</option></select>
+        <input id="pn-engv" class="mono" placeholder="版本（可选，如 4.7.1 / 6000.3.10f1）" style="flex:1"/></div></div>
       <div class="f-field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer">
         <input type="checkbox" id="pn-def" style="width:16px;height:16px;padding:0"/> 设为默认项目（未盖项目章的工单归它）</label></div>
       <div class="p7foot"><a class="btn h44" href="#/hub">取消</a>
@@ -166,7 +173,9 @@ window.projNewSave = async (btn) => {
   const name = $('pn-name').value.trim(), p = $('pn-path').value.trim(), note = $('pn-note').value.trim();
   if (!name || !p) return toast('项目名与仓库路径不能为空');
   btn.disabled = true;
-  const r = await post('/api/config/project', { 动作: '注册', 名称: name, 路径: p, 说明: note });
+  const engT = $('pn-eng').value, engV = $('pn-engv').value.trim();
+  const r = await post('/api/config/project', { 动作: '注册', 名称: name, 路径: p, 说明: note,
+    ...(engT ? { 引擎: { 类型: engT, ...(engV ? { 版本: engV } : {}) } } : {}) });
   if (!r.ok) { btn.disabled = false; return toast(r.error || '注册失败'); }
   if ($('pn-def').checked) await post('/api/config/project', { 动作: '设默认', 名称: name });
   _cfg = null; // 项目表变了，语境缓存作废
@@ -1050,6 +1059,7 @@ function projRowsHtml(项目) {
   const reg = (项目 && 项目.注册) || {}; const def = 项目 && 项目.默认;
   return Object.entries(reg).map(([n, p]) => `<div class="prow"><b class="mono">${esc(n)}</b>
       <span class="pv" title="${esc(p.路径)}">${esc(p.路径)}</span><span class="pn">${esc(p.说明 || '')}</span>
+      ${p.引擎 ? `<span class="pill sm mut" title="引擎档案">${esc(p.引擎.类型)}${p.引擎.版本 ? ' ' + esc(p.引擎.版本) : ''}</span>` : ''}
       ${n === def ? '<span class="pill sm ok">默认</span>' : `<button class="btn h32" style="height:26px;padding:0 12px;font-size:11px" onclick="projSet('${esc(n)}')">设默认</button>`}
       <button class="btn danger-o h32" style="height:26px;padding:0 10px;font-size:11px" onclick="projDel('${esc(n)}')">删</button></div>`).join('')
     || '<p class="dim">尚无注册项目</p>';
