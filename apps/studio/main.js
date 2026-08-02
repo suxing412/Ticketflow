@@ -27,6 +27,8 @@ async function createWindow() {
       nodeIntegration: false,
     },
   });
+  // 换版必清缓存：asar 文件 mtime 恒定 + Chromium 磁盘缓存跨重启持久 → 旧 UI 借尸还魂（0.17.2 实测）
+  try { await win.webContents.session.clearCache(); } catch { /* 清不掉也照常启动 */ }
   win.loadURL(`http://127.0.0.1:${port}`);
   // 外部链接交给系统浏览器
   win.webContents.setWindowOpenHandler(({ url }) => {
