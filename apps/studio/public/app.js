@@ -486,13 +486,14 @@ window.flChain = (id) => {
     const walk = (m, i) => (m[i] || []).forEach((x) => { if (!rel.has(x)) { rel.add(x); walk(m, x); } });
     walk(upM, id); walk(dnM, id);
   }
+  // 高亮类名 onchain：不准叫 chain——详情页追溯链的通用 .chain{margin-top:18px} 会把绝对定位卡片顶下沉 18px（0.17.3 连环误诊的真凶）
   d.ns.forEach((n) => { const el = $('fl-' + n.id); if (!el) return;
     el.classList.toggle('dimmed', !!rel && !rel.has(n.id));
-    el.classList.toggle('chain', !!rel && rel.has(n.id) && n.id !== id); });
+    el.classList.toggle('onchain', !!rel && rel.has(n.id) && n.id !== id); });
   document.querySelectorAll('path.fl-e').forEach((p) => {
     const on = rel && rel.has(p.dataset.f) && rel.has(p.dataset.t);
     p.classList.toggle('dimmed', !!rel && !on);
-    p.classList.toggle('chain', !!on && !p.classList.contains('crit')); });
+    p.classList.toggle('onchain', !!on && !p.classList.contains('crit')); });
 };
 window.flFold = (btn) => {
   const d = window._flData; if (!d) return;

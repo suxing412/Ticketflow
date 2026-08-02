@@ -383,12 +383,12 @@ a.gear { text-decoration:none; }
 .fl-node.crit { border-color:var(--danger); }
 .fl-node.crit::before { background:var(--danger); }
 .fl-node.dimmed { opacity:.15; }
-.fl-node.chain { box-shadow:0 0 0 3px var(--mask), var(--shadow-md); z-index:6; }
+.fl-node.onchain { box-shadow:0 0 0 3px var(--mask), var(--shadow-md); z-index:6; }
 path.fl-e { fill:none; stroke:var(--ink3); stroke-width:1.25; opacity:.45; }
 path.fl-e.up { stroke-dasharray:5 4; }
 path.fl-e.faded { opacity:.14; } /* 已满足的依赖：历史退场，别跟活边抢眼 */
 path.fl-e.crit { stroke:var(--danger); stroke-width:2; stroke-dasharray:none; opacity:.9; }
-path.fl-e.chain { stroke:var(--ink2); stroke-width:2; opacity:1; }
+path.fl-e.onchain { stroke:var(--ink2); stroke-width:2; opacity:1; }
 path.fl-e.dimmed { opacity:.08; }
 @media (prefers-reduced-motion: reduce) { .fl-node { transition-duration:.01s; } .fl-node:hover { transform:none; } }
 
