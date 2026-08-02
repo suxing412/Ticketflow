@@ -3,6 +3,8 @@ const assert = require('node:assert');
 const life = require('../lib/lifecycle');
 const store = require('../lib/core/store');
 const { makeRoot, seed, CFG } = require('./helper');
+const fs = require('fs');
+const path = require('path');
 
 let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
 const st = (root, id) => store.find(root, id).state;
@@ -108,6 +110,33 @@ t('滞留检查（R3）：超时单标告警但不自动撤回', () => {
   assert.equal(st(root, 'N'), '在途'); // 新单不动
   // 再查一次不重复告警（只记一次）
   assert.equal(life.滞留检查(root, CFG).告警.length, 2);
+});
+
+t('推翻重做（制作人翻案）：完成→已归档带理由，自动编号新草稿+返工链+下游接续；无理由/非终态拒', () => {
+  const root = makeRoot();
+  store.create(root, 'TK-1', { id: 'TK-1', title: '探索', 职能: '程序', 项目: 'X', 优先级: 'P1' }, '原正文');
+  fs.renameSync(path.join(root, '草稿', 'TK-1.md'), path.join(root, '完成', 'TK-1.md'));
+  store.create(root, 'TK-2', { id: 'TK-2', title: '下游', 职能: '程序', 项目: 'X', 依赖: 'TK-1' }, 'x');
+  assert.ok(!life.推翻(root, 'TK-1', '').ok, '无理由拒');
+  const r = life.推翻(root, 'TK-1', '细胞感太重全部重来');
+  assert.ok(r.ok); assert.equal(r.新单, 'TK-3');
+  const old = store.find(root, 'TK-1');
+  assert.equal(old.state, '已归档'); assert.ok(String(old.fm.归档原因).includes('推翻'));
+  const nu = store.find(root, 'TK-3');
+  assert.equal(nu.fm.返工自, 'TK-1'); assert.ok(nu.body.includes('细胞感'));
+  assert.equal(store.find(root, 'TK-2').fm.依赖, 'TK-3', '下游接续');
+  assert.ok(!life.推翻(root, 'TK-3', '再翻').ok, '草稿不可推翻');
+});
+
+t('隐藏归档：仅已归档可藏，可逆；非归档拒', () => {
+  const root = makeRoot();
+  store.create(root, 'TK-1', { id: 'TK-1', title: '废案', 职能: '程序', 项目: 'X' }, 'x');
+  assert.ok(!life.隐藏(root, 'TK-1', true).ok, '草稿拒藏');
+  fs.renameSync(path.join(root, '草稿', 'TK-1.md'), path.join(root, '已归档', 'TK-1.md'));
+  assert.ok(life.隐藏(root, 'TK-1', true).ok);
+  assert.equal(store.find(root, 'TK-1').fm.隐藏, true);
+  assert.ok(life.隐藏(root, 'TK-1', false).ok);
+  assert.equal(store.find(root, 'TK-1').fm.隐藏, undefined);
 });
 
 console.log(`全部通过：${passed} 项`);

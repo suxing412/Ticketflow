@@ -74,7 +74,8 @@ function bshell(crumb, pillHtml, inner, home) {
 
 /* ===== 数据装配 ===== */
 async function loadBoard() {
-  const [d] = await Promise.all([api('/api/board'), loadCfg()]);
+  const [d] = await Promise.all([api('/api/board' + (window._showHidden ? '?含隐藏=1' : '')), loadCfg()]);
+  window._hiddenCnt = d.隐藏数 || 0;
   const raw = []; for (const s of d.states) for (const t of d.board[s]) raw.push({ ...t, state: s });
   const p = projActive();
   if (!p) return { states: d.states, board: d.board, all: raw, raw };
@@ -309,7 +310,9 @@ async function viewBoard() {
       ? `<h4>${s}<a class="newdraft" href="#/draft">＋ 起草</a></h4>`
       : s === '待投' && items.length
         ? `<h4>${s}<button class="newdraft" title="整批投池（D43：拆完一批不用一张张点，人闸就是这一下）" onclick="releaseAll()">⇧ 全投 ${items.length}</button></h4>`
-        : `<h4>${s}<span class="cnt">${items.length}</span></h4>`;
+        : s === '已归档' && (window._hiddenCnt || window._showHidden)
+          ? `<h4>${s}<span class="cnt">${items.length}</span><button class="newdraft" title="隐藏归档：制作人湮灭的废案，默认不渲染" onclick="window._showHidden=!window._showHidden;route()">${window._showHidden ? '藏起' : `显隐藏 ${window._hiddenCnt}`}</button></h4>`
+          : `<h4>${s}<span class="cnt">${items.length}</span></h4>`;
     const cards = items.map((t) => `<div class="bcard2" data-tid="${esc(t.id)}" onclick="location.hash='#/t/${t.id}'">
         <span class="cid">${esc(t.id)}</span>
         <span class="cpri ${t.优先级 === 'P0' ? 'p0' : ''}">${esc(t.优先级 || '')}</span>
@@ -471,7 +474,7 @@ async function viewFlow() {
       <span class="subnote">横轴=阶段 · 泳道=系统 · 红=关键路径（预计时间加权）· 虚线=升阶链 · 点卡进详情</span>
       <span class="sp"></span>
       ${cp.len ? `<span class="fl-cp">关键路径 ${Math.round(cp.len * 10) / 10}h · ${cp.path.length} 单</span>` : ''}
-      <button class="btn h32" onclick="flFold(this)">折叠已完成</button></div>
+      <button class="btn h32" id="fl-fold-btn" onclick="flFold(this)">折叠已完成</button></div>
     <div class="fl-wrap"><div class="fl-stage" style="width:${xa + 20}px;height:${yy + 16}px">
       <svg class="fl-svg" width="${xa + 20}" height="${yy + 16}">${paths}</svg>
       ${heads}${laneHtml}${nodeHtml}</div></div>`;
@@ -498,11 +501,18 @@ window.flChain = (id) => {
 window.flFold = (btn) => {
   const d = window._flData; if (!d) return;
   const fold = !btn.classList.contains('on');
-  btn.classList.toggle('on', fold); btn.textContent = fold ? '显示已完成' : '折叠已完成';
+  try { localStorage.setItem('fl_fold', fold ? 'on' : 'off'); } catch { /* 无痕模式不阻塞 */ }
+  btn.classList.toggle('on', fold); btn.textContent = fold ? '显示历史' : '折叠已完成';
   const doneSet = new Set(d.done);
   d.done.forEach((id) => { const el = $('fl-' + id); if (el) el.style.display = fold ? 'none' : ''; });
   document.querySelectorAll('path.fl-e').forEach((p) => {
     p.style.display = (fold && (doneSet.has(p.dataset.f) || doneSet.has(p.dataset.t))) ? 'none' : ''; });
+};
+// 默认折叠历史（用户裁定：三代同堂淹没活单）——偏好跨会话保持，显式点开才看历史
+window.flAutoFold = () => {
+  let pref = 'on'; try { pref = localStorage.getItem('fl_fold') || 'on'; } catch { /* 默认折叠 */ }
+  const btn = $('fl-fold-btn');
+  if (btn && pref !== 'off' && !btn.classList.contains('on')) flFold(btn);
 };
 
 /* ===== P10 树形 ===== */
@@ -1246,6 +1256,8 @@ async function viewDetail(id) {
     if (fm.职能 === '策划') ops.push(['入标杆', '提炼进设计公理（审批点④）', `axModal('${id}')`]);
     if (fm.职能 === '美术' || fm.职能 === '装配') ops.push(['入美术库', '产出精选进风格库（审批点④）', `artModal('${id}')`]);
   }
+  if (['完成', '已归档'].includes(d.state)) ops.push(['推翻重做', '翻案：归档旧单+自动开返工草稿（须写理由）', `overturnModal('${id}')`]);
+  if (d.state === '已归档') ops.push([fm.隐藏 ? '取消隐藏' : '隐藏归档', fm.隐藏 ? '重新出现在归档列表' : '从一切默认视图湮灭（纸面仍可考）', `toggleHide('${id}',${fm.隐藏 ? 'false' : 'true'})`]);
   return `${liveHtml}<div class="p8grid"><div>
       <div class="p8main card r16"><h2>${esc(id)} · ${esc(fm.title)}</h2>
         <div class="chipsrow">${fnPill(fm.职能)}<span class="pill mut">${esc(fm.产出物类型 || '')}</span>
@@ -1274,6 +1286,22 @@ async function viewDetail(id) {
         <div class="subnote" style="margin-top:14px">预计 ${esc(fm.预计时间 || '—')} · ${esc(fm.预计token || '—')} · 状态 ${esc(d.state)}</div></div></div></div>`;
 }
 window.act2 = async (name, id) => { const r = await post('/api/act/' + name, { id }); toast(r.ok ? '完成' : (r.error || '失败')); route(); };
+window.overturnModal = (id) => showModal(`<h3>推翻重做 ${esc(id)}</h3>
+  <p class="subnote" style="margin-top:6px">归档旧单 + 自动编号开返工草稿（带返工链），下游依赖自动接续。理由必填，进新单正文与流水。</p>
+  <textarea id="ov-r" style="width:100%;height:90px;margin-top:12px" placeholder="为什么翻案：哪里完全不行、新的要求方向是什么"></textarea>
+  <div class="p7foot" style="margin-top:14px"><button class="btn h32" onclick="this.closest('.mwrap').remove()">取消</button>
+  <button class="btn accent h32" onclick="doOverturn('${esc(id)}',this)">推翻并开草稿</button></div>`);
+window.doOverturn = async (id, btn) => {
+  const 理由 = $('ov-r').value.trim();
+  if (!理由) return toast('理由必填');
+  btn.disabled = true;
+  const r = await post('/api/act/推翻', { id, 理由 });
+  if (!r.ok) { btn.disabled = false; return toast(r.error || '失败'); }
+  btn.closest('.mwrap').remove();
+  toast(`已推翻 → 新单 ${r.新单}`);
+  location.hash = '#/draft?edit=' + encodeURIComponent(r.新单);
+};
+window.toggleHide = async (id, on) => { const r = await post('/api/act/隐藏', { id, 值: on }); toast(r.ok ? (on ? '已湮灭出视野' : '已恢复可见') : (r.error || '失败')); if (r.ok) location.hash = on ? '#/board' : location.hash, route(); };
 window.openArt = async (id, p, mode) => { const r = await post('/api/open', { id, 路径: p, 方式: mode }); if (!r.ok) toast(r.error || '调起失败'); };
 // 秒级走表：1s 本地跳字，每 3s 拉一次 runner 刷活尾巴；步骤切换/落袋整页重渲；离开详情自动熄火
 window.lvStart = (id, stepIso, allIso, kind) => {
@@ -1383,6 +1411,7 @@ async function route() {
       document.querySelectorAll('.bcard2[data-tid]').forEach((el) => { flipOld[el.dataset.tid] = el.getBoundingClientRect(); });
     }
     app.innerHTML = shell(key, inner);
+    if (key === 'flow') flAutoFold(); // 默认折叠历史（偏好跨会话）
     if (Object.keys(flipOld).length) {
       requestAnimationFrame(() => {
         document.querySelectorAll('.bcard2[data-tid]').forEach((el) => {
