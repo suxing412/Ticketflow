@@ -439,38 +439,15 @@ async function viewFlow() {
   for (const k in inE) inE[k].sort((a, b) => nById[a].y - nById[b].y);
   for (const k in outE) outE[k].sort((a, b) => nById[a].y - nById[b].y);
   const aY = (n, list, o) => n.y + NHh * ((list.indexOf(o) + 1) / (list.length + 1));
-  // 折线圆角化：连续拐点用 Q 收圆，去重共线点防退化
-  const rline = (pts, R = 5) => {
-    const q = pts.filter((p, i) => !i || p[0] !== pts[i - 1][0] || p[1] !== pts[i - 1][1]);
-    if (q.length < 2) return '';
-    let s = `M ${q[0][0]} ${q[0][1]}`;
-    for (let i = 1; i < q.length - 1; i++) {
-      const [ax, ay] = q[i - 1], [bx, by] = q[i], [cx, cy] = q[i + 1];
-      const r = Math.min(R, Math.abs(bx - ax) + Math.abs(by - ay), Math.abs(cx - bx) + Math.abs(cy - by)) / 1;
-      const v1 = [Math.sign(bx - ax), Math.sign(by - ay)], v2 = [Math.sign(cx - bx), Math.sign(cy - by)];
-      if (v1[0] === v2[0] && v1[1] === v2[1]) continue; // 共线不拐
-      s += ` L ${bx - v1[0] * r} ${by - v1[1] * r} Q ${bx} ${by} ${bx + v2[0] * r} ${by + v2[1] * r}`;
-    }
-    return s + ` L ${q[q.length - 1][0]} ${q[q.length - 1][1]}`;
-  };
+  // 连线保持贝塞尔（用户裁定：横穿无妨，曲线更好看）；已满足依赖退淡影
   let paths = '';
   ns.forEach((n) => n.deps.forEach((d) => {
     const u = nById[d];
-    const oi = outE[u.id].indexOf(n.id), ii = inE[n.id].indexOf(u.id);
     const x1 = u.x + NW, y1 = aY(u, outE[u.id], n.id), x2 = n.x, y2 = aY(n, inE[n.id], u.id);
-    // 沟槽坐标带错位：同槽多边不重叠（列间 22px / 行间 12px 内浮动）
-    const xgs = x1 + 8 + (oi % 3) * 5, xgt = x2 - 8 - (ii % 3) * 5;
-    let dseg;
-    if (x2 > x1 && x2 - x1 <= NW + HGap + 2 && Math.abs(y2 - y1) <= NHh + VG) {
-      dseg = `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`; // 相邻短边：贝塞尔最顺眼
-    } else if (x2 > x1) {
-      const yc = n.y - 4 - (ii % 3) * 3; // 目标卡上方的行间通道
-      dseg = rline([[x1, y1], [xgs, y1], [xgs, yc], [xgt, yc], [xgt, y2], [x2, y2]]);
-    } else {
-      const yb = Math.max(u.y, n.y) + NHh + 4 + (ii % 3) * 3; // 回边：绕两卡下方
-      dseg = rline([[x1, y1], [xgs, y1], [xgs, yb], [xgt, yb], [xgt, y2], [x2, y2]]);
-    }
-    const faded = DONE.has(u.t.state) && !(crit.has(n.id) && crit.has(u.id)); // 已满足的依赖退成淡影
+    const dseg = x2 > x1
+      ? `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`
+      : `M ${x1} ${y1} C ${x1 + 30} ${Math.max(u.y, n.y) + NHh + 16}, ${x2 - 30} ${Math.max(u.y, n.y) + NHh + 16}, ${x2} ${y2}`;
+    const faded = DONE.has(u.t.state) && !(crit.has(n.id) && crit.has(u.id));
     paths += `<path class="fl-e${u.stg !== n.stg ? ' up' : ''}${crit.has(n.id) && crit.has(u.id) ? ' crit' : ''}${faded ? ' faded' : ''}" data-f="${esc(u.id)}" data-t="${esc(n.id)}" d="${dseg}"/>`;
   }));
   const heads = STG.map((s, i) => `<div class="fl-head" style="left:${stageX[i]}px;width:${subMax[i] * (NW + HGap)}px" title="阶段验收标准（${esc(s.代号)} ${esc(s.名称)}）&#10;${esc(Object.entries(stg.标准[s.代号] || {}).map(([f, v]) => f + '：' + v).join('\n'))}">
@@ -1216,6 +1193,31 @@ async function viewDetail(id) {
   const d = await api('/api/ticket?id=' + encodeURIComponent(id));
   if (d.error) return `<p class="err" style="margin-top:30px">${esc(d.error)}</p>`;
   const fm = d.fm, c = d.链 || { 父子: { 父: null, 子: [] }, 依赖: [] };
+  // ---- 在途细粒度进度（用户定稿：详情页最上层=进度条+步骤详情+秒级走表）----
+  let liveHtml = '';
+  if (['在途', '质检', '待验收', '待定夺'].includes(d.state)) {
+    const run = await api('/api/runner').catch(() => ({}));
+    const live = (run.执行中 || []).find((x) => x.id === id) || null;
+    if (live || d.state === '在途' || d.state === '质检') {
+      const qaOn = fm.QA !== '关';
+      const judge = fm.验收方式 === '委托' ? '代核' : '你验收';
+      const names = ['领单', '执行'].concat(qaOn ? ['质检'] : []).concat([judge, '落袋']);
+      const doneUpto = { 在途: '领单', 质检: '执行', 待验收: qaOn ? '质检' : '执行', 待定夺: qaOn ? '质检' : '执行' }[d.state];
+      const curName = live ? (live.kind === '执行' ? '执行' : live.kind === '质检' ? '质检' : judge)
+        : (d.state === '在途' ? '执行' : d.state === '质检' ? '质检' : null);
+      const di = names.indexOf(doneUpto);
+      const segs = names.map((k, i) => [k, k === curName ? (live ? 'cur' : 'wait') : i <= di ? 'done' : 'todo']);
+      liveHtml = `<div class="livecard card r16" id="lvcard">
+        <div class="lv-top"><b style="font-size:13px">执行进度</b>
+          <span class="pill sm ${live ? 'ok' : 'mut'}" id="lv-who">${live ? esc(live.agent) + ' · ' + esc(live.kind) : '等待执行器衔接（间隔 ' + (run.间隔秒 || 15) + 's）'}</span>
+          <span class="sp"></span>
+          <span class="lv-t mono" id="lv-step-t">--:--</span><span class="subnote">本步</span>
+          <span class="lv-t mono" id="lv-all-t">--:--</span><span class="subnote">全程</span></div>
+        <div class="lv-bar">${segs.map(([k, s]) => `<div class="lv-seg ${s}"><i></i><span>${esc(k)}</span></div>`).join('')}</div>
+        <div class="lv-tail mono" id="lv-tail">${live && live.tail ? esc(live.tail) : '（尚无输出）'}</div></div>`;
+      setTimeout(() => lvStart(id, live ? live.startedAt : null, fm.领单时间 || fm.更新时间 || null, live ? live.kind : null), 0);
+    }
+  }
   const chainRow = (k, v, cls) => `<div class="crow"><span class="ck">${k}</span><span class="cv ${cls || ''}">${v || '—'}</span></div>`;
   const kidsTxt = (c.父子.子 || []).map((x) => `<a href="#/t/${x.id}" style="color:var(--accent-ink)">${esc(x.id)}</a>(${esc(x.state)})`).join('、');
   let rsecs = '';
@@ -1241,7 +1243,7 @@ async function viewDetail(id) {
     if (fm.职能 === '策划') ops.push(['入标杆', '提炼进设计公理（审批点④）', `axModal('${id}')`]);
     if (fm.职能 === '美术' || fm.职能 === '装配') ops.push(['入美术库', '产出精选进风格库（审批点④）', `artModal('${id}')`]);
   }
-  return `<div class="p8grid"><div>
+  return `${liveHtml}<div class="p8grid"><div>
       <div class="p8main card r16"><h2>${esc(id)} · ${esc(fm.title)}</h2>
         <div class="chipsrow">${fnPill(fm.职能)}<span class="pill mut">${esc(fm.产出物类型 || '')}</span>
           <span class="pill ${fm.验收方式 === '委托' ? 'mut' : 'ok'}">${esc(fm.验收方式 || '保留')}</span><span class="pill mut">${esc(fm.规模 || '')}</span>
@@ -1270,6 +1272,29 @@ async function viewDetail(id) {
 }
 window.act2 = async (name, id) => { const r = await post('/api/act/' + name, { id }); toast(r.ok ? '完成' : (r.error || '失败')); route(); };
 window.openArt = async (id, p, mode) => { const r = await post('/api/open', { id, 路径: p, 方式: mode }); if (!r.ok) toast(r.error || '调起失败'); };
+// 秒级走表：1s 本地跳字，每 3s 拉一次 runner 刷活尾巴；步骤切换/落袋整页重渲；离开详情自动熄火
+window.lvStart = (id, stepIso, allIso, kind) => {
+  clearInterval(window._lv || 0);
+  let n = 0, had = !!stepIso, step = stepIso;
+  const fmt = (ms) => { if (ms == null || ms < 0) return '--:--'; const s = Math.floor(ms / 1000);
+    return (s >= 3600 ? Math.floor(s / 3600) + ':' : '') + String(Math.floor(s / 60) % 60).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+  window._lv = setInterval(async () => {
+    const el = $('lv-step-t');
+    if (!el) { clearInterval(window._lv); return; } // 已离开详情页
+    el.textContent = step ? fmt(Date.now() - Date.parse(step)) : '--:--';
+    const at = $('lv-all-t'); if (at && allIso) at.textContent = fmt(Date.now() - Date.parse(allIso));
+    if (++n % 3 !== 0) return;
+    try {
+      const run = await api('/api/runner');
+      const e = (run.执行中 || []).find((x) => x.id === id);
+      if (e) { had = true; step = e.startedAt;
+        if (e.kind !== kind) { route(); return; } // 换步骤 → 重渲进度条
+        const tl = $('lv-tail'); if (tl && e.tail) tl.textContent = e.tail;
+        const who = $('lv-who'); if (who) { who.textContent = e.agent + ' · ' + e.kind; who.className = 'pill sm ok'; }
+      } else if (had) { route(); return; } // 本步收线（流转/落袋）→ 重渲拿新状态
+    } catch { /* 单次失败下轮再试 */ }
+  }, 1000);
+};
 // 入库弹窗（审批点④）
 function showModal(inner) {
   const w = document.createElement('div'); w.className = 'mwrap';
