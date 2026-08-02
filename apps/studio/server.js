@@ -20,14 +20,35 @@ else { try { cfg = config.load(ROOT); store.ensureDirs(ROOT); } catch (e) { init
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
-// CSRF 护栏：写请求校验本机 Host + 同源 Origin
-const LOCAL = new Set(['127.0.0.1', 'localhost', '[::1]']);
+// ---- 远程访问（0.17.10）：默认只听 127.0.0.1；config.网络.远程.开 = true 时听 0.0.0.0，
+// 一切请求须持令牌（?t= 首访换 cookie / x-studio-token 头）。实弹台有项目仓全写权，令牌是底线。
+const REMOTE = () => (cfg && cfg.网络 && cfg.网络.远程) || {};
+const isLocalReq = (req) => {
+  const ip = String(req.socket.remoteAddress || '');
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+};
+const tokenOk = (req) => {
+  const tk = REMOTE().令牌;
+  if (!tk) return false;
+  const got = req.query.t || req.headers['x-studio-token'] || (String(req.headers.cookie || '').match(/studio_t=([\w-]+)/) || [])[1];
+  return got === tk;
+};
 app.use((req, res, next) => {
+  const remoteOn = !!REMOTE().开;
+  if (!isLocalReq(req)) {
+    if (!remoteOn) return res.status(403).json({ error: '远程访问未开启' });
+    if (!tokenOk(req)) return res.status(401).send('<meta charset="utf-8">需要访问令牌：请用带 ?t=令牌 的链接打开');
+    if (req.query.t) res.setHeader('Set-Cookie', `studio_t=${req.query.t}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
+    return next(); // 令牌即身份，远程写放行
+  }
+  // 本机请求维持原 CSRF 护栏：写请求校验本机 Host + 同源 Origin
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const LOCAL = new Set(['127.0.0.1', 'localhost', '[::1]']);
   const host = String(req.headers.host || '').replace(/:\d+$/, '');
-  if (!LOCAL.has(host)) return res.status(403).json({ error: '拒绝：非本机写请求' });
+  if (!LOCAL.has(host) && !tokenOk(req)) return res.status(403).json({ error: '拒绝：非本机写请求' });
   const o = req.headers.origin;
-  if (o) { let h = null; try { h = new URL(o).hostname; } catch { h = null; } if (!h || !LOCAL.has(h)) return res.status(403).json({ error: '拒绝：跨源写请求' }); }
+  if (o) { let h = null; try { h = new URL(o).hostname; } catch { h = null; }
+    if ((!h || !LOCAL.has(h)) && !tokenOk(req)) return res.status(403).json({ error: '拒绝：跨源写请求' }); }
   next();
 });
 const ready = (res) => { if (initError) { res.status(500).json({ error: initError }); return false; } return true; };
@@ -378,6 +399,33 @@ app.get('/api/ticket', (req, res) => {
   res.json({ id, state: t.state, fm: t.fm, body: t.body, html: mdHtml(t.body), 链: trace.chains(ROOT, id), 回执, 产出 });
 });
 
+// ---- 遥控传令板（0.17.10）：制作人手机端 ↔ Claude 的双向留言（明文 jsonl，监视器唤醒）----
+const relay = require('./lib/relay');
+app.get('/api/relay', (req, res) => {
+  if (!ready(res)) return;
+  res.json({ 消息: relay.list(ROOT, Number(req.query.limit) || 100) });
+});
+app.post('/api/relay', (req, res) => {
+  if (!ready(res)) return;
+  const r = relay.append(ROOT, '制作人', (req.body || {}).text);
+  if (r.ok) journal.append(ROOT, `遥控传令：${String((req.body || {}).text).slice(0, 60)}`);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+// 远程配置（参数页卡片）：开关 + 令牌重生成（仅本机可改——远程端不许给自己续权）
+app.post('/api/config/remote', (req, res) => {
+  if (!ready(res)) return;
+  if (!isLocalReq(req)) return res.status(403).json({ error: '远程配置只能在本机修改' });
+  const { 开, 重生成令牌 } = req.body || {};
+  cfg.网络 = cfg.网络 || {}; cfg.网络.远程 = cfg.网络.远程 || {};
+  if (typeof 开 === 'boolean') cfg.网络.远程.开 = 开;
+  if (重生成令牌 || (cfg.网络.远程.开 && !cfg.网络.远程.令牌)) {
+    cfg.网络.远程.令牌 = require('crypto').randomBytes(16).toString('hex');
+  }
+  fs.writeFileSync(path.join(ROOT, 'studio.config.json'), JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  journal.append(ROOT, `远程访问：${cfg.网络.远程.开 ? '开' : '关'}${重生成令牌 ? '（令牌已重生成）' : ''}（重启生效监听地址）`);
+  res.json({ ok: true, 远程: { 开: !!cfg.网络.远程.开, 令牌: cfg.网络.远程.令牌 || '' } });
+});
+
 // ---- 产出调起：打开文件/所在文件夹（仅限该单所属项目仓内，越界拒）----
 app.post('/api/open', (req, res) => {
   if (!ready(res)) return;
@@ -672,8 +720,9 @@ function injectProxy() {
 function start() {
   return new Promise((resolve, reject) => {
     injectProxy();
-    const srv = app.listen(port, '127.0.0.1', () => {
-      console.log(initError ? `监制台启动但未就绪：${initError}` : `监制台已启动：http://127.0.0.1:${port}`);
+    const bindAddr = REMOTE().开 ? '0.0.0.0' : '127.0.0.1'; // 远程开=全接口监听（令牌把门）
+    const srv = app.listen(port, bindAddr, () => {
+      console.log(initError ? `监制台启动但未就绪：${initError}` : `监制台已启动：http://127.0.0.1:${port}${bindAddr === '0.0.0.0' ? '（远程监听已开，令牌把门）' : ''}`);
       巡检();
       if (!initError) setInterval(巡检, 30 * 60000).unref();
       // 自动记账（D35）：定期把工单流转/回执/journal git commit 落袋，间隔读 config（0=关）

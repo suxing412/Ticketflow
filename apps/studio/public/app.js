@@ -9,7 +9,7 @@ const FNHEX = { 策划: 'var(--fn-plan)', 程序: 'var(--fn-code)', 美术: 'var
 const FNCLS = { 策划: 'fn-plan', 程序: 'fn-code', 美术: 'fn-art', QA: 'fn-qa', 装配: 'fn-asm' };
 const STCLS = { 在途: 'st-doing', 质检: 'st-review', 待验收: 'st-accept', 完成: 'st-done', 待定夺: 'st-escal', 执行失败: 'st-escal', 草稿: 'mut', 已归档: 'mut', 待投: '', 池: '' };
 const STPCT = { 草稿: 0, 待投: 0, 池: 0, 在途: 60, 质检: 85, 待定夺: 70, 执行失败: 60, 待验收: 90, 完成: 100, 已归档: 0 };
-const NAV = [['总览', ''], ['工单池', 'board'], ['流程', 'flow'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['风格库', 'stylelib'], ['报表', 'report']]; // 参数入口只走 ⚙
+const NAV = [['总览', ''], ['工单池', 'board'], ['流程', 'flow'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['遥控', 'relay'], ['风格库', 'stylelib'], ['报表', 'report']]; // 参数入口只走 ⚙
 function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1900); }
 // 数值跳字确认（步进器改完后调用）：重触发 animation
 function bump(el) { if (!el) return; el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
@@ -867,6 +867,10 @@ async function viewParams() {
     <div class="paramcard card"><h4>服务端口</h4><p class="pmeta">重启监制台后生效</p>
       <div class="runbtn"><input id="port-in" class="mono" style="width:84px;height:32px;padding:0 10px;font-size:12px" value="${(c.server && c.server.port) || 4270}"/>
       <button class="btn h32" style="margin-left:8px" onclick="portSave()">保存</button></div></div>
+    <div class="paramcard card"><h4>远程访问</h4><p class="pmeta">手机/其它设备访问监制台（令牌把门 · 重启生效监听）· 只能在本机改</p>
+      <div class="runbtn"><button class="btn h32 ${(c.网络 && c.网络.远程 && c.网络.远程.开) ? 'accent' : ''}" onclick="remoteToggle(${!(c.网络 && c.网络.远程 && c.网络.远程.开)})">${(c.网络 && c.网络.远程 && c.网络.远程.开) ? '已开启 · 点击关闭' : '已关闭 · 点击开启'}</button>
+      <button class="btn h32" style="margin-left:8px" onclick="remoteToggle(null,true)">重生成令牌</button></div>
+      ${(c.网络 && c.网络.远程 && c.网络.远程.令牌) ? `<p class="pmeta mono" style="margin-top:8px;word-break:break-all">手机访问：http://本机IP:${(c.server && c.server.port) || 4270}/?t=${esc(c.网络.远程.令牌)}</p>` : ''}</div>
     <div class="paramcard card" data-theme-card><h4>外观主题</h4><p class="pmeta">暖纸=日间纸感；玻璃=夜间暗色 · 即点即切，本机记忆</p>
       <div class="egtoggle"><button class="egbtn ${curTheme() === 'glass' ? '' : 'on'}" data-th="paper" onclick="themeSet('paper')">暖纸</button><button class="egbtn ${curTheme() === 'glass' ? 'on' : ''}" data-th="glass" onclick="themeSet('glass')">玻璃</button></div></div>`;
   // 模型档：池默认 + 裁判档（选项来自 /api/models 监测 + config 增补）
@@ -1302,6 +1306,13 @@ window.doOverturn = async (id, btn) => {
   location.hash = '#/draft?edit=' + encodeURIComponent(r.新单);
 };
 window.toggleHide = async (id, on) => { const r = await post('/api/act/隐藏', { id, 值: on }); toast(r.ok ? (on ? '已湮灭出视野' : '已恢复可见') : (r.error || '失败')); if (r.ok) location.hash = on ? '#/board' : location.hash, route(); };
+window.remoteToggle = async (开, regen) => {
+  const body = regen ? { 重生成令牌: true } : { 开 };
+  const r = await post('/api/config/remote', body);
+  if (!r.ok) return toast(r.error || '失败');
+  toast(regen ? '令牌已重生成' : (r.远程.开 ? '远程已开（重启监制台生效）' : '远程已关（重启生效）'));
+  window._p6cfg = null; route();
+};
 window.openArt = async (id, p, mode) => { const r = await post('/api/open', { id, 路径: p, 方式: mode }); if (!r.ok) toast(r.error || '调起失败'); };
 // 秒级走表：1s 本地跳字，每 3s 拉一次 runner 刷活尾巴；步骤切换/落袋整页重渲；离开详情自动熄火
 window.lvStart = (id, stepIso, allIso, kind) => {
@@ -1371,7 +1382,36 @@ window.artSubmit = async (id, btn) => {
 window.act3 = async (name, id, 决定) => { const r = await post('/api/act/' + name, { id, 决定 }); toast(r.ok ? `${决定} 完成` : (r.error || '失败')); route(); };
 
 /* ===== 路由 ===== */
-const ROUTES = { '': viewOverview, board: viewBoard, flow: viewFlow, tree: viewTree, agents: viewAgents, decisions: viewDecisions, stylelib: viewStyleLib, report: viewReport };
+const ROUTES = { '': viewOverview, board: viewBoard, flow: viewFlow, tree: viewTree, agents: viewAgents, decisions: viewDecisions, relay: viewRelay, stylelib: viewStyleLib, report: viewReport };
+
+/* ===== P13 遥控传令板（0.17.10）：制作人手机端 ↔ Claude 双向留言 ===== */
+async function viewRelay() {
+  const d = await api('/api/relay').catch(() => ({ 消息: [] }));
+  const msgs = (d.消息 || []).map((m) => `<div class="rl-msg ${m.from === '制作人' ? 'me' : 'ai'}">
+      <div class="rl-meta">${m.from === '制作人' ? '你' : 'Claude'} · ${esc(String(m.t).slice(5, 16).replace('T', ' '))}</div>
+      <div class="rl-body">${esc(m.text)}</div></div>`).join('') || '<p class="dim" style="text-align:center;margin-top:40px">尚无传令。在下方写第一条——Claude 由监视器唤醒，回执通常一两分钟内到。</p>';
+  setTimeout(() => { const box = $('rl-list'); if (box) box.scrollTop = box.scrollHeight;
+    clearInterval(window._rl || 0);
+    window._rl = setInterval(async () => {
+      const el = $('rl-list'); if (!el) { clearInterval(window._rl); return; }
+      const nd = await api('/api/relay').catch(() => null); if (!nd) return;
+      if ((nd.消息 || []).length !== (window._rlN || 0)) { window._rlN = nd.消息.length; route(); }
+    }, 5000);
+  }, 0);
+  window._rlN = (d.消息 || []).length;
+  return `<div class="rl-wrap">
+    <div class="rl-head"><b style="font-size:15px">遥控传令板</b>
+      <span class="subnote">你在任何设备写指令 → Claude 在主机上带全量上下文执行 → 回帖到这里 · 明文留档</span></div>
+    <div class="rl-list card r16" id="rl-list">${msgs}</div>
+    <div class="rl-input"><textarea id="rl-t" placeholder="写给 Claude 的指令…（Ctrl+Enter 发送）" onkeydown="if(event.ctrlKey&&event.key==='Enter')relaySend()"></textarea>
+      <button class="btn accent h44" onclick="relaySend()">传令</button></div></div>`;
+}
+window.relaySend = async () => {
+  const t = $('rl-t').value.trim(); if (!t) return;
+  const r = await post('/api/relay', { text: t });
+  if (!r.ok) return toast(r.error || '发送失败');
+  $('rl-t').value = ''; route();
+};
 const markIn = (key) => { if (window._lastViewKey !== key) { const v = $('view') || $('app').firstElementChild; if (v) v.classList.add('vin'); } window._lastViewKey = key; };
 async function route() {
   const h = location.hash.replace(/^#\//, '');
