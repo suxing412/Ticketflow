@@ -37,15 +37,19 @@ const mdHtml = (s) => sanitizeHtml(marked.parse(s || ''), { allowedTags: sanitiz
 app.get('/api/board', (req, res) => {
   if (!ready(res)) return;
   const snap = store.snapshot(ROOT);
+  const showHidden = req.query.含隐藏 === '1';
+  let 隐藏数 = 0;
+  for (const s of store.STATES) snap[s] = snap[s].filter((t) => { if (t.fm.隐藏) { 隐藏数++; return showHidden; } return true; });
   const out = {};
   for (const s of store.STATES) out[s] = snap[s].map((t) => ({
+    隐藏: !!t.fm.隐藏,
     id: t.id, title: t.fm.title, 职能: t.fm.职能, 优先级: t.fm.优先级, 规模: t.fm.规模,
     QA: t.fm.QA, 验收方式: t.fm.验收方式, 主办: t.fm.主办 || null, 项目: t.fm.项目 || null, // D42 多项目视界按此归属
     阶段: t.fm.阶段 || null, 预计时间: t.fm.预计时间 || null, // D43 流程视图用
     父单: t.fm.父单 || null, 依赖: t.fm.依赖 || null,
     领单时间: t.fm.领单时间 || null, 交付时间: t.fm.交付时间 || null, 滞留告警: !!t.fm.滞留告警,
   }));
-  res.json({ states: store.STATES, board: out });
+  res.json({ states: store.STATES, board: out, 隐藏数 });
 });
 // （排期 API 已随甘特退役移除——拉取模型没有"计划日期"，时间轴只回放真实执行；里程碑=父单完成，已废）
 
@@ -431,6 +435,8 @@ const ACTIONS = {
   验收: (b) => life.验收(ROOT, b.id, !!b.通过),
   失败分诊: (b) => life.失败分诊(ROOT, b.id, b.决定), // D31：重投/上呈（废弃走通用废弃）
   解除复核: (b) => life.解除待复核(ROOT, b.id, b.说明), // D36：核对新版后解除
+  推翻: (b) => life.推翻(ROOT, b.id, b.理由), // 制作人翻案：完成/已归档 → 自动编号返工草稿
+  隐藏: (b) => life.隐藏(ROOT, b.id, b.值), // 隐藏归档：默认视图湮灭，纸面可考
 };
 app.post('/api/act/:name', (req, res) => {
   if (!ready(res)) return;

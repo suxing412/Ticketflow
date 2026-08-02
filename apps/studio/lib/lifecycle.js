@@ -231,7 +231,48 @@ function 返工(root, oldId, newId, fm, body) {
   return { ...r, 依赖接续: 接续 };
 }
 
+// ---- 推翻重做（制作人专权·审批点）：完成/已归档单翻案 = 自动编号返工 ----
+// D6 一脉：旧单归档不复活，新草稿带返工链与打回理由，制作人补充要求后再定稿投池。
+function 推翻(root, id, 理由) {
+  const t = store.find(root, id);
+  if (!t) return { ok: false, error: '不存在' };
+  if (!['完成', '已归档'].includes(t.state)) return { ok: false, error: `推翻只针对完成/已归档单（当前 ${t.state}，用打回/废弃）` };
+  if (!String(理由 || '').trim()) return { ok: false, error: '推翻必须写理由（历史要能回答"为什么翻案"）' };
+  const m = String(id).match(/^(.+)-(\d+)$/);
+  if (!m) return { ok: false, error: '编号不含序号，无法自动派新号' };
+  let mx = 0;
+  for (const s of store.STATES) for (const x of store.list(root, s)) {
+    const mm = String(x.id).match(/^(.+)-(\d+)$/);
+    if (mm && mm[1] === m[1]) mx = Math.max(mx, Number(mm[2]));
+  }
+  const newId = `${m[1]}-${mx + 1}`;
+  const fm = {
+    id: newId, title: `${t.fm.title}（推翻重做）`, 职能: t.fm.职能, 产出物类型: t.fm.产出物类型,
+    优先级: t.fm.优先级 || 'P1', 规模: t.fm.规模 || '单兵', QA: t.fm.QA || '开',
+    验收方式: t.fm.验收方式 || '保留', 预计时间: t.fm.预计时间 || '', 预计token: '',
+    项目: t.fm.项目, ...(t.fm.阶段 ? { 阶段: t.fm.阶段 } : {}), ...(t.fm.父单 ? { 父单: t.fm.父单 } : {}),
+    ...(t.fm.依赖 ? { 依赖: t.fm.依赖 } : {}),
+  };
+  const body = `## 推翻理由（制作人）\n${String(理由).trim()}\n\n${t.body || ''}`;
+  // 完成→已归档 不在常规状态机里（完成=成功终态）——翻案是制作人特权，此处强制归档
+  if (t.state === '完成') store.move(root, id, '完成', '已归档', (f) => { f.归档原因 = '推翻替代（制作人翻案）'; }, nowIso());
+  const r = 返工(root, id, newId, fm, body);
+  if (r.ok) journal.append(root, `推翻重做 ${id} → ${newId}（制作人翻案：${String(理由).trim().slice(0, 60)}）`);
+  return r.ok ? { ...r, 新单: newId } : r;
+}
+
+// ---- 隐藏归档（制作人专权）：已归档单从一切默认视图湮灭，纸面仍在可考 ----
+function 隐藏(root, id, 值) {
+  const t = store.find(root, id);
+  if (!t) return { ok: false, error: '不存在' };
+  if (t.state !== '已归档') return { ok: false, error: `只有已归档单可隐藏（当前 ${t.state}）` };
+  const on = 值 !== false;
+  const r = store.update(root, id, (fm) => { if (on) fm.隐藏 = true; else delete fm.隐藏; });
+  if (r.ok) journal.append(root, `隐藏归档 ${id} → ${on ? '隐藏（默认视图不再渲染）' : '取消隐藏'}`);
+  return r;
+}
+
 module.exports = {
   定稿, 投池, 交产出, QA裁定, 定夺, 验收, 撤回, 废弃, 收回, 滞留检查, 返工, 执行失败, 失败分诊,
-  标记待复核, 解除待复核,
+  标记待复核, 解除待复核, 推翻, 隐藏,
 };
