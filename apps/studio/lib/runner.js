@@ -55,7 +55,33 @@ function resolveCli(poolName, model) {
     'claude',
   ];
   const cmd = candidates.find((c) => c === 'claude' || fs.existsSync(c));
-  return { cmd, args: ['-p', '--permission-mode', 'acceptEdits', ...(model ? ['--model', model] : [])] };
+  // stream-json 全量捕获（TK-35 案终局）：-p 纯文本只吐最后一条消息——agent 写完报告
+  // 再说句闲话/收个尾，真报告整条被吞（TK-31/33 静默死、TK-35 187 字节闲聊回执同源）。
+  // 全量事件流落地后由 extractClaudeText 提取真报告。
+  return { cmd, args: ['-p', '--permission-mode', 'acceptEdits', '--output-format', 'stream-json', '--verbose', ...(model ? ['--model', model] : [])], stream: true };
+}
+
+// stream-json（JSONL 事件流）→ 报告文本：收集全部 assistant 文本块，
+// 优先取最后一个像"报告"的（完工报告/QA 核验/结论行），否则整体拼接兜底；
+// 解析不出一行 JSON（版本不支持等）则原文返回，行为退化为旧样。
+function extractClaudeText(raw) {
+  const texts = [];
+  let sawJson = false;
+  for (const line of String(raw).split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s.startsWith('{')) continue;
+    try {
+      const e = JSON.parse(s);
+      sawJson = true;
+      if (e.type === 'assistant' && e.message && Array.isArray(e.message.content)) {
+        for (const b of e.message.content) if (b.type === 'text' && b.text && b.text.trim()) texts.push(b.text.trim());
+      }
+    } catch { /* 非 JSON 行忽略 */ }
+  }
+  if (!sawJson) return String(raw);
+  const like = texts.filter((t) => /完工报告|QA 核验|核验报告|结论[:：]/.test(t));
+  if (like.length) return like[like.length - 1];
+  return texts.join('\n\n');
 }
 
 // 代理注入（中台验证过的坑：claude 无头调用必须带代理 env）。
@@ -290,7 +316,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   const poolName = t.fm.执行池 || 'claude';
   const agentCfg = (cfg.agents || []).find((a) => a.id === agentId);
   const model = pickModel(cfg, kind, agentCfg, poolName);
-  const { cmd, args } = resolveCli(kind === '执行' ? poolName : 'claude', model); // 质检/代核都走 claude
+  const { cmd, args, stream } = resolveCli(kind === '执行' ? poolName : 'claude', model); // 质检/代核都走 claude
   const receiptPath = path.join(root, '回执', `${t.id}.md`);
   const prompt = kind === '质检' ? buildQaPrompt(root, t, proj, receiptPath)
     : kind === '代核' ? buildAuditPrompt(root, t, proj, receiptPath)
@@ -304,8 +330,13 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   const cliPool = kind === '执行' ? poolName : 'claude'; // 质检/代核实际走 claude，流水如实记
   journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name}）`);
   let out = '', errout = '';
-  child.stdout.on('data', (d) => { out += d; if (out.length > 400000) out = out.slice(-200000);
-    entry.tail = out.replace(/\s+/g, ' ').trim().slice(-300); }); // 活尾巴：详情页秒级进度用
+  child.stdout.on('data', (d) => { out += d; if (out.length > 800000) out = out.slice(-400000);
+    // 活尾巴：stream-json 取最近一个 text 块的可读文本，纯文本流原样截尾
+    if (stream) {
+      const ms = out.match(/"text":"((?:[^"\\]|\\.)*)"/g);
+      if (ms) { try { entry.tail = JSON.parse('"' + ms[ms.length - 1].slice(8, -1) + '"').replace(/\s+/g, ' ').trim().slice(-300); } catch { /* 保持旧尾 */ } }
+    } else entry.tail = out.replace(/\s+/g, ' ').trim().slice(-300);
+  });
   child.stderr.on('data', (d) => { errout += d; if (errout.length > 20000) errout = errout.slice(-10000); });
   const timeoutMs = (rc.执行超时分钟 ?? 30) * 60000;
   const killer = setTimeout(() => { // 超时树杀（中台同款）：整棵进程树掐掉再标失败
@@ -317,7 +348,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   child.on('close', (code) => {
     clearTimeout(killer);
     if (!running.has(agentId)) return; // 已被超时处理
-    settleClose(kind, code, out, errout, t.id, finishOk, failLocal);
+    settleClose(kind, code, stream ? extractClaudeText(out) : out, errout, t.id, finishOk, failLocal);
   });
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 事件兜底 */ }
   return true;
@@ -422,4 +453,4 @@ function status(root, cfg) {
   };
 }
 
-module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, isDry, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose };
+module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, isDry, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose, extractClaudeText };
