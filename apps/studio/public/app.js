@@ -1197,8 +1197,8 @@ async function viewDetail(id) {
   if (d.回执) {
     const secs = { 做了什么: '', 'QA 章节': '', 实际消耗: '', 异议: '' };
     d.回执.raw.split(/^## /m).forEach((p) => { const nl = p.indexOf('\n'); const h = p.slice(0, nl < 0 ? undefined : nl).trim();
-      for (const k of Object.keys(secs)) if (h.startsWith(k) || (k === 'QA 章节' && /QA/.test(h))) secs[k] = (nl < 0 ? '' : p.slice(nl + 1)).trim().split('\n')[0]; });
-    rsecs = Object.entries(secs).map(([k, v]) => `<div class="rsec"><div class="rl">${k}</div><div class="rv">${esc(v || '—')}</div></div>`).join('');
+      for (const k of Object.keys(secs)) if (h.startsWith(k) || (k === 'QA 章节' && /QA/.test(h))) secs[k] = (nl < 0 ? '' : p.slice(nl + 1)).trim().split('\n').slice(0, k === '做了什么' ? 4 : 1).join('\n'); });
+    rsecs = Object.entries(secs).map(([k, v]) => `<div class="rsec"><div class="rl">${k}</div><div class="rv" style="white-space:pre-line">${esc(v || '—')}</div></div>`).join('');
   }
   const ops = [];
   if (['池', '待投'].includes(d.state)) ops.push(['撤回', '回草稿（仅在池 / 待投）', `act2('撤回','${id}')`]);
@@ -1228,6 +1228,14 @@ async function viewDetail(id) {
           ${chainRow('返工自', c.返工自 ? esc(c.返工自) : null)}
           ${chainRow('依据', c.依据 ? `<span style="color:var(--accent-ink)">${esc(c.依据)}</span>` : null)}
           ${chainRow('依赖', (c.依赖 || []).map((x) => `${esc(x.id)}(${esc(x.state)})`).join('、'), 'okc')}</div></div>
+      ${d.产出 && d.产出.产出.length ? `<div class="p8main card r16"><b style="font-size:13px">产出速览</b>
+        <span class="subnote" style="margin-left:8px">${d.产出.来源 === '结构化' ? '回执产出章节' : '从回执正文解析'} · 点击调起本机查看</span>
+        ${d.产出.产出.map((a) => `<div class="prow" style="margin-top:8px">
+          <span class="pv mono" style="flex:1" title="${esc(a.路径)}">${esc(a.路径)}</span>
+          ${a.存在 ? `<span class="pill sm ok">${a.大小 > 1048576 ? (a.大小 / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(a.大小 / 1024)) + ' KB'}</span>
+            <button class="btn h32" style="height:26px;padding:0 12px;font-size:11px" onclick="openArt('${esc(id)}','${esc(a.路径)}','文件')">打开</button>
+            <button class="btn h32" style="height:26px;padding:0 10px;font-size:11px" onclick="openArt('${esc(id)}','${esc(a.路径)}','文件夹')">文件夹</button>`
+    : '<span class="pill sm red" title="回执声称的产出在项目仓找不到">缺失</span>'}</div>`).join('')}</div>` : ''}
       <div class="p8main card r16"><b style="font-size:13px">正文</b><div class="doc2">${d.html || '<p class="dim">无正文</p>'}</div></div>
     </div><div>
       <div class="rside card r16"><h3>回执 · 完工报告</h3>${rsecs || '<p class="dim" style="margin-top:10px">尚无回执（完工后生成）</p>'}</div>
@@ -1236,6 +1244,7 @@ async function viewDetail(id) {
         <div class="subnote" style="margin-top:14px">预计 ${esc(fm.预计时间 || '—')} · ${esc(fm.预计token || '—')} · 状态 ${esc(d.state)}</div></div></div></div>`;
 }
 window.act2 = async (name, id) => { const r = await post('/api/act/' + name, { id }); toast(r.ok ? '完成' : (r.error || '失败')); route(); };
+window.openArt = async (id, p, mode) => { const r = await post('/api/open', { id, 路径: p, 方式: mode }); if (!r.ok) toast(r.error || '调起失败'); };
 // 入库弹窗（审批点④）
 function showModal(inner) {
   const w = document.createElement('div'); w.className = 'mwrap';

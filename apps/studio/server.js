@@ -362,10 +362,34 @@ app.get('/api/ticket', (req, res) => {
   const id = String(req.query.id || '');
   const t = store.find(ROOT, id);
   if (!t) return res.status(404).json({ error: '工单不存在' });
-  let 回执 = null;
+  let 回执 = null; let 产出 = null;
   const rp = path.join(ROOT, '回执', `${id}.md`);
-  if (fs.existsSync(rp)) 回执 = { raw: fs.readFileSync(rp, 'utf8'), html: mdHtml(fs.readFileSync(rp, 'utf8')) };
-  res.json({ id, state: t.state, fm: t.fm, body: t.body, html: mdHtml(t.body), 链: trace.chains(ROOT, id), 回执 });
+  if (fs.existsSync(rp)) {
+    const raw = fs.readFileSync(rp, 'utf8');
+    回执 = { raw, html: mdHtml(raw) };
+    // 产出速览：定位回执产出到项目仓（验收动线——路径不该埋在正文里）
+    const proj = t.fm.项目 && cfg.项目 && cfg.项目.注册 && cfg.项目.注册[t.fm.项目];
+    if (proj) 产出 = require('./lib/artifacts').locate(raw, proj.路径);
+  }
+  res.json({ id, state: t.state, fm: t.fm, body: t.body, html: mdHtml(t.body), 链: trace.chains(ROOT, id), 回执, 产出 });
+});
+
+// ---- 产出调起：打开文件/所在文件夹（仅限该单所属项目仓内，越界拒）----
+app.post('/api/open', (req, res) => {
+  if (!ready(res)) return;
+  const { id, 路径, 方式 } = req.body || {};
+  const t = store.find(ROOT, String(id || ''));
+  if (!t) return res.status(404).json({ error: '工单不存在' });
+  const proj = t.fm.项目 && cfg.项目 && cfg.项目.注册 && cfg.项目.注册[t.fm.项目];
+  if (!proj) return res.status(400).json({ error: '该单无所属项目，无法定位产出' });
+  const abs = require('./lib/artifacts').resolveIn(proj.路径, String(路径 || ''));
+  if (!abs) return res.status(400).json({ error: '路径越出项目仓，拒绝调起' });
+  if (!fs.existsSync(abs)) return res.status(404).json({ error: '文件不存在：' + String(路径).slice(0, 60) });
+  const { spawn } = require('child_process');
+  const win = abs.replace(/\//g, '\\');
+  if (方式 === '文件夹') spawn('explorer', ['/select,', win], { detached: true, windowsHide: true }).unref();
+  else spawn('cmd', ['/c', 'start', '', win], { detached: true, windowsHide: true }).unref();
+  res.json({ ok: true });
 });
 
 // ---- 决策台（P4）：待验收 + 待定夺 ----
