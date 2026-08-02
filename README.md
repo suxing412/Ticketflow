@@ -1,6 +1,7 @@
-# Papercrew
+# Vermilion（朱批）
 
-**明文纸面工单（paper）驱动的 AI 班组（crew）。**
+**百官以纸面奏事，朱笔只在御手。**
+AI 班组以明文工单流转生产（透明化），而裁决的朱笔永远只在人手（人本化）。
 
 宪法五条（[S 级·宪法](docs/协议库/S-宪法.md)）：**自动化 · 模块化 · 透明化 · 自优化 · 人本化**
 ——能给机器的绝不消耗人；一切能力皆可拔插；不落纸面就没发生；同一个坑不摔第二次；
@@ -13,7 +14,7 @@
 | 共享地基（状态机/池/闸/额度）| `packages/core/` | 抽取中 | 双签 |
 | CLI 厂商适配层 | `packages/providers/` | 迁入中 | 双签 |
 
-谱系：[ticket-hub（工单中台，封存）](https://github.com/suxing412/AIworkflow-TicketHub) → Papercrew。
+谱系：[ticket-hub（工单中台，封存）](https://github.com/suxing412/AIworkflow-TicketHub) → Papercrew → Vermilion（2026-08-02 依五化宪法更名：补上"裁决权永远在人"的缺口）。
 疆界与协作规则见 [CODEOWNERS](CODEOWNERS)。
 
 ---
@@ -132,7 +133,7 @@ AI工作室/
 ```
 cd apps/studio
 npm install          # electron 下载慢可用镜像
-npm test             # 95 项测试
+npm test             # 102 项测试
 npm run dist         # 产出便携 exe（见 package.json build.directories.output）
 powershell -ExecutionPolicy Bypass -File ..\..\套件\打包套件.ps1   # 打分发包
 ```

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// enginectl — 引擎通道注册表（Papercrew 通用件）
+// enginectl — 引擎通道注册表（Vermilion 通用件）
 // 用法：node enginectl.js <通道> --project <工程目录> [--out <产物>] [--preset <导出预设>] [--script <测试脚本>]
 //      node enginectl.js 探测            ← 列出本机可用引擎
 // 通道只认名字，换引擎不换协议（宪法·模块化）。每通道：定位→版本校验→执行→退出码语义。

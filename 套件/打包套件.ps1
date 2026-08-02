@@ -4,7 +4,7 @@
 # 前置：D:\studio-build\dist\ 下已有当前版本 exe（npm run dist 的产物）
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $MyInvocation.MyCommand.Path | Split-Path -Parent  # 仓库根
-# 布局自适应：Papercrew monorepo = apps\studio；历史布局 监制台\_app / _app 兜底
+# 布局自适应：Vermilion monorepo = apps\studio；历史布局 监制台\_app / _app 兜底
 $appDir = @('apps\studio', '监制台\_app', '_app') | ForEach-Object { Join-Path $repo $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $appDir) { throw '找不到 studio 应用目录（apps\studio）' }
 $pkg = Get-Content -Raw -Encoding UTF8 (Join-Path $appDir 'package.json') | ConvertFrom-Json
