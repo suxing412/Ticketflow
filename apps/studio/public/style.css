@@ -365,7 +365,7 @@ a.gear { text-decoration:none; }
 .fl-node .nt { font-size:11.5px; font-weight:500; line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; padding-right:26px; }
 .fl-node .nst { position:absolute; top:6px; right:8px; font-size:9px; padding:1px 7px; border-radius:999px; background:var(--chip); color:var(--ink2); }
 .fl-node .nh { position:absolute; bottom:5px; right:9px; font-family:var(--mono); font-size:9px; color:var(--ink3); }
-.fl-node:hover { box-shadow:var(--shadow-md); transform:translateY(-2px); border-color:var(--ink3); z-index:5; }
+.fl-node:hover { box-shadow:var(--shadow-md); border-color:var(--ink3); z-index:5; } /* 不上浮：卡动线不动=连线对不上（用户裁定） */
 .fl-node.done { opacity:.35; }
 .fl-node.doing { border-color:var(--accent); }
 .fl-node.doing .nst { background:var(--ink); color:var(--paper); }
@@ -391,6 +391,25 @@ path.fl-e.crit { stroke:var(--danger); stroke-width:2; stroke-dasharray:none; op
 path.fl-e.chain { stroke:var(--ink2); stroke-width:2; opacity:1; }
 path.fl-e.dimmed { opacity:.08; }
 @media (prefers-reduced-motion: reduce) { .fl-node { transition-duration:.01s; } .fl-node:hover { transform:none; } }
+
+/* ===== 在途细粒度进度（详情页顶卡）===== */
+.livecard { margin-top:24px; padding:16px 20px 14px; }
+.lv-top { display:flex; align-items:center; gap:10px; }
+.lv-top .sp { flex:1; }
+.lv-t { font-size:16px; font-weight:600; margin-left:16px; font-variant-numeric:tabular-nums; }
+.lv-bar { display:flex; gap:6px; margin-top:14px; }
+.lv-seg { flex:1; min-width:0; }
+.lv-seg i { display:block; height:6px; border-radius:3px; background:var(--chip); }
+.lv-seg span { display:block; font-size:10px; color:var(--ink3); margin-top:5px; text-align:center; }
+.lv-seg.done i { background:var(--ok); opacity:.5; }
+.lv-seg.done span { color:var(--ok); }
+.lv-seg.cur i { background:var(--accent); animation:lvpulse 1.2s ease-in-out infinite; }
+.lv-seg.cur span { color:var(--ink); font-weight:700; }
+.lv-seg.wait i { background:var(--gateln); animation:lvpulse 2s ease-in-out infinite; }
+.lv-tail { margin-top:10px; font-size:11px; color:var(--ink2); white-space:nowrap; overflow:hidden;
+  direction:rtl; unicode-bidi:plaintext; text-align:left; } /* 只看得见尾部=最新输出 */
+@keyframes lvpulse { 50% { opacity:.4; } }
+@media (prefers-reduced-motion: reduce) { .lv-seg i { animation:none !important; } }
 
 /* ===== P10 树形 ===== */
 .ttools { display:flex; gap:12px; align-items:center; margin-top:24px; }

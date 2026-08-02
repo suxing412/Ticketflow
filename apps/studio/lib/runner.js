@@ -285,7 +285,8 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   const cliPool = kind === '执行' ? poolName : 'claude'; // 质检/代核实际走 claude，流水如实记
   journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name}）`);
   let out = '', errout = '';
-  child.stdout.on('data', (d) => { out += d; if (out.length > 400000) out = out.slice(-200000); });
+  child.stdout.on('data', (d) => { out += d; if (out.length > 400000) out = out.slice(-200000);
+    entry.tail = out.replace(/\s+/g, ' ').trim().slice(-300); }); // 活尾巴：详情页秒级进度用
   child.stderr.on('data', (d) => { errout += d; if (errout.length > 20000) errout = errout.slice(-10000); });
   const timeoutMs = (rc.执行超时分钟 ?? 30) * 60000;
   const killer = setTimeout(() => { // 超时树杀（中台同款）：整棵进程树掐掉再标失败
@@ -396,7 +397,7 @@ function status(root, cfg) {
     运行: !!st.运行, 试跑: st.试跑 !== false,
     实弹解锁: !!(cfg.执行器 && cfg.执行器.实弹解锁),
     间隔秒: (cfg.执行器 || {}).间隔秒 ?? 15,
-    执行中: [...running.entries()].map(([agent, e]) => ({ agent, id: e.id, kind: e.kind, startedAt: e.startedAt })),
+    执行中: [...running.entries()].map(([agent, e]) => ({ agent, id: e.id, kind: e.kind, startedAt: e.startedAt, tail: e.tail || null })),
     执行失败数: store.list(root, '执行失败').length,
     上轮: lastTick,
   };
