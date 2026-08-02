@@ -641,7 +641,8 @@ app.get('/api/pulse', (req, res) => {
   res.json({ token: String(acc) });
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+// no-store：asar 内文件 mtime 恒定会骗过 ETag，换版后 Electron 磁盘缓存端出旧 UI（0.17.2 实测坑）
+app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModified: false, setHeaders: (res) => res.setHeader('Cache-Control', 'no-store') }));
 // 风格库静态服务（美术库缩略图直读；express.static 自带路径穿越防护）
 if (!initError) app.use('/stylelib-files', express.static(path.join(ROOT, '风格库')));
 const port = (cfg && cfg.server && cfg.server.port) || 4270;
