@@ -226,6 +226,17 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     runner.settleClose('代核', 1, '', 'boom', 'X-1', fin, fail);
     assert.equal(calls[0].path, 'fail');
     assert.ok(calls[0].why.includes('boom'));
+    // 质检散文体结论判读（曾硬编码 true 致 QA 永放行，TK-31/33 案）：
+    // "## 结论\n**通过**"→true；"结论\n不过"→false；无结论/判读不了→判官失败重试
+    calls.length = 0;
+    runner.settleClose('质检', 0, '# QA 核验\n## 逐条核验\n1. ✓\n## 结论\n\n**通过**', '', 'X-1', fin, fail);
+    assert.deepEqual([calls[0].path, calls[0].v], ['ok', true], 'QA 散文体通过');
+    calls.length = 0;
+    runner.settleClose('质检', 0, '# QA 核验\n## 结论\n不过（修复指引：补文件）', '', 'X-1', fin, fail);
+    assert.deepEqual([calls[0].path, calls[0].v], ['ok', false], 'QA 散文体不过驱动自修');
+    calls.length = 0;
+    runner.settleClose('质检', 0, '写了一堆核验过程但没有那个收束标记', '', 'X-1', fin, fail);
+    assert.equal(calls[0].path, 'fail', 'QA 无结论按判官失败重试');
   });
 
   await t('委托代核失败重试封顶：封顶前留待验收下轮重试且不盖章，封顶后停拉、清计数可重审', async () => {

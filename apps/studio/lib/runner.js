@@ -154,7 +154,19 @@ function settleClose(kind, code, out, errout, ticketId, finishOk, failLocal) {
   }
   const tail = text.slice(-8000);
   // 代核结论机器可读行：找不到"结论：通过"一律按不过处理（保守，不误自动完成）
-  finishOk(tail, kind === '代核' ? /结论[:：]\s*通过/.test(tail) : true);
+  if (kind === '代核') return finishOk(tail, /结论[:：]\s*通过/.test(tail));
+  if (kind === '质检') {
+    // QA 报告是散文体（"## 结论\n**通过**"之类）：取最后一个「结论」标记后的近文判定；
+    // 找不到结论标记＝报告没写完 → 按判官失败重试，绝不默认放行（曾硬编码 true 酿成 TK-31/33 案）
+    const i = text.lastIndexOf('结论');
+    if (i < 0) { failLocal('质检报告无结论标记——不作数，按判官失败重试'); return; }
+    const seg = text.slice(i, i + 80);
+    if (/不过|不通过/.test(seg)) return finishOk(tail, false);
+    if (/通过/.test(seg)) return finishOk(tail, true);
+    failLocal('质检结论无法判读——按判官失败重试');
+    return;
+  }
+  finishOk(tail, true);
 }
 
 // ---- 执行一份工作（在途执行 / 质检复核）。opts.durMs=0 供测试同步完成；opts.failWith 注入失败 ----
@@ -179,7 +191,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     if (kind === '质检') {
       if (!cur || cur.state !== '质检') return;
       store.update(root, t.id, (fm) => { fm.质检人 = agentId; delete fm.质检失败次数; });
-      const r = lifecycle.QA裁定(root, cfg, t.id, true);
+      const r = lifecycle.QA裁定(root, cfg, t.id, verdict); // 曾硬编码 true——QA 写"不过"也放行，自修/待定夺全成死代码（TK-31/33 空壳两连过的真凶）
       if (r.ok) journal.append(root, `质检执行完成 ${t.id}（${agentId} · ${note}）`);
     } else if (kind === '代裁') {
       // D43③：解析裁判档结论。给方向→定夺给方向（方向文本进正文，主办重执行能读到）；
