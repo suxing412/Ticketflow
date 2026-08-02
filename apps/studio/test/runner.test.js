@@ -239,6 +239,17 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.equal(calls[0].path, 'fail', 'QA 无结论按判官失败重试');
   });
 
+  await t('stream-json 报告提取（TK-35 案）：真报告不被闲聊尾巴吞掉', async () => {
+    const mk = (t2) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: t2 }] } });
+    const raw = [mk('先做点事'), mk('# 完工报告 TK-X\n## 产出\nA.md'), mk('顺手收个尾，闲聊一句')].join('\n');
+    const got = runner.extractClaudeText(raw);
+    assert.ok(got.startsWith('# 完工报告') && !got.includes('闲聊'), '取报告样消息而非最后闲聊');
+    assert.equal(runner.extractClaudeText('普通纯文本输出'), '普通纯文本输出', '非 JSONL 原样退化');
+    assert.equal(runner.extractClaudeText([mk('甲段'), mk('乙段')].join('\n')), '甲段\n\n乙段', '无报告样时全量拼接');
+    assert.ok(runner.resolveCli('claude', 'opus').args.includes('stream-json'), 'claude 走 stream-json');
+    assert.ok(!runner.resolveCli('codex', '').args.includes('stream-json'), 'codex 不受影响');
+  });
+
   await t('委托代核失败重试封顶：封顶前留待验收下轮重试且不盖章，封顶后停拉、清计数可重审', async () => {
     const root = makeRoot(); on(root);
     seed(root, '待验收', { id: 'P-40', 职能: '程序', 验收方式: '委托' });
