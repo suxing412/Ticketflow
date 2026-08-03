@@ -127,4 +127,43 @@ function cut(root, cfg, parentId, projPath, cb) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
-module.exports = { cut, buildCutPrompt, parseTickets };
+// 收口报告：战役全落袋后汇总子单回执 → 验收包（含逐项验收步骤与成本账）
+function closeout(root, cfg, parentId, cb) {
+  const parent = store.find(root, parentId);
+  if (!parent) return cb({ ok: false, error: '父单不存在' });
+  const wake = require('./wake');
+  const kids = wake.childrenOf(root, parentId);
+  const receipts = kids.map((k) => {
+    let raw = '';
+    try { raw = fs.readFileSync(path.join(root, '回执', `${k.id}.md`), 'utf8'); } catch { /* 无回执 */ }
+    const pick = raw.split(/^## /m).filter((s) => /^(产出|验收步骤|实际消耗)/.test(s)).map((s) => '## ' + s.trim()).join('\n');
+    return `### ${k.id} ${k.fm.title}（${k.state}）\n${pick.slice(0, 1800) || '（无回执）'}`;
+  }).join('\n\n');
+  const prompt = [
+    '你是单流的「项目管理」职能。战役父单的全部子单已落袋，写收口报告呈制作人验收。',
+    '要求：①一段战役总结（做成了什么）②合并的验收步骤清单（制作人按此逐项实测，绝对路径）',
+    '③成本账（各单实耗汇总）④遗留事项/异议汇总。务实文风，不奉承不注水。',
+    '', '=== 战役父单 ===', parent.body || '', '', '=== 子单回执摘要 ===', receipts,
+  ].join('\n');
+  const cmd = cli();
+  const model = (cfg.模型 || {}).项管 || 'fable';
+  const child = spawn(cmd, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'],
+    { env: { ...process.env }, windowsHide: true, shell: String(cmd).endsWith('.cmd') });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; if (out.length > 900000) out = out.slice(-450000); });
+  const timer = setTimeout(() => { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch { /**/ } }, 10 * 60000);
+  if (timer.unref) timer.unref();
+  child.on('close', () => {
+    clearTimeout(timer);
+    const text = require('../runner').extractClaudeText(out);
+    if (!text.trim()) return cb({ ok: false, error: '收口报告空输出' });
+    const rp = path.join(ledger.DIR(root), `收口报告-${parentId}.md`);
+    fs.mkdirSync(ledger.DIR(root), { recursive: true });
+    fs.writeFileSync(rp, `# 收口报告 · ${parentId}\n\n${text}\n`, 'utf8');
+    ledger.event(root, '收口报告', { 父单: parentId, 报告: rp });
+    cb({ ok: true, 报告: rp });
+  });
+  try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
+}
+
+module.exports = { cut, closeout, buildCutPrompt, parseTickets };

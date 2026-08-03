@@ -413,6 +413,12 @@ async function tick(root, cfg, opts = {}) {
       }
       pmLedger.update(root, (l) => { l.就绪队列 = ready.filter((r2) => !picks.some((pk) => pk.id === r2.id)); l.在跑 = Object.fromEntries([...running.entries()].filter(([, e]) => e.kind === '执行').map(([a, e]) => [e.id, { agent: a, 池: e.池 || '', 拉起时间: e.startedAt }])); });
     }
+    // H49 接线②③：战役全落袋→收口报告；连环失败→上呈（台账去重，判断才唤醒）
+    try {
+      const wake = require('./pm/wake');
+      wake.checkCloseouts(root, cfg, { test: !!opts.noBrain || dry });
+      wake.checkChainFailures(root);
+    } catch (e) { result.拒因.push('项管巡检异常：' + String(e.message).slice(0, 60)); }
   } else {
     // ② 自动领单（拉取制，一人一张/双闸/依赖全在 claim 里把关）
     for (const a of agents) {
