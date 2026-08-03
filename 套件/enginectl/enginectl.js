@@ -29,6 +29,31 @@ function findUnreal() {
   try { const d = fs.readdirSync(base).find((x) => /^UE_/.test(x)); return d ? path.join(base, d) : null; } catch { return null; }
 }
 
+// —— 工程级互斥（TK-55/57 撞锁案）：同一 Unity 工程同时只允许一个 enginectl 会话。
+// mkdir 原子抢锁；等待方轮询（默认上限 30min）。锁目录带 pid 文件，宿主进程死了视为孤儿锁可夺。
+function acquireProjectLock(proj, waitMin) {
+  const lockDir = path.join(proj, '.enginectl-lock');
+  const pidFile = path.join(lockDir, 'pid');
+  const deadline = Date.now() + (waitMin || 30) * 60000;
+  for (;;) {
+    try { fs.mkdirSync(lockDir); fs.writeFileSync(pidFile, String(process.pid)); return lockDir; } catch { /* 已被占 */ }
+    try { // 孤儿锁检测：持锁 pid 已死则夺锁
+      const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+      if (pid) { try { process.kill(pid, 0); } catch { fs.rmSync(lockDir, { recursive: true, force: true }); continue; } }
+    } catch { /* pid 文件缺失，按占用等待 */ }
+    if (Date.now() > deadline) return null;
+    const sab = new SharedArrayBuffer(4); Atomics.wait(new Int32Array(sab), 0, 0, 3000); // 同步睡 3s
+  }
+}
+// 孤儿 UnityLockfile 自愈：文件在但本机无 Unity 进程 = 上次运行被杀的尸体，安全清除。
+function clearOrphanUnityLock(proj) {
+  const f = path.join(proj, 'Temp', 'UnityLockfile');
+  if (!fs.existsSync(f)) return false;
+  const r = spawnSync('tasklist', ['/FI', 'IMAGENAME eq Unity.exe', '/NH'], { encoding: 'utf8', windowsHide: true });
+  if (/Unity\.exe/i.test(r.stdout || '')) return false; // 真有编辑器/批处理在跑，不动
+  try { fs.unlinkSync(f); return true; } catch { return false; }
+}
+
 const args = {};
 const pos = [];
 for (let i = 2; i < process.argv.length; i++) {
@@ -59,6 +84,12 @@ function unityFor(project) {
   }
   const proj = args.project && path.resolve(args.project);
   if (!proj || !fs.existsSync(proj)) return out({ ok: false, error: '必填 --project <工程目录>' });
+
+  // 互斥 + 自愈（unity/godot 通道统一走）：抢不到锁=有同工程会话在跑，排队等待而非撞锁三振
+  const lock = acquireProjectLock(proj, Number(args['lock-wait-min'] || 30));
+  if (!lock) return out({ ok: false, error: '工程互斥锁等待超时（' + (args['lock-wait-min'] || 30) + 'min）——同工程另一 enginectl 会话未释放' });
+  process.on('exit', () => { try { fs.rmSync(lock, { recursive: true, force: true }); } catch { /* 尽力而为 */ } });
+  if (clearOrphanUnityLock(proj)) console.error('[enginectl] 孤儿 UnityLockfile 已自愈清除（无 Unity 进程存活）');
 
   if (channel === 'godot-import' || channel === 'godot-test' || channel === 'godot-export') {
     const g = findGodot();
