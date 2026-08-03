@@ -44,7 +44,7 @@ function pickModel(cfg, kind, agentCfg, poolName) {
 }
 
 // ---- 实弹 CLI 定位：exe 的 GUI 进程 PATH 不全（探针实证），按候选绝对路径解析 ----
-function resolveCli(poolName, model) {
+function resolveCli(poolName, model, allowedTools) {
   if (poolName === 'codex') {
     return { cmd: 'codex', args: ['exec', '--dangerously-bypass-approvals-and-sandbox', ...(model ? ['-m', model] : []), '-'] };
   }
@@ -58,7 +58,10 @@ function resolveCli(poolName, model) {
   // stream-json 全量捕获（TK-35 案终局）：-p 纯文本只吐最后一条消息——agent 写完报告
   // 再说句闲话/收个尾，真报告整条被吞（TK-31/33 静默死、TK-35 187 字节闲聊回执同源）。
   // 全量事件流落地后由 extractClaudeText 提取真报告。
-  return { cmd, args: ['-p', '--permission-mode', 'acceptEdits', '--output-format', 'stream-json', '--verbose', ...(model ? ['--model', model] : [])], stream: true };
+  // 放行工具（TK-49 案）：acceptEdits 下 Bash 仍逐条要审批，无头会话无人可批——
+  // 项目侧 settings.json 规则曾四种路径变体全落空，改由拉起参数直接放行（值在 config.执行器.放行工具）。
+  const allow = Array.isArray(allowedTools) ? allowedTools.filter((s) => typeof s === 'string' && s.trim()) : [];
+  return { cmd, args: ['-p', '--permission-mode', 'acceptEdits', '--output-format', 'stream-json', '--verbose', ...(allow.length ? ['--allowedTools', ...allow] : []), ...(model ? ['--model', model] : [])], stream: true };
 }
 
 // stream-json（JSONL 事件流）→ 报告文本：收集全部 assistant 文本块，
@@ -320,7 +323,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   const poolName = t.fm.执行池 || 'claude';
   const agentCfg = (cfg.agents || []).find((a) => a.id === agentId);
   const model = pickModel(cfg, kind, agentCfg, poolName);
-  const { cmd, args, stream } = resolveCli(kind === '执行' ? poolName : 'claude', model); // 质检/代核都走 claude
+  const { cmd, args, stream } = resolveCli(kind === '执行' ? poolName : 'claude', model, (cfg.执行器 || {}).放行工具); // 质检/代核都走 claude
   const receiptPath = path.join(root, '回执', `${t.id}.md`);
   const prompt = kind === '质检' ? buildQaPrompt(root, t, proj, receiptPath)
     : kind === '代核' ? buildAuditPrompt(root, t, proj, receiptPath)
