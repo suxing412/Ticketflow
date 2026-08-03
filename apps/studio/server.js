@@ -374,10 +374,27 @@ app.post('/api/config/staff', (req, res) => {
 app.get('/api/agents', (req, res) => {
   if (!ready(res)) return;
   const fl = pool.inFlight(ROOT);
+  const 滞留 = fl.filter((t) => t.fm.滞留告警).map((t) => ({ id: t.id, state: t.state, 时长h: t.fm.滞留时长h }));
+  if (cfg.执行器 && cfg.执行器.派发制) {
+    // H49 派发制视图：一次性执行者（因单而生）+ 判官编制 + 就绪队列/并发
+    const runStatus = require('./lib/runner').status(ROOT, cfg);
+    const liveByTicket = Object.fromEntries((runStatus.执行中 || []).map((e) => [e.id, e]));
+    const 在跑 = fl.filter((t) => ['在途', '质检'].includes(t.state)).map((t) => ({
+      主办: t.fm.主办 || '（衔接中）', id: t.id, title: t.fm.title, state: t.state,
+      职能: t.fm.职能, 池: t.fm.执行池 || '', 领单时间: t.fm.领单时间 || null,
+      环节: (liveByTicket[t.id] || {}).kind || null, 环节起时: (liveByTicket[t.id] || {}).startedAt || null,
+      尾: (liveByTicket[t.id] || {}).tail || null,
+    }));
+    const 判官 = (cfg.agents || []).filter((a) => a.职能 === 'QA').map((a) => {
+      const busy = (runStatus.执行中 || []).find((e) => e.kind !== '执行' && e.id && (fl.find((t) => t.id === e.id)));
+      return { id: a.id, 忙: !!busy, 当前: busy ? busy.id : null };
+    });
+    const l = pmLedger.read(ROOT);
+    return res.json({ 模式: '派发', 在跑, 判官, 就绪队列: l.就绪队列 || [], 并发上限: l.并发上限, 滞留告警: 滞留 });
+  }
   const byAgent = {};
   for (const t of fl) if (t.fm.主办) byAgent[t.fm.主办] = { id: t.id, title: t.fm.title, state: t.state, 职能: t.fm.职能, 领单时间: t.fm.领单时间 };
   const agents = (cfg.agents || []).map((a) => ({ ...a, 手持: byAgent[a.id] || null }));
-  const 滞留 = fl.filter((t) => t.fm.滞留告警).map((t) => ({ id: t.id, state: t.state, 时长h: t.fm.滞留时长h }));
   res.json({ agents, 在途数: fl.length, 上限: require('./lib/staff').onlineCount(cfg), 滞留告警: 滞留 });
 });
 

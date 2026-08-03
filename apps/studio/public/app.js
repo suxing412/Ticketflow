@@ -617,8 +617,46 @@ function timelineHtml(agents, all) {
       <div class="tlnow" style="left:${W - 1}px;height:${20 + ids.length * 30}px"></div>
     </div></div></div></div>`;
 }
+/* ===== 在途 · 派发制视图（H49）：执行者因单而生、完成即销毁，常备的只有判官 ===== */
+function viewAgentsDispatch(d, all) {
+  const lim = d.并发上限 || {};
+  const cards = (d.在跑 || []).map((r) => {
+    const since = r.环节起时 || r.领单时间 || '';
+    const elapsed = since ? Date.now() - Date.parse(since) : 0;
+    return `<div class="arow2 card r14">
+      <div class="av" style="background:${FNHEX[r.职能] || 'var(--ink3)'}">${esc((r.职能 || '').slice(0, 2))}</div>
+      <div class="who">${esc(r.主办)}</div>
+      <span class="poolp pill sm fn ${r.池 === 'claude' ? 'pool-claude' : 'pool-codex'}">${esc(r.池 || '?')} 池</span>
+      <div class="mid2"><span class="aid"><a href="#/t/${esc(r.id)}" style="color:inherit">${esc(r.id)}</a></span>
+        <div class="at">${esc(r.title || '')}${r.尾 ? ` <span class="dim2">· ${esc(String(r.尾).slice(-60))}</span>` : ''}</div></div>
+      <div class="chips">${fnPill(r.职能)}${stPill(r.state)}</div>
+      <div class="rgt"><span class="lbl">${r.环节 ? esc(r.环节) + '中' : '衔接中'}</span><br/>
+        <span class="tm" data-since="${esc(since)}">${fmtElapsed(elapsed)}</span>
+        <div class="bar"><i style="width:${Math.min(1, elapsed / (4 * 3600000)) * 100}%"></i></div><div class="cap">滞留阈值 4h</div></div>
+    </div>`;
+  }).join('') || '<p class="dim" style="margin:26px 0;text-align:center">当前无在跑执行者 —— 派发制下没有常备军，就绪单一到即拉起，完成即销毁。</p>';
+  const judges = (d.判官 || []).map((j) => `<span class="pill sm ${j.忙 ? 'ok' : 'mut'}">${esc(j.id)}${j.忙 ? ' · 审 ' + esc(j.当前 || '') : ' · 待命'}</span>`).join(' ') || '<span class="dim">（未配置）</span>';
+  const ready = (d.就绪队列 || []).map((q) => `<span class="pill sm mut mono">${esc(q.id || q)}</span>`).join(' ') || '<span class="dim">空 —— 无就绪待派单</span>';
+  // 已跑计时秒级跳动（与领单视图同款：离开视图自动停）
+  setTimeout(function tickTm() {
+    const els = document.querySelectorAll('.tm[data-since]');
+    if (!els.length) return;
+    els.forEach((el) => { const t = Date.parse(el.dataset.since); if (!isNaN(t)) el.textContent = fmtElapsed(Date.now() - t); });
+    setTimeout(tickTm, 1000);
+  }, 1000);
+  return `<div class="sec-h" style="margin-top:26px"><h3 class="h17">在跑执行者</h3>
+      <span class="subnote">派发制 · 因单而生、完成即销毁 · 并发 codex ≤${lim.codex != null ? lim.codex : '—'} / claude ≤${lim.claude != null ? lim.claude : '—'}（项管调配 · 代码硬顶 3）</span></div>
+    ${cards}
+    <div class="sec-h" style="margin-top:26px"><h3 class="h17">判官编制</h3><span class="subnote">质检 / 代核 / 代裁 · 唯一常驻岗</span></div>
+    <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${judges}</div>
+    <div class="sec-h" style="margin-top:26px"><h3 class="h17">就绪队列</h3><span class="subnote">依赖已齐、等槽位或额度（项管台账）</span></div>
+    <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${ready}</div>
+    ${timelineHtml([], all)}`;
+}
+
 async function viewAgents() {
   const [d, { all }, run] = await Promise.all([api('/api/agents'), loadBoard(), api('/api/runner').catch(() => ({ 执行中: [] }))]);
+  if (d.模式 === '派发') return viewAgentsDispatch(d, all);
   // 执行中清单（含质检/代核工作）：QA 复核别人单时不是主办，只按手持渲染会假显"空闲"（另会话实测）
   const working = {}; for (const w of (run.执行中 || [])) working[w.agent] = w;
   const titleOf = (id) => { const t = all.find((x) => x.id === id); return t ? t.title : ''; };
