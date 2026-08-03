@@ -426,6 +426,43 @@ app.post('/api/config/remote', (req, res) => {
   res.json({ ok: true, 远程: { 开: !!cfg.网络.远程.开, 令牌: cfg.网络.远程.令牌 || '' } });
 });
 
+// ---- H49 双域：想法池 + 项管 ----
+const ideas = require('./lib/pm/ideas');
+const pmLedger = require('./lib/pm/ledger');
+app.get('/api/ideas', (req, res) => {
+  if (!ready(res)) return;
+  res.json({ 想法: ideas.list(ROOT).filter((x) => req.query.全部 === '1' || x.状态 === '在池') });
+});
+app.post('/api/ideas', (req, res) => {
+  if (!ready(res)) return;
+  const { 动作, id, 文本, 备注, 项目, 前缀 } = req.body || {};
+  let r;
+  if (动作 === '放弃') r = ideas.drop(ROOT, id);
+  else if (动作 === '拍板') {
+    r = ideas.拍板(ROOT, id, 项目 || (cfg.项目 && cfg.项目.默认) || '', 前缀 || (cfg.项目 && cfg.项目.默认) || 'TK');
+    if (r.ok) journal.append(ROOT, `拍板：想法 ${id} → 父单 ${r.父单}（补齐边界与验收标准后生效）`);
+  } else { r = ideas.add(ROOT, 文本, 备注); if (r.ok) journal.append(ROOT, `想法入池：${String(文本).slice(0, 40)}`); }
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.get('/api/pm/ledger', (req, res) => {
+  if (!ready(res)) return;
+  res.json({ 台账: pmLedger.read(ROOT), 事件: pmLedger.events(ROOT, Number(req.query.limit) || 80) });
+});
+app.post('/api/pm/cut', (req, res) => {
+  if (!ready(res)) return;
+  const { 父单 } = req.body || {};
+  const t = store.find(ROOT, String(父单 || ''));
+  if (!t) return res.status(404).json({ error: '父单不存在' });
+  const proj = t.fm.项目 && cfg.项目 && cfg.项目.注册 && cfg.项目.注册[t.fm.项目];
+  journal.append(ROOT, `项管切单启动：${父单}（fable 档，完成后简报待审）`);
+  pmLedger.event(ROOT, '切单启动', { 父单 });
+  require('./lib/pm/brain').cut(ROOT, cfg, String(父单), proj && proj.路径, (r) => {
+    journal.append(ROOT, r.ok ? `项管切单完成：${父单} → ${r.子单.join('、')}（简报待审）` : `项管切单失败：${父单}（${r.error}）`);
+    if (!r.ok) pmLedger.event(ROOT, '切单失败', { 父单, error: r.error });
+  });
+  res.json({ ok: true, 状态: '切单进行中（fable），完成后拆单简报进台账待审' });
+});
+
 // ---- 产出调起：打开文件/所在文件夹（仅限该单所属项目仓内，越界拒）----
 app.post('/api/open', (req, res) => {
   if (!ready(res)) return;
@@ -485,7 +522,18 @@ const ACTIONS = {
   解除复核: (b) => life.解除待复核(ROOT, b.id, b.说明), // D36：核对新版后解除
   推翻: (b) => life.推翻(ROOT, b.id, b.理由), // 制作人翻案：完成/已归档 → 自动编号返工草稿
   隐藏: (b) => life.隐藏(ROOT, b.id, b.值), // 隐藏归档：默认视图湮灭，纸面可考
+  放行: (b) => { // H49 派发制：待投单标放行（依赖就绪即被派发引擎拉起）
+    const t = store.find(ROOT, b.id);
+    if (!t) return { ok: false, error: '不存在' };
+    if (t.state !== '待投') return { ok: false, error: `只有待投单可放行（当前 ${t.state}）` };
+    const r = store.update(ROOT, b.id, (fm) => { fm.放行 = true; });
+    if (r.ok) journal.append(ROOT, `放行 ${b.id}（H49：入就绪队列，依赖就绪即派发）`);
+    return r;
+  },
 };
+// H49：派发制下「投池」语义重定向为放行（旧 UI 按钮零改动兼容）
+const legacy投池 = ACTIONS.投池;
+ACTIONS.投池 = (b) => (cfg.执行器 && cfg.执行器.派发制) ? ACTIONS.放行(b) : legacy投池(b);
 app.post('/api/act/:name', (req, res) => {
   if (!ready(res)) return;
   const fn = ACTIONS[req.params.name];
