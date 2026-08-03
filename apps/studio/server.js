@@ -416,17 +416,27 @@ app.get('/api/ticket', (req, res) => {
   res.json({ id, state: t.state, fm: t.fm, body: t.body, html: mdHtml(t.body), 链: trace.chains(ROOT, id), 回执, 产出 });
 });
 
-// ---- 遥控传令板（0.17.10）：制作人手机端 ↔ Claude 的双向留言（明文 jsonl，监视器唤醒）----
+// ---- 项管信道（0.18.6，前身遥控传令板）：制作人 ↔ 项管（fable）问答 + 汇报流（明文 jsonl 留档）----
 const relay = require('./lib/relay');
+let pmBusy = false; // 项管答话一次一问（fable 会话贵，排队不并发）
 app.get('/api/relay', (req, res) => {
   if (!ready(res)) return;
-  res.json({ 消息: relay.list(ROOT, Number(req.query.limit) || 100) });
+  res.json({ 消息: relay.list(ROOT, Number(req.query.limit) || 100), 项管忙: pmBusy });
 });
 app.post('/api/relay', (req, res) => {
   if (!ready(res)) return;
-  const r = relay.append(ROOT, '制作人', (req.body || {}).text);
-  if (r.ok) journal.append(ROOT, `遥控传令：${String((req.body || {}).text).slice(0, 60)}`);
-  res.status(r.ok ? 200 : 400).json(r);
+  const text = (req.body || {}).text;
+  const r = relay.append(ROOT, '制作人', text);
+  if (!r.ok) return res.status(400).json(r);
+  journal.append(ROOT, `项管信道·制作人：${String(text).slice(0, 60)}`);
+  if (pmBusy) { relay.append(ROOT, '项管', '（上一问仍在作答，稍候再问——项管一次一问）'); return res.json({ ...r, 项管忙: true }); }
+  pmBusy = true;
+  require('./lib/pm/brain').answer(ROOT, cfg, text, (a) => {
+    pmBusy = false;
+    relay.append(ROOT, '项管', a.text || a.error || '（无应答）');
+    journal.append(ROOT, `项管信道·答：${String(a.text || '').slice(0, 60)}`);
+  });
+  res.json(r);
 });
 // 远程配置（参数页卡片）：开关 + 令牌重生成（仅本机可改——远程端不许给自己续权）
 app.post('/api/config/remote', (req, res) => {
