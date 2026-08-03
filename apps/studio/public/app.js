@@ -9,7 +9,7 @@ const FNHEX = { 策划: 'var(--fn-plan)', 程序: 'var(--fn-code)', 美术: 'var
 const FNCLS = { 策划: 'fn-plan', 程序: 'fn-code', 美术: 'fn-art', QA: 'fn-qa', 装配: 'fn-asm' };
 const STCLS = { 在途: 'st-doing', 质检: 'st-review', 待验收: 'st-accept', 完成: 'st-done', 待定夺: 'st-escal', 执行失败: 'st-escal', 草稿: 'mut', 已归档: 'mut', 待投: '', 池: '' };
 const STPCT = { 草稿: 0, 待投: 0, 池: 0, 在途: 60, 质检: 85, 待定夺: 70, 执行失败: 60, 待验收: 90, 完成: 100, 已归档: 0 };
-const NAV = [['总览', ''], ['想法', 'ideas'], ['工单', 'board'], ['流程', 'flow'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['遥控', 'relay'], ['风格库', 'stylelib'], ['报表', 'report']]; // 参数入口只走 ⚙
+const NAV = [['总览', ''], ['想法', 'ideas'], ['工单', 'board'], ['流程', 'flow'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['项管', 'relay'], ['风格库', 'stylelib'], ['报表', 'report']]; // 参数入口只走 ⚙
 function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1900); }
 // 数值跳字确认（步进器改完后调用）：重触发 animation
 function bump(el) { if (!el) return; el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
@@ -805,8 +805,19 @@ window.artRemove = async (name) => {
 };
 
 /* ===== P13 消耗报表（停车场老待办落地）===== */
+// 派发制报表：按主办已无意义（一次性主办恒单数=1）→ 单耗排行（实耗降序，直链工单）
+function costRankTable(rows) {
+  const top = rows.filter((r) => r.实际h != null).sort((a, b) => b.实际h - a.实际h).slice(0, 12);
+  return `<div class="rp-card card r14"><h4>单耗排行<span class="subnote" style="margin-left:10px">实耗降序 · 前 12 · 点行进详情</span></h4>
+    <table class="rp-t"><tr><th>单</th><th>职能</th><th>实际h</th><th>偏差</th><th>自修</th></tr>
+    ${top.map((r) => `<tr onclick="location.hash='#/t/${encodeURIComponent(r.id)}'" style="cursor:pointer">
+      <td class="mono">${esc(r.id)}</td><td>${fnPill(r.职能)}</td><td>${r.实际h}</td>
+      <td class="${r.预计h && r.实际h > r.预计h * 1.5 ? 'err' : ''}">${r.预计h ? Math.round(r.实际h / r.预计h * 100) + '%' : '—'}</td>
+      <td class="${r.自修次数 ? 'warnc' : 'dim'}">${r.自修次数 || ''}</td></tr>`).join('') || '<tr><td colspan="5" class="dim">无数据</td></tr>'}</table></div>`;
+}
 async function viewReport() {
-  const [d] = await Promise.all([api('/api/report'), loadCfg()]);
+  const [d, , pl] = await Promise.all([api('/api/report'), loadCfg(), api('/api/pm/ledger').catch(() => null)]);
+  const dispatch = !!(_cfg && _cfg.执行器 && _cfg.执行器.派发制);
   const p = projActive();
   // D42 项目语境：明细/分组按项目过滤（服务端全量，客户端切片——报表数据量小）
   const rows = p ? d.明细.filter((r) => (r.项目 || projDefault()) === p) : d.明细;
@@ -819,6 +830,7 @@ async function viewReport() {
     stat('代核 过/不过', o.代核通过 + '/' + o.代核不过),
     stat('代裁 向/呈', o.代裁给方向 + '/' + o.代裁上呈),
     stat('token(agent自报)', o.token估计合计 ? o.token估计合计.toLocaleString() : '—'),
+    ...(dispatch && pl && pl.台账 && pl.台账.管理费 ? [stat('管理费(项管)', (pl.台账.管理费.token合计 || 0).toLocaleString() + ' tk·' + (pl.台账.管理费.次数 || 0) + '次')] : []),
   ].join('<div class="vdiv"></div>');
   const gtable = (title, rows2, note) => `<div class="rp-card card r14"><h4>${title}<span class="subnote" style="margin-left:10px">${note || ''}</span></h4>
     <table class="rp-t"><tr><th></th><th>单数</th><th>合计h</th><th>均h</th><th>自修</th></tr>
@@ -834,7 +846,7 @@ async function viewReport() {
       <td class="dim" title="${esc(r.实际消耗 || '')}">${esc((r.实际消耗 || '—').slice(0, 26))}</td></tr>`).join('');
   return `<div class="stat-strip card r14">${strip}</div>
     <div class="rp-grid">
-      <div>${gtable('按职能', d.按职能)}${gtable('按主办', d.按主办)}${gtable('按执行池', d.按池, '订阅额度去向')}</div>
+      <div>${gtable('按职能', d.按职能)}${dispatch ? costRankTable(rows) : gtable('按主办', d.按主办)}${gtable('按执行池', d.按池, '订阅额度去向')}</div>
       <div><div class="rp-card card r14"><h4>每日交付<span class="subnote" style="margin-left:10px">近 14 天</span></h4>
         <div class="rp-days">${daysHtml}</div></div>
         ${gtable('按项目', d.按项目)}</div>
@@ -1476,12 +1488,29 @@ window.ideaAct = async (动作, id) => {
   route();
 };
 
-/* ===== P13 遥控传令板（0.17.10）：制作人手机端 ↔ Claude 双向留言 ===== */
+/* ===== P13 项管信道（0.18.6，前身遥控传令板）：制作人 ↔ 项管问答 + 汇报流 ===== */
+function pmEventLine(e) {
+  const t = String(e.t || '').slice(5, 16).replace('T', ' ');
+  if (e.类型 === '待审') return { t, txt: `拆单完成：${e.父单} → ${(e.子单 || []).join('、')}，简报呈 Claude 审批`, hot: true };
+  if (e.类型 === '切单启动') return { t, txt: `开始拆单：${e.父单}（fable 盘点中）` };
+  if (e.类型 === '派发') return { t, txt: `派发 ${e.id} → ${e.池} 池` };
+  if (e.类型 === '收口') return { t, txt: `战役收口：${e.父单}，收口报告已出`, hot: true };
+  if (e.类型 === '上呈') return { t, txt: `上呈制作人：${e.原因 || e.父单 || ''}`, hot: true };
+  if (e.类型 === '额度报警') return { t, txt: `额度报警：${e.详情 || ''}`, hot: true };
+  return { t, txt: `${e.类型}：${e.id || e.父单 || ''}` };
+}
 async function viewRelay() {
-  const d = await api('/api/relay').catch(() => ({ 消息: [] }));
+  const [d, pl] = await Promise.all([
+    api('/api/relay').catch(() => ({ 消息: [] })),
+    api('/api/pm/ledger').catch(() => ({ 事件: [] })),
+  ]);
+  const feed = (pl.事件 || []).slice(-14).reverse().map((e) => { const v = pmEventLine(e);
+    return `<div class="logrow"><time>${esc(v.t)}</time><span${v.hot ? ' style="color:var(--accent-ink);font-weight:600"' : ''}>${esc(v.txt)}</span></div>`; }).join('')
+    || '<p class="dim">项管还没有动静。</p>';
+  const who = (f) => f === '制作人' ? '你' : (f === '项管' ? '项管' : 'Claude');
   const msgs = (d.消息 || []).map((m) => `<div class="rl-msg ${m.from === '制作人' ? 'me' : 'ai'}">
-      <div class="rl-meta">${m.from === '制作人' ? '你' : 'Claude'} · ${esc(String(m.t).slice(5, 16).replace('T', ' '))}</div>
-      <div class="rl-body">${esc(m.text)}</div></div>`).join('') || '<p class="dim" style="text-align:center;margin-top:40px">尚无传令。在下方写第一条——Claude 由监视器唤醒，回执通常一两分钟内到。</p>';
+      <div class="rl-meta">${who(m.from)} · ${esc(String(m.t).slice(5, 16).replace('T', ' '))}</div>
+      <div class="rl-body">${esc(m.text)}</div></div>`).join('') || '<p class="dim" style="text-align:center;margin-top:40px">问项管任何事：进度、排期、依赖、成本、风险。它带台账作答，一两分钟内回帖。</p>';
   setTimeout(() => { const box = $('rl-list'); if (box) box.scrollTop = box.scrollHeight;
     clearInterval(window._rl || 0);
     window._rl = setInterval(async () => {
@@ -1492,11 +1521,12 @@ async function viewRelay() {
   }, 0);
   window._rlN = (d.消息 || []).length;
   return `<div class="rl-wrap">
-    <div class="rl-head"><b style="font-size:15px">遥控传令板</b>
-      <span class="subnote">你在任何设备写指令 → Claude 在主机上带全量上下文执行 → 回帖到这里 · 明文留档</span></div>
+    <div class="rl-head"><b style="font-size:15px">项管信道</b>
+      <span class="subnote">项管（fable）常驻台账 · 汇报流自动成帖 · 你的问题它带全量台账作答${d.项管忙 ? ' · <b style="color:var(--warn)">作答中…</b>' : ''} · 明文留档</span></div>
+    <div class="logcard card r14" style="margin-bottom:14px"><b style="font-size:13px">汇报流</b><div style="margin-top:12px">${feed}</div></div>
     <div class="rl-list card r16" id="rl-list">${msgs}</div>
-    <div class="rl-input"><textarea id="rl-t" placeholder="写给 Claude 的指令…（Ctrl+Enter 发送）" onkeydown="if(event.ctrlKey&&event.key==='Enter')relaySend()"></textarea>
-      <button class="btn accent h44" onclick="relaySend()">传令</button></div></div>`;
+    <div class="rl-input"><textarea id="rl-t" placeholder="问项管…（Ctrl+Enter 发送）" onkeydown="if(event.ctrlKey&&event.key==='Enter')relaySend()"></textarea>
+      <button class="btn accent h44" onclick="relaySend()">发问</button></div></div>`;
 }
 window.relaySend = async () => {
   const t = $('rl-t').value.trim(); if (!t) return;

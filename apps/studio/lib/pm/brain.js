@@ -166,4 +166,41 @@ function closeout(root, cfg, parentId, cb) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
-module.exports = { cut, closeout, buildCutPrompt, parseTickets };
+// 项管答话（0.18.6 项管信道）：制作人在信道里问 → fable 带台账/事件/盘面答 → 回帖
+// 硬边界同上：只答不裁——不得放行/移单/改协议，涉裁决一律回「呈制作人/Claude」。
+function answer(root, cfg, question, cb) {
+  const read = (f) => { try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch { return ''; } };
+  const board = [];
+  for (const s of store.STATES) {
+    const l = store.list(root, s).map((t) => t.id + ' ' + (t.fm.title || '').slice(0, 24));
+    if (l.length) board.push(s + '：' + l.join('；'));
+  }
+  const events = (ledger.events(root, 40) || []).map((e) => JSON.stringify(e)).join('\n');
+  const prompt = [
+    '你是单流的「项目管理」职能（fable 档），在监制台的项管信道里回复制作人。',
+    '你的权限：读台账/事件/盘面，答进度、排期、依赖、成本、风险。你无裁决权——放行/验收/改协议只能建议并注明「呈制作人」。',
+    '回复体裁：直接回答，先结论后依据，中文，禁散文化寒暄，300 字内；不确定就明说。',
+    '',
+    '=== 台账 ===', read('项管台账/台账.json'),
+    '=== 最近事件 ===', events,
+    '=== 盘面 ===', board.join('\n'),
+    '',
+    '制作人问：', String(question || '').slice(0, 2000),
+  ].join('\n');
+  const cmd = cli();
+  const model = (cfg.模型 || {}).项管 || 'fable';
+  const child = spawn(cmd, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'],
+    { env: { ...process.env }, windowsHide: true, shell: String(cmd).endsWith('.cmd') });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; if (out.length > 400000) out = out.slice(-200000); });
+  const timer = setTimeout(() => { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch { /**/ } }, 5 * 60000);
+  if (timer.unref) timer.unref();
+  child.on('close', () => {
+    clearTimeout(timer);
+    const text = require('../runner').extractClaudeText(out).trim();
+    cb({ ok: !!text, text: text || '（项管无应答——fable 会话空输出，请重问或查额度）' });
+  });
+  try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
+}
+
+module.exports = { cut, closeout, answer, buildCutPrompt, parseTickets };
