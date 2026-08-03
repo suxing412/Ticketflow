@@ -104,14 +104,18 @@ function charter(root, 职能) {
   return parts.join('\n\n---\n\n');
 }
 
-// 工单 → 执行提示词（岗位协议 + 范围/不要做/验收标准；中文走 stdin 防 argv 乱码）
+// 工单 → 执行提示词（岗位协议 + 装配包 + 范围/不要做/验收标准；中文走 stdin 防 argv 乱码）
+// H49 装配器：协议选段 + 坑档案 + 上游依赖回执随包注入（修 TK-29 上游盲区）
 function buildPrompt(root, t, proj) {
   const ch = charter(root, t.fm.职能);
+  let pack = '';
+  try { pack = require('./assembler').assemble(root, t); } catch { /* 装配失败不阻塞执行 */ }
   return [
     ch ? `=== 岗位协议（必须遵守）===\n${ch}\n` : '',
     `你是「${t.fm.职能}」职能执行 agent，领到工单 ${t.id}：${t.fm.title}`,
     `工作目录（项目仓库）：${proj.path}`,
     '只做工单范围内的事，遵守「不要做」，产出满足全部验收标准。',
+    pack ? '\n' + pack : '',
     '', '=== 工单正文 ===', t.body || '（无正文）',
     '', '完成后按通用章程的回执格式输出完工报告，它会作为回执存档。',
   ].filter(Boolean).join('\n');
