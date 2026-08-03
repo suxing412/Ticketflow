@@ -84,7 +84,7 @@ function cut(root, cfg, parentId, projPath, cb) {
   const cmd = cli();
   const model = (cfg.模型 || {}).项管 || 'fable';
   const child = spawn(cmd, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'],
-    { env: { ...process.env }, windowsHide: true, shell: String(cmd).endsWith('.cmd') });
+    { cwd: projPath || undefined, env: { ...process.env }, windowsHide: true, shell: String(cmd).endsWith('.cmd') }); // cwd=项目仓：项管盘点有读权（首切简报暴露的盲区）
   let out = '';
   child.stdout.on('data', (d) => { out += d; if (out.length > 900000) out = out.slice(-450000); });
   const timer = setTimeout(() => { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch { /**/ } }, 20 * 60000);
