@@ -97,6 +97,17 @@ function unityFor(project) {
     return out({ ok: r.code === 0 && failed === '0', channel, code: r.code, passed, failed, 版本: u.版本, results: xml });
   }
 
+  if (channel === 'unity-run') { // 通用 executeMethod：场景重建/烘焙等工程内 static 方法（TK-49 案增补）
+    const u = unityFor(proj);
+    if (u.err) return out({ ok: false, error: u.err });
+    if (fs.existsSync(path.join(proj, 'Temp', 'UnityLockfile'))) {
+      return out({ ok: false, error: '工程被 Unity 编辑器占用（Temp/UnityLockfile 存在）——请关闭编辑器后重试；此为环境占用非代码问题' });
+    }
+    if (!args.method) return out({ ok: false, error: '必填 --method <类.静态无参方法>' });
+    const log = path.join(proj, 'enginectl-run.log');
+    const r = run(u.exe, ['-batchmode', '-nographics', '-projectPath', proj, '-executeMethod', String(args.method), '-quit', '-logFile', log], Number(args['timeout-min'] ?? 20));
+    return out({ ok: r.code === 0, channel, code: r.code, method: String(args.method), log, ...(r.code !== 0 ? { tail: (() => { try { return fs.readFileSync(log, 'utf8').slice(-400); } catch { return r.stderr.slice(-300); } })() } : {}) });
+  }
   if (channel === 'unity-build') return out({ ok: false, error: '占位通道：构建脚本按项目落地后启用（需工程内 static 构建方法）' });
   if (channel && channel.startsWith('unreal')) return out({ ok: false, error: '预留通道：本机未装 UE；装后按 RunUAT/BuildCookRun 补实现（见 引擎适配调研报告）' });
   return out({ ok: false, error: '未知通道。可用：探测 / godot-import / godot-test / godot-export / unity-test' });
