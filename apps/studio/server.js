@@ -534,6 +534,20 @@ const ACTIONS = {
 // H49：派发制下「投池」语义重定向为放行（旧 UI 按钮零改动兼容）
 const legacy投池 = ACTIONS.投池;
 ACTIONS.投池 = (b) => (cfg.执行器 && cfg.执行器.派发制) ? ACTIONS.放行(b) : legacy投池(b);
+// H49 接线①：战役父单定稿 → 项管自动切单（拍板的下半步）
+const legacy定稿 = ACTIONS.定稿;
+ACTIONS.定稿 = (b) => {
+  const r = legacy定稿(b);
+  if (r.ok && cfg.执行器 && cfg.执行器.派发制) {
+    const t = store.find(ROOT, b.id);
+    if (t && t.fm.父单类型 === '战役') {
+      const proj = t.fm.项目 && cfg.项目 && cfg.项目.注册 && cfg.项目.注册[t.fm.项目];
+      require('./lib/pm/wake').onCampaignFinalized(ROOT, cfg, t, proj && proj.路径);
+      return { ...r, 项管: '切单已启动（fable），简报完成后进台账待审' };
+    }
+  }
+  return r;
+};
 app.post('/api/act/:name', (req, res) => {
   if (!ready(res)) return;
   const fn = ACTIONS[req.params.name];
