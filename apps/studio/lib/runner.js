@@ -203,7 +203,7 @@ function settleClose(kind, code, out, errout, ticketId, finishOk, failLocal) {
 async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   if (!agentId || running.has(agentId) || busyTickets().has(t.id)) return false;
   const rc = cfg.执行器 || {};
-  const entry = { id: t.id, kind, startedAt: opts.nowIso || new Date().toISOString() };
+  const entry = { id: t.id, kind, startedAt: opts.nowIso || new Date().toISOString(), 池: kind === '执行' ? (t.fm.执行池 || null) : 'claude' };
   running.set(agentId, entry);
   const finishOk = (note, verdict) => {
     try { finishOkInner(note, verdict); } catch (e) {
@@ -371,24 +371,60 @@ async function tick(root, cfg, opts = {}) {
   const lockedPools = new Set();
   for (const [k, v] of Object.entries(st.paused || {})) if (k !== 'global' && v) lockedPools.add(k);
 
+  const dispatchMode = !!(cfg.执行器 && cfg.执行器.派发制); // H49 特性开关：true=派发制，false=旧拉取制（可回退）
+
   // ① 断点恢复 + 在途执行（待复核单不起工，D36）
   for (const t of store.list(root, '在途')) {
     if (!t.fm.主办 || busyTickets().has(t.id)) continue;
     if (t.fm.待复核) { result.拒因.push(`${t.id} 待复核未解除，不起执行`); continue; }
-    if (!agents.some((a) => a.id === t.fm.主办)) continue; // 退役待归者不起新执行
+    if (!dispatchMode && !agents.some((a) => a.id === t.fm.主办)) continue; // 拉取制：退役待归者不起新执行；派发制：一次性主办直接续跑
     if (await startWork(root, cfg, t, t.fm.主办, '执行', opts)) result.执行.push(t.id);
   }
 
-  // ② 自动领单（一人一张/双闸/依赖全在 claim 里把关）
-  for (const a of agents) {
-    if (running.has(a.id)) continue;
-    const r = await pool.claim(root, cfg, a.id, opts.nowIso);
-    if (r.ok) {
-      journal.append(root, `领单 ${r.id}（池→在途 · ${a.id} · 执行器自动拉取）`);
-      result.领单.push(r.id);
-      const t = store.find(root, r.id);
-      if (t && await startWork(root, cfg, t, a.id, '执行', opts)) result.执行.push(r.id);
-    } else if (r.gated) { result.拒因.push(r.error); }
+  if (dispatchMode) {
+    // ②′ 派发制（H49）：迁移旧池 → 就绪盘点 → 护城河/并发闸 → 拉起一次性 agent
+    const dispatch = require('./pm/dispatch');
+    const pmLedger = require('./pm/ledger');
+    for (const t of store.list(root, '池')) { // 一次性迁移：存量池单并入待投（已放行）
+      const r = store.move(root, t.id, '池', '待投', (fm) => { fm.放行 = true; }, opts.nowIso || new Date().toISOString());
+      if (r.ok) { journal.append(root, `H49 迁移：${t.id} 池→待投（自动放行）`); pmLedger.event(root, '迁移', { id: t.id }); }
+    }
+    if (!(st.paused || {}).global) {
+      const locks = await require('./gates').allLocks(cfg).catch(() => null);
+      const gatesInfo = {};
+      if (locks) for (const p of ['codex', 'claude']) gatesInfo[p] = { fivePct: locks[p] && locks[p].fivePct, locked: !!(locks[p] && locks[p].locked) };
+      for (const p of lockedPools) { gatesInfo[p] = gatesInfo[p] || {}; gatesInfo[p].locked = true; }
+      const runningByPool = {};
+      for (const e of running.values()) if (e.kind === '执行' && e.池) runningByPool[e.池] = (runningByPool[e.池] || 0) + 1;
+      const ledger = pmLedger.read(root);
+      const ready = dispatch.readySet(root, pool.criticalSet(root));
+      const picks = dispatch.pickNext(cfg, ready, runningByPool, gatesInfo, ledger.并发上限);
+      for (const p of picks) {
+        const t0 = store.find(root, p.id);
+        if (!t0 || t0.state !== '待投') continue;
+        const 主办 = `${t0.fm.职能}·${p.id}`; // 一次性 agent：一人一单一生命周期
+        const mv = store.move(root, p.id, '待投', '在途', (fm) => { fm.主办 = 主办; fm.执行池 = p.池; fm.领单时间 = opts.nowIso || new Date().toISOString(); }, opts.nowIso || new Date().toISOString());
+        if (!mv.ok) continue;
+        journal.append(root, `派发 ${p.id}（待投→在途 · ${主办} · ${p.池} · H49 派发制）`);
+        pmLedger.event(root, '派发', { id: p.id, 池: p.池 });
+        result.领单.push(p.id);
+        const t1 = store.find(root, p.id);
+        if (t1 && await startWork(root, cfg, t1, 主办, '执行', opts)) result.执行.push(p.id);
+      }
+      pmLedger.update(root, (l) => { l.就绪队列 = ready.filter((r2) => !picks.some((pk) => pk.id === r2.id)); l.在跑 = Object.fromEntries([...running.entries()].filter(([, e]) => e.kind === '执行').map(([a, e]) => [e.id, { agent: a, 池: e.池 || '', 拉起时间: e.startedAt }])); });
+    }
+  } else {
+    // ② 自动领单（拉取制，一人一张/双闸/依赖全在 claim 里把关）
+    for (const a of agents) {
+      if (running.has(a.id)) continue;
+      const r = await pool.claim(root, cfg, a.id, opts.nowIso);
+      if (r.ok) {
+        journal.append(root, `领单 ${r.id}（池→在途 · ${a.id} · 执行器自动拉取）`);
+        result.领单.push(r.id);
+        const t = store.find(root, r.id);
+        if (t && await startWork(root, cfg, t, a.id, '执行', opts)) result.执行.push(r.id);
+      } else if (r.gated) { result.拒因.push(r.error); }
+    }
   }
 
   // ③ 质检执行：派给空闲在岗 QA agent（QA 只裁不开单，D10）

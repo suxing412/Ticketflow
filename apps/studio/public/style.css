@@ -683,3 +683,11 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
   .fl-wrap, .ttools { overflow-x:auto; -webkit-overflow-scrolling:touch; }
   .p6grid, .p5grid, .dgrid, .artgrid { grid-template-columns:1fr !important; display:block; }
 }
+
+/* ===== P14 想法池（H49） ===== */
+.ideagrid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:14px; }
+.idea { padding:16px 18px 12px; display:flex; flex-direction:column; gap:8px; }
+.idea .it { font-size:14px; line-height:1.6; white-space:pre-wrap; }
+.idea .in2 { font-size:12px; color:var(--ink3); }
+.idea .ia { display:flex; align-items:center; gap:8px; margin-top:4px; }
+.idea .ia .sp { flex:1; }

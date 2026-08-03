@@ -9,7 +9,7 @@ const FNHEX = { 策划: 'var(--fn-plan)', 程序: 'var(--fn-code)', 美术: 'var
 const FNCLS = { 策划: 'fn-plan', 程序: 'fn-code', 美术: 'fn-art', QA: 'fn-qa', 装配: 'fn-asm' };
 const STCLS = { 在途: 'st-doing', 质检: 'st-review', 待验收: 'st-accept', 完成: 'st-done', 待定夺: 'st-escal', 执行失败: 'st-escal', 草稿: 'mut', 已归档: 'mut', 待投: '', 池: '' };
 const STPCT = { 草稿: 0, 待投: 0, 池: 0, 在途: 60, 质检: 85, 待定夺: 70, 执行失败: 60, 待验收: 90, 完成: 100, 已归档: 0 };
-const NAV = [['总览', ''], ['工单池', 'board'], ['流程', 'flow'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['遥控', 'relay'], ['风格库', 'stylelib'], ['报表', 'report']]; // 参数入口只走 ⚙
+const NAV = [['总览', ''], ['想法', 'ideas'], ['工单', 'board'], ['流程', 'flow'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['遥控', 'relay'], ['风格库', 'stylelib'], ['报表', 'report']]; // 参数入口只走 ⚙
 function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1900); }
 // 数值跳字确认（步进器改完后调用）：重触发 animation
 function bump(el) { if (!el) return; el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
@@ -1382,7 +1382,38 @@ window.artSubmit = async (id, btn) => {
 window.act3 = async (name, id, 决定) => { const r = await post('/api/act/' + name, { id, 决定 }); toast(r.ok ? `${决定} 完成` : (r.error || '失败')); route(); };
 
 /* ===== 路由 ===== */
-const ROUTES = { '': viewOverview, board: viewBoard, flow: viewFlow, tree: viewTree, agents: viewAgents, decisions: viewDecisions, relay: viewRelay, stylelib: viewStyleLib, report: viewReport };
+const ROUTES = { '': viewOverview, ideas: viewIdeas, board: viewBoard, flow: viewFlow, tree: viewTree, agents: viewAgents, decisions: viewDecisions, relay: viewRelay, stylelib: viewStyleLib, report: viewReport };
+
+/* ===== P14 想法池（H49 双域·制作人层域）===== */
+async function viewIdeas() {
+  const d = await api('/api/ideas').catch(() => ({ 想法: [] }));
+  const cards = (d.想法 || []).map((x) => `<div class="idea card r14">
+      <div class="it">${esc(x.文本)}</div>
+      ${x.备注 ? `<div class="in2">${esc(x.备注)}</div>` : ''}
+      <div class="ia"><span class="subnote">${esc(String(x.t).slice(5, 10))}</span><span class="sp"></span>
+        <button class="btn h32" onclick="ideaAct('放弃','${esc(x.id)}')">放弃</button>
+        <button class="btn accent h32" onclick="ideaAct('拍板','${esc(x.id)}')">拍板 → 父单</button></div></div>`).join('')
+    || '<p class="dim" style="text-align:center;margin-top:40px">想法池空。灵感随手扔进来——没有验收标准、没有排期压力，拍板那一刻才进项目组域。</p>';
+  return `<div class="rl-wrap" style="height:auto">
+    <div class="rl-head"><b style="font-size:15px">想法池 · 制作人层域</b>
+      <span class="subnote">随聊随记（手机也行）→ 拍板成父单（补边界+验收标准）→ 项管切单派发。拍板是唯一人闸。</span></div>
+    <div class="rl-input" style="margin:0 0 18px"><textarea id="idea-t" placeholder="一句话想法…（Ctrl+Enter 入池）" onkeydown="if(event.ctrlKey&&event.key==='Enter')ideaAdd()"></textarea>
+      <button class="btn accent h44" onclick="ideaAdd()">入池</button></div>
+    <div class="ideagrid">${cards}</div></div>`;
+}
+window.ideaAdd = async () => {
+  const t = $('idea-t').value.trim(); if (!t) return;
+  const r = await post('/api/ideas', { 文本: t });
+  if (!r.ok) return toast(r.error || '失败');
+  $('idea-t').value = ''; route();
+};
+window.ideaAct = async (动作, id) => {
+  if (动作 === '放弃' && !confirm('放弃这个想法？')) return;
+  const r = await post('/api/ideas', { 动作, id });
+  if (!r.ok) return toast(r.error || '失败');
+  if (动作 === '拍板') { toast(`父单 ${r.父单} 已建——去补齐边界与验收标准`); location.hash = '#/draft?edit=' + encodeURIComponent(r.父单); return; }
+  route();
+};
 
 /* ===== P13 遥控传令板（0.17.10）：制作人手机端 ↔ Claude 双向留言 ===== */
 async function viewRelay() {
