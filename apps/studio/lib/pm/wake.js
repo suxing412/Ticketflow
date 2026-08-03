@@ -32,11 +32,21 @@ function onCampaignFinalized(root, cfg, t, projPath, opts = {}) {
 }
 
 // ② 战役全落袋 → 收口报告（每 tick 巡一遍，台账标记去重）
+// 父单状态诚实映射（H53 案：父单不该躺在待投/草稿装「待投」）：
+// 首个子单派发 → 父单 在途（战役开打）；全落袋+收口 → 父单 待验收（战役签字位）。
+function onChildDispatched(root, parentId) {
+  if (!parentId) return;
+  const p = store.find(root, parentId);
+  if (!p || !isCampaign(p) || p.state !== '待投') return;
+  const r = store.move(root, parentId, '待投', '在途', (fm) => { fm.主办 = '战役'; fm.领单时间 = fm.领单时间 || new Date().toISOString(); }, new Date().toISOString());
+  if (r.ok) journal.append(root, `战役开打 ${parentId}（首子单派发 → 父单在途，H53 状态诚实映射）`);
+}
+
 function checkCloseouts(root, cfg, opts = {}) {
   const woke = [];
   const l = ledger.read(root);
   l.已收口 = l.已收口 || {};
-  for (const s of ['待投', '草稿']) {
+  for (const s of ['在途', '待投', '草稿']) {
     for (const p of store.list(root, s)) {
       if (!isCampaign(p) || l.已收口[p.id]) continue;
       const kids = childrenOf(root, p.id);
@@ -48,11 +58,19 @@ function checkCloseouts(root, cfg, opts = {}) {
       ledger.event(root, '收口待验', { 父单: p.id, 子单数: kids.length });
       journal.append(root, `项管唤醒：${p.id} 战役全落袋 → 收口报告生成中`);
       woke.push(p.id);
+      const lift = () => { // 收口后父单上待验收：战役唯一签字位（保留签字上移，H53）
+        const cur = store.find(root, p.id);
+        if (cur && ['在途', '待投'].includes(cur.state)) {
+          const mv = store.move(root, p.id, cur.state, '待验收', (fm) => { fm.交付时间 = new Date().toISOString(); }, new Date().toISOString());
+          if (mv.ok) journal.append(root, `战役收口 ${p.id} → 待验收（父单=唯一签字位，H53）`);
+        }
+      };
       if (!opts.test) {
         require('./brain').closeout(root, cfg, p.id, (r) => {
           journal.append(root, r.ok ? `收口报告就绪：${p.id}（${r.报告}）` : `收口报告失败：${p.id}（${r.error}）`);
+          lift();
         });
-      }
+      } else lift();
     }
   }
   return woke;
@@ -82,4 +100,4 @@ function checkChainFailures(root, opts = {}) {
   return alerts;
 }
 
-module.exports = { onCampaignFinalized, checkCloseouts, checkChainFailures, isCampaign, childrenOf };
+module.exports = { onCampaignFinalized, onChildDispatched, checkCloseouts, checkChainFailures, isCampaign, childrenOf };

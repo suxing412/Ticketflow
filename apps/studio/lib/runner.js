@@ -410,6 +410,7 @@ async function tick(root, cfg, opts = {}) {
         if (!mv.ok) continue;
         journal.append(root, `派发 ${p.id}（待投→在途 · ${主办} · ${p.池} · H49 派发制）`);
         pmLedger.event(root, '派发', { id: p.id, 池: p.池 });
+        require('./pm/wake').onChildDispatched(root, t0.fm.父单); // H53：首子单派发 → 战役父单进在途
         result.领单.push(p.id);
         const t1 = store.find(root, p.id);
         if (t1 && await startWork(root, cfg, t1, 主办, '执行', opts)) result.执行.push(p.id);
