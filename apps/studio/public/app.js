@@ -354,18 +354,25 @@ async function viewBoard() {
 /* ===== P12 流程（D43）：横轴=阶段 · 阶段内拓扑子列 · 泳道=系统（根祖先）· 红=关键路径 =====
    兼任投池前排版台：草稿/待投也显示。父单（组织容器）不出节点，只当泳道。 */
 async function viewFlow() {
-  const [{ all }, stg] = await Promise.all([loadBoard(), api('/api/stages?项目=' + encodeURIComponent(curProj())).catch(() => ({ 阶段: [], 标准: {} }))]);
+  const [{ all }, stg, pls] = await Promise.all([loadBoard(), api('/api/stages?项目=' + encodeURIComponent(curProj())).catch(() => ({ 阶段: [], 标准: {} })), api('/api/pipelines').catch(() => ({ 管线: [] }))]);
   const STG = (stg.阶段 && stg.阶段.length) ? stg.阶段 : [{ 代号: 'L0', 名称: '原型' }, { 代号: 'L1', 名称: '正式化' }, { 代号: 'L2', 名称: '打磨' }];
   const byId = Object.fromEntries(all.map((t) => [t.id, t]));
+  const pById = Object.fromEntries((pls.管线 || []).map((p) => [p.id, p]));
   const hasKids = new Set(all.filter((t) => t.父单 && byId[t.父单]).map((t) => t.父单));
   const depsOf = (t) => t.依赖 ? (Array.isArray(t.依赖) ? t.依赖 : String(t.依赖).split(/[，,\s]+/)).filter((d) => byId[d]) : [];
   const rootOf = (t) => { let c = t, g = 0; while (c.父单 && byId[c.父单] && g++ < 10) c = byId[c.父单]; return c; };
+  // H51 管线章解析：显式字段优先，否则沿父链上溯（子单继承战役父单的线）
+  const pipeOf = (t) => { let c = t, g = 0; while (c && g++ < 10) { if (c.管线 && pById[c.管线]) return c.管线; c = c.父单 ? byId[c.父单] : null; } return null; };
   const DONE = new Set(['完成', '已归档']);
-  // 节点=非容器单；无阶段章的旧单归第一阶段
-  const ns = all.filter((t) => !hasKids.has(t.id)).map((t) => ({
-    t, id: t.id, deps: depsOf(t), stg: STG.some((s) => s.代号 === t.阶段) ? t.阶段 : STG[0].代号,
-    h: parseFloat(t.预计时间) || 1, lane: rootOf(t).id === t.id ? '未归属' : (rootOf(t).title || rootOf(t).id),
-  }));
+  // 节点=非容器单；无阶段章的旧单归第一阶段；泳道=管线优先（H51），无线单沿旧根归属
+  const ns = all.filter((t) => !hasKids.has(t.id)).map((t) => {
+    const pid = pipeOf(t);
+    return {
+      t, id: t.id, deps: depsOf(t), stg: STG.some((s) => s.代号 === t.阶段) ? t.阶段 : STG[0].代号,
+      h: parseFloat(t.预计时间) || 1, pid,
+      lane: pid ? `${pById[pid].名称}` : (rootOf(t).id === t.id ? '未归属' : (rootOf(t).title || rootOf(t).id)),
+    };
+  });
   if (!ns.length) return `<div class="emptycard" style="margin-top:30px"><h5>流程空</h5><p>起草工单（选阶段、填依赖/父单）后，这里按 阶段×系统 铺出整个项目的流动。</p></div>`;
   const nById = Object.fromEntries(ns.map((n) => [n.id, n]));
   ns.forEach((n) => { n.deps = n.deps.filter((d) => nById[d]); });
@@ -458,11 +465,13 @@ async function viewFlow() {
     + (i ? `<div class="fl-col" style="left:${stageX[i] - CELLPAD / 2}px"></div>` : '')).join('');
   const laneHtml = laneNames.map((ln) => {
     const L = lanes[ln]; const ls = laneStage(L.mine); const misc = ln === '未归属';
+    const pid = (L.mine.find((n) => n.pid) || {}).pid; // H51：管线泳道挂线徽
+    const sealed = pid && pById[pid].状态 === '封存';
     const lag = !misc && SIDX[ls] < SIDX[mainStage] && L.mine.some((n) => !DONE.has(n.t.state));
     const lead = !misc && SIDX[ls] > SIDX[mainStage];
     const wait = L.mine.some((n) => n.t.state === '待验收' && n.t.验收方式 === '保留');
     return `<div class="fl-lane" style="top:${L.top}px"></div>
-      <div class="fl-lab" style="top:${L.top}px">${esc(ln)}<span class="lst ${lag ? 'lag' : lead ? 'lead' : ''}">${esc(ls)}${lag ? ' 滞后' : lead ? ' 超前' : ''}</span>${wait ? '<span class="lst lag" style="background:var(--dangerbg);color:var(--danger);border-color:transparent">待你验收</span>' : ''}</div>`;
+      <div class="fl-lab" style="top:${L.top}px">${pid ? `<span class="lst" style="background:var(--accentbg);color:var(--accent-ink);border-color:transparent" title="管线 ${esc(pid)} · 域的常青树（H51）">管线</span>` : ''}${esc(ln)}${sealed ? '<span class="lst lag">已封存</span>' : ''}<span class="lst ${lag ? 'lag' : lead ? 'lead' : ''}">${esc(ls)}${lag ? ' 滞后' : lead ? ' 超前' : ''}</span>${wait ? '<span class="lst lag" style="background:var(--dangerbg);color:var(--danger);border-color:transparent">待你验收</span>' : ''}</div>`;
   }).join('');
   const nodeHtml = ns.map((n) => `<div class="fl-node ${flCls(n)}${crit.has(n.id) ? ' crit' : ''}" id="fl-${esc(n.id)}"
       style="left:${n.x}px;top:${n.y}px;--fn:${FNHEX[n.t.职能] || 'var(--ink3)'}" data-nid="${esc(n.id)}"
@@ -519,8 +528,10 @@ window.flAutoFold = () => {
 let tState = { collapsed: new Set(JSON.parse(localStorage.getItem('studio.tree.collapsed') || '[]')), fn: '', st: 'active', expandAll: false };
 function saveCollapsed() { localStorage.setItem('studio.tree.collapsed', JSON.stringify([...tState.collapsed])); }
 async function viewTree() {
-  const { all } = await loadBoard();
+  const [{ all }, pls] = await Promise.all([loadBoard(), api('/api/pipelines').catch(() => ({ 管线: [] }))]);
   const { byId, kids, parents, topLeaves } = buildTree(all);
+  const pById = Object.fromEntries((pls.管线 || []).map((p) => [p.id, p]));
+  const pipeOf = (t) => { let c = t, g = 0; while (c && g++ < 10) { if (c.管线 && pById[c.管线]) return c.管线; c = c.父单 ? byId[c.父单] : null; } return null; };
   const parentSet = new Set(parents.map((p) => p.id));
   const stOk = (t) => tState.st === 'active' ? !['完成', '已归档'].includes(t.state) : true;
   const fnOk = (t) => !tState.fn || t.职能 === tState.fn;
@@ -555,12 +566,26 @@ async function viewTree() {
     }
   };
   // 只有根父单（自己没有在场父亲的）开树；中间层父单在递归里渲染——D42 前的单层写法曾把 TK-15 重复画成两棵树
+  // H51 管线分区：根与散单按管线章分组渲染，管线是区块头不是工单卡（实体分立律 H52）
   const roots = parents.filter((p) => !(p.父单 && byId[p.父单]));
-  roots.forEach((p) => {
+  const leaves = topLeaves.filter((t) => stOk(t) && fnOk(t));
+  const pipeHead = (p) => `<div class="trow2 parent" style="background:var(--accentbg);border-radius:8px">
+    <span class="twist2 none">⛓</span><span class="tid2">${esc(p.id)}</span><span class="tt2"><b>${esc(p.名称)}</b>（管线）</span>
+    <span class="kids">${esc(p.阶段 || '')}${p.状态 === '封存' ? ' · 已封存' : ''}</span></div>`;
+  const grouped = new Set();
+  for (const p of (pls.管线 || [])) {
+    const myRoots = roots.filter((r) => pipeOf(r) === p.id);
+    const myLeaves = leaves.filter((t) => pipeOf(t) === p.id);
+    if (!myRoots.length && !myLeaves.length) continue;
+    html += pipeHead(p);
+    myRoots.forEach((r) => { grouped.add(r.id); if (!anyVisible(r) && !stOk(r)) return; treeN++; renderSub(r, 1); });
+    myLeaves.forEach((t) => { grouped.add(t.id); count++; html += rowHtml(t, 1, false, []); });
+  }
+  roots.filter((r) => !grouped.has(r.id)).forEach((p) => {
     if (!anyVisible(p) && !stOk(p)) return;
     treeN++; renderSub(p, 0);
   });
-  topLeaves.filter((t) => stOk(t) && fnOk(t)).forEach((t) => { count++; html += rowHtml(t, 0, false, []); });
+  leaves.filter((t) => !grouped.has(t.id)).forEach((t) => { count++; html += rowHtml(t, 0, false, []); });
   const fns = ['', '策划', '程序', '美术', 'QA'];
   return `<div class="ttools">
       <button class="btn h32" onclick="tExpandAll()">${tState.collapsed.size ? '⌄ 全部展开' : '⌃ 全部折叠'}</button>

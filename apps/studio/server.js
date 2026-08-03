@@ -67,10 +67,35 @@ app.get('/api/board', (req, res) => {
     id: t.id, title: t.fm.title, 职能: t.fm.职能, 优先级: t.fm.优先级, 规模: t.fm.规模,
     QA: t.fm.QA, 验收方式: t.fm.验收方式, 主办: t.fm.主办 || null, 项目: t.fm.项目 || null, // D42 多项目视界按此归属
     阶段: t.fm.阶段 || null, 预计时间: t.fm.预计时间 || null, // D43 流程视图用
-    父单: t.fm.父单 || null, 依赖: t.fm.依赖 || null,
+    父单: t.fm.父单 || null, 依赖: t.fm.依赖 || null, 管线: t.fm.管线 || null, // H51 管线章
+    父单类型: t.fm.父单类型 || null,
     领单时间: t.fm.领单时间 || null, 交付时间: t.fm.交付时间 || null, 滞留告警: !!t.fm.滞留告警,
   }));
   res.json({ states: store.STATES, board: out, 隐藏数 });
+});
+
+// ---- 管线（H51/H52，0.19）：独立实体，开线/封存=人闸（仅本机） ----
+const pipelines = require('./lib/pipelines');
+app.get('/api/pipelines', (req, res) => {
+  if (!ready(res)) return;
+  const ps = pipelines.list(ROOT).map((p) => ({ id: p.id, ...p.fm }));
+  res.json({ 管线: ps });
+});
+app.post('/api/pipelines', (req, res) => {
+  if (!ready(res)) return;
+  if (!isLocalReq(req)) return res.status(403).json({ error: '开线是人闸，只能在本机操作' });
+  const { 名称, 阶段, 规格 } = req.body || {};
+  const r = pipelines.create(ROOT, 名称, 阶段, 规格);
+  if (r.ok) journal.append(ROOT, `开线 ${r.id}「${名称}」（H51 人闸）`);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.post('/api/pipelines/status', (req, res) => {
+  if (!ready(res)) return;
+  if (!isLocalReq(req)) return res.status(403).json({ error: '封存/复线是人闸，只能在本机操作' });
+  const { id, 状态 } = req.body || {};
+  const r = pipelines.setStatus(ROOT, id, 状态);
+  if (r.ok) journal.append(ROOT, `管线${状态} ${id}（H51 人闸）`);
+  res.status(r.ok ? 200 : 400).json(r);
 });
 // （排期 API 已随甘特退役移除——拉取模型没有"计划日期"，时间轴只回放真实执行；里程碑=父单完成，已废）
 
