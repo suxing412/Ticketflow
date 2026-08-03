@@ -582,11 +582,16 @@ window.tAcceptAll = async (pid) => {
 };
 
 /* ===== P3 在途 · 时间轴（甘特并入：回放真实执行，无计划日期）===== */
-function timelineHtml(agents, all) {
+function timelineHtml(agents, all, opts) {
   const now = Date.now(); const HOURS = 48; const t0 = now - HOURS * 3600000; const pxh = 26; const W = HOURS * pxh;
-  const online = agents.filter((a) => a.上线 !== false).map((a) => a.id);
+  const byFn = !!(opts && opts.byFn); // 派发制：按职能分泳道——一次性主办不占行，行数恒定
+  const online = byFn ? [] : agents.filter((a) => a.上线 !== false).map((a) => a.id);
   const withSegs = all.filter((t) => t.主办 && t.领单时间);
-  const ids = [...new Set([...online, ...withSegs.map((t) => t.主办)])];
+  const laneOf = (t) => byFn ? (t.职能 || '其他') : t.主办;
+  const FN_ORDER = ['策划', '程序', '美术', '装配', 'QA', '其他'];
+  const ids = byFn
+    ? FN_ORDER.filter((fn) => withSegs.some((t) => (t.职能 || '其他') === fn))
+    : [...new Set([...online, ...withSegs.map((t) => t.主办)])];
   const segs = {}; let any = false;
   for (const t of withSegs) {
     const s = Date.parse(t.领单时间); if (Number.isNaN(s)) continue;
@@ -594,7 +599,8 @@ function timelineHtml(agents, all) {
     const e = t.交付时间 ? Date.parse(t.交付时间) : (inflight ? now : null);
     if (e == null || e < t0) continue;
     any = true;
-    (segs[t.主办] = segs[t.主办] || []).push({ s: Math.max(s, t0), e: Math.min(e, now), t, inflight });
+    const lane = laneOf(t);
+    (segs[lane] = segs[lane] || []).push({ s: Math.max(s, t0), e: Math.min(e, now), t, inflight });
   }
   const head = `<b style="font-size:13px">执行时间轴</b><span class="subnote" style="margin-left:12px">最近 48 小时 · 右缘=现在 · 段=领单→交付</span>`;
   if (!any) return `<div class="tlcard card r14">${head}
@@ -604,17 +610,34 @@ function timelineHtml(agents, all) {
   for (let h = 0; h <= HOURS; h += 6) { const x = W - h * pxh; const d = new Date(now - h * 3600000);
     ticks += `<span class="tltick" style="left:${x}px">${String(d.getHours()).padStart(2, '0')}:00</span>`; }
   let si = 0; // 段序号：入场按序生长（左→右错峰 40ms，封顶 12 档）
-  const lanes = ids.map((id) => `<div class="tllane">${(segs[id] || []).map((g) => {
+  const laneLevels = {}; // 职能泳道内并行段堆叠：贪心装层，防重叠
+  if (byFn) {
+    for (const id of ids) {
+      const arr = (segs[id] || []).sort((a, b) => a.s - b.s);
+      const levelEnds = [];
+      for (const g of arr) {
+        let lv = levelEnds.findIndex((end) => end <= g.s);
+        if (lv < 0) { lv = levelEnds.length; levelEnds.push(0); }
+        levelEnds[lv] = g.e + 60000; g.lv = lv;
+      }
+      laneLevels[id] = Math.max(1, levelEnds.length);
+    }
+  }
+  const rowH = (id) => byFn ? (laneLevels[id] || 1) * 30 : 30; // 整行占位（含 8px 外边距）
+  const laneH = (id) => rowH(id) - 8;
+  const lanes = ids.map((id) => `<div class="tllane" style="height:${laneH(id)}px">${(segs[id] || []).map((g) => {
     const x = (g.s - t0) / 3600000 * pxh; const w = Math.max(6, (g.e - g.s) / 3600000 * pxh);
     const c = FNHEX[g.t.职能] || 'var(--ink3)';
-    return `<span class="tlseg ${g.inflight ? 'on' : ''}" style="--i:${si++};left:${x}px;width:${w}px;background:${c}" title="${esc(g.t.id)} ${esc(g.t.title)}（${g.inflight ? '进行中' : '已交付'}）" onclick="location.hash='#/t/${esc(g.t.id)}'"></span>`;
+    const label = byFn && w >= 44 ? `<i class="tlseglb">${esc(g.t.id.replace(/^TK-/, ''))}</i>` : '';
+    return `<span class="tlseg ${g.inflight ? 'on' : ''}" style="--i:${si++};left:${x}px;width:${w}px;background:${c}${byFn ? `;top:${3 + (g.lv || 0) * 30}px` : ''}" title="${esc(g.t.id)} ${esc(g.t.title)}（${g.inflight ? '进行中' : '已交付'}）" onclick="location.hash='#/t/${esc(g.t.id)}'">${label}</span>`;
   }).join('')}</div>`).join('');
+  const colH = ids.reduce((a, id) => a + rowH(id), 0);
   setTimeout(() => { const el = $('tlscroll'); if (el) el.scrollLeft = el.scrollWidth; }, 0);
   return `<div class="tlcard card r14">${head}
-    <div class="tlflex"><div class="tlwhocol"><div class="tlsp"></div>${ids.map((id) => `<div class="tlwho">${esc(id)}</div>`).join('')}</div>
+    <div class="tlflex"><div class="tlwhocol"><div class="tlsp"></div>${ids.map((id) => `<div class="tlwho" style="height:${rowH(id)}px">${esc(id)}</div>`).join('')}</div>
     <div class="tlscroll" id="tlscroll"><div style="position:relative;width:${W + 20}px">
       <div class="tlaxis">${ticks}</div>${lanes}
-      <div class="tlnow" style="left:${W - 1}px;height:${20 + ids.length * 30}px"></div>
+      <div class="tlnow" style="left:${W - 1}px;height:${20 + colH}px"></div>
     </div></div></div></div>`;
 }
 /* ===== 在途 · 派发制视图（H49）：执行者因单而生、完成即销毁，常备的只有判官 ===== */
@@ -651,7 +674,7 @@ function viewAgentsDispatch(d, all) {
     <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${judges}</div>
     <div class="sec-h" style="margin-top:26px"><h3 class="h17">就绪队列</h3><span class="subnote">依赖已齐、等槽位或额度（项管台账）</span></div>
     <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${ready}</div>
-    ${timelineHtml([], all)}`;
+    ${timelineHtml([], all, { byFn: true })}`;
 }
 
 async function viewAgents() {
