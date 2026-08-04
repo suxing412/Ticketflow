@@ -1705,9 +1705,9 @@ async function viewRelay() {
   return `<div class="rl-wrap">
     <div class="rl-head"><b style="font-size:15px">项管信道</b>
       <span class="subnote">项管（${esc(模型档)}）常驻台账 · 汇报流自动成帖 · 你的问题它带全量台账作答${d.项管忙 ? ' · <b style="color:var(--warn)">作答中…</b>' : ''} · 明文留档</span></div>
-    <div class="card r14" style="padding:14px 16px;margin-bottom:14px">
-      <b style="font-size:13px">台账</b>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:12px">
+    <details class="rl-fold"><summary>台账 · 并发 ${esc(capTxt)} · 管理费 ${Number(fee.token合计 || 0).toLocaleString()} tk · 就绪 ${(L.就绪队列 || []).length} 单（展开）</summary>
+      <div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px">
         <div><p class="dim" style="font-size:12px;margin:0 0 4px">并发上限</p><p style="margin:0">${capTxt}</p></div>
         <div><p class="dim" style="font-size:12px;margin:0 0 4px">管理费（项管自身）</p><p style="margin:0">${Number(fee.token合计 || 0).toLocaleString()} tk · ${fee.次数 || 0} 次</p></div>
         <div><p class="dim" style="font-size:12px;margin:0 0 4px">在跑</p><p style="margin:0">${Object.keys(L.在跑 || {}).length} 项</p></div>
@@ -1717,12 +1717,12 @@ async function viewRelay() {
       <div>${readyTxt}</div>
       <p class="dim" style="font-size:12px;margin:14px 0 6px">父单成本归集（近 6）</p>
       <table class="rp-t" style="font-size:12.5px"><tr><th>专项</th><th style="text-align:right">tokens</th></tr>${costRows}</table>
-    </div>
-    <div class="logcard card r14" style="margin-bottom:14px"><b style="font-size:13px">关键汇报</b>
-      <span class="subnote" style="margin-left:8px">拆单 / 待审 / 收口 / 上呈 / 报警</span>
-      <div style="margin-top:12px">${feedKey}</div>
-      <details style="margin-top:12px"><summary class="dim" style="cursor:pointer;font-size:12px">派发流水（展开）</summary>
-        <div style="margin-top:8px">${feedFlow}</div></details></div>
+      </div>
+    </details>
+    <details class="rl-fold" open><summary>关键汇报（拆单 / 待审 / 收口 / 上呈 / 报警）</summary>
+      <div class="logcard" style="padding:0">${feedKey}
+        <details style="margin-top:10px"><summary class="dim" style="cursor:pointer;font-size:12px">派发流水（展开）</summary>
+          <div style="margin-top:8px">${feedFlow}</div></details></div></details>
     <div class="rl-list card r16" id="rl-list">${msgs}${pending}</div>
     <div class="rl-input"><textarea id="rl-t" placeholder="问项管…（Ctrl+Enter 发送）" onkeydown="if(event.ctrlKey&&event.key==='Enter')relaySend()"></textarea>
       <button class="btn accent h44" onclick="relaySend()">发问</button></div></div>`;

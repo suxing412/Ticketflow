@@ -146,6 +146,8 @@ function cut(root, cfg, parentId, projPath, cb) {
     fs.mkdirSync(ledger.DIR(root), { recursive: true });
     fs.writeFileSync(briefPath, `# 拆单简报 · ${parentId}\n\n子单：${created.join('、')}\n\n${brief || '（项管未附简报）'}\n`, 'utf8');
     ledger.event(root, '待审', { 父单: parentId, 子单: created, 简报: briefPath });
+    // 0.23.3：拆单简报本体主动贴进项管信道——制作人不该去翻台账文件（用户实测困惑）
+    try { require('../relay').append(root, '项管', '拆单完成：' + parentId + ' → ' + created.join('、') + '（简报呈 Claude 审批后放行）' + String.fromCharCode(10) + String.fromCharCode(10) + (brief || '（无简报正文）')); } catch { /* 信道失败不阻塞 */ }
     cb({ ok: true, 子单: created, 简报: briefPath });
   });
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
@@ -185,6 +187,7 @@ function closeout(root, cfg, parentId, cb) {
     fs.mkdirSync(ledger.DIR(root), { recursive: true });
     fs.writeFileSync(rp, `# 收口报告 · ${parentId}\n\n${text}\n`, 'utf8');
     ledger.event(root, '收口报告', { 父单: parentId, 报告: rp });
+    try { require('../relay').append(root, '项管', '收口报告：' + parentId + String.fromCharCode(10) + String.fromCharCode(10) + text.slice(0, 3000)); } catch { /* 信道失败不阻塞 */ }
     cb({ ok: true, 报告: rp });
   });
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
