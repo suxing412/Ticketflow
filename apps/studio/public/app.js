@@ -1671,92 +1671,44 @@ function pmEventLine(e) {
   return { t, txt: `${e.类型}：${e.id || e.父单 || ''}` };
 }
 async function viewRelay() {
+  // 0.23.9 信息架构定案（用户裁定）：只留三项——状态 / 关键汇报 / 详细流水。
+  // 台账与对话区退出 UI（机制层 API 保留：制作人层通道走 /api/relay，台账走 /api/pm/ledger）。
   const [d, pl] = await Promise.all([
     api('/api/relay').catch(() => ({ 消息: [] })),
-    api('/api/pm/ledger').catch(() => ({ 事件: [] })),
+    api('/api/pm/ledger').catch(() => ({ 事件: [], 台账: {} })),
   ]);
-  // 汇报流分层（0.23.2）：关键事件独立成栏永不被派发流水挤出窗口（实测 slice(-14) 吞掉切单启动）
+  const 模型档 = (_cfg && _cfg.模型 && _cfg.模型.项管) || '—';
+  const L = pl.台账 || {};
   const KEY = new Set(['切单启动', '待审', '收口报告', '收口', '上呈', '额度报警', '切单失败']);
   const evAll = pl.事件 || [];
   const line = (e) => { const v = pmEventLine(e);
     return `<div class="logrow"><time>${esc(v.t)}</time><span${v.hot ? ' style="color:var(--accent-ink);font-weight:600"' : ''}>${esc(v.txt)}</span></div>`; };
-  const feedKey = evAll.filter((e) => KEY.has(e.类型)).slice(-10).reverse().map(line).join('')
+  const feedKey = evAll.filter((e) => KEY.has(e.类型)).slice(-12).reverse().map(line).join('')
     || '<p class="dim">暂无关键事件。</p>';
-  const feedFlow = evAll.filter((e) => !KEY.has(e.类型)).slice(-12).reverse().map(line).join('')
+  const feedFlow = evAll.filter((e) => !KEY.has(e.类型)).slice(-50).reverse().map(line).join('')
     || '<p class="dim">暂无流水。</p>';
-  // 问答区（0.23.2 重做）：你的提问=右侧短气泡；项管回复=左对齐全宽文档块并渲染 markdown
-  // （回复常含表格/列表，旧版 pre-wrap 气泡把 markdown 露成生文本且 82% 宽难读）
-  const who = (f) => f === '制作人' ? '你' : (f === '项管' ? '项管' : 'Claude');
-  const msgs = (d.消息 || []).map((m) => m.from === '制作人'
-    ? `<div class="rl-msg me"><div class="rl-meta">你 · ${esc(String(m.t).slice(5, 16).replace('T', ' '))}</div>
-       <div class="rl-body">${esc(m.text)}</div></div>`
-    : `<div class="rl-doc"><div class="rl-meta">${who(m.from)} · ${esc(String(m.t).slice(5, 16).replace('T', ' '))}</div>
-       <div class="wk-body">${wkMd(m.text, null)}</div></div>`).join('')
-    || '<p class="dim" style="text-align:center;margin-top:40px">问项管任何事：进度、排期、依赖、成本、风险。它带台账作答，一两分钟内回帖。</p>';
-  // 作答中占位：一次一问，受理后到回帖前给明确反馈（旧版只在标题栏小字提示，像石沉大海）
-  const pending = d.项管忙 ? `<div class="rl-doc"><div class="rl-meta">项管 · 作答中</div>
-      <div class="wk-body dim" id="rl-wait">正在读台账作答…（已等待 <b>0</b> 秒）</div></div>` : '';
-  setTimeout(() => { const box = $('rl-list'); if (box) box.scrollTop = box.scrollHeight;
-    clearInterval(window._rl || 0);
-    if (d.项管忙) { const t0 = Date.now();
-      clearInterval(window._rlw || 0);
-      window._rlw = setInterval(() => { const el = $('rl-wait'); if (!el) { clearInterval(window._rlw); return; }
-        el.innerHTML = `正在读台账作答…（已等待 <b>${Math.round((Date.now() - t0) / 1000)}</b> 秒）`; }, 1000);
-    }
-    window._rl = setInterval(async () => {
-      const el = $('rl-list'); if (!el) { clearInterval(window._rl); return; }
-      const draft = $('rl-t') && $('rl-t').value;               // 轮询不吞草稿（旧版整页重渲会清空输入框）
-      const nd = await api('/api/relay').catch(() => null); if (!nd) return;
-      if ((nd.消息 || []).length !== (window._rlN || 0) || !!nd.项管忙 !== !!window._rlBusy) {
-        window._rlN = (nd.消息 || []).length; window._rlBusy = !!nd.项管忙;
-        await route();
-        if (draft && $('rl-t')) $('rl-t').value = draft;
-      }
-    }, 5000);
-  }, 0);
-  window._rlN = (d.消息 || []).length; window._rlBusy = !!d.项管忙;
-  // 台账区（0.23.1）：项管的账本直接上信道——并发/就绪/管理费/父单成本
-  const L = pl.台账 || {};
-  const 模型档 = (_cfg && _cfg.模型 && _cfg.模型.项管) || '—';
-  const caps = L.并发上限 || {};
-  const capTxt = Object.entries(caps).map(([k, v]) => `${esc(k)} ≤${v}`).join(' · ') || '—';
-  const readyTxt = (L.就绪队列 || []).map((r) => `<span class="pill sm mut mono">${esc(r.id || r)}</span>`).join(' ') || '<span class="dim">空</span>';
-  const fee = L.管理费 || { token合计: 0, 次数: 0 };
-  const costRows = Object.entries(L.父单成本 || {}).slice(-6).map(([pid, c]) => {
-    const tk = typeof c === 'object' ? (c.token合计 ?? c.tokens ?? 0) : c;
-    return `<tr><td class="mono">${esc(pid)}</td><td style="text-align:right">${Number(tk).toLocaleString()}</td></tr>`;
-  }).join('') || '<tr><td colspan="2" class="dim">暂无归集</td></tr>';
-  return `<div class="rl-wrap">
-    <div class="rl-head"><span class="dot ${d.作业 ? 'breathe-warn' : (d.值守 ? '' : 'off')}" id="pm-dot" style="width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:8px;background:${d.作业 ? 'var(--warn)' : (d.值守 ? 'var(--ok)' : 'var(--ink3)')};${d.值守 && !d.作业 ? 'animation:breathe 2.4s var(--ease-out) infinite;' : ''}" title="${d.作业 ? '作业中：' + d.作业.用途 + (d.作业.对象 ? ' ' + d.作业.对象 : '') : (d.值守 ? '在线值守（事件即唤醒）' : '执行器已停——项管失守')}"></span><b style="font-size:15px">项管信道</b>
-      <span class="subnote">项管（${esc(模型档)}）${d.作业 ? '<b style="color:var(--warn)">作业中：' + esc(d.作业.用途 + (d.作业.对象 ? ' ' + d.作业.对象 : '')) + '</b> · ' : (d.值守 ? '在线值守 · ' : '<b style="color:var(--danger)">离线（执行器停）</b> · ')}常驻台账 · 汇报流自动成帖 · 你的问题它带全量台账作答${d.项管忙 ? ' · <b style="color:var(--warn)">作答中…</b>' : ''} · 明文留档</span></div>
-    <details class="rl-fold"><summary>台账 · 并发 ${esc(capTxt)} · 管理费 ${Number(fee.token合计 || 0).toLocaleString()} tk · 就绪 ${(L.就绪队列 || []).length} 单（展开）</summary>
-      <div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px">
-        <div><p class="dim" style="font-size:12px;margin:0 0 4px">并发上限</p><p style="margin:0">${capTxt}</p></div>
-        <div><p class="dim" style="font-size:12px;margin:0 0 4px">管理费（项管自身）</p><p style="margin:0">${Number(fee.token合计 || 0).toLocaleString()} tk · ${fee.次数 || 0} 次</p></div>
-        <div><p class="dim" style="font-size:12px;margin:0 0 4px">在跑</p><p style="margin:0">${Object.keys(L.在跑 || {}).length} 项</p></div>
-        <div><p class="dim" style="font-size:12px;margin:0 0 4px">已收口专项</p><p style="margin:0">${Object.keys(L.已收口 || {}).length} 个</p></div>
-      </div>
-      <p class="dim" style="font-size:12px;margin:14px 0 6px">就绪队列（依赖已齐，等槽位/额度）</p>
-      <div>${readyTxt}</div>
-      <p class="dim" style="font-size:12px;margin:14px 0 6px">父单成本归集（近 6）</p>
-      <table class="rp-t" style="font-size:12.5px"><tr><th>专项</th><th style="text-align:right">tokens</th></tr>${costRows}</table>
-      </div>
-    </details>
-    <details class="rl-fold" open><summary>关键汇报（拆单 / 待审 / 收口 / 上呈 / 报警）</summary>
-      <div class="logcard" style="padding:0">${feedKey}
-        <details style="margin-top:10px"><summary class="dim" style="cursor:pointer;font-size:12px">派发流水（展开）</summary>
-          <div style="margin-top:8px">${feedFlow}</div></details></div></details>
-    <div class="rl-list card r16" id="rl-list">${msgs}${pending}</div>
-    <div class="rl-input"><textarea id="rl-t" placeholder="问项管…（Ctrl+Enter 发送）" onkeydown="if(event.ctrlKey&&event.key==='Enter')relaySend()"></textarea>
-      <button class="btn accent h44" onclick="relaySend()">发问</button></div></div>`;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const cnt = {};
+  for (const e of evAll.filter((x) => new Date(x.t) >= today)) cnt[e.类型] = (cnt[e.类型] || 0) + 1;
+  const digest = Object.entries(cnt).map(([k, v]) => k + ' ' + v).join(' · ') || '今日无动作';
+  const working = d.作业;
+  const on = !!d.值守;
+  const stateColor = working ? 'var(--warn)' : (on ? 'var(--ok)' : 'var(--ink3)');
+  const stateText = working ? `作业中 · ${esc(working.用途)}${working.对象 ? ' ' + esc(working.对象) : ''}` : (on ? '在线值守' : '离线（执行器停）');
+  return `<div style="max-width:860px;margin:24px auto 0">
+    <div class="card r16" style="padding:18px 22px;display:flex;align-items:center;gap:14px;margin-bottom:16px">
+      <span style="width:12px;height:12px;border-radius:50%;background:${stateColor};${on && !working ? 'animation:breathe 2.4s var(--ease-out) infinite;' : ''}${working ? 'animation:breathe-warn 1.6s var(--ease-out) infinite;' : ''}"></span>
+      <div style="flex:1"><b style="font-size:16px">${stateText}</b>
+        <p class="dim" style="margin:4px 0 0;font-size:12.5px">项管 ${esc(模型档)} · 在跑 ${Object.keys(L.在跑 || {}).length} 项 · 就绪 ${(L.就绪队列 || []).length} 单 · 今日：${esc(digest)}</p></div>
+    </div>
+    <div class="logcard card r14" style="margin-bottom:16px"><b style="font-size:13px">关键汇报</b>
+      <span class="subnote" style="margin-left:8px">拆单 / 待审 / 收口 / 上呈 / 报警</span>
+      <div style="margin-top:12px">${feedKey}</div></div>
+    <div class="logcard card r14"><b style="font-size:13px">详细流水</b>
+      <span class="subnote" style="margin-left:8px">近 50 条 · 它都做了什么</span>
+      <div style="margin-top:12px;max-height:46vh;overflow-y:auto">${feedFlow}</div></div>
+  </div>`;
 }
-window.relaySend = async () => {
-  const t = $('rl-t').value.trim(); if (!t) return;
-  const r = await post('/api/relay', { text: t });
-  if (!r.ok) return toast(r.error || '发送失败');
-  $('rl-t').value = ''; route();
-};
 const markIn = (key) => { if (window._lastViewKey !== key) { const v = $('view') || $('app').firstElementChild; if (v) v.classList.add('vin'); } window._lastViewKey = key; };
 async function route() {
   const h = location.hash.replace(/^#\//, '');
