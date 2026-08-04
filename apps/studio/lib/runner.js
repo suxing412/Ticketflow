@@ -406,7 +406,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   } catch (e) { failLocal('CLI 启动失败：' + e.message); return true; }
   entry.child = child;
   const cliPool = kind === '执行' ? poolName : 'claude'; // 质检/代核实际走 claude，流水如实记
-  journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name}）`);
+  journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name} · 超时闸 ${rc.执行超时分钟 ?? 30}m 派发时快照）`); // 夜班推演 #3：热改超时不作用于在跑会话，快照值写明防误判
   let out = '', errout = '';
   child.stdout.on('data', (d) => { out += d; if (out.length > 800000) out = out.slice(-400000);
     // 活尾巴：stream-json 取最近一个 text 块的可读文本，纯文本流原样截尾

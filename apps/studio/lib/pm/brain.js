@@ -293,7 +293,7 @@ function draftTicket(root, cfg, 需求, projPath, cb) {
     const r = store.create(root, nid, fm, tk.body);
     if (!r.ok) return cb(r);
     try { require('../relay').append(root, '项管', '受托起草：' + nid + ' ' + fm.title + '（草稿区待 Claude 审）' + String.fromCharCode(10) + String.fromCharCode(10) + (brief || '')); } catch { /**/ }
-    ledger.event(root, '待审', { 父单: nid, 子单: [nid], 简报: '（单张起草）' });
+    ledger.event(root, '待审', { 单: nid, 起草: '单张' }); // 不写父单/子单：夜班推演 #7——伪装拆单结构会污染 H53 收口/成本归集
     cb({ ok: true, 单: nid });
   });
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }

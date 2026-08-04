@@ -1651,7 +1651,7 @@ function pmEventLine(e) {
   const d0 = new Date(e.t); const p2 = (n) => String(n).padStart(2, '0');
   const t = isNaN(d0) ? String(e.t || '').slice(5, 16).replace('T', ' ')
     : `${p2(d0.getMonth() + 1)}-${p2(d0.getDate())} ${p2(d0.getHours())}:${p2(d0.getMinutes())}`;
-  if (e.类型 === '待审') return { t, txt: `拆单完成：${e.父单} → ${(e.子单 || []).join('、')}，简报呈 Claude 审批`, hot: true };
+  if (e.类型 === '待审') return { t, txt: e.单 ? `受托起草：${e.单}（草稿待总监审）` : `拆单完成：${e.父单} → ${(e.子单 || []).join('、')}，简报呈 Claude 审批`, hot: true };
   if (e.类型 === '切单启动') return { t, txt: `开始拆单：${e.父单}（仓况盘点中）`, hot: true };
   if (e.类型 === '派发') return { t, txt: `派发 ${e.id} → ${e.池} 池` };
   if (e.类型 === '收口') return { t, txt: `专项收口：${e.父单}，收口报告已出`, hot: true };

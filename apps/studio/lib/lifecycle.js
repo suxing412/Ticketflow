@@ -74,7 +74,7 @@ function 定夺(root, id, 决定, 方向, 裁决人) {
   const map = { 接受: '待验收', 给方向: '在途', 打回: '已归档' };
   const to = map[决定];
   if (!to) return { ok: false, error: `未知决定：${决定}` };
-  const r = store.move(root, id, '待定夺', to, null, nowIso());
+  const r = store.move(root, id, '待定夺', to, 决定 === '打回' ? (fm) => { fm.归档原因 = '定夺打回'; } : null, nowIso()); // 归档来路补全（夜班推演 #4）
   if (r.ok) {
     if (决定 === '给方向' && 方向) {
       store.update(root, id, (fm, t2) => ({ body: (t2.body || '') + `\n\n## 定夺方向（${裁决人 || '制作人'} · ${nowIso().slice(0, 10)}）\n${String(方向).slice(0, 2000)}\n` }));
@@ -111,8 +111,20 @@ function 废弃(root, id) {
   if (!t) return { ok: false, error: '不存在' };
   if (store.TERMINAL.includes(t.state)) return { ok: false, error: '终态单不可废弃' };
   if (!store.isLegal(t.state, '已归档')) return { ok: false, error: `${t.state} 不可直接归档` };
+  // 依赖悬空扫描（夜班推演 #5）：废弃前查未完成单里还挂着本单依赖的——不阻断，呼叫+留痕，防静默死锁
+  const 悬空 = [];
+  for (const s of ['草稿', '待投', '池', '在途', '质检', '待验收', '待定夺', '执行失败']) {
+    for (const x of store.list(root, s)) {
+      const d = x.fm.依赖; if (!d) continue;
+      const arr = Array.isArray(d) ? d.map(String) : String(d).split(/[，,\s]+/).filter(Boolean);
+      if (arr.includes(String(id))) 悬空.push(x.id);
+    }
+  }
   const r = store.move(root, id, t.state, '已归档', (fm) => { fm.归档原因 = '废弃'; }, nowIso());
-  if (r.ok) journal.append(root, `废弃 ${id}（${t.state}→已归档）`);
+  if (r.ok) {
+    journal.append(root, `废弃 ${id}（${t.state}→已归档）${悬空.length ? ` · 依赖悬空：${悬空.join('、')} 需改挂` : ''}`);
+    if (悬空.length) { try { require('./inbox').post(root, '急', '依赖悬空', `${id} 被废弃，${悬空.join('、')} 的依赖需改挂接棒单`, { 单号: id }); } catch { /* 信箱失败不阻塞 */ } }
+  }
   return r;
 }
 

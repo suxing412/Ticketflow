@@ -9,12 +9,14 @@ function depsDone(root, t) {
   const d = t.fm.依赖;
   if (!d) return true;
   const ids = (Array.isArray(d) ? d.map(String) : String(d).split(/[，,\s]+/)).filter(Boolean);
-  // 只认「完成」：已归档含废弃/打回/推翻（完成→已归档唯一入口=推翻重做），皆非落袋。
-  // H59 首案（TK-79 误派发，2026-08-05）：TK-76 废弃归档曾被当作依赖已了结。
-  const done = new Set(['完成']);
+  // 落袋 = 完成，或「无因归档」（正常交付后的整理性归档）。带 归档原因（废弃/验收打回/
+  // 定夺打回/推翻替代）的归档一律不算——夜班推演 #4：一刀切只认完成会把 13 张已交付
+  // 后归档的依赖判成永不就绪；H59 首案（TK-76 废弃却被旧逻辑当落袋）则是反向翻车。
   for (const id of ids) {
     const dep = store.find(root, id);
-    if (dep && !done.has(dep.state)) return false;
+    if (!dep) continue;
+    const ok = dep.state === '完成' || (dep.state === '已归档' && !dep.fm.归档原因);
+    if (!ok) return false;
   }
   return true;
 }
