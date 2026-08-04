@@ -116,6 +116,7 @@ function cut(root, cfg, parentId, projPath, cb) {
   if (timer.unref) timer.unref();
   child.on('close', () => {
     clearTimeout(timer);
+    billFee(root, '切单', out);
     const text = require('../runner').extractClaudeText(out);
     const { tickets, brief } = parseTickets(text);
     if (!tickets.length) return cb({ ok: false, error: '切单输出无子单块', raw: text.slice(0, 500) });
@@ -182,6 +183,7 @@ function closeout(root, cfg, parentId, cb) {
   if (timer.unref) timer.unref();
   child.on('close', () => {
     clearTimeout(timer);
+    billFee(root, '收口', out);
     const text = require('../runner').extractClaudeText(out);
     if (!text.trim()) return cb({ ok: false, error: '收口报告空输出' });
     const rp = path.join(ledger.DIR(root), `收口报告-${parentId}.md`);
@@ -225,6 +227,7 @@ function answer(root, cfg, question, cb) {
   if (timer.unref) timer.unref();
   child.on('close', () => {
     clearTimeout(timer);
+    billFee(root, '答话', out);
     const text = require('../runner').extractClaudeText(out).trim();
     cb({ ok: !!text, text: text || '（项管无应答——fable 会话空输出，请重问或查额度）' });
   });
