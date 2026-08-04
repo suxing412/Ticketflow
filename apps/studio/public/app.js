@@ -1667,9 +1667,33 @@ async function viewRelay() {
     }, 5000);
   }, 0);
   window._rlN = (d.消息 || []).length;
+  // 台账区（0.23.1）：项管的账本直接上信道——并发/就绪/管理费/父单成本
+  const L = pl.台账 || {};
+  const 模型档 = (_cfg && _cfg.模型 && _cfg.模型.项管) || '—';
+  const caps = L.并发上限 || {};
+  const capTxt = Object.entries(caps).map(([k, v]) => `${esc(k)} ≤${v}`).join(' · ') || '—';
+  const readyTxt = (L.就绪队列 || []).map((r) => `<span class="pill sm mut mono">${esc(r.id || r)}</span>`).join(' ') || '<span class="dim">空</span>';
+  const fee = L.管理费 || { token合计: 0, 次数: 0 };
+  const costRows = Object.entries(L.父单成本 || {}).slice(-6).map(([pid, c]) => {
+    const tk = typeof c === 'object' ? (c.token合计 ?? c.tokens ?? 0) : c;
+    return `<tr><td class="mono">${esc(pid)}</td><td style="text-align:right">${Number(tk).toLocaleString()}</td></tr>`;
+  }).join('') || '<tr><td colspan="2" class="dim">暂无归集</td></tr>';
   return `<div class="rl-wrap">
     <div class="rl-head"><b style="font-size:15px">项管信道</b>
-      <span class="subnote">项管（fable）常驻台账 · 汇报流自动成帖 · 你的问题它带全量台账作答${d.项管忙 ? ' · <b style="color:var(--warn)">作答中…</b>' : ''} · 明文留档</span></div>
+      <span class="subnote">项管（${esc(模型档)}）常驻台账 · 汇报流自动成帖 · 你的问题它带全量台账作答${d.项管忙 ? ' · <b style="color:var(--warn)">作答中…</b>' : ''} · 明文留档</span></div>
+    <div class="card r14" style="padding:14px 16px;margin-bottom:14px">
+      <b style="font-size:13px">台账</b>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:12px">
+        <div><p class="dim" style="font-size:12px;margin:0 0 4px">并发上限</p><p style="margin:0">${capTxt}</p></div>
+        <div><p class="dim" style="font-size:12px;margin:0 0 4px">管理费（项管自身）</p><p style="margin:0">${Number(fee.token合计 || 0).toLocaleString()} tk · ${fee.次数 || 0} 次</p></div>
+        <div><p class="dim" style="font-size:12px;margin:0 0 4px">在跑</p><p style="margin:0">${Object.keys(L.在跑 || {}).length} 项</p></div>
+        <div><p class="dim" style="font-size:12px;margin:0 0 4px">已收口专项</p><p style="margin:0">${Object.keys(L.已收口 || {}).length} 个</p></div>
+      </div>
+      <p class="dim" style="font-size:12px;margin:14px 0 6px">就绪队列（依赖已齐，等槽位/额度）</p>
+      <div>${readyTxt}</div>
+      <p class="dim" style="font-size:12px;margin:14px 0 6px">父单成本归集（近 6）</p>
+      <table class="rp-t" style="font-size:12.5px"><tr><th>专项</th><th style="text-align:right">tokens</th></tr>${costRows}</table>
+    </div>
     <div class="logcard card r14" style="margin-bottom:14px"><b style="font-size:13px">汇报流</b><div style="margin-top:12px">${feed}</div></div>
     <div class="rl-list card r16" id="rl-list">${msgs}</div>
     <div class="rl-input"><textarea id="rl-t" placeholder="问项管…（Ctrl+Enter 发送）" onkeydown="if(event.ctrlKey&&event.key==='Enter')relaySend()"></textarea>

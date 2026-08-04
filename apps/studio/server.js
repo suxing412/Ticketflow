@@ -592,7 +592,7 @@ app.post('/api/pm/cut', (req, res) => {
     journal.append(ROOT, r.ok ? `项管切单完成：${父单} → ${r.子单.join('、')}（简报待审）` : `项管切单失败：${父单}（${r.error}）`);
     if (!r.ok) pmLedger.event(ROOT, '切单失败', { 父单, error: r.error });
   });
-  res.json({ ok: true, 状态: '切单进行中（fable），完成后拆单简报进台账待审' });
+  res.json({ ok: true, 状态: `切单进行中（${(cfg.模型 || {}).项管 || '项管档'}），完成后拆单简报进台账待审` });
 });
 
 // ---- 产出调起：打开文件/所在文件夹（仅限该单所属项目仓内，越界拒）----
