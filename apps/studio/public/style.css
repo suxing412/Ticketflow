@@ -713,3 +713,9 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .wk-back { border-top:0.5px solid var(--line); margin-top:16px; padding-top:10px; }
 .wk-pend { display:flex; gap:10px; align-items:center; padding:10px 14px; margin-bottom:8px; border-left:3px solid var(--warn); border-radius:0 12px 12px 0; }
 @media (max-width: 680px) { .wk-grid { grid-template-columns: 1fr; } .wk-tree { border-right:none; } }
+
+/* 项管信道问答重做（0.23.2）：提问=右侧短气泡，回复=左对齐全宽文档块（含 markdown） */
+.rl-doc { align-self:stretch; width:100%; }
+.rl-doc .wk-body { background:var(--sect); border:1px solid var(--line); border-radius:14px; border-top-left-radius:4px; padding:12px 16px; font-size:13.5px; }
+.rl-doc .wk-body p { margin:0 0 10px; }
+.rl-doc .wk-body p:last-child { margin-bottom:0; }

@@ -1639,7 +1639,7 @@ window.ideaAct = async (动作, id) => {
 function pmEventLine(e) {
   const t = String(e.t || '').slice(5, 16).replace('T', ' ');
   if (e.类型 === '待审') return { t, txt: `拆单完成：${e.父单} → ${(e.子单 || []).join('、')}，简报呈 Claude 审批`, hot: true };
-  if (e.类型 === '切单启动') return { t, txt: `开始拆单：${e.父单}（fable 盘点中）` };
+  if (e.类型 === '切单启动') return { t, txt: `开始拆单：${e.父单}（仓况盘点中）`, hot: true };
   if (e.类型 === '派发') return { t, txt: `派发 ${e.id} → ${e.池} 池` };
   if (e.类型 === '收口') return { t, txt: `专项收口：${e.父单}，收口报告已出`, hot: true };
   if (e.类型 === '上呈') return { t, txt: `上呈制作人：${e.原因 || e.父单 || ''}`, hot: true };
@@ -1651,22 +1651,46 @@ async function viewRelay() {
     api('/api/relay').catch(() => ({ 消息: [] })),
     api('/api/pm/ledger').catch(() => ({ 事件: [] })),
   ]);
-  const feed = (pl.事件 || []).slice(-14).reverse().map((e) => { const v = pmEventLine(e);
-    return `<div class="logrow"><time>${esc(v.t)}</time><span${v.hot ? ' style="color:var(--accent-ink);font-weight:600"' : ''}>${esc(v.txt)}</span></div>`; }).join('')
-    || '<p class="dim">项管还没有动静。</p>';
+  // 汇报流分层（0.23.2）：关键事件独立成栏永不被派发流水挤出窗口（实测 slice(-14) 吞掉切单启动）
+  const KEY = new Set(['切单启动', '待审', '收口报告', '收口', '上呈', '额度报警', '切单失败']);
+  const evAll = pl.事件 || [];
+  const line = (e) => { const v = pmEventLine(e);
+    return `<div class="logrow"><time>${esc(v.t)}</time><span${v.hot ? ' style="color:var(--accent-ink);font-weight:600"' : ''}>${esc(v.txt)}</span></div>`; };
+  const feedKey = evAll.filter((e) => KEY.has(e.类型)).slice(-10).reverse().map(line).join('')
+    || '<p class="dim">暂无关键事件。</p>';
+  const feedFlow = evAll.filter((e) => !KEY.has(e.类型)).slice(-12).reverse().map(line).join('')
+    || '<p class="dim">暂无流水。</p>';
+  // 问答区（0.23.2 重做）：你的提问=右侧短气泡；项管回复=左对齐全宽文档块并渲染 markdown
+  // （回复常含表格/列表，旧版 pre-wrap 气泡把 markdown 露成生文本且 82% 宽难读）
   const who = (f) => f === '制作人' ? '你' : (f === '项管' ? '项管' : 'Claude');
-  const msgs = (d.消息 || []).map((m) => `<div class="rl-msg ${m.from === '制作人' ? 'me' : 'ai'}">
-      <div class="rl-meta">${who(m.from)} · ${esc(String(m.t).slice(5, 16).replace('T', ' '))}</div>
-      <div class="rl-body">${esc(m.text)}</div></div>`).join('') || '<p class="dim" style="text-align:center;margin-top:40px">问项管任何事：进度、排期、依赖、成本、风险。它带台账作答，一两分钟内回帖。</p>';
+  const msgs = (d.消息 || []).map((m) => m.from === '制作人'
+    ? `<div class="rl-msg me"><div class="rl-meta">你 · ${esc(String(m.t).slice(5, 16).replace('T', ' '))}</div>
+       <div class="rl-body">${esc(m.text)}</div></div>`
+    : `<div class="rl-doc"><div class="rl-meta">${who(m.from)} · ${esc(String(m.t).slice(5, 16).replace('T', ' '))}</div>
+       <div class="wk-body">${wkMd(m.text, null)}</div></div>`).join('')
+    || '<p class="dim" style="text-align:center;margin-top:40px">问项管任何事：进度、排期、依赖、成本、风险。它带台账作答，一两分钟内回帖。</p>';
+  // 作答中占位：一次一问，受理后到回帖前给明确反馈（旧版只在标题栏小字提示，像石沉大海）
+  const pending = d.项管忙 ? `<div class="rl-doc"><div class="rl-meta">项管 · 作答中</div>
+      <div class="wk-body dim" id="rl-wait">正在读台账作答…（已等待 <b>0</b> 秒）</div></div>` : '';
   setTimeout(() => { const box = $('rl-list'); if (box) box.scrollTop = box.scrollHeight;
     clearInterval(window._rl || 0);
+    if (d.项管忙) { const t0 = Date.now();
+      clearInterval(window._rlw || 0);
+      window._rlw = setInterval(() => { const el = $('rl-wait'); if (!el) { clearInterval(window._rlw); return; }
+        el.innerHTML = `正在读台账作答…（已等待 <b>${Math.round((Date.now() - t0) / 1000)}</b> 秒）`; }, 1000);
+    }
     window._rl = setInterval(async () => {
       const el = $('rl-list'); if (!el) { clearInterval(window._rl); return; }
+      const draft = $('rl-t') && $('rl-t').value;               // 轮询不吞草稿（旧版整页重渲会清空输入框）
       const nd = await api('/api/relay').catch(() => null); if (!nd) return;
-      if ((nd.消息 || []).length !== (window._rlN || 0)) { window._rlN = nd.消息.length; route(); }
+      if ((nd.消息 || []).length !== (window._rlN || 0) || !!nd.项管忙 !== !!window._rlBusy) {
+        window._rlN = (nd.消息 || []).length; window._rlBusy = !!nd.项管忙;
+        await route();
+        if (draft && $('rl-t')) $('rl-t').value = draft;
+      }
     }, 5000);
   }, 0);
-  window._rlN = (d.消息 || []).length;
+  window._rlN = (d.消息 || []).length; window._rlBusy = !!d.项管忙;
   // 台账区（0.23.1）：项管的账本直接上信道——并发/就绪/管理费/父单成本
   const L = pl.台账 || {};
   const 模型档 = (_cfg && _cfg.模型 && _cfg.模型.项管) || '—';
@@ -1694,8 +1718,12 @@ async function viewRelay() {
       <p class="dim" style="font-size:12px;margin:14px 0 6px">父单成本归集（近 6）</p>
       <table class="rp-t" style="font-size:12.5px"><tr><th>专项</th><th style="text-align:right">tokens</th></tr>${costRows}</table>
     </div>
-    <div class="logcard card r14" style="margin-bottom:14px"><b style="font-size:13px">汇报流</b><div style="margin-top:12px">${feed}</div></div>
-    <div class="rl-list card r16" id="rl-list">${msgs}</div>
+    <div class="logcard card r14" style="margin-bottom:14px"><b style="font-size:13px">关键汇报</b>
+      <span class="subnote" style="margin-left:8px">拆单 / 待审 / 收口 / 上呈 / 报警</span>
+      <div style="margin-top:12px">${feedKey}</div>
+      <details style="margin-top:12px"><summary class="dim" style="cursor:pointer;font-size:12px">派发流水（展开）</summary>
+        <div style="margin-top:8px">${feedFlow}</div></details></div>
+    <div class="rl-list card r16" id="rl-list">${msgs}${pending}</div>
     <div class="rl-input"><textarea id="rl-t" placeholder="问项管…（Ctrl+Enter 发送）" onkeydown="if(event.ctrlKey&&event.key==='Enter')relaySend()"></textarea>
       <button class="btn accent h44" onclick="relaySend()">发问</button></div></div>`;
 }
