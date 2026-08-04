@@ -526,7 +526,9 @@ const relay = require('./lib/relay');
 let pmBusy = false; // 项管答话一次一问（fable 会话贵，排队不并发）
 app.get('/api/relay', (req, res) => {
   if (!ready(res)) return;
-  res.json({ 消息: relay.list(ROOT, Number(req.query.limit) || 100), 项管忙: pmBusy });
+  const brainWorking = (() => { try { return require('./lib/pm/brain').getWorking(); } catch { return null; } })();
+  const runnerOn = (() => { try { return require('./lib/runner').isOn(ROOT); } catch { return false; } })();
+  res.json({ 消息: relay.list(ROOT, Number(req.query.limit) || 100), 项管忙: pmBusy, 作业: brainWorking, 值守: runnerOn });
 });
 app.post('/api/relay', (req, res) => {
   if (!ready(res)) return;

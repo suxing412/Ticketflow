@@ -1727,8 +1727,8 @@ async function viewRelay() {
     return `<tr><td class="mono">${esc(pid)}</td><td style="text-align:right">${Number(tk).toLocaleString()}</td></tr>`;
   }).join('') || '<tr><td colspan="2" class="dim">暂无归集</td></tr>';
   return `<div class="rl-wrap">
-    <div class="rl-head"><b style="font-size:15px">项管信道</b>
-      <span class="subnote">项管（${esc(模型档)}）常驻台账 · 汇报流自动成帖 · 你的问题它带全量台账作答${d.项管忙 ? ' · <b style="color:var(--warn)">作答中…</b>' : ''} · 明文留档</span></div>
+    <div class="rl-head"><span class="dot ${d.作业 ? 'breathe-warn' : (d.值守 ? '' : 'off')}" id="pm-dot" style="width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:8px;background:${d.作业 ? 'var(--warn)' : (d.值守 ? 'var(--ok)' : 'var(--ink3)')};${d.值守 && !d.作业 ? 'animation:breathe 2.4s var(--ease-out) infinite;' : ''}" title="${d.作业 ? '作业中：' + d.作业.用途 + (d.作业.对象 ? ' ' + d.作业.对象 : '') : (d.值守 ? '在线值守（事件即唤醒）' : '执行器已停——项管失守')}"></span><b style="font-size:15px">项管信道</b>
+      <span class="subnote">项管（${esc(模型档)}）${d.作业 ? '<b style="color:var(--warn)">作业中：' + esc(d.作业.用途 + (d.作业.对象 ? ' ' + d.作业.对象 : '')) + '</b> · ' : (d.值守 ? '在线值守 · ' : '<b style="color:var(--danger)">离线（执行器停）</b> · ')}常驻台账 · 汇报流自动成帖 · 你的问题它带全量台账作答${d.项管忙 ? ' · <b style="color:var(--warn)">作答中…</b>' : ''} · 明文留档</span></div>
     <details class="rl-fold"><summary>台账 · 并发 ${esc(capTxt)} · 管理费 ${Number(fee.token合计 || 0).toLocaleString()} tk · 就绪 ${(L.就绪队列 || []).length} 单（展开）</summary>
       <div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px">

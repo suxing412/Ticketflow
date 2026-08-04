@@ -31,6 +31,11 @@ function billFee(root, 用途, raw) {
   } catch { /* 记账失败不阻塞 */ }
 }
 
+// 作业态（0.23.7 呼吸灯）：项管 LLM 会话起止登记，供信道在线灯显示
+let working = null;
+function setWorking(w) { working = w ? { ...w, 起时: new Date().toISOString() } : null; }
+function getWorking() { return working; }
+
 function cli() {
   const home = os.homedir();
   const cands = [path.join(home, '.local', 'bin', 'claude.exe'), path.join(home, 'AppData', 'Roaming', 'npm', 'claude.cmd'), 'claude'];
@@ -108,6 +113,7 @@ function cut(root, cfg, parentId, projPath, cb) {
   const prompt = buildCutPrompt(root, cfg, parent, projPath);
   const cmd = cli();
   const model = (cfg.模型 || {}).项管 || 'fable';
+  setWorking({ 用途: '切单', 对象: parentId });
   const child = spawn(cmd, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'],
     { cwd: projPath || undefined, env: { ...process.env }, windowsHide: true, shell: String(cmd).endsWith('.cmd') }); // cwd=项目仓：项管盘点有读权（首切简报暴露的盲区）
   let out = '';
@@ -115,6 +121,7 @@ function cut(root, cfg, parentId, projPath, cb) {
   const timer = setTimeout(() => { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch { /**/ } }, 20 * 60000);
   if (timer.unref) timer.unref();
   child.on('close', () => {
+    setWorking(null);
     clearTimeout(timer);
     billFee(root, '切单', out);
     const text = require('../runner').extractClaudeText(out);
@@ -175,6 +182,7 @@ function closeout(root, cfg, parentId, cb) {
   ].join('\n');
   const cmd = cli();
   const model = (cfg.模型 || {}).项管 || 'fable';
+  setWorking({ 用途: '收口', 对象: parentId });
   const child = spawn(cmd, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'],
     { env: { ...process.env }, windowsHide: true, shell: String(cmd).endsWith('.cmd') });
   let out = '';
@@ -182,6 +190,7 @@ function closeout(root, cfg, parentId, cb) {
   const timer = setTimeout(() => { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch { /**/ } }, 10 * 60000);
   if (timer.unref) timer.unref();
   child.on('close', () => {
+    setWorking(null);
     clearTimeout(timer);
     billFee(root, '收口', out);
     const text = require('../runner').extractClaudeText(out);
@@ -219,6 +228,7 @@ function answer(root, cfg, question, cb) {
   ].join('\n');
   const cmd = cli();
   const model = (cfg.模型 || {}).项管 || 'fable';
+  setWorking({ 用途: '答话' });
   const child = spawn(cmd, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'],
     { env: { ...process.env }, windowsHide: true, shell: String(cmd).endsWith('.cmd') });
   let out = '';
@@ -226,6 +236,7 @@ function answer(root, cfg, question, cb) {
   const timer = setTimeout(() => { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch { /**/ } }, 5 * 60000);
   if (timer.unref) timer.unref();
   child.on('close', () => {
+    setWorking(null);
     clearTimeout(timer);
     billFee(root, '答话', out);
     const text = require('../runner').extractClaudeText(out).trim();
@@ -234,4 +245,4 @@ function answer(root, cfg, question, cb) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
-module.exports = { cut, closeout, answer, buildCutPrompt, parseTickets };
+module.exports = { cut, closeout, answer, buildCutPrompt, parseTickets, getWorking };
