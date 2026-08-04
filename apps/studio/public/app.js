@@ -9,7 +9,7 @@ const FNHEX = { 策划: 'var(--fn-plan)', 程序: 'var(--fn-code)', 美术: 'var
 const FNCLS = { 策划: 'fn-plan', 程序: 'fn-code', 美术: 'fn-art', QA: 'fn-qa', 装配: 'fn-asm' };
 const STCLS = { 在途: 'st-doing', 质检: 'st-review', 待验收: 'st-accept', 完成: 'st-done', 待定夺: 'st-escal', 执行失败: 'st-escal', 草稿: 'mut', 已归档: 'mut', 待投: '', 池: '' };
 const STPCT = { 草稿: 0, 待投: 0, 池: 0, 在途: 60, 质检: 85, 待定夺: 70, 执行失败: 60, 待验收: 90, 完成: 100, 已归档: 0 };
-const NAV = [['总览', ''], ['想法', 'ideas'], ['工单', 'board'], ['流程', 'flow'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['项管', 'relay'], ['风格库', 'stylelib'], ['报表', 'report']]; // 参数入口只走 ⚙
+const NAV = [['总览', ''], ['想法', 'ideas'], ['工单', 'board'], ['流程', 'flow'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['Wiki', 'wiki'], ['项管', 'relay'], ['风格库', 'stylelib'], ['报表', 'report']]; // 参数入口只走 ⚙
 function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1900); }
 // 数值跳字确认（步进器改完后调用）：重触发 animation
 function bump(el) { if (!el) return; el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
@@ -1480,7 +1480,142 @@ window.artSubmit = async (id, btn) => {
 window.act3 = async (name, id, 决定) => { const r = await post('/api/act/' + name, { id, 决定 }); toast(r.ok ? `${决定} 完成` : (r.error || '失败')); route(); };
 
 /* ===== 路由 ===== */
-const ROUTES = { '': viewOverview, ideas: viewIdeas, board: viewBoard, flow: viewFlow, tree: viewTree, agents: viewAgents, decisions: viewDecisions, relay: viewRelay, stylelib: viewStyleLib, report: viewReport };
+/* ===== P16 Wiki（0.20，H52 第三类实体）：设计事实源——分类树 + 词条双链 + 信息栏 + 待审人闸 + 关系图 ===== */
+const wkState = { entry: '', mode: 'read', q: '', cat: '' };
+// 极简 markdown 渲染（词条正文专用）：标题/加粗/行内码/列表/段落/[[双链]]。不引库，XSS 经 esc 全量转义。
+function wkMd(src, byName) {
+  const link = (s) => s.replace(/\[\[([^\]|#]+?)(?:\|([^\]]*))?\]\]/g, (m, name, alias) => {
+    const n = esc(name.trim());
+    const exists = byName && byName[name.trim()];
+    return `<a class="wk-l ${exists ? '' : 'ghost'}" onclick="wkOpen('${n}')" title="${exists ? '' : '条目未建——点击可从此名开稿'}">${esc(alias || name.trim())}</a>`;
+  });
+  const inline = (s) => link(esc(s)).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  const out = []; let list = null, para = [];
+  const flushP = () => { if (para.length) { out.push(`<p>${inline(para.join(' '))}</p>`); para = []; } };
+  const flushL = () => { if (list) { out.push(`<ul>${list.map((x) => `<li>${inline(x)}</li>`).join('')}</ul>`); list = null; } };
+  for (const raw of String(src).split(/\r?\n/)) {
+    const line = raw.trimEnd();
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { flushP(); flushL(); out.push(`<h${h[1].length + 2} class="wk-h">${inline(h[2])}</h${h[1].length + 2}>`); continue; }
+    const li = line.match(/^\s*[-*]\s+(.*)$/);
+    if (li) { flushP(); (list = list || []).push(li[1]); continue; }
+    if (line.match(/^\s*\|.*\|\s*$/)) { flushP(); flushL(); out.push(`<p class="mono" style="font-size:12px">${inline(line)}</p>`); continue; }
+    if (!line.trim()) { flushP(); flushL(); continue; }
+    flushL(); para.push(line);
+  }
+  flushP(); flushL();
+  return out.join('\n');
+}
+async function viewWiki() {
+  const proj = curProj() || projDefault();
+  const d = await api('/api/wiki?项目=' + encodeURIComponent(proj)).catch((e) => ({ error: String(e) }));
+  if (d.error) return `<div class="emptycard" style="margin-top:30px"><h5>Wiki 未就绪</h5><p>${esc(d.error)}</p></div>`;
+  const byName = Object.fromEntries((d.条目 || []).map((e) => [e.名称, e]));
+  const q = wkState.q.trim();
+  const match = (e) => !q || e.名称.includes(q) || e.分类.includes(q);
+  const cats = [...new Set((d.条目 || []).map((e) => e.分类))].sort();
+  const CATICON = { 世界观: '🌏', 地图: '🗺', 势力: '⚔', 系统: '⚙', 数值: '🧮' };
+  if (!wkState.entry || !byName[wkState.entry]) wkState.entry = ((d.条目 || [])[0] || {}).名称 || '';
+  const tree = cats.map((c) => {
+    const mine = d.条目.filter((e) => e.分类 === c && match(e));
+    if (q && !mine.length) return '';
+    return `<p class="wk-cat">${CATICON[c] || '📄'} ${esc(c)} <span class="dim">· ${mine.length}</span></p>` +
+      mine.map((e) => `<p class="wk-it ${e.名称 === wkState.entry ? 'cur' : ''}" onclick="wkOpen('${esc(e.名称)}')">${esc(e.名称)}</p>`).join('');
+  }).join('');
+  const pend = (d.待审 || []).map((w) => `<div class="wk-pend card r14">
+      <b>${esc(w.名称)}</b><span class="pill sm mut">${esc(w.分类)}</span>${w.来源工单 ? `<span class="pill sm mut mono">${esc(w.来源工单)}</span>` : ''}<span class="dim" style="font-size:12px">${w.字数} 字</span>
+      <span style="margin-left:auto"><button class="btn h32 accent" onclick="wkApprove('${esc(w.文件)}')">入册</button>
+      <button class="btn h32" onclick="wkReject('${esc(w.文件)}')">退回</button></span></div>`).join('');
+  let article = '<div class="emptycard"><h5>还没有词条</h5><p>策划单产出会先落待审区；你也可以直接在项目仓 Docs/wiki/&lt;分类&gt;/ 下手写 .md（frontmatter 写 名称/分类/锚号），刷新即入册。</p></div>';
+  if (wkState.mode === 'graph') {
+    article = `<div style="position:relative"><canvas id="wk-g" width="760" height="520" style="width:100%;border:0.5px solid var(--line);border-radius:12px"></canvas>
+      <p class="subnote" style="margin-top:8px">节点=词条（按分类着色，灰=被引用但未建）· 边=双链 · 拖拽节点 · 点击进词条</p></div>`;
+    setTimeout(() => wkGraph(proj), 0);
+  } else if (wkState.entry && byName[wkState.entry]) {
+    const e = await api('/api/wiki/entry?项目=' + encodeURIComponent(proj) + '&名称=' + encodeURIComponent(wkState.entry)).catch(() => null);
+    if (e) {
+      article = `<p class="dim" style="font-size:12px;margin:0">${esc(e.分类)} › 词条</p>
+        <h2 style="margin:2px 0 14px">${esc(e.名称)}</h2>
+        <div class="wk-body">${wkMd(e.body, byName)}</div>
+        <div class="wk-back"><p class="dim" style="font-size:12px;margin:0 0 4px">被引用（反向链接）</p>
+        ${(e.backlinks || []).length ? e.backlinks.map((b) => `<a class="wk-l" onclick="wkOpen('${esc(b)}')">${esc(b)}</a>`).join(' · ') : '<span class="dim">暂无</span>'}</div>`;
+    }
+  }
+  const cur = byName[wkState.entry];
+  const info = cur ? `<div class="card r14" style="padding:14px">
+      <b style="font-size:13px">信息栏</b>
+      <table class="rp-t" style="margin-top:8px;font-size:12.5px">
+        <tr><td class="dim">分类</td><td style="text-align:right">${esc(cur.分类)}</td></tr>
+        <tr><td class="dim">状态</td><td style="text-align:right" class="${cur.状态 === '正式' ? 'okc' : 'warnc'}">${esc(cur.状态)}</td></tr>
+        ${cur.锚号 ? `<tr><td class="dim">锚号</td><td style="text-align:right" class="mono">${esc(cur.锚号)}</td></tr>` : ''}
+        ${cur.来源工单 ? `<tr><td class="dim">来源工单</td><td style="text-align:right" class="mono">${esc(String(cur.来源工单))}</td></tr>` : ''}
+        <tr><td class="dim">被引用</td><td style="text-align:right">${(cur.backlinks || []).length} 条目</td></tr>
+        ${cur.更新时间 ? `<tr><td class="dim">更新</td><td style="text-align:right">${esc(String(cur.更新时间).slice(0, 10))}</td></tr>` : ''}
+      </table></div>` : '';
+  return `<div class="wk-tools">
+      <input class="btn h32" style="padding:0 12px;width:200px" placeholder="搜索词条…" value="${esc(wkState.q)}" oninput="wkState.q=this.value;route()"/>
+      <button class="btn h32 ${wkState.mode === 'graph' ? 'accent' : ''}" onclick="wkState.mode=wkState.mode==='graph'?'read':'graph';route()">◉ 关系图</button>
+      <span class="cnt">${(d.条目 || []).length} 词条${d.待审.length ? ` · <span class="warnc">待审 ${d.待审.length}</span>` : ''}</span></div>
+    ${d.待审.length ? `<div style="margin-bottom:14px">${pend}</div>` : ''}
+    <div class="wk-grid">
+      <div class="wk-tree">${tree || '<p class="dim">无词条</p>'}</div>
+      <div class="wk-art card r16" style="padding:20px 24px">${article}</div>
+      <div>${info}</div>
+    </div>`;
+}
+window.wkOpen = (name) => { wkState.entry = name; wkState.mode = 'read'; route(); };
+window.wkApprove = async (f) => { const r = await post('/api/wiki/approve', { 文件: f, 项目: curProj() || projDefault() }); toast(r.ok ? `已入册「${r.名称}」` : (r.error || '失败')); route(); };
+window.wkReject = async (f) => { if (!confirm('退回将删除该待审稿（agent 提案不入史）。确认？')) return; const r = await post('/api/wiki/reject', { 文件: f, 项目: curProj() || projDefault() }); toast(r.ok ? '已退回' : (r.error || '失败')); route(); };
+// 力导向关系图：手写迭代（斥力+弹簧+向心），无外部库；拖拽节点、点击进词条。
+async function wkGraph(proj) {
+  const cv = $('wk-g'); if (!cv) return;
+  const g = await api('/api/wiki/graph?项目=' + encodeURIComponent(proj)).catch(() => null); if (!g) return;
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const CAT = { 世界观: '#7f77dd', 地图: '#1d9e75', 势力: '#d85a30', 系统: '#378add', 数值: '#ba7517', 未建: '#6b7280' };
+  const ns = g.nodes.map((n, i) => ({ ...n, x: W / 2 + Math.cos(i * 2.4) * (80 + i * 7), y: H / 2 + Math.sin(i * 2.4) * (60 + i * 5), vx: 0, vy: 0 }));
+  const byId = Object.fromEntries(ns.map((n) => [n.id, n]));
+  const es = g.edges.filter((e) => byId[e.from] && byId[e.to]);
+  let drag = null;
+  const step = () => {
+    for (const a of ns) { a.fx = (W / 2 - a.x) * 0.002; a.fy = (H / 2 - a.y) * 0.002; }
+    for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) {
+      const a = ns[i], b = ns[j];
+      let dx = a.x - b.x, dy = a.y - b.y; const d2 = dx * dx + dy * dy + 40;
+      const f = 1800 / d2; const d = Math.sqrt(d2);
+      dx /= d; dy /= d; a.fx += dx * f; a.fy += dy * f; b.fx -= dx * f; b.fy -= dy * f;
+    }
+    for (const e of es) {
+      const a = byId[e.from], b = byId[e.to];
+      let dx = b.x - a.x, dy = b.y - a.y; const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const f = (d - 110) * 0.004; dx /= d; dy /= d;
+      a.fx += dx * f * d * 0.02; a.fy += dy * f * d * 0.02; b.fx -= dx * f * d * 0.02; b.fy -= dy * f * d * 0.02;
+    }
+    for (const a of ns) { if (a === drag) continue; a.vx = (a.vx + a.fx) * 0.82; a.vy = (a.vy + a.fy) * 0.82; a.x += a.vx; a.y += a.vy; a.x = Math.max(30, Math.min(W - 30, a.x)); a.y = Math.max(24, Math.min(H - 24, a.y)); }
+  };
+  const draw = () => {
+    ctx.clearRect(0, 0, W, H);
+    ctx.strokeStyle = 'rgba(128,136,148,.35)'; ctx.lineWidth = 1;
+    for (const e of es) { const a = byId[e.from], b = byId[e.to]; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+    for (const n of ns) {
+      const r = 5 + Math.min(9, n.度 * 1.5);
+      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 7); ctx.fillStyle = CAT[n.分类] || '#888'; ctx.fill();
+      ctx.fillStyle = getComputedStyle(document.body).color; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(n.id, n.x, n.y - r - 5);
+    }
+  };
+  let ticks = 0;
+  const loop = () => { if (!document.contains(cv)) return; step(); draw(); if (++ticks < 600 || drag) requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+  const pos = (ev) => { const b = cv.getBoundingClientRect(); return { x: (ev.clientX - b.left) * W / b.width, y: (ev.clientY - b.top) * H / b.height }; };
+  const hit = (p) => ns.find((n) => (n.x - p.x) ** 2 + (n.y - p.y) ** 2 < 220);
+  cv.onmousedown = (ev) => { drag = hit(pos(ev)); if (drag) { ticks = 0; requestAnimationFrame(loop); } };
+  cv.onmousemove = (ev) => { if (drag) { const p = pos(ev); drag.x = p.x; drag.y = p.y; ticks = 0; } };
+  cv.onmouseup = (ev) => { if (drag) { const p = pos(ev); const n = hit(p); if (n === drag && Math.abs(drag.vx) < 1) { /* 点击语义留 click */ } } drag = null; };
+  cv.onclick = (ev) => { const n = hit(pos(ev)); if (n && n.分类 !== '未建') wkOpen(n.id); };
+}
+
+const ROUTES = { '': viewOverview, ideas: viewIdeas, board: viewBoard, flow: viewFlow, tree: viewTree, agents: viewAgents, decisions: viewDecisions, wiki: viewWiki, relay: viewRelay, stylelib: viewStyleLib, report: viewReport };
 
 /* ===== P14 想法池（H49 双域·制作人层域）===== */
 async function viewIdeas() {

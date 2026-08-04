@@ -76,6 +76,53 @@ app.get('/api/board', (req, res) => {
 
 // ---- 管线（H51/H52，0.19）：独立实体，开线/封存=人闸（仅本机） ----
 const pipelines = require('./lib/pipelines');
+// ---- Wiki（0.20，H52 第三类实体）：设计事实源浏览 + 待审人闸 + 关系图 ----
+const wiki = require('./lib/wiki');
+function wikiProj(req) {
+  const reg = (cfg.项目 && cfg.项目.注册) || {};
+  const name = String(req.query.项目 || req.body && req.body.项目 || '') || (cfg.项目 && cfg.项目.默认) || '';
+  const p = name && reg[name] && reg[name].路径;
+  return p && fs.existsSync(p) ? p : null;
+}
+app.get('/api/wiki', (req, res) => {
+  if (!ready(res)) return;
+  const p = wikiProj(req);
+  if (!p) return res.status(400).json({ error: '项目未注册或路径不存在' });
+  const { entries } = wiki.scan(p);
+  res.json({ 条目: entries, 待审: wiki.pending(p) });
+});
+app.get('/api/wiki/entry', (req, res) => {
+  if (!ready(res)) return;
+  const p = wikiProj(req);
+  if (!p) return res.status(400).json({ error: '项目未注册' });
+  const e = wiki.readEntry(p, String(req.query.名称 || ''));
+  if (!e) return res.status(404).json({ error: '条目不存在' });
+  res.json(e);
+});
+app.get('/api/wiki/graph', (req, res) => {
+  if (!ready(res)) return;
+  const p = wikiProj(req);
+  if (!p) return res.status(400).json({ error: '项目未注册' });
+  res.json(wiki.graph(p));
+});
+app.post('/api/wiki/approve', (req, res) => {
+  if (!ready(res)) return;
+  const p = wikiProj(req);
+  if (!p) return res.status(400).json({ error: '项目未注册' });
+  const r = wiki.approve(p, String((req.body || {}).文件 || ''));
+  if (r.ok) journal.append(ROOT, `wiki 入册「${r.名称}」（${r.分类} · 制作人人闸）`);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.post('/api/wiki/reject', (req, res) => {
+  if (!ready(res)) return;
+  const p = wikiProj(req);
+  if (!p) return res.status(400).json({ error: '项目未注册' });
+  const 文件 = String((req.body || {}).文件 || '');
+  const r = wiki.reject(p, 文件);
+  if (r.ok) journal.append(ROOT, `wiki 退回待审稿 ${文件}（制作人人闸）`);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
 app.get('/api/pipelines', (req, res) => {
   if (!ready(res)) return;
   const ps = pipelines.list(ROOT).map((p) => ({ id: p.id, ...p.fm }));

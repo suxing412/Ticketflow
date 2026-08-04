@@ -693,3 +693,23 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .idea .in2 { font-size:12px; color:var(--ink3); }
 .idea .ia { display:flex; align-items:center; gap:8px; margin-top:4px; }
 .idea .ia .sp { flex:1; }
+
+/* ===== P16 Wiki（0.20）：三栏词条布局 · 双链 · 待审卡 ===== */
+.wk-tools { display:flex; gap:10px; align-items:center; margin:18px 0 14px; }
+.wk-grid { display:grid; grid-template-columns: 170px minmax(0,1fr) 210px; gap:16px; align-items:start; }
+.wk-tree { border-right:0.5px solid var(--line); padding-right:12px; font-size:13px; }
+.wk-cat { margin:0 0 8px; font-weight:600; }
+.wk-it { margin:0 0 6px 16px; color:var(--ink2); cursor:pointer; }
+.wk-it:hover { color:var(--ink); }
+.wk-it.cur { color:var(--accent-ink); font-weight:600; }
+.wk-l { color:var(--accent-ink); cursor:pointer; }
+.wk-l:hover { text-decoration:underline; }
+.wk-l.ghost { opacity:.55; border-bottom:1px dashed var(--accent-ink); }
+.wk-body { line-height:1.85; font-size:14px; }
+.wk-body p { margin:0 0 12px; }
+.wk-body ul { margin:0 0 12px 18px; padding:0; }
+.wk-body li { margin-bottom:4px; }
+.wk-h { margin:16px 0 8px; }
+.wk-back { border-top:0.5px solid var(--line); margin-top:16px; padding-top:10px; }
+.wk-pend { display:flex; gap:10px; align-items:center; padding:10px 14px; margin-bottom:8px; border-left:3px solid var(--warn); border-radius:0 12px 12px 0; }
+@media (max-width: 680px) { .wk-grid { grid-template-columns: 1fr; } .wk-tree { border-right:none; } }
