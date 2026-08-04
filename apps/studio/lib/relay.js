@@ -10,7 +10,8 @@ function append(root, from, text) {
   const t = String(text || '').trim();
   if (!t) return { ok: false, error: '空指令不收' };
   if (t.length > 4000) return { ok: false, error: '单条 ≤4000 字' };
-  if (!['制作人', 'Claude'].includes(from)) return { ok: false, error: '非法署名' };
+  // 项管入列（2026-08-05 夜班推演案：答话/简报/收口/起草的信道发言全被旧白名单静默丢弃）
+  if (!['制作人', 'Claude', '项管'].includes(from)) return { ok: false, error: '非法署名' };
   fs.mkdirSync(path.dirname(FILE(root)), { recursive: true });
   const entry = { t: new Date().toISOString(), from, text: t };
   fs.appendFileSync(FILE(root), JSON.stringify(entry) + '\n', 'utf8');

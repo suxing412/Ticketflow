@@ -121,8 +121,8 @@ function 收回(root, id) {
   const t = store.find(root, id);
   if (!t) return { ok: false, error: '不存在' };
   if (t.state !== '在途') return { ok: false, error: `只有在途单可收回（当前 ${t.state}）` };
-  const r = store.move(root, id, '在途', '池', (fm) => { delete fm.主办; delete fm.领单时间; }, nowIso());
-  if (r.ok) journal.append(root, `收回 ${id}（在途→池 · 清主办）`);
+  const r = store.move(root, id, '在途', '池', (fm) => { delete fm.主办; delete fm.领单时间; fm.放行 = false; }, nowIso()); // 收回=收权：撤放行旗（2026-08-05 语义分家：收回待重放行，重投带放行）
+  if (r.ok) journal.append(root, `收回 ${id}（在途→池 · 清主办 · 撤放行）`);
   return r;
 }
 
@@ -173,8 +173,8 @@ function 失败分诊(root, id, 决定) {
   if (!t) return { ok: false, error: '不存在' };
   if (t.state !== '执行失败') return { ok: false, error: `当前不在执行失败（${t.state}）` };
   if (决定 === '重投') {
-    const r = store.move(root, id, '执行失败', '池', (fm) => { delete fm.主办; delete fm.领单时间; delete fm.交付时间; }, nowIso());
-    if (r.ok) journal.append(root, `失败分诊 ${id}：重投（执行失败→池 · 清主办重新可领）`);
+    const r = store.move(root, id, '执行失败', '池', (fm) => { delete fm.主办; delete fm.领单时间; delete fm.交付时间; fm.放行 = true; }, nowIso()); // 重投=明确指令：带放行旗过迁移（2026-08-05）
+    if (r.ok) journal.append(root, `失败分诊 ${id}：重投（执行失败→池 · 清主办 · 带放行重新可派）`);
     return r;
   }
   if (决定 === '上呈') {

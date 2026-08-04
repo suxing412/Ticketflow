@@ -236,7 +236,7 @@ function answer(root, cfg, question, cb) {
   const model = (cfg.模型 || {}).项管 || 'fable';
   setWorking({ 用途: '答话' });
   const child = spawn(cmd, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'],
-    { env: { ...process.env }, windowsHide: true, shell: String(cmd).endsWith('.cmd') });
+    { cwd: root, env: { ...process.env }, windowsHide: true, shell: String(cmd).endsWith('.cmd') }); // cwd=工单库：答话会话有读权（2026-08-05 推演案：曾困在临时目录只能看注入摘要）
   let out = '';
   child.stdout.on('data', (d) => { out += d; if (out.length > 400000) out = out.slice(-200000); });
   const timer = setTimeout(() => { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch { /**/ } }, 5 * 60000);

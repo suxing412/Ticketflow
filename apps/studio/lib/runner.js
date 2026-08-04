@@ -460,9 +460,9 @@ async function tick(root, cfg, opts = {}) {
     // ②′ 派发制（H49）：迁移旧池 → 就绪盘点 → 护城河/并发闸 → 拉起一次性 agent
     const dispatch = require('./pm/dispatch');
     const pmLedger = require('./pm/ledger');
-    for (const t of store.list(root, '池')) { // 池目录清空归位：现今只有「收回」会入池——退待投但不放行（2026-08-05 TK-79 逃逸案：旧写法强制放行=收回即复活）
-      const r = store.move(root, t.id, '池', '待投', (fm) => { fm.放行 = false; }, opts.nowIso || new Date().toISOString());
-      if (r.ok) { journal.append(root, `归位：${t.id} 池→待投（收回单，待重新放行）`); pmLedger.event(root, '迁移', { id: t.id }); }
+    for (const t of store.list(root, '池')) { // 池目录归位：只搬家不改旗——放行意图由动作定（收回撤旗/重投带旗，2026-08-05 语义分家）
+      const r = store.move(root, t.id, '池', '待投', (fm) => { fm.放行 = fm.放行 === true; }, opts.nowIso || new Date().toISOString());
+      if (r.ok) { journal.append(root, `归位：${t.id} 池→待投（放行旗保持 ${t.fm.放行 === true ? '有' : '无'}）`); pmLedger.event(root, '迁移', { id: t.id }); }
     }
     if (!(st.paused || {}).global) {
       const locks = await require('./gates').allLocks(cfg).catch(() => null);
