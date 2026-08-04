@@ -76,6 +76,17 @@ app.get('/api/board', (req, res) => {
 
 // ---- 管线（H51/H52，0.19）：独立实体，开线/封存=人闸（仅本机） ----
 const pipelines = require('./lib/pipelines');
+// ---- 呼叫信箱（0.21）：确定性监视统一出口——会话侧一条监视器 tail 此文件即可 ----
+const inbox = require('./lib/inbox');
+app.get('/api/inbox', (req, res) => {
+  if (!ready(res)) return;
+  res.json({ 未读: inbox.unread(ROOT), 全部: inbox.list(ROOT, Number(req.query.limit) || 50) });
+});
+app.post('/api/inbox/read', (req, res) => {
+  if (!ready(res)) return;
+  res.json(inbox.markRead(ROOT));
+});
+
 // ---- Wiki（0.20，H52 第三类实体）：设计事实源浏览 + 待审人闸 + 关系图 ----
 const wiki = require('./lib/wiki');
 function wikiProj(req) {

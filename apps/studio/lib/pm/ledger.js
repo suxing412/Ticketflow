@@ -40,7 +40,9 @@ function update(root, fn) {
 }
 
 // 事件流水：只追加（派发/落袋/失败/切单/报警……）
+const INBOX_TYPES = { 待审: '急', 上呈: '急', 收口报告: '急', 额度报警: '急' };
 function event(root, 类型, data) {
+  if (INBOX_TYPES[类型]) { try { require('../inbox').post(root, INBOX_TYPES[类型], 类型, JSON.stringify(data).slice(0, 200), data && data.父单 ? { 单号: data.父单 } : undefined); } catch { /* 信箱失败不阻塞记账 */ } }
   fs.mkdirSync(DIR(root), { recursive: true });
   const e = { t: new Date().toISOString(), 类型, ...(data || {}) };
   fs.appendFileSync(EVENTS(root), JSON.stringify(e) + '\n', 'utf8');

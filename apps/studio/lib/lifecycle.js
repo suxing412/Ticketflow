@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const store = require('./core/store');
 const journal = require('./journal');
+const inbox = require('./inbox');
 
 const nowIso = () => new Date().toISOString();
 
@@ -60,7 +61,7 @@ function QA裁定(root, cfg, id, 通过) {
     return r;
   }
   const r = store.move(root, id, '质检', '待定夺', (fm) => { fm.自修次数 = c; }, nowIso());
-  if (r.ok) journal.append(root, `QA 修不好 ${id} → 待定夺（四件套呈你我）`);
+  if (r.ok) { journal.append(root, `QA 修不好 ${id} → 待定夺（四件套呈你我）`); inbox.post(root, '急', '三振上呈', `${id} QA 修不好，四件套待裁`, { 单号: id }); }
   return r;
 }
 
@@ -142,6 +143,7 @@ function 滞留检查(root, cfg, nowMs) {
         if (!t.fm.滞留告警) { // 只记一次，不刷屏
           store.update(root, t.id, (fm) => { fm.滞留告警 = true; fm.滞留时长h = Math.round(停留h); }, new Date(now).toISOString());
           journal.append(root, `滞留告警 ${t.id}（${state} 停留 ${Math.round(停留h)}h，超 ${超时h}h）——请人工检查，未自动撤回`);
+          inbox.post(root, '急', '滞留告警', `${t.id} ${state} 停留 ${Math.round(停留h)}h`, { 单号: t.id });
         }
         告警.push({ id: t.id, state, 停留h: Math.round(停留h) });
       }
@@ -161,7 +163,7 @@ function 执行失败(root, id, 原因) {
     fm.失败次数 = (Number(fm.失败次数) || 0) + 1;
     fm.失败时间 = nowIso();
   }, nowIso());
-  if (r.ok) journal.append(root, `执行失败 ${id}（${t.state}→执行失败 · ${String(原因 || '').slice(0, 60)}）——待 Claude 分诊`);
+  if (r.ok) { journal.append(root, `执行失败 ${id}（${t.state}→执行失败 · ${String(原因 || '').slice(0, 60)}）——待 Claude 分诊`); inbox.post(root, '急', '执行失败', `${id} ${String(原因 || '').slice(0, 80)}`, { 单号: id }); }
   return r;
 }
 

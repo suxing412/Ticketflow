@@ -62,7 +62,7 @@ function checkCloseouts(root, cfg, opts = {}) {
         const cur = store.find(root, p.id);
         if (cur && ['在途', '待投'].includes(cur.state)) {
           const mv = store.move(root, p.id, cur.state, '待验收', (fm) => { fm.交付时间 = new Date().toISOString(); }, new Date().toISOString());
-          if (mv.ok) journal.append(root, `专项收口 ${p.id} → 待验收（父单=唯一签字位，H53）`);
+          if (mv.ok) { journal.append(root, `专项收口 ${p.id} → 待验收（父单=唯一签字位，H53）`); require('../inbox').post(root, '急', '专项待签', `${p.id} 收口完毕，待制作人签字`, { 单号: p.id }); }
         }
       };
       if (!opts.test) {

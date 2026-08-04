@@ -14,6 +14,7 @@ const state = require('./core/state');
 const pool = require('./pool');
 const lifecycle = require('./lifecycle');
 const journal = require('./journal');
+const inbox = require('./inbox');
 
 // 内存态：正在执行的工作（agentId → { id, kind, startedAt, timer, child }）。
 // exe 重启即清空，tick 为"在途/质检有主办但无执行记录"的单重新拉起（断点恢复）。
@@ -60,7 +61,7 @@ function editorBusyProjects(cfg) {
   return busy;
 }
 function reportEditorBusy(root, busy) {
-  for (const name of busy) if (!editorBusyLast.has(name)) journal.append(root, `编辑器占用 ${name}：涉该项目派发挂起（关编辑器自动恢复）`);
+  for (const name of busy) if (!editorBusyLast.has(name)) { journal.append(root, `编辑器占用 ${name}：涉该项目派发挂起（关编辑器自动恢复）`); inbox.post(root, '常', '编辑器占用', `${name} 派发挂起`); }
   for (const name of editorBusyLast) if (!busy.has(name)) journal.append(root, `编辑器占用解除 ${name}：派发恢复`);
   editorBusyLast = new Set(busy);
 }
@@ -278,6 +279,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
         if (r.ok) journal.append(root, `委托代核通过 ${t.id} → 验收完成（Claude 代劳，D11/D34）`);
       } else {
         journal.append(root, `委托代核不过 ${t.id}：留在待验收，附核验报告等你裁（不自动打回）`);
+        inbox.post(root, '急', '代核不过', `${t.id} 核验报告待裁`, { 单号: t.id });
       }
     } else {
       if (!cur || cur.state !== '在途') return; // 期间被收回/废弃，不硬交
