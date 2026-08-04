@@ -350,7 +350,8 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   const poolName = t.fm.执行池 || 'claude';
   const agentCfg = (cfg.agents || []).find((a) => a.id === agentId);
   const model = pickModel(cfg, kind, agentCfg, poolName);
-  const { cmd, args, stream } = resolveCli(kind === '执行' ? poolName : 'claude', model, (cfg.执行器 || {}).放行工具); // 质检/代核都走 claude
+  const compat = kind === '执行' && cfg.执行池 && cfg.执行池[poolName] && cfg.执行池[poolName].兼容;
+  const { cmd, args, stream } = resolveCli(kind === '执行' ? poolName : 'claude', compat ? (compat.模型 || model) : model, (cfg.执行器 || {}).放行工具); // 质检/代核都走 claude
   const receiptPath = path.join(root, '回执', `${t.id}.md`);
   const prompt = kind === '质检' ? buildQaPrompt(root, t, proj, receiptPath)
     : kind === '代核' ? buildAuditPrompt(root, t, proj, receiptPath)
@@ -358,7 +359,16 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     : buildPrompt(root, t, proj);
   let child;
   try {
-    child = spawn(cmd, args, { cwd: proj.path, env: proxyEnv(cfg), windowsHide: true, shell: cmd.endsWith('.cmd'), stdio: ['pipe', 'pipe', 'pipe'] });
+    const env = proxyEnv(cfg);
+    if (compat) {
+      env.ANTHROPIC_BASE_URL = compat.base; env.ANTHROPIC_AUTH_TOKEN = compat.key; delete env.ANTHROPIC_API_KEY;
+      // 双认证冲突（实测挂起 50s+）：订阅 OAuth 登录态与 env 令牌并存时 CLI 静默等待——
+      // 兼容池用独立配置目录隔离登录态；国内端点剥代理直连。
+      env.CLAUDE_CONFIG_DIR = path.join(root, '兼容池配置', poolName);
+      try { fs.mkdirSync(env.CLAUDE_CONFIG_DIR, { recursive: true }); } catch { /* 已存在 */ }
+      delete env.HTTPS_PROXY; delete env.HTTP_PROXY; delete env.https_proxy; delete env.http_proxy;
+    }
+    child = spawn(cmd, args, { cwd: proj.path, env, windowsHide: true, shell: cmd.endsWith('.cmd'), stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (e) { failLocal('CLI 启动失败：' + e.message); return true; }
   entry.child = child;
   const cliPool = kind === '执行' ? poolName : 'claude'; // 质检/代核实际走 claude，流水如实记

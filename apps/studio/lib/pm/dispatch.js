@@ -49,7 +49,7 @@ function moatBlocked(cfg, gatesInfo, poolName) {
 }
 
 // 硬顶（代码级）：任何情况下每池并发不得超过此值——项管只能在此以内调
-const HARD_CAP = { codex: 3, claude: 3 };
+const HARD_CAP = { codex: 3, claude: 3, deepseek: 3 };
 
 // 挑单：给定在跑计数与闸态，返回本轮可拉起的清单（不执行，纯决策——可测）
 function pickNext(cfg, ready, runningByPool, gatesInfo, caps) {
