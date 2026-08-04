@@ -43,6 +43,28 @@ function pickModel(cfg, kind, agentCfg, poolName) {
   return (agentCfg && agentCfg.模型) || m[poolName + '默认'] || '';
 }
 
+// ---- 编辑器占用监视（0.20.2）：UnityLockfile 在 + 本机有 Unity 进程 = 制作人在用编辑器。
+// 孤儿锁（进程已死）不算占用——enginectl 侧会自愈清除。探测结果 5s 缓存防 tasklist 刷屏。 ----
+let editorProbeCache = { at: 0, busy: new Set() };
+let editorBusyLast = new Set();
+function editorBusyProjects(cfg) {
+  if (Date.now() - editorProbeCache.at < 5000) return editorProbeCache.busy;
+  const busy = new Set();
+  const reg = (cfg.项目 && cfg.项目.注册) || {};
+  const locks = Object.entries(reg).filter(([, v]) => v.路径 && fs.existsSync(path.join(v.路径, 'Temp', 'UnityLockfile')));
+  if (locks.length) {
+    const r = require('child_process').spawnSync('tasklist', ['/FI', 'IMAGENAME eq Unity.exe', '/NH'], { encoding: 'utf8', windowsHide: true });
+    if (/Unity\.exe/i.test(r.stdout || '')) for (const [name] of locks) busy.add(name);
+  }
+  editorProbeCache = { at: Date.now(), busy };
+  return busy;
+}
+function reportEditorBusy(root, busy) {
+  for (const name of busy) if (!editorBusyLast.has(name)) journal.append(root, `编辑器占用 ${name}：涉该项目派发挂起（关编辑器自动恢复）`);
+  for (const name of editorBusyLast) if (!busy.has(name)) journal.append(root, `编辑器占用解除 ${name}：派发恢复`);
+  editorBusyLast = new Set(busy);
+}
+
 // ---- 实弹 CLI 定位：exe 的 GUI 进程 PATH 不全（探针实证），按候选绝对路径解析 ----
 function resolveCli(poolName, model, allowedTools) {
   if (poolName === 'codex') {
@@ -404,7 +426,17 @@ async function tick(root, cfg, opts = {}) {
       const runningByPool = {};
       for (const e of running.values()) if (e.kind === '执行' && e.池) runningByPool[e.池] = (runningByPool[e.池] || 0) + 1;
       const ledger = pmLedger.read(root);
-      const ready = dispatch.readySet(root, pool.criticalSet(root));
+      // 编辑器占用监视（用户提议，0.20.2）：制作人开着 Unity 编辑器时该项目的派发挂起，
+      // 关编辑器下个周期自动恢复——agent 与人抢工程锁的对撞从派发源头消除（TK-62 超时案）。
+      const readyAll = dispatch.readySet(root, pool.criticalSet(root));
+      const busyProjects = editorBusyProjects(cfg);
+      const ready = readyAll.filter((r2) => {
+        const t2 = store.find(root, r2.id);
+        const pj = t2 && projectPath(cfg, t2);
+        if (pj && busyProjects.has(pj.name)) { result.拒因.push(`${r2.id} 挂起：项目 ${pj.name} 编辑器占用中`); return false; }
+        return true;
+      });
+      reportEditorBusy(root, busyProjects);
       const picks = dispatch.pickNext(cfg, ready, runningByPool, gatesInfo, ledger.并发上限);
       for (const p of picks) {
         const t0 = store.find(root, p.id);
@@ -503,6 +535,7 @@ function status(root, cfg) {
     间隔秒: (cfg.执行器 || {}).间隔秒 ?? 15,
     执行中: [...running.entries()].map(([agent, e]) => ({ agent, id: e.id, kind: e.kind, startedAt: e.startedAt, tail: e.tail || null })),
     执行失败数: store.list(root, '执行失败').length,
+    编辑器占用: [...editorBusyProjects(cfg)],
     上轮: lastTick,
   };
 }

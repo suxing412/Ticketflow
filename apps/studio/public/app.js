@@ -692,7 +692,8 @@ function viewAgentsDispatch(d, all) {
     els.forEach((el) => { const t = Date.parse(el.dataset.since); if (!isNaN(t)) el.textContent = fmtElapsed(Date.now() - t); });
     setTimeout(tickTm, 1000);
   }, 1000);
-  return `<div class="sec-h" style="margin-top:26px"><h3 class="h17">在跑执行者</h3>
+  const busyBanner = (d.编辑器占用||[]).length ? `<div class="card r14" style="padding:10px 16px;margin-top:16px;border-left:3px solid var(--warn);border-radius:0 12px 12px 0"><b>编辑器占用中</b> · 项目 ${d.编辑器占用.map(esc).join("、")} 的派发已挂起——关闭 Unity 编辑器后自动恢复</div>` : '';
+  return busyBanner + `<div class="sec-h" style="margin-top:26px"><h3 class="h17">在跑执行者</h3>
       <span class="subnote">派发制 · 因单而生、完成即销毁 · 并发 codex ≤${lim.codex != null ? lim.codex : '—'} / claude ≤${lim.claude != null ? lim.claude : '—'}（项管调配 · 代码硬顶 3）</span></div>
     ${cards}
     <div class="sec-h" style="margin-top:26px"><h3 class="h17">判官编制</h3><span class="subnote">质检 / 代核 / 代裁 · 唯一常驻岗</span></div>

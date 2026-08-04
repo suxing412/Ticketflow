@@ -463,7 +463,7 @@ app.get('/api/agents', (req, res) => {
       return { id: a.id, 忙: !!busy, 当前: busy ? busy.id : null };
     });
     const l = pmLedger.read(ROOT);
-    return res.json({ 模式: '派发', 在跑, 判官, 就绪队列: l.就绪队列 || [], 并发上限: l.并发上限, 滞留告警: 滞留 });
+    return res.json({ 模式: '派发', 在跑, 判官, 就绪队列: l.就绪队列 || [], 并发上限: l.并发上限, 滞留告警: 滞留, 编辑器占用: runStatus.编辑器占用 || [] });
   }
   const byAgent = {};
   for (const t of fl) if (t.fm.主办) byAgent[t.fm.主办] = { id: t.id, title: t.fm.title, state: t.state, 职能: t.fm.职能, 领单时间: t.fm.领单时间 };
