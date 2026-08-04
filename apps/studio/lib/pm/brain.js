@@ -8,6 +8,29 @@ const { spawn } = require('child_process');
 const store = require('../core/store');
 const ledger = require('./ledger');
 
+// 管理费记账（H49 报表单列，0.22.3 补接线）：从事件流提取真实用量入台账
+function extractUsage(raw) {
+  let inTok = 0, outTok = 0;
+  for (const line of String(raw).split(String.fromCharCode(10))) {
+    const s = line.replace(String.fromCharCode(13), '').trim();
+    if (!s.startsWith('{')) continue;
+    try { const e = JSON.parse(s);
+      const u = (e.usage) || (e.message && e.message.usage);
+      if (u) { if (u.input_tokens) inTok = Math.max(inTok, u.input_tokens + (u.cache_read_input_tokens || 0)); if (u.output_tokens) outTok += u.output_tokens; }
+    } catch { /* 忽略 */ }
+  }
+  return { input: inTok, output: outTok };
+}
+function billFee(root, 用途, raw) {
+  try { const u = extractUsage(raw);
+    ledger.update(root, (l) => { l.管理费 = l.管理费 || { token合计: 0, 次数: 0 };
+      l.管理费.token合计 += u.input + u.output; l.管理费.次数 += 1;
+      l.管理费.明细 = l.管理费.明细 || []; l.管理费.明细.push({ t: new Date().toISOString(), 用途, tokens: u.input + u.output });
+      if (l.管理费.明细.length > 200) l.管理费.明细 = l.管理费.明细.slice(-200);
+    });
+  } catch { /* 记账失败不阻塞 */ }
+}
+
 function cli() {
   const home = os.homedir();
   const cands = [path.join(home, '.local', 'bin', 'claude.exe'), path.join(home, 'AppData', 'Roaming', 'npm', 'claude.cmd'), 'claude'];
