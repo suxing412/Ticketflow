@@ -10,6 +10,12 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+# 互斥（0.23.8 教训：两个等窗任务互踩，旧任务把新版本盖回去）
+$mutex = Join-Path $env:TEMP 'studio-deploy.lock'
+if (Test-Path $mutex) { $age=(Get-Date)-(Get-Item $mutex).LastWriteTime; if ($age.TotalMinutes -lt 45) { Write-Error "另一换装任务持锁中（$([int]$age.TotalMinutes) 分钟前），拒绝并发"; exit 4 } }
+Set-Content $mutex (Get-Date) -Encoding utf8
+try {
+
 if (-not $Version) {
   # 取产物目录最新 exe 的版本号（避开 PS5.1 的 JSON/BOM 摩擦）
   $latest = Get-ChildItem $DistDir -Filter '监制台 *.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -48,3 +54,4 @@ try {
   Write-Error "换装后服务无应答——检查 $DeployDir 的 exe 与端口 $Port"
   exit 3
 }
+} finally { Remove-Item $mutex -Force -ErrorAction SilentlyContinue }
