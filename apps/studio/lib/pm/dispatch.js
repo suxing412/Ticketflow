@@ -9,7 +9,9 @@ function depsDone(root, t) {
   const d = t.fm.依赖;
   if (!d) return true;
   const ids = (Array.isArray(d) ? d.map(String) : String(d).split(/[，,\s]+/)).filter(Boolean);
-  const done = new Set(['完成', '已归档']);
+  // 只认「完成」：已归档含废弃/打回/推翻（完成→已归档唯一入口=推翻重做），皆非落袋。
+  // H59 首案（TK-79 误派发，2026-08-05）：TK-76 废弃归档曾被当作依赖已了结。
+  const done = new Set(['完成']);
   for (const id of ids) {
     const dep = store.find(root, id);
     if (dep && !done.has(dep.state)) return false;

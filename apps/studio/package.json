@@ -1,6 +1,6 @@
 {
   "name": "studio-console",
-  "version": "0.23.12",
+  "version": "0.23.13",
   "private": true,
   "description": "监制台：AI 工作室制作人驾驶舱。工单 .md 是唯一事实源，目录即状态机。",
   "main": "main.js",

@@ -1002,7 +1002,48 @@ async function viewParams() {
   const params = Object.entries(c.闸值 || {}).map(([k, v]) => `<div class="paramcard card" data-key="${esc(k)}"><h4>${esc(P6NAMES[k] || k)}</h4><p class="pmeta">${esc((P6META[k] || '').replace('N', v))}</p>
       <div class="stepper"><button onclick="pStep('${k}',-1)">−</button><span class="val">${v}</span><button onclick="pStep('${k}',1)">＋</button></div></div>`).join('');
   const recCards = ''; // 精力档/推荐在途（D28）已随拉取制退役（0.23.11）
-  
+  void staffCards; void capCard; void recCards; // 退役占位，仅为注释留痕
+  const team = teamRowsHtml(c.agents);
+  // 额度不阻塞首屏：先占位骨架，数据回来原地填（footprint 不变），随后 5s 活体轮询
+  let lastPoolJson = '';
+  const fillPools = async () => {
+    const g = await api('/api/gates');
+    const key = JSON.stringify([g.locks.codex, g.locks.claude]);
+    if (key === lastPoolJson) return;
+    lastPoolJson = key;
+    const pc = $('pool-codex'); if (pc) pc.innerHTML = poolCardHtml('codex', g.locks.codex, c.执行池 && c.执行池.codex);
+    const pl = $('pool-claude'); if (pl) pl.innerHTML = poolCardHtml('claude', g.locks.claude, c.执行池 && c.执行池.claude);
+  };
+  setTimeout(() => { fillPools().catch(() => { /* 保持占位，不清空 */ }); }, 0);
+  pollLoop('pool-codex', 5000, fillPools);
+  // 执行器活体轮询：留在参数页时每 5s 原地刷状态灯/执行中清单，离开视图自动停
+  setTimeout(function pollRun() {
+    if (!$('run-card')) return;
+    setTimeout(async () => {
+      if (!$('run-card')) return;
+      try {
+        const r = await api('/api/runner');
+        const dot = $('run-dot'); if (dot) dot.className = dotCls(r);
+        const st = $('run-state'); if (st) st.textContent = r.运行 ? '运行中' : '已停';
+        const bt = $('run-toggle'); if (bt) { bt.textContent = r.运行 ? '停止' : '启动'; bt.className = 'btn h32' + (r.运行 ? '' : ' primary'); }
+        const meta = $('run-meta'); if (meta) meta.textContent = (r.试跑 ? '试跑模式：模拟执行 · 零额度' : '实弹模式') + (r.执行中 && r.执行中.length ? ` · 执行中 ${r.执行中.map((x) => x.id).join(' / ')}` : '');
+      } catch { /* 下轮再试 */ }
+      pollRun();
+    }, 5000);
+  }, 0);
+  // 全链路自检进页自动跑（服务端 60s 缓存，便宜）；按钮=强制复检
+  setTimeout(() => { if ($('env-card')) window.envProbe(null); }, 0);
+  return `<div class="p6grid"><div>
+      <div class="sec-h"><h3 class="h17">执行器</h3><span class="subnote">派发调度循环 · 开 exe 即开工厂</span></div>${runCards}
+      <div class="sec-h" style="margin-top:26px"><h3 class="h17">参数闸值</h3><span class="subnote">监制台可调</span></div>${params}
+      <div class="sec-h" style="margin-top:26px"><h3 class="h17">模型档</h3><span class="subnote">贵裁判 · 贱体力（D38）</span></div>${modelCards}${compatCards}</div>
+    <div><div class="sec-h"><h3 class="h17">环境探针</h3><span class="subnote">实弹前置检查</span></div>${envCard}
+      <div class="sec-h" style="margin-top:26px"><h3 class="h17">项目注册</h3><span class="subnote">执行 agent 的目标仓库（D32）</span></div>${projCard}
+      <div class="sec-h" style="margin-top:26px"><h3 class="h17">执行池阈值</h3><span class="subnote">额度锁的杆（D26）</span></div>${poolCards}
+      <div class="sec-h" style="margin-top:26px"><h3 class="h17">额度双池</h3></div>
+      <div class="poolcard card" id="pool-codex">${poolCardHtml('codex', null, c.执行池 && c.执行池.codex)}</div>
+      <div class="poolcard card" id="pool-claude">${poolCardHtml('claude', null, c.执行池 && c.执行池.claude)}</div>
+      <div class="sec-h" style="margin-top:26px"><h3 style="font-size:15px;margin:0;font-weight:700">agent 编制 · 执行池</h3></div><div id="team-list">${team}</div></div></div>`;
 }
 // 编制步进：POST 后原地更新该职能人数、在途上限推导值、右侧编制表——视图保持渲染，不整页重载
 // sStep（编制步进）已随拉取制退役（0.23.11）
@@ -1606,7 +1647,10 @@ window.ideaAct = async (动作, id) => {
 
 /* ===== P13 项管信道（0.18.6，前身遥控传令板）：制作人 ↔ 项管问答 + 汇报流 ===== */
 function pmEventLine(e) {
-  const t = String(e.t || '').slice(5, 16).replace('T', ' ');
+  // e.t 是 UTC ISO 串，必须转本地时区再显示（用户实测：00:16 曾显示成 16:16）
+  const d0 = new Date(e.t); const p2 = (n) => String(n).padStart(2, '0');
+  const t = isNaN(d0) ? String(e.t || '').slice(5, 16).replace('T', ' ')
+    : `${p2(d0.getMonth() + 1)}-${p2(d0.getDate())} ${p2(d0.getHours())}:${p2(d0.getMinutes())}`;
   if (e.类型 === '待审') return { t, txt: `拆单完成：${e.父单} → ${(e.子单 || []).join('、')}，简报呈 Claude 审批`, hot: true };
   if (e.类型 === '切单启动') return { t, txt: `开始拆单：${e.父单}（仓况盘点中）`, hot: true };
   if (e.类型 === '派发') return { t, txt: `派发 ${e.id} → ${e.池} 池` };
