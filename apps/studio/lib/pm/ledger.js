@@ -21,14 +21,34 @@ function read(root) {
   try {
     const s = JSON.parse(fs.readFileSync(STATE(root), 'utf8'));
     return { ...DEFAULT(), ...s };
-  } catch { return DEFAULT(); }
+  } catch (e1) {
+    // 防清零（2026-08-05 管理费历史丢失案）：主档读失败不再静默退空账——
+    // 先回退 .bak 副本；副本也不可用时把损毁现场留档再退空，全程 journal 留痕。
+    try {
+      const b = JSON.parse(fs.readFileSync(STATE(root) + '.bak', 'utf8'));
+      try { journal(root, '台账主档读失败（' + e1.message + '），已用 .bak 副本回退'); } catch { /* 留痕失败不阻塞 */ }
+      return { ...DEFAULT(), ...b };
+    } catch {
+      try {
+        if (fs.existsSync(STATE(root))) {
+          fs.copyFileSync(STATE(root), STATE(root) + '.损毁-' + Date.now() + '.json');
+          journal(root, '台账主档与副本均不可读，退回空账（损毁现场已留档）');
+        }
+      } catch { /* 留痕失败不阻塞 */ }
+      return DEFAULT();
+    }
+  }
 }
+
+function journal(root, msg) { try { require('../journal').append(root, msg); } catch { /* 无 journal 环境（测试）忽略 */ } }
 
 function write(root, ledger) {
   fs.mkdirSync(DIR(root), { recursive: true });
   ledger.更新时间 = new Date().toISOString();
   const tmp = STATE(root) + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(ledger, null, 2), 'utf8');
+  // 写盘前留一份可解析的旧档做 .bak（600B 量级）；旧档已损毁则不覆盖现有 .bak
+  try { JSON.parse(fs.readFileSync(STATE(root), 'utf8')); fs.copyFileSync(STATE(root), STATE(root) + '.bak'); } catch { /* 首写或旧档损毁：保留既有 .bak */ }
   fs.renameSync(tmp, STATE(root));
   return ledger;
 }

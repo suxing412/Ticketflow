@@ -53,8 +53,10 @@ function checkCloseouts(root, cfg, opts = {}) {
       if (!kids.length) continue;
       if (!kids.every((k) => DONE.has(k.state))) continue;
       if (!kids.some((k) => k.state === '完成')) continue;
-      l.已收口[p.id] = true;
-      ledger.write(root, l);
+      // 定点更新防丢账（2026-08-05）：不整写外层旧快照——长窗口内 billFee 等并发写会被覆盖
+      let 首标 = false;
+      ledger.update(root, (f) => { f.已收口 = f.已收口 || {}; if (!f.已收口[p.id]) { f.已收口[p.id] = true; 首标 = true; } });
+      if (!首标) continue;
       ledger.event(root, '收口待验', { 父单: p.id, 子单数: kids.length });
       journal.append(root, `项管唤醒：${p.id} 专项全部完成 → 收口报告生成中`);
       woke.push(p.id);
@@ -90,8 +92,10 @@ function checkChainFailures(root, opts = {}) {
   }
   for (const [p, ids] of Object.entries(byParent)) {
     if (ids.length >= 2 && !l.已上呈连环[p]) {
-      l.已上呈连环[p] = true;
-      ledger.write(root, l);
+      // 定点更新防丢账（2026-08-05）：同 checkCloseouts
+      let 首呈 = false;
+      ledger.update(root, (f) => { f.已上呈连环 = f.已上呈连环 || {}; if (!f.已上呈连环[p]) { f.已上呈连环[p] = true; 首呈 = true; } });
+      if (!首呈) continue;
       ledger.event(root, '上呈', { 父单: p, 异常单: ids, 因: '连环失败/三振 ≥2' });
       journal.append(root, `项管上呈：${p} 连环异常（${ids.join('、')}）——需制作人层跟进`);
       alerts.push(p);
