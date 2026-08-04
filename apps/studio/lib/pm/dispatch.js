@@ -23,7 +23,7 @@ function readySet(root, crit) {
   for (const t of store.list(root, '待投')) {
     if (!t.fm.放行) continue;
     if (!depsDone(root, t)) continue;
-    out.push({ id: t.id, 职能: t.fm.职能, 优先级: t.fm.优先级 || 'P2',
+    out.push({ id: t.id, 职能: t.fm.职能, 优先级: t.fm.优先级 || 'P2', 执行池: t.fm.执行池 || null, // 池章直通（0.22.2：兼容池评测单盖章曾被 poolFor 覆盖）
       红链: crit ? crit.has(t.id) : false, 创建时间: t.fm.创建时间 || '' });
   }
   return out;
