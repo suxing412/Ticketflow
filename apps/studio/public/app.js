@@ -972,12 +972,19 @@ async function viewParams() {
       ${(c.网络 && c.网络.远程 && c.网络.远程.令牌) ? `<p class="pmeta mono" style="margin-top:8px;word-break:break-all">手机访问：http://本机IP:${(c.server && c.server.port) || 4270}/?t=${esc(c.网络.远程.令牌)}</p>` : ''}</div>
     <div class="paramcard card" data-theme-card><h4>外观主题</h4><p class="pmeta">暖纸=日间纸感；玻璃=夜间暗色 · 即点即切，本机记忆</p>
       <div class="egtoggle"><button class="egbtn ${curTheme() === 'glass' ? '' : 'on'}" data-th="paper" onclick="themeSet('paper')">暖纸</button><button class="egbtn ${curTheme() === 'glass' ? 'on' : ''}" data-th="glass" onclick="themeSet('glass')">玻璃</button></div></div>`;
+  // 兼容池（0.22.1）：Anthropic 兼容厂商——异厂对抗第三池的密钥与模型管理（仅本机可改）
+  const compatPools = Object.entries(c.执行池 || {}).filter(([, v]) => v.兼容);
+  const compatCards = compatPools.map(([name, v]) => `<div class="paramcard card"><h4>兼容池 · ${esc(name)}</h4>
+      <p class="pmeta mono" style="word-break:break-all">${esc(v.兼容.base || '')}<br/>模型 ${esc(v.兼容.模型 || 'CLI 默认')} · 密钥 ${esc(v.兼容.key || '未设')} · 职能 ${(v.职能 || []).join('/') || '（评测中·单张盖章）'}</p>
+      <div class="runbtn"><button class="btn h32" onclick="compatEdit('${esc(name)}')">更新密钥/模型</button></div></div>`).join('')
+    + `<div class="paramcard card"><h4>＋ 新增兼容池</h4><p class="pmeta">任何 Anthropic 兼容厂商（Kimi/GLM/MiniMax…）：池名+端点+密钥即接入 · 密钥只存本机 config，界面与远程只显尾四位</p>
+      <div class="runbtn"><button class="btn h32 accent" onclick="compatEdit('')">配置</button></div></div>`;
   // 模型档：池默认 + 裁判档（选项来自 /api/models 监测 + config 增补）
   const mOpt = (pool, cur) => { const list = ((models[pool] && models[pool].可选) || []);
     return `<option value="" ${!cur ? 'selected' : ''}>CLI 默认</option>` + list.map((o) => `<option value="${esc(o)}" ${cur === o ? 'selected' : ''}>${esc(o)}</option>`).join('')
       + (cur && !list.includes(cur) ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''); };
   const mc = c.模型 || {};
-  const modelCards = [['claude默认', 'claude', 'claude 池体力档'], ['codex默认', 'codex', 'codex 池体力档'], ['质检', 'claude', 'QA 复核裁判档'], ['代核', 'claude', '委托代核裁判档'], ['代裁', 'claude', '待定夺代裁裁判档（D43，空=跟代核档）']]
+  const modelCards = [['claude默认', 'claude', 'claude 池体力档'], ['codex默认', 'codex', 'codex 池体力档'], ['质检', 'claude', 'QA 复核裁判档'], ['代核', 'claude', '委托代核裁判档'], ['代裁', 'claude', '待定夺代裁裁判档（D43，空=跟代核档）'], ['项管', 'claude', '项目管理切单/收口/答话档（H49，现值 fable）']]
     .map(([k, pool, note]) => `<div class="paramcard card"><h4>${k}</h4><p class="pmeta">${note}</p>
       <div class="runbtn"><select class="mselect mono" onchange="mSet('${k}', this.value)">${mOpt(pool, mc[k] || '')}</select></div></div>`).join('')
     + `<div class="paramcard card"><h4>可选模型增补</h4><p class="pmeta">监测之外手动补（写进 config.模型.可选）</p>
@@ -1044,7 +1051,7 @@ async function viewParams() {
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">职能编制</h3><span class="subnote">直接调人数 · 编制即上限</span></div>${staffCards}${capCard}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">参数闸值</h3><span class="subnote">监制台可调</span></div>${params}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">推荐在途</h3><span class="subnote">制作人精力参考 · 随处理速度调整</span></div>${recCards}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">模型档</h3><span class="subnote">贵裁判 · 贱体力（D38）</span></div>${modelCards}</div>
+      <div class="sec-h" style="margin-top:26px"><h3 class="h17">模型档</h3><span class="subnote">贵裁判 · 贱体力（D38）</span></div>${modelCards}${compatCards}</div>
     <div><div class="sec-h"><h3 class="h17">环境探针</h3><span class="subnote">实弹前置检查</span></div>${envCard}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">项目注册</h3><span class="subnote">执行 agent 的目标仓库（D32）</span></div>${projCard}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">执行池阈值</h3><span class="subnote">额度锁的杆（D26）</span></div>${poolCards}
@@ -1810,3 +1817,19 @@ setInterval(async () => {
   if (document.querySelector('.modal2')) return;
   try { const d = await api('/api/pulse'); if (lastPulse && d.token !== lastPulse) route(); lastPulse = d.token; } catch { /* offline */ }
 }, 3000);
+
+/* 兼容池编辑（0.22.1）：轻量三问式，密钥留空=保留旧值；仅本机端点会拒远程 */
+window.compatEdit = async (name) => {
+  const 池名 = name || (prompt('池名（小写英文标识，如 kimi / glm / minimax）：') || '').trim();
+  if (!池名) return;
+  const base = (prompt('Anthropic 兼容端点 base URL：', name ? '' : 'https://') || '').trim();
+  const key = (prompt('API 密钥（更新时留空=保留旧值）：') || '').trim();
+  const 模型 = (prompt('模型名（厂商侧模型 ID，留空=CLI 默认）：') || '').trim();
+  const body = { 池名 };
+  if (base && base !== 'https://') body.base = base;
+  if (key) body.key = key;
+  if (模型) body.模型 = 模型;
+  const r = await post('/api/config/compat-pool', body);
+  toast(r.ok ? `兼容池 ${池名} 已保存` : (r.error || '失败'));
+  if (r.ok) { _cfg = null; route(); }
+};

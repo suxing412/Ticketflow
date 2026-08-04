@@ -209,6 +209,27 @@ app.post('/api/config/pool', (req, res) => {
   res.json({ ok: true, 执行池: cfg.执行池 });
 });
 
+// 兼容池管理（0.22.1，仅本机）：新增/更新 Anthropic 兼容厂商池；删除=停用（职能清空保历史）
+app.post('/api/config/compat-pool', (req, res) => {
+  if (!ready(res)) return;
+  if (!isLocalReq(req)) return res.status(403).json({ error: '密钥管理只能在本机操作' });
+  const { 池名, base, key, 模型 } = req.body || {};
+  const name = String(池名 || '').trim();
+  if (!/^[a-z][a-z0-9-]{1,19}$/.test(name)) return res.status(400).json({ error: '池名须为小写字母开头的英文标识（2-20 位）' });
+  if (['codex', 'claude'].includes(name)) return res.status(400).json({ error: '原生池不走兼容配置' });
+  cfg.执行池 = cfg.执行池 || {};
+  const old = cfg.执行池[name] || { 职能: [], 阈值: 70, 周阈值: 90 };
+  const compat = { ...(old.兼容 || {}) };
+  if (base) { try { new URL(String(base)); } catch { return res.status(400).json({ error: 'base 不是合法 URL' }); } compat.base = String(base); }
+  if (key) compat.key = String(key);
+  if (模型) compat.模型 = String(模型);
+  if (!compat.base || !compat.key) return res.status(400).json({ error: 'base 与 key 必填（更新时 key 可留空保留旧值）' });
+  cfg.执行池[name] = { ...old, 兼容: compat };
+  saveCfg();
+  journal.append(ROOT, `兼容池配置：${name}（${compat.base} · ${compat.模型 || 'CLI 默认模型'}）——密钥不入日志`);
+  res.json({ ok: true });
+});
+
 // 模型档（池默认 + 裁判档）；可选清单增补
 app.post('/api/config/model', (req, res) => {
   if (!ready(res)) return;
@@ -713,7 +734,13 @@ app.post('/api/anchor/migrate', (req, res) => {
 });
 
 // ---- 参数与额度（P6）----
-app.get('/api/config', (req, res) => { if (!ready(res)) return; res.json({ 闸值: cfg.闸值, 执行池: cfg.执行池, agents: cfg.agents, 职能: cfg.职能, 推荐: cfg.推荐 || {}, 项目: cfg.项目 || {}, 模型: cfg.模型 || {}, 执行器: cfg.执行器 || {}, quota: cfg.quota || {}, server: cfg.server || {} }); });
+app.get('/api/config', (req, res) => {
+  if (!ready(res)) return;
+  // 兼容池密钥脱敏（0.22.1）：config 会流向远程客户端，密钥只留尾四位指纹
+  const pools = JSON.parse(JSON.stringify(cfg.执行池 || {}));
+  for (const p of Object.values(pools)) if (p.兼容 && p.兼容.key) p.兼容.key = '●●●●' + String(p.兼容.key).slice(-4);
+  res.json({ 闸值: cfg.闸值, 执行池: pools, agents: cfg.agents, 职能: cfg.职能, 推荐: cfg.推荐 || {}, 项目: cfg.项目 || {}, 模型: cfg.模型 || {}, 执行器: cfg.执行器 || {}, quota: cfg.quota || {}, server: cfg.server || {} });
+});
 app.get('/api/quota', async (req, res) => {
   if (!ready(res)) return;
   const [rl, cu] = await Promise.all([quota.getRateLimits(cfg), quota.getClaudeUsage(cfg)]);
