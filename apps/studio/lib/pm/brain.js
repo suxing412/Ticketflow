@@ -245,4 +245,52 @@ function answer(root, cfg, question, cb) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
-module.exports = { cut, closeout, answer, buildCutPrompt, parseTickets, getWorking };
+// 派单委托（H57，2026-08-04 用户裁定：派单权归项管，Claude 不得直接造单）：
+// 制作人层提需求 → 项管起草单张工单（草稿态）→ Claude 审 → 定稿放行。审批与起草分离。
+function draftTicket(root, cfg, 需求, projPath, cb) {
+  setWorking({ 用途: '起草' });
+  const 单元 = (cfg.单元 || {});
+  const prompt = [
+    '你是单流的「项目管理」职能。制作人层委托你起草一张执行工单（单张，不是拆专项）。',
+    '项目仓库（可读，用于盘点核实）：' + (projPath || '（未注册）'),
+    '纪律：①先盘仓核实需求描述的现状 ②单元标准 ' + (单元.小时 || 0.25) + 'h/≤' + (单元.token || 50000) + ' token，顶格 2 单元 ③验收标准全部可判定 ④收尾锚点（受控重建/SavedScene/体积闸）只属装配单 ⑤如需求实际需要多张单，直说并建议走专项拍板，不要硬塞。',
+    '输出契约与拆单相同：一个 ```ticket 代码块（title/单型/职能/产出物类型/优先级/QA/验收方式/预计时间/预计token/依赖留空 + --- + 正文三章）。之后一段「起草说明」：盘点发现+边界取舍。',
+    '', '=== 制作人层需求 ===', String(需求 || '').slice(0, 4000),
+  ].join(String.fromCharCode(10));
+  const cmd = cli();
+  const model = (cfg.模型 || {}).项管 || 'opus';
+  const child = spawn(cmd, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'],
+    { cwd: projPath || undefined, env: { ...process.env }, windowsHide: true, shell: String(cmd).endsWith('.cmd') });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; if (out.length > 900000) out = out.slice(-450000); });
+  const timer = setTimeout(() => { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch { /**/ } }, 10 * 60000);
+  if (timer.unref) timer.unref();
+  child.on('close', () => {
+    setWorking(null);
+    clearTimeout(timer);
+    billFee(root, '起草', out);
+    const text = require('../runner').extractClaudeText(out);
+    const { tickets, brief } = parseTickets(text);
+    if (!tickets.length) return cb({ ok: false, error: '起草输出无工单块', raw: text.slice(0, 400) });
+    const px = 'TK';
+    let mx = 0;
+    for (const s of store.STATES) for (const x of store.list(root, s)) {
+      const mm = String(x.id).match(/^TK-([0-9]+)$/);
+      if (mm) mx = Math.max(mx, Number(mm[1]));
+    }
+    const nid = px + '-' + (mx + 1);
+    const tk = tickets[0];
+    const fm = { id: nid, title: tk.fm.title || '起草单', 职能: tk.fm.职能 || '程序', 产出物类型: tk.fm.产出物类型 || '代码',
+      优先级: tk.fm.优先级 || 'P1', 规模: '单兵', QA: tk.fm.QA || '开', 验收方式: tk.fm.验收方式 || '委托',
+      预计时间: tk.fm.预计时间 || '0.25', 预计token: tk.fm.预计token || '50000', 项目: (cfg.项目 && cfg.项目.默认) || '',
+      单型: tk.fm.单型 || '修复单', 切单人: '项管', 创建时间: new Date().toISOString().slice(0, 10) };
+    const r = store.create(root, nid, fm, tk.body);
+    if (!r.ok) return cb(r);
+    try { require('../relay').append(root, '项管', '受托起草：' + nid + ' ' + fm.title + '（草稿区待 Claude 审）' + String.fromCharCode(10) + String.fromCharCode(10) + (brief || '')); } catch { /**/ }
+    ledger.event(root, '待审', { 父单: nid, 子单: [nid], 简报: '（单张起草）' });
+    cb({ ok: true, 单: nid });
+  });
+  try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
+}
+
+module.exports = { cut, closeout, answer, draftTicket, buildCutPrompt, parseTickets, getWorking };

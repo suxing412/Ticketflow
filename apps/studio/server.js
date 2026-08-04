@@ -87,6 +87,21 @@ app.post('/api/inbox/read', (req, res) => {
   res.json(inbox.markRead(ROOT));
 });
 
+// ---- 派单委托（H57）：制作人层提需求 → 项管起草 → Claude 审 → 放行 ----
+app.post('/api/pm/draft', (req, res) => {
+  if (!ready(res)) return;
+  const 需求 = String((req.body || {}).需求 || '').trim();
+  if (!需求) return res.status(400).json({ error: '需求必填' });
+  const reg = (cfg.项目 && cfg.项目.注册) || {};
+  const name = (cfg.项目 && cfg.项目.默认) || '';
+  const projPath = name && reg[name] && reg[name].路径;
+  journal.append(ROOT, '派单委托受理（H57）：' + 需求.slice(0, 60));
+  require('./lib/pm/brain').draftTicket(ROOT, cfg, 需求, projPath, (r) => {
+    journal.append(ROOT, r.ok ? '项管起草完成：' + r.单 + '（草稿待审）' : '项管起草失败：' + (r.error || ''));
+  });
+  res.json({ ok: true, 状态: '项管起草中，完成后草稿区+信道可见' });
+});
+
 // ---- Wiki（0.20，H52 第三类实体）：设计事实源浏览 + 待审人闸 + 关系图 ----
 const wiki = require('./lib/wiki');
 function wikiProj(req) {
