@@ -460,9 +460,9 @@ async function tick(root, cfg, opts = {}) {
     // ②′ 派发制（H49）：迁移旧池 → 就绪盘点 → 护城河/并发闸 → 拉起一次性 agent
     const dispatch = require('./pm/dispatch');
     const pmLedger = require('./pm/ledger');
-    for (const t of store.list(root, '池')) { // 一次性迁移：存量池单并入待投（已放行）
-      const r = store.move(root, t.id, '池', '待投', (fm) => { fm.放行 = true; }, opts.nowIso || new Date().toISOString());
-      if (r.ok) { journal.append(root, `H49 迁移：${t.id} 池→待投（自动放行）`); pmLedger.event(root, '迁移', { id: t.id }); }
+    for (const t of store.list(root, '池')) { // 池目录清空归位：现今只有「收回」会入池——退待投但不放行（2026-08-05 TK-79 逃逸案：旧写法强制放行=收回即复活）
+      const r = store.move(root, t.id, '池', '待投', (fm) => { fm.放行 = false; }, opts.nowIso || new Date().toISOString());
+      if (r.ok) { journal.append(root, `归位：${t.id} 池→待投（收回单，待重新放行）`); pmLedger.event(root, '迁移', { id: t.id }); }
     }
     if (!(st.paused || {}).global) {
       const locks = await require('./gates').allLocks(cfg).catch(() => null);
@@ -586,4 +586,16 @@ function status(root, cfg) {
   };
 }
 
-module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, isDry, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose, extractClaudeText };
+// 按单终止（2026-08-05 推演补漏）：收回/废弃在途单时同步掐掉执行会话——此前文件挪走、进程仍在跑
+function killTicket(root, id) {
+  for (const [agentId, e] of running.entries()) {
+    if (e.id !== id) continue;
+    try { if (e.child && e.child.pid) spawn('taskkill', ['/pid', String(e.child.pid), '/T', '/F'], { windowsHide: true }); } catch { /* 尽力 */ }
+    running.delete(agentId);
+    journal.append(root, `终止会话 ${id}（${agentId}）：单被收回/废弃`);
+    return true;
+  }
+  return false;
+}
+
+module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, isDry, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket };
