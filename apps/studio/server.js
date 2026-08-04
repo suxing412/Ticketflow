@@ -96,6 +96,7 @@ app.post('/api/pm/draft', (req, res) => {
   const name = (cfg.项目 && cfg.项目.默认) || '';
   const projPath = name && reg[name] && reg[name].路径;
   journal.append(ROOT, '派单委托受理（H57）：' + 需求.slice(0, 60));
+  try { require('./lib/ledger').event(ROOT, '派单委托', { 需求: 需求.slice(0, 200) }); } catch { /**/ }
   require('./lib/pm/brain').draftTicket(ROOT, cfg, 需求, projPath, (r) => {
     journal.append(ROOT, r.ok ? '项管起草完成：' + r.单 + '（草稿待审）' : '项管起草失败：' + (r.error || ''));
   });
@@ -687,6 +688,8 @@ ACTIONS.投池 = (b) => (cfg.执行器 && cfg.执行器.派发制) ? ACTIONS.放
 const legacy定稿 = ACTIONS.定稿;
 ACTIONS.定稿 = (b) => {
   const r = legacy定稿(b);
+  // H57 透明化：定稿是 Claude 审批放行动作，入台账事件供项管视图可见
+  if (r.ok) { try { require('./lib/ledger').event(ROOT, '定稿放行', { 单: b.id }); } catch { /**/ } }
   if (r.ok && cfg.执行器 && cfg.执行器.派发制) {
     const t = store.find(ROOT, b.id);
     if (t && ['战役','专项'].includes(t.fm.父单类型)) {
