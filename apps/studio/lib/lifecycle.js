@@ -134,6 +134,7 @@ function 滞留检查(root, cfg, nowMs) {
   const 告警 = [];
   for (const state of ['在途', '质检', '待定夺']) {
     for (const t of store.list(root, state)) {
+      if (['战役','专项'].includes(t.fm.父单类型) || ['战役','专项'].includes(t.fm.主办)) continue; // H53：父单在途=专项进行中的状态章，不适用执行滞留阈值
       const 基准 = Date.parse(t.fm.领单时间 || t.fm.更新时间 || '');
       if (Number.isNaN(基准)) continue;
       const 停留h = (now - 基准) / 3600000;

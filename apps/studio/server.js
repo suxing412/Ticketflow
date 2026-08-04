@@ -451,7 +451,8 @@ app.get('/api/agents', (req, res) => {
     // H49 派发制视图：一次性执行者（因单而生）+ 判官编制 + 就绪队列/并发
     const runStatus = require('./lib/runner').status(ROOT, cfg);
     const liveByTicket = Object.fromEntries((runStatus.执行中 || []).map((e) => [e.id, e]));
-    const 在跑 = fl.filter((t) => ['在途', '质检'].includes(t.state)).map((t) => ({
+    const isParent = (t) => ['战役','专项'].includes(t.fm.父单类型) || ['战役','专项'].includes(t.fm.主办); // H53：组织容器不是执行者
+    const 在跑 = fl.filter((t) => ['在途', '质检'].includes(t.state) && !isParent(t)).map((t) => ({
       主办: t.fm.主办 || '（衔接中）', id: t.id, title: t.fm.title, state: t.state,
       职能: t.fm.职能, 池: t.fm.执行池 || '', 领单时间: t.fm.领单时间 || null,
       环节: (liveByTicket[t.id] || {}).kind || null, 环节起时: (liveByTicket[t.id] || {}).startedAt || null,
