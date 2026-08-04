@@ -361,7 +361,7 @@ async function viewFlow() {
   const hasKids = new Set(all.filter((t) => t.父单 && byId[t.父单]).map((t) => t.父单));
   const depsOf = (t) => t.依赖 ? (Array.isArray(t.依赖) ? t.依赖 : String(t.依赖).split(/[，,\s]+/)).filter((d) => byId[d]) : [];
   const rootOf = (t) => { let c = t, g = 0; while (c.父单 && byId[c.父单] && g++ < 10) c = byId[c.父单]; return c; };
-  // H51 管线章解析：显式字段优先，否则沿父链上溯（子单继承战役父单的线）
+  // H51 管线章解析：显式字段优先，否则沿父链上溯（子单继承专项父单的线）
   const pipeOf = (t) => { let c = t, g = 0; while (c && g++ < 10) { if (c.管线 && pById[c.管线]) return c.管线; c = c.父单 ? byId[c.父单] : null; } return null; };
   const DONE = new Set(['完成', '已归档']);
   // 节点=非容器单；无阶段章的旧单归第一阶段；泳道=管线优先（H51），无线单沿旧根归属
@@ -1519,7 +1519,7 @@ function pmEventLine(e) {
   if (e.类型 === '待审') return { t, txt: `拆单完成：${e.父单} → ${(e.子单 || []).join('、')}，简报呈 Claude 审批`, hot: true };
   if (e.类型 === '切单启动') return { t, txt: `开始拆单：${e.父单}（fable 盘点中）` };
   if (e.类型 === '派发') return { t, txt: `派发 ${e.id} → ${e.池} 池` };
-  if (e.类型 === '收口') return { t, txt: `战役收口：${e.父单}，收口报告已出`, hot: true };
+  if (e.类型 === '收口') return { t, txt: `专项收口：${e.父单}，收口报告已出`, hot: true };
   if (e.类型 === '上呈') return { t, txt: `上呈制作人：${e.原因 || e.父单 || ''}`, hot: true };
   if (e.类型 === '额度报警') return { t, txt: `额度报警：${e.详情 || ''}`, hot: true };
   return { t, txt: `${e.类型}：${e.id || e.父单 || ''}` };

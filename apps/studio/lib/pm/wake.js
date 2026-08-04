@@ -7,7 +7,7 @@ const journal = require('../journal');
 
 const DONE = new Set(['完成', '已归档']);
 
-function isCampaign(t) { return t && t.fm && t.fm.父单类型 === '战役'; }
+function isCampaign(t) { return t && t.fm && ['战役','专项'].includes(t.fm.父单类型); }
 
 function childrenOf(root, parentId) {
   const out = [];
@@ -21,7 +21,7 @@ function childrenOf(root, parentId) {
 function onCampaignFinalized(root, cfg, t, projPath, opts = {}) {
   if (!isCampaign(t)) return { woke: false };
   ledger.event(root, '切单启动', { 父单: t.id, 触发: '定稿自动' });
-  journal.append(root, `项管唤醒：${t.id} 战役定稿 → 自动切单（fable）`);
+  journal.append(root, `项管唤醒：${t.id} 专项定稿 → 自动切单（fable）`);
   if (!opts.test) {
     require('./brain').cut(root, cfg, t.id, projPath, (r) => {
       journal.append(root, r.ok ? `项管切单完成：${t.id} → ${r.子单.join('、')}（简报待审）` : `项管切单失败：${t.id}（${r.error}）`);
@@ -38,8 +38,8 @@ function onChildDispatched(root, parentId) {
   if (!parentId) return;
   const p = store.find(root, parentId);
   if (!p || !isCampaign(p) || p.state !== '待投') return;
-  const r = store.move(root, parentId, '待投', '在途', (fm) => { fm.主办 = '战役'; fm.领单时间 = fm.领单时间 || new Date().toISOString(); }, new Date().toISOString());
-  if (r.ok) journal.append(root, `战役开打 ${parentId}（首子单派发 → 父单在途，H53 状态诚实映射）`);
+  const r = store.move(root, parentId, '待投', '在途', (fm) => { fm.主办 = '专项'; fm.领单时间 = fm.领单时间 || new Date().toISOString(); }, new Date().toISOString());
+  if (r.ok) journal.append(root, `专项启动 ${parentId}（首子单派发 → 父单在途，H53 状态诚实映射）`);
 }
 
 function checkCloseouts(root, cfg, opts = {}) {
@@ -56,13 +56,13 @@ function checkCloseouts(root, cfg, opts = {}) {
       l.已收口[p.id] = true;
       ledger.write(root, l);
       ledger.event(root, '收口待验', { 父单: p.id, 子单数: kids.length });
-      journal.append(root, `项管唤醒：${p.id} 战役全落袋 → 收口报告生成中`);
+      journal.append(root, `项管唤醒：${p.id} 专项全部完成 → 收口报告生成中`);
       woke.push(p.id);
       const lift = () => { // 收口后父单上待验收：战役唯一签字位（保留签字上移，H53）
         const cur = store.find(root, p.id);
         if (cur && ['在途', '待投'].includes(cur.state)) {
           const mv = store.move(root, p.id, cur.state, '待验收', (fm) => { fm.交付时间 = new Date().toISOString(); }, new Date().toISOString());
-          if (mv.ok) journal.append(root, `战役收口 ${p.id} → 待验收（父单=唯一签字位，H53）`);
+          if (mv.ok) journal.append(root, `专项收口 ${p.id} → 待验收（父单=唯一签字位，H53）`);
         }
       };
       if (!opts.test) {

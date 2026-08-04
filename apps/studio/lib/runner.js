@@ -382,7 +382,7 @@ async function tick(root, cfg, opts = {}) {
   // ① 断点恢复 + 在途执行（待复核单不起工，D36）
   for (const t of store.list(root, '在途')) {
     if (!t.fm.主办 || busyTickets().has(t.id)) continue;
-    if (t.fm.父单类型 === '战役' || t.fm.主办 === '战役') continue; // H53：父单在途=战役开打的状态章，是组织容器，永不起执行（0.19.1 事故：TK-41 被当断线单续跑）
+    if (['战役','专项'].includes(t.fm.父单类型) || ['战役','专项'].includes(t.fm.主办)) continue; // H53：父单在途=战役开打的状态章，是组织容器，永不起执行（0.19.1 事故：TK-41 被当断线单续跑）
     if (t.fm.待复核) { result.拒因.push(`${t.id} 待复核未解除，不起执行`); continue; }
     if (!dispatchMode && !agents.some((a) => a.id === t.fm.主办)) continue; // 拉取制：退役待归者不起新执行；派发制：一次性主办直接续跑
     if (await startWork(root, cfg, t, t.fm.主办, '执行', opts)) result.执行.push(t.id);

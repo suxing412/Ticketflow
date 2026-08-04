@@ -43,21 +43,21 @@ function 拍板(root, id, 项目, 前缀) {
   const all = list(root);
   const i = all.findIndex((x) => x.id === id && x.状态 === '在池');
   if (i < 0) return { ok: false, error: '想法不存在或已处理' };
-  // 自动派号（沿用推翻的派号法）
+  // 专项 S 系列派号（命名分层：管线 P-# / 专项 <项目>-S# / 单元 <项目>-#；存量战役号不迁移）
   let mx = 0;
   const px = String(前缀 || 'TK');
   for (const s of store.STATES) for (const x of store.list(root, s)) {
-    const m = String(x.id).match(/^(.+)-(\d+)$/);
+    const m = String(x.id).match(/^(.+)-S(\d+)$/);
     if (m && m[1] === px) mx = Math.max(mx, Number(m[2]));
   }
-  const newId = `${px}-${mx + 1}`;
+  const newId = `${px}-S${mx + 1}`;
   const fm = {
     id: newId, title: all[i].文本.slice(0, 40), 职能: '策划', 产出物类型: '规格',
     优先级: 'P1', 规模: '单兵', QA: '关', 验收方式: '保留', 预计时间: '', 预计token: '',
     项目: String(项目 || ''), 创建时间: new Date().toISOString().slice(0, 10),
-    父单类型: '战役', 想法源: all[i].id,
+    父单类型: '专项', 想法源: all[i].id,
   };
-  const body = `## 战役目标（拍板前补齐）\n${all[i].文本}\n${all[i].备注 ? '\n> ' + all[i].备注 + '\n' : ''}\n## 系统边界（必填：写区圈定 + 不要做）\n（补齐后拍板生效）\n\n## 验收标准（必填：可判定条目 + 标注保留项）\n（补齐后拍板生效）\n`;
+  const body = `## 专项目标（拍板前补齐）\n${all[i].文本}\n${all[i].备注 ? '\n> ' + all[i].备注 + '\n' : ''}\n## 系统边界（必填：写区圈定 + 不要做）\n（补齐后拍板生效）\n\n## 验收标准（必填：可判定条目 + 标注保留项）\n（补齐后拍板生效）\n`;
   const r = store.create(root, newId, fm, body);
   if (!r.ok) return r;
   all[i].状态 = '已拍板'; all[i].父单 = newId; saveAll(root, all);

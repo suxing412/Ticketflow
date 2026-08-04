@@ -32,7 +32,7 @@ function buildCutPrompt(root, cfg, parent, projPath) {
     '⑦结构归位（H50/H51）：工单树是项管资产，管线是顶层单位——若本父单无管线章（frontmatter 管线: P-#），在简报里提出应挂入的既有管线，或建议开新线（开线是制作人人闸，你只有建议权）；判不出写「呈制作人定归属」',
     '',
     '=== 单型库（只从五型选：调研单/实现单/装配单/修复单/收口单）===',
-    '收口单必为最后一张，依赖全部前置单，验收方式=委托（QA 核收口报告即可）——制作人的保留签字上移到战役父单，一场战役只签一次（H53）。',
+    '收口单必为最后一张，依赖全部前置单，验收方式=委托（QA 核收口报告即可）——制作人的保留签字上移到专项父单，一个专项只签一次（H53）。',
     '',
     '=== 输出契约（机器解析，严格遵守）===',
     '每张子单一个代码块，格式：',
@@ -128,7 +128,7 @@ function cut(root, cfg, parentId, projPath, cb) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
-// 收口报告：战役全落袋后汇总子单回执 → 验收包（含逐项验收步骤与成本账）
+// 收口报告：专项全落袋后汇总子单回执 → 验收包（含逐项验收步骤与成本账）
 function closeout(root, cfg, parentId, cb) {
   const parent = store.find(root, parentId);
   if (!parent) return cb({ ok: false, error: '父单不存在' });
@@ -141,10 +141,10 @@ function closeout(root, cfg, parentId, cb) {
     return `### ${k.id} ${k.fm.title}（${k.state}）\n${pick.slice(0, 1800) || '（无回执）'}`;
   }).join('\n\n');
   const prompt = [
-    '你是单流的「项目管理」职能。战役父单的全部子单已落袋，写收口报告呈制作人验收。',
-    '要求：①一段战役总结（做成了什么）②合并的验收步骤清单（制作人按此逐项实测，绝对路径）',
+    '你是单流的「项目管理」职能。专项父单的全部子单已落袋，写收口报告呈制作人验收。',
+    '要求：①一段专项总结（做成了什么）②合并的验收步骤清单（制作人按此逐项实测，绝对路径）',
     '③成本账（各单实耗汇总）④遗留事项/异议汇总。务实文风，不奉承不注水。',
-    '', '=== 战役父单 ===', parent.body || '', '', '=== 子单回执摘要 ===', receipts,
+    '', '=== 专项父单 ===', parent.body || '', '', '=== 子单回执摘要 ===', receipts,
   ].join('\n');
   const cmd = cli();
   const model = (cfg.模型 || {}).项管 || 'fable';
