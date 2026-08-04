@@ -824,6 +824,18 @@ function costRankTable(rows) {
       <td class="${r.预计h && r.实际h > r.预计h * 1.5 ? 'err' : ''}">${r.预计h ? Math.round(r.实际h / r.预计h * 100) + '%' : '—'}</td>
       <td class="${r.自修次数 ? 'warnc' : 'dim'}">${r.自修次数 || ''}</td></tr>`).join('') || '<tr><td colspan="5" class="dim">无数据</td></tr>'}</table></div>`;
 }
+// 项管台账卡（0.23.10：台账归报表——用户裁定）
+function pmLedgerCard(L) {
+  const fee = L.管理费 || { token合计: 0, 次数: 0 };
+  const caps = Object.entries(L.并发上限 || {}).map(([k, v]) => esc(k) + ' ≤' + v).join(' · ') || '—';
+  const costRows = Object.entries(L.父单成本 || {}).slice(-6).map(([pid, c]) => {
+    const tk = typeof c === 'object' ? (c.token合计 ?? c.tokens ?? 0) : c;
+    return '<tr><td class="mono">' + esc(pid) + '</td><td style="text-align:right">' + Number(tk).toLocaleString() + '</td></tr>';
+  }).join('') || '<tr><td colspan="2" class="dim">暂无归集</td></tr>';
+  return '<div class="rp-card card r14"><h4>项目管理台账<span class="subnote" style="margin-left:10px">管理费 '
+    + Number(fee.token合计 || 0).toLocaleString() + ' tk · ' + (fee.次数 || 0) + ' 次 · 并发 ' + caps + '</span></h4>'
+    + '<table class="rp-t"><tr><th>专项成本归集</th><th style="text-align:right">tokens</th></tr>' + costRows + '</table></div>';
+}
 async function viewReport() {
   const [d, , pl] = await Promise.all([api('/api/report'), loadCfg(), api('/api/pm/ledger').catch(() => null)]);
   const dispatch = !!(_cfg && _cfg.执行器 && _cfg.执行器.派发制);
@@ -855,7 +867,7 @@ async function viewReport() {
       <td class="dim" title="${esc(r.实际消耗 || '')}">${esc((r.实际消耗 || '—').slice(0, 26))}</td></tr>`).join('');
   return `<div class="stat-strip card r14">${strip}</div>
     <div class="rp-grid">
-      <div>${gtable('按职能', d.按职能)}${dispatch ? costRankTable(rows) : gtable('按主办', d.按主办)}${gtable('按执行池', d.按池, '订阅额度去向')}</div>
+      <div>${gtable('按职能', dispatch && pl && pl.台账 ? [...d.按职能, { 名: '项目管理', 单数: (pl.台账.管理费 || {}).次数 || 0, 实际h合计: '—', 平均h: ((pl.台账.管理费 || {}).token合计 || 0).toLocaleString() + ' tk', 自修合计: 0 }] : d.按职能)}${dispatch ? costRankTable(rows) : gtable('按主办', d.按主办)}${dispatch && pl && pl.台账 ? pmLedgerCard(pl.台账) : ''}${gtable('按执行池', d.按池, '订阅额度去向')}</div>
       <div><div class="rp-card card r14"><h4>每日交付<span class="subnote" style="margin-left:10px">近 14 天</span></h4>
         <div class="rp-days">${daysHtml}</div></div>
         ${gtable('按项目', d.按项目)}</div>
