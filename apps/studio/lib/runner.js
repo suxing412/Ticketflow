@@ -192,6 +192,38 @@ function buildQaPrompt(root, t, proj, receiptPath) {
 //    空壳一路混过 QA 到待验收，产出真伪无据。现改执行失败分诊，绝不占位混关；
 // ③ 判官光板结论（有结论行但全文过薄、无逐条理由）＝摆烂不是裁决——TK-29 实测
 //    两字"不过"逼制作人层人工清章。按判官失败重试。
+// 返工草稿预生成（0.23）：代核不过时把判官报告的整改/返工建议节预填进新草稿，
+// 原单留在待验收等裁，草稿不放行——打回与否、方向增删，权在制作人。
+function prepareReworkDraft(root, t, verdictTail) {
+  try {
+    const px = (String(t.id).match(/^(.+?)-/) || [])[1] || 'TK';
+    let mx = 0;
+    const idRe = new RegExp('^' + px + '-([0-9]+)$');
+    for (const s of store.STATES) for (const x of store.list(root, s)) {
+      const m = String(x.id).match(idRe);
+      if (m) mx = Math.max(mx, Number(m[1]));
+    }
+    const nid = px + '-' + (mx + 1);
+    const parts = String(verdictTail).split(/##\s*(?:返工建议|整改建议|判定与整改建议)/);
+    const advice = (parts.length > 1 ? parts[parts.length - 1] : '').slice(0, 2500);
+    const fm = {
+      id: nid, title: t.fm.title + '（返工草稿·待制作人审）', 职能: t.fm.职能,
+      产出物类型: t.fm.产出物类型, 优先级: t.fm.优先级 || 'P1', 规模: '单兵',
+      QA: '开', 验收方式: t.fm.验收方式 || '委托',
+      预计时间: t.fm.预计时间 || '0.25', 预计token: t.fm.预计token || '50000',
+      项目: t.fm.项目, 阶段: t.fm.阶段,
+      ...(t.fm.管线 ? { 管线: t.fm.管线 } : {}), ...(t.fm.父单 ? { 父单: t.fm.父单 } : {}),
+      单型: '修复单', 切单人: '代核预生成', 返工自: t.id,
+      创建时间: new Date().toISOString().slice(0, 10),
+    };
+    const body = (t.body || '')
+      + '\n\n## 范围补正（代核判官返工建议自动预填——制作人审改后定稿放行）\n'
+      + (advice.trim() || '（判官报告未含标准建议节——见原单回执末段核验报告，人工摘录方向）');
+    const cr = store.create(root, nid, fm, body);
+    if (cr.ok) journal.append(root, `返工草稿预生成 ${nid}（源 ${t.id} 代核不过）——草稿区待审，未放行`);
+  } catch (e) { journal.append(root, `返工草稿预生成失败（${t.id}）：${e.message}`); }
+}
+
 const JUDGE_KINDS = new Set(['质检', '代核', '代裁']);
 function settleClose(kind, code, out, errout, ticketId, finishOk, failLocal) {
   const text = String(out).trim();
@@ -279,7 +311,8 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
         if (r.ok) journal.append(root, `委托代核通过 ${t.id} → 验收完成（Claude 代劳，D11/D34）`);
       } else {
         journal.append(root, `委托代核不过 ${t.id}：留在待验收，附核验报告等你裁（不自动打回）`);
-        inbox.post(root, '急', '代核不过', `${t.id} 核验报告待裁`, { 单号: t.id });
+        inbox.post(root, '急', '代核不过', `${t.id} 核验报告待裁（返工草稿已备）`, { 单号: t.id });
+        prepareReworkDraft(root, t, tail); // 0.23：判官报告自动预填返工草稿，制作人审后放行——文书归零
       }
     } else {
       if (!cur || cur.state !== '在途') return; // 期间被收回/废弃，不硬交

@@ -704,51 +704,10 @@ function viewAgentsDispatch(d, all) {
 }
 
 async function viewAgents() {
-  const [d, { all }, run] = await Promise.all([api('/api/agents'), loadBoard(), api('/api/runner').catch(() => ({ 执行中: [] }))]);
-  if (d.模式 === '派发') return viewAgentsDispatch(d, all);
-  // 执行中清单（含质检/代核工作）：QA 复核别人单时不是主办，只按手持渲染会假显"空闲"（另会话实测）
-  const working = {}; for (const w of (run.执行中 || [])) working[w.agent] = w;
-  const titleOf = (id) => { const t = all.find((x) => x.id === id); return t ? t.title : ''; };
-  const rows = d.agents.map((a) => {
-    const h = a.手持; const w = !h && working[a.id]; // 主办工作优先显示；否则显示判官工作（质检/代核）
-    const busy = !!h || !!w;
-    const since = h ? h.领单时间 : (w ? w.startedAt : '');
-    const elapsed = busy && since ? Date.now() - Date.parse(since) : 0;
-    const ratio = Math.min(1, elapsed / (4 * 3600000));
-    const showId = h ? h.id : (w ? w.id : '—');
-    const showTitle = h ? h.title : (w ? `${w.kind}中 · ${titleOf(w.id)}` : (a.上线 === false ? '未上线' : '空闲 · 等待领单'));
-    const pill = h ? stPill(h.state === '质检' ? '质检' : '在途') : (w ? stPill('质检') : '<span class="pill mut">空闲</span>');
-    return `<div class="arow2 card r14">
-      <div class="av ${busy ? '' : 'idle'}" style="${busy ? 'background:' + (FNHEX[a.职能] || 'var(--ink3)') : ''}">${esc(a.id.slice(0, 2))}</div>
-      <div class="who">${esc(a.id)}</div>
-      <span class="poolp pill sm fn ${a.执行池 === 'claude' ? 'pool-claude' : 'pool-codex'}">${esc(a.执行池)} 池</span>
-      <div class="mid2"><span class="aid">${esc(showId)}</span>
-        <div class="at ${busy ? '' : 'dim2'}">${esc(showTitle)}</div></div>
-      <div class="chips">${fnPill(a.职能)}${pill}</div>
-      ${busy ? `<div class="rgt"><span class="lbl">${h ? '已领' : '复核'}</span><br/><span class="tm" data-since="${esc(since || '')}">${fmtElapsed(elapsed)}</span>
-        <div class="bar"><i class="${(h && h.state === '质检') || w ? 'rev' : ''}" style="width:${ratio * 100}%"></i></div><div class="cap">滞留阈值 4h</div></div>`
-      : (a.上线 !== false ? `<button class="btn accent pullbtn" style="min-width:124px" onclick="claim('${esc(a.id)}')">去派单</button>` : '')}
-    </div>`;
-  }).join('');
-  const jn = await api('/api/journal').catch(() => ({}));
-  const logs = (jn.lines || []).slice(-4).reverse().map((l) => { const m = String(l).match(/^\[([\d-]+ )?([\d:]{5})[^\]]*\]\s*(.*)$/);
-    return `<div class="logrow"><time>${m ? esc(m[2]) : ''}</time><span>${esc(m ? m[3] : l)}</span></div>`; }).join('') || '<p class="dim">无动态</p>';
-  // 推荐值后到、原地填（视图保持渲染铁律）
-  setTimeout(async () => { try { const g = await api('/api/gates'); const el = $('rec-line');
-    if (el && g.推荐) { el.textContent = ` · 推荐在途 ≤${g.推荐.推荐}`; el.title = g.推荐.原因.join('；'); el.className = g.推荐.当前 > g.推荐.推荐 ? 'err' : ''; } } catch { /* 保持占位 */ } }, 0);
-  // 已领计时秒级跳动：本地每秒原地更新，离开视图自动停（不整页刷新）
-  setTimeout(function tickTm() {
-    const els = document.querySelectorAll('.tm[data-since]');
-    if (!els.length) return;
-    els.forEach((el) => { const t = Date.parse(el.dataset.since); if (!isNaN(t)) el.textContent = fmtElapsed(Date.now() - t); });
-    setTimeout(tickTm, 1000);
-  }, 1000);
-  return `<div class="sec-h" style="margin-top:26px"><h3 class="h17">在岗 agent</h3>
-      <span class="subnote">${d.agents.filter((a) => a.上线 !== false).length} 名在岗 · 每人同时一张 · 同职能可多人 · 在途 ${d.在途数}/${d.上限}<span id="rec-line"></span></span></div>
-    ${rows}${timelineHtml(d.agents, all)}
-    <div class="logcard card r14"><b style="font-size:13px">实时动态日志</b><div style="margin-top:14px">${logs}</div></div>`;
+  const [d, { all }] = await Promise.all([api('/api/agents'), loadBoard()]);
+  // 0.23：拉取制视图退役——派发制是唯一现实（H49/H56 清仓）
+  return viewAgentsDispatch(d, all);
 }
-window.claim = async (agent) => { const r = await post('/api/claim', { agent }); toast(r.ok ? `已领 ${r.id}` : (r.error || '失败')); route(); };
 
 /* ===== P4 决策台 ===== */
 let dTab = 'accept';
