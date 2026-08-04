@@ -80,7 +80,7 @@ function unityFor(project) {
 
 (async () => {
   if (channel === '探测' || channel === 'probe') {
-    return out({ ok: true, godot: findGodot(), unity: findUnityEditors().map((e) => e.版本), unreal: findUnreal(), 通道: ['godot-import', 'godot-test', 'godot-export', 'unity-test', 'unity-build(占位)', 'unreal-*(未装/预留)'] });
+    return out({ ok: true, godot: findGodot(), unity: findUnityEditors().map((e) => e.版本), unreal: findUnreal(), 通道: ['godot-import', 'godot-test', 'godot-export', 'unity-test', 'unity-run', 'unity-build(占位)', 'unreal-*(未装/预留)'] });
   }
   const proj = args.project && path.resolve(args.project);
   if (!proj || !fs.existsSync(proj)) return out({ ok: false, error: '必填 --project <工程目录>' });
@@ -141,5 +141,5 @@ function unityFor(project) {
   }
   if (channel === 'unity-build') return out({ ok: false, error: '占位通道：构建脚本按项目落地后启用（需工程内 static 构建方法）' });
   if (channel && channel.startsWith('unreal')) return out({ ok: false, error: '预留通道：本机未装 UE；装后按 RunUAT/BuildCookRun 补实现（见 引擎适配调研报告）' });
-  return out({ ok: false, error: '未知通道。可用：探测 / godot-import / godot-test / godot-export / unity-test' });
+  return out({ ok: false, error: '未知通道。可用：探测 / godot-import / godot-test / godot-export / unity-test / unity-run' });
 })();
