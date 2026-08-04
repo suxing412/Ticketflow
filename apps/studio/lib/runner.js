@@ -36,12 +36,13 @@ function projectPath(cfg, t) {
 
 // ---- 模型分级（D38 = 停车场 P-5 落地）：贵模型当裁判，便宜模型干体力 ----
 // 解析顺序：agent 个体覆盖(config.agents[].模型) > 工种/池默认(config.模型) > CLI 自带默认(空)
-function pickModel(cfg, kind, agentCfg, poolName) {
+function pickModel(cfg, kind, agentCfg, poolName, 职能) {
   const m = cfg.模型 || {};
   if (kind === '质检') return m.质检 || m.claude默认 || '';
   if (kind === '代核') return m.代核 || m.claude默认 || '';
   if (kind === '代裁') return m.代裁 || m.代核 || m.claude默认 || ''; // D43③ 裁判档
-  return (agentCfg && agentCfg.模型) || m[poolName + '默认'] || '';
+  // 职能覆盖（0.23.11：装配单事故率实证——装配上 opus）：config.模型.职能覆盖 = { 装配: 'opus', ... }
+  return (agentCfg && agentCfg.模型) || (m.职能覆盖 && 职能 && m.职能覆盖[职能]) || m[poolName + '默认'] || '';
 }
 
 // ---- 编辑器占用监视（0.20.2）：UnityLockfile 在 + 本机有 Unity 进程 = 制作人在用编辑器。
@@ -382,7 +383,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   if (!proj) { failLocal('项目未注册或路径不存在（config.项目）'); return true; }
   const poolName = t.fm.执行池 || 'claude';
   const agentCfg = (cfg.agents || []).find((a) => a.id === agentId);
-  const model = pickModel(cfg, kind, agentCfg, poolName);
+  const model = pickModel(cfg, kind, agentCfg, poolName, t.fm.职能);
   const compat = kind === '执行' && cfg.执行池 && cfg.执行池[poolName] && cfg.执行池[poolName].兼容;
   const { cmd, args, stream } = resolveCli(kind === '执行' ? poolName : 'claude', compat ? (compat.模型 || model) : model, (cfg.执行器 || {}).放行工具); // 质检/代核都走 claude
   const receiptPath = path.join(root, '回执', `${t.id}.md`);

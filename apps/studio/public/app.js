@@ -945,7 +945,7 @@ async function viewParams() {
   const [c, run, models] = await Promise.all([api('/api/config'), api('/api/runner'), api('/api/models').catch(() => ({}))]);
   window._p6cfg = c;
   window._models = models;
-  // 执行器（D30）：内嵌拉取循环的仪表与开关
+  // 执行器：派发调度循环的仪表与开关（H49）
   const rcfg = c.执行器 || {};
   const runCards = `<div class="paramcard card" id="run-card"><h4><i class="${dotCls(run)}" id="run-dot"></i>执行器 <span id="run-state">${run.运行 ? '运行中' : '已停'}</span></h4>
       <p class="pmeta" id="run-meta">${run.试跑 ? '试跑模式：模拟执行 · 零额度' : '实弹模式'}${run.执行中 && run.执行中.length ? ` · 执行中 ${run.执行中.map((x) => x.id).join(' / ')}` : ''}</p>
@@ -986,7 +986,7 @@ async function viewParams() {
       <div class="runbtn"><input id="madd-codex" class="mono" placeholder="codex" style="width:90px;height:30px;padding:0 8px;font-size:11px"/><button class="btn h32" style="height:30px;margin:0 6px" onclick="mAdd('codex')">＋</button>
       <input id="madd-claude" class="mono" placeholder="claude" style="width:90px;height:30px;padding:0 8px;font-size:11px"/><button class="btn h32" style="height:30px;margin-left:6px" onclick="mAdd('claude')">＋</button></div></div>`;
   // 执行池阈值（额度锁的杆）
-  const poolCards = ['codex', 'claude'].flatMap((pool) => [['阈值', '5h 用量 ≥N% 冻结领单'], ['周阈值', '周用量 ≥N% 冻结领单']].map(([k, note]) => {
+  const poolCards = ['codex', 'claude'].flatMap((pool) => [['阈值', '5h 用量 ≥N% 冻结派发'], ['周阈值', '周用量 ≥N% 冻结派发']].map(([k, note]) => {
     const v = (c.执行池 && c.执行池[pool] && c.执行池[pool][k]) || (k === '阈值' ? 70 : 90);
     return `<div class="paramcard card" data-pl="${pool}.${k}"><h4>${pool} ${k}</h4><p class="pmeta">${note.replace('N', v)}</p>
       <div class="stepper"><button onclick="plStep('${pool}','${k}',-5)">−</button><span class="val">${v}</span><button onclick="plStep('${pool}','${k}',5)">＋</button></div></div>`;
@@ -997,77 +997,16 @@ async function viewParams() {
   const envCard = `<div class="envcard card" id="env-card">
       <div class="eg-head"><span id="env-light" class="pill sm mut">自检中…</span><button class="btn h32" style="margin-left:auto;height:28px" onclick="envProbe(this)">重新自检</button></div>
       <div id="env-body"><p class="dim" style="margin:10px 0 4px">全链路自检运行中…</p></div></div>`;
-  // 职能编制：直接调各职能人数（D17 走到底：编制即上限）
-  const roleCount = (fn) => (c.agents || []).filter((a) => a.职能 === fn && a.上线 !== false).length;
-  const online = (c.agents || []).filter((a) => a.上线 !== false).length;
-  const staffCards = (c.职能 || []).map((fn) => `<div class="paramcard card" data-staff="${esc(fn)}"><h4>${esc(fn)} 编制</h4><p class="pmeta">在岗 agent 人数 · 每人同时一张</p>
-      <div class="stepper"><button onclick="sStep('${esc(fn)}',-1)">−</button><span class="val">${roleCount(fn)}</span><button onclick="sStep('${esc(fn)}',1)">＋</button></div></div>`).join('');
-  const capCard = `<div class="paramcard card"><h4>在途上限</h4><p>= 在岗人数（编制即上限，D17）</p><span class="fixed" id="cap-derived">= ${online}</span></div>`;
+  const staffCards = ''; const capCard = ''; // 编制/在途上限（D17）已随拉取制退役：派发制并发上限在项管台账（0.23.11）
+  
   const params = Object.entries(c.闸值 || {}).map(([k, v]) => `<div class="paramcard card" data-key="${esc(k)}"><h4>${esc(P6NAMES[k] || k)}</h4><p class="pmeta">${esc((P6META[k] || '').replace('N', v))}</p>
       <div class="stepper"><button onclick="pStep('${k}',-1)">−</button><span class="val">${v}</span><button onclick="pStep('${k}',1)">＋</button></div></div>`).join('');
-  // 推荐在途（D28）：制作人精力参考——精力档打底，高档随处理速度爬升
-  const rc = c.推荐 || {}; const eg = rc.精力档 === '低' ? '低' : '高';
-  const recCards = `<div class="paramcard card" data-energy><h4>精力档</h4><p class="pmeta">低=专注一张；高=随处理速度爬档</p>
-      <div class="egtoggle"><button class="egbtn ${eg === '低' ? 'on' : ''}" data-eg="低" onclick="eSet('低')">低</button><button class="egbtn ${eg === '高' ? 'on' : ''}" data-eg="高" onclick="eSet('高')">高</button></div></div>`
-    + [['速度窗口小时', rc.速度窗口小时 ?? 2], ['每档处理数', rc.每档处理数 ?? 2]].map(([k, v]) => `<div class="paramcard card" data-rkey="${k}"><h4>${esc(P6NAMES[k] || k)}</h4><p class="pmeta">${esc((P6META[k] || '').replace('N', v))}</p>
-      <div class="stepper"><button onclick="rStep('${k}',-1)">−</button><span class="val">${v}</span><button onclick="rStep('${k}',1)">＋</button></div></div>`).join('');
-  const team = teamRowsHtml(c.agents);
-  // 额度不阻塞首屏：先占位骨架，数据回来原地填（footprint 不变），随后 5s 活体轮询
-  let lastPoolJson = '';
-  const fillPools = async () => {
-    const g = await api('/api/gates');
-    const key = JSON.stringify([g.locks.codex, g.locks.claude]);
-    if (key === lastPoolJson) return;
-    lastPoolJson = key;
-    const pc = $('pool-codex'); if (pc) pc.innerHTML = poolCardHtml('codex', g.locks.codex, c.执行池 && c.执行池.codex);
-    const pl = $('pool-claude'); if (pl) pl.innerHTML = poolCardHtml('claude', g.locks.claude, c.执行池 && c.执行池.claude);
-  };
-  setTimeout(() => { fillPools().catch(() => { /* 保持占位，不清空 */ }); }, 0);
-  pollLoop('pool-codex', 5000, fillPools);
-  // 执行器活体轮询：留在参数页时每 5s 原地刷状态灯/执行中清单，离开视图自动停
-  setTimeout(function pollRun() {
-    if (!$('run-card')) return;
-    setTimeout(async () => {
-      if (!$('run-card')) return;
-      try {
-        const r = await api('/api/runner');
-        const dot = $('run-dot'); if (dot) dot.className = dotCls(r);
-        const st = $('run-state'); if (st) st.textContent = r.运行 ? '运行中' : '已停';
-        const bt = $('run-toggle'); if (bt) { bt.textContent = r.运行 ? '停止' : '启动'; bt.className = 'btn h32' + (r.运行 ? '' : ' primary'); }
-        const meta = $('run-meta'); if (meta) meta.textContent = (r.试跑 ? '试跑模式：模拟执行 · 零额度' : '实弹模式') + (r.执行中 && r.执行中.length ? ` · 执行中 ${r.执行中.map((x) => x.id).join(' / ')}` : '');
-      } catch { /* 下轮再试 */ }
-      pollRun();
-    }, 5000);
-  }, 0);
-  // 全链路自检进页自动跑（服务端 60s 缓存，便宜）；按钮=强制复检
-  setTimeout(() => { if ($('env-card')) window.envProbe(null); }, 0);
-  return `<div class="p6grid"><div>
-      <div class="sec-h"><h3 class="h17">执行器</h3><span class="subnote">内嵌拉取循环 · 开 exe 即开工厂</span></div>${runCards}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">职能编制</h3><span class="subnote">直接调人数 · 编制即上限</span></div>${staffCards}${capCard}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">参数闸值</h3><span class="subnote">监制台可调</span></div>${params}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">推荐在途</h3><span class="subnote">制作人精力参考 · 随处理速度调整</span></div>${recCards}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">模型档</h3><span class="subnote">贵裁判 · 贱体力（D38）</span></div>${modelCards}${compatCards}</div>
-    <div><div class="sec-h"><h3 class="h17">环境探针</h3><span class="subnote">实弹前置检查</span></div>${envCard}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">项目注册</h3><span class="subnote">执行 agent 的目标仓库（D32）</span></div>${projCard}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">执行池阈值</h3><span class="subnote">额度锁的杆（D26）</span></div>${poolCards}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">额度双池</h3></div>
-      <div class="poolcard card" id="pool-codex">${poolCardHtml('codex', null, c.执行池 && c.执行池.codex)}</div>
-      <div class="poolcard card" id="pool-claude">${poolCardHtml('claude', null, c.执行池 && c.执行池.claude)}</div>
-      <div class="sec-h" style="margin-top:26px"><h3 style="font-size:15px;margin:0;font-weight:700">agent 编制 · 执行池</h3></div><div id="team-list">${team}</div></div></div>`;
+  const recCards = ''; // 精力档/推荐在途（D28）已随拉取制退役（0.23.11）
+  
 }
 // 编制步进：POST 后原地更新该职能人数、在途上限推导值、右侧编制表——视图保持渲染，不整页重载
-window.sStep = async (fn, delta) => {
-  const card = document.querySelector(`.paramcard[data-staff="${fn}"]`); if (!card) return;
-  const valEl = card.querySelector('.val');
-  const next = Number(valEl.textContent) + delta;
-  const r = await post('/api/config/staff', { 职能: fn, count: next });
-  if (!r.ok) return toast(r.error || '失败');
-  valEl.textContent = String(next); bump(valEl);
-  const cap = $('cap-derived'); if (cap) { cap.textContent = '= ' + r.在途上限; bump(cap); }
-  const tl = $('team-list'); if (tl) tl.innerHTML = teamRowsHtml(r.agents);
-  if (window._p6cfg) window._p6cfg.agents = r.agents;
-  toast(`${fn} 编制 → ${next} 人${r.退役.length ? `（${r.退役.join('、')} 退役待归）` : ''}`);
-};
+// sStep（编制步进）已随拉取制退役（0.23.11）
+
 // 调参：POST 后只原地更新该卡片的数字与说明，视图保持渲染、不重载
 window.pStep = async (k, delta) => {
   const card = document.querySelector(`.paramcard[data-key="${k}"]`); if (!card) return;
@@ -1213,14 +1152,8 @@ window.envProbe = async (btn) => {
   } catch { toast('自检失败'); }
   if (btn) { btn.disabled = false; btn.textContent = '重新自检'; }
 };
-// 精力档切换（D28）：POST 后原地换高亮，不重载
-window.eSet = async (v) => {
-  const r = await post('/api/config/recommend', { key: '精力档', value: v });
-  if (!r.ok) return toast(r.error || '失败');
-  document.querySelectorAll('.egbtn').forEach((b) => b.classList.toggle('on', b.dataset.eg === v));
-  if (window._p6cfg) window._p6cfg.推荐 = r.推荐;
-  toast(`精力档 → ${v}${v === '低' ? '（推荐固定 1 张）' : '（随处理速度爬档）'}`);
-};
+// 精力档切换已随拉取制退役（0.23.11）
+
 // 推荐速度参数步进：POST 后只原地更新该卡片，视图保持渲染
 window.rStep = async (k, delta) => {
   const card = document.querySelector(`.paramcard[data-rkey="${k}"]`); if (!card) return;
