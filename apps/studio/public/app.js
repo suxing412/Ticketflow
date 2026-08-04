@@ -1516,7 +1516,8 @@ async function viewWiki() {
   const match = (e) => !q || e.名称.includes(q) || e.分类.includes(q);
   const cats = [...new Set((d.条目 || []).map((e) => e.分类))].sort();
   const CATICON = { 世界观: '🌏', 地图: '🗺', 势力: '⚔', 系统: '⚙', 数值: '🧮' };
-  if (!wkState.entry || !byName[wkState.entry]) wkState.entry = ((d.条目 || [])[0] || {}).名称 || '';
+  if (wkState.entry && !byName[wkState.entry]) wkState.entry = ''; // 条目已不存在 → 回主页；空 = 主页
+  const homeLink = `<p class="wk-it ${!wkState.entry && wkState.mode !== 'graph' ? 'cur' : ''}" style="margin-left:0;font-weight:600" onclick="wkOpen('')">🏠 主页</p>`;
   const tree = cats.map((c) => {
     const mine = d.条目.filter((e) => e.分类 === c && match(e));
     if (q && !mine.length) return '';
@@ -1532,6 +1533,25 @@ async function viewWiki() {
     article = `<div style="position:relative"><canvas id="wk-g" width="760" height="520" style="width:100%;border:0.5px solid var(--line);border-radius:12px"></canvas>
       <p class="subnote" style="margin-top:8px">节点=词条（按分类着色，灰=被引用但未建）· 边=双链 · 拖拽节点 · 点击进词条</p></div>`;
     setTimeout(() => wkGraph(proj), 0);
+  } else if (!wkState.entry) {
+    const g = await api('/api/wiki/graph?项目=' + encodeURIComponent(proj)).catch(() => ({ nodes: [], edges: [] }));
+    const ghosts = (g.nodes || []).filter((n) => n.分类 === '未建');
+    const hubs = [...(d.条目 || [])].sort((x, y) => (y.backlinks || []).length - (x.backlinks || []).length).slice(0, 5).filter((e) => (e.backlinks || []).length);
+    const recent = [...(d.条目 || [])].filter((e) => e.更新时间).sort((x, y) => String(y.更新时间).localeCompare(String(x.更新时间))).slice(0, 5);
+    const CATI = { 世界观: '🌏', 地图: '🗺', 势力: '⚔', 系统: '⚙', 数值: '🧮' };
+    const links = (d.条目 || []).reduce((s, e) => s + (e.links || []).length, 0);
+    const catCards = cats.map((c) => { const mine = d.条目.filter((e) => e.分类 === c);
+      return `<div class="card r14" style="padding:14px 16px;cursor:pointer" onclick="wkOpen('${esc((mine[0] || {}).名称 || '')}')">
+        <b style="font-size:14px">${CATI[c] || '📄'} ${esc(c)}</b><span class="dim" style="margin-left:8px">${mine.length} 词条</span>
+        <p class="dim" style="margin:8px 0 0;font-size:12.5px">${mine.slice(0, 3).map((e) => esc(e.名称)).join(' · ')}${mine.length > 3 ? ' …' : ''}</p></div>`; }).join('');
+    article = `<h2 style="margin:0 0 4px">${esc(proj)} 设计 Wiki</h2>
+      <p class="dim" style="margin:0 0 16px;font-size:13px">${(d.条目 || []).length} 词条 · ${cats.length} 分类 · ${links} 条双链${d.待审.length ? ` · <span class="warnc">${d.待审.length} 篇待审</span>` : ''}</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:18px">${catCards || '<p class="dim">还没有分类</p>'}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div><p class="dim" style="font-size:12px;margin:0 0 6px">枢纽词条（被引最多）</p>${hubs.map((e) => `<p style="margin:0 0 6px"><a class="wk-l" onclick="wkOpen('${esc(e.名称)}')">${esc(e.名称)}</a> <span class="dim">← ${(e.backlinks || []).length}</span></p>`).join('') || '<p class="dim">暂无</p>'}</div>
+        <div><p class="dim" style="font-size:12px;margin:0 0 6px">待建词条（被引用但未落笔——设计待办）</p>${ghosts.map((n) => `<p style="margin:0 0 6px"><a class="wk-l ghost">${esc(n.id)}</a></p>`).join('') || '<p class="dim">无——链接网是闭合的</p>'}</div>
+      </div>
+      ${recent.length ? `<p class="dim" style="font-size:12px;margin:16px 0 6px;border-top:0.5px solid var(--line);padding-top:10px">最近更新</p>` + recent.map((e) => `<p style="margin:0 0 5px"><a class="wk-l" onclick="wkOpen('${esc(e.名称)}')">${esc(e.名称)}</a> <span class="dim">${esc(String(e.更新时间).slice(0, 10))} · ${esc(e.分类)}</span></p>`).join('') : ''}`;
   } else if (wkState.entry && byName[wkState.entry]) {
     const e = await api('/api/wiki/entry?项目=' + encodeURIComponent(proj) + '&名称=' + encodeURIComponent(wkState.entry)).catch(() => null);
     if (e) {
@@ -1559,7 +1579,7 @@ async function viewWiki() {
       <span class="cnt">${(d.条目 || []).length} 词条${d.待审.length ? ` · <span class="warnc">待审 ${d.待审.length}</span>` : ''}</span></div>
     ${d.待审.length ? `<div style="margin-bottom:14px">${pend}</div>` : ''}
     <div class="wk-grid">
-      <div class="wk-tree">${tree || '<p class="dim">无词条</p>'}</div>
+      <div class="wk-tree">${homeLink}${tree || '<p class="dim">无词条</p>'}</div>
       <div class="wk-art card r16" style="padding:20px 24px">${article}</div>
       <div>${info}</div>
     </div>`;
