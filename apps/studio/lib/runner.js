@@ -647,7 +647,7 @@ async function tick(root, cfg, opts = {}) {
   const 两检 = (cfg.执行器 || {}).两检 || {};
   const 两检开 = 两检.开 !== false && (cfg.执行池 || {})[两检.池 || 'deepseek'];
   if (两检开 && !running.has('两检初检')) {
-    const t = store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !x.fm.初检 && !x.fm.代核
+    const t = store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !['战役', '专项'].includes(x.fm.父单类型) && !x.fm.初检 && !x.fm.代核
       && (Number(x.fm.初检失败次数) || 0) < 判官上限 && !busyTickets().has(x.id));
     if (t && await startWork(root, cfg, t, '两检初检', '初检', opts)) (result.初检 = result.初检 || []).push(t.id);
   }
