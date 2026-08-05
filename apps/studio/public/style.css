@@ -737,3 +737,9 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .ag-detail { animation:agdIn .18s var(--ease-out); }
 @keyframes agdIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:none; } }
 @media (prefers-reduced-motion: reduce) { .ag-detail { animation:none; } }
+
+/* 2026-08-06 UI 评审 · hub 页：H-1 最近动态行 / H-2 零值灰显 / H-3 焦点环 */
+.hubcard .hlast { font-family:var(--mono); font-size:10.5px; color:var(--ink3); margin-top:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-height:14px; }
+.hubcard .hc i.z { color:var(--ink3); font-weight:500; }
+.hubcard:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.inbox-row:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }

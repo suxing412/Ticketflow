@@ -107,13 +107,16 @@ async function viewHub() {
     const counts = [['在途', cnt(a, '在途', '质检'), ''], ['在池', cnt(a, '池'), ''], ['待验收', cnt(a, '待验收'), ''],
       ['待定夺', cnt(a, '待定夺'), 'err'], ['失败', cnt(a, '执行失败'), 'err']];
     const eng = reg[n] && reg[n].引擎;
-    return `<div class="hubcard card r16" onclick="enterProj('${esc(n)}')">
+    // H-2 零值灰显 / H-3 键盘可达（2026-08-06 UI 评审 hub 页）
+    return `<div class="hubcard card r16" onclick="enterProj('${esc(n)}')" tabindex="0" role="button" aria-label="进入项目 ${esc(n)}"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();enterProj('${esc(n)}')}">
       <div class="hn"><b>${esc(n)}</b>${n === def ? '<span class="pill sm mut">默认</span>' : ''}
         ${eng ? `<span class="pill sm mut" title="引擎档案（探针按此自检）">${esc(eng.类型)}${eng.版本 ? ' ' + esc(eng.版本) : ''}</span>` : ''}
         ${need ? `<span class="pill sm red">需处理 ${need}</span>` : '<span class="pill sm ok">安好</span>'}</div>
       <div class="hpath mono" title="${esc((reg[n] && reg[n].路径) || '')}">${esc((reg[n] && reg[n].路径) || '')}</div>
       ${reg[n] && reg[n].说明 ? `<div class="hnote">${esc(reg[n].说明)}</div>` : ''}
-      <div class="hcounts">${counts.map(([l, v, c]) => `<span class="hc"><i class="${v && c ? c : ''}">${v}</i>${l}</span>`).join('')}</div></div>`;
+      <div class="hcounts">${counts.map(([l, v, c]) => `<span class="hc"><i class="${v ? (c || '') : 'z'}">${v}</i>${l}</span>`).join('')}</div>
+      <div class="hlast dim" id="hlast-${esc(n)}"></div></div>`;
   }).join('');
   // 全局横幅数据后到、原地填（视图保持渲染铁律）
   setTimeout(async () => { try {
@@ -124,6 +127,15 @@ async function viewHub() {
     setNum($('hub-cx'), g.locks.codex.fivePct != null ? g.locks.codex.fivePct + '%' : '—', 'num ' + (g.locks.codex.locked ? 'err' : 'okc'));
     setNum($('hub-cl'), g.locks.claude.fivePct != null ? g.locks.claude.fivePct + '%' : '—', 'num ' + (g.locks.claude.locked ? 'err' : 'dim'));
   } catch { /* 保持占位 */ } }, 0);
+  // H-1 项目卡最近动态行（2026-08-06 UI 评审）：journal 该项目最后一条，启动页有实时判断力
+  setTimeout(async () => { try {
+    const jn = await api('/api/journal'); const lines = jn.lines || [];
+    for (const n of names) {
+      const el = document.getElementById('hlast-' + n); if (!el) continue;
+      const hit = [...lines].reverse().find((l) => l.includes(n + '-') || l.includes('项目 ' + n));
+      if (hit) { const m = String(hit).match(/^\[[^\]]*?([\d:]{5})[^\]]*\]\s*(.*)$/); el.textContent = (m ? m[1] + ' · ' + m[2] : hit).slice(0, 56); }
+    }
+  } catch { /* 无动态不补 */ } }, 0);
   setTimeout(async () => { try {
     const e2 = await api('/api/env'); const el = $('hub-env'); if (!el) return;
     el.title = e2.结论.join('\n');
@@ -196,13 +208,15 @@ async function viewOverview() {
     ...(board['待验收'] || []).map((t) => ({ ...t, k: '待验收', note: t.验收方式 === '保留' ? '保留 · 待品味终审' : '委托 · 核查可代签' })),
     ...(board['待定夺'] || []).map((t) => ({ ...t, k: '待定夺', note: 'QA 未过，四件套已备' })),
   ];
-  const inboxHtml = inbox.map((r) => `<div class="inbox-row card" onclick="location.hash='#/t/${r.id}'">
+  const inboxHtml = inbox.map((r) => `<div class="inbox-row card" onclick="location.hash='#/t/${r.id}'" tabindex="0" role="button"
+      onkeydown="if(event.key==='Enter'){location.hash='#/t/${r.id}'}">
       <span class="rid">${esc(r.id)}</span><span class="rt">${esc(r.title)}</span><span class="rnote">${esc(r.note)}</span>
-      ${stPill(r.k)}</div>`).join('') || '<p class="dim">收件箱空——没有需要你决定的</p>';
+      ${stPill(r.k)}</div>`).join('')
+    || `<p class="dim">收件箱空——没有需要你决定的${n('待投') ? `；<a href="#/board" style="color:var(--accent-ink)">待投区还有 ${n('待投')} 张可放行 →</a>` : ''}</p>`;
   // 池首投放建议已随拉取制退役（0.24.7 视图清仓）
   const lines = (jn.lines || []).slice(-5).reverse();
   const logHtml = lines.map((l) => { const m = String(l).match(/^\[([\d-]+ )?([\d:]{5})[^\]]*\]\s*(.*)$/); const tm = m ? m[2] : ''; const tx = m ? m[3] : String(l);
-    const cls = /锁|超|告警|打回/.test(tx) ? 'err' : /通过|完成|验收/.test(tx) ? 'okc' : ''; return `<div class="logrow"><time>${esc(tm)}</time><span class="${cls}">${esc(tx.slice(0, 40))}</span></div>`; }).join('') || '<p class="dim">无动态</p>';
+    const cls = /锁|超|告警|打回/.test(tx) ? 'err' : /通过|完成|验收/.test(tx) ? 'okc' : ''; return `<div class="logrow"><time>${esc(tm)}</time><span class="${cls}" title="${esc(tx)}">${esc(tx.slice(0, 56))}</span></div>`; }).join('') || '<p class="dim">无动态</p>';
   // 额度卡双杆：5h + 周（周额度烧穿是灾难级，必须可见）；陈旧读数带时间戳
   const qbarLine = (lbl, pct, hot) => `<div class="qrow2"><span class="qn">${lbl}</span><div class="qbar"><i class="${hot ? 'hot' : ''}" style="width:${pct || 0}%"></i></div>
       <span class="qp ${hot ? 'err' : ''}">${pct == null ? '—' : pct + '%'}</span></div>`;
