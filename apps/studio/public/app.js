@@ -310,7 +310,7 @@ async function viewBoard() {
     const head = s === '草稿'
       ? `<h4>${s}<a class="newdraft" href="#/draft">＋ 起草</a></h4>`
       : s === '待投' && items.length
-        ? `<h4>${s}<button class="newdraft" title="整批投池（D43：拆完一批不用一张张点，人闸就是这一下）" onclick="releaseAll()">⇧ 全投 ${items.length}</button></h4>`
+        ? `<h4>${s}<button class="newdraft" title="整批放行（H49 派发制：放行后依赖就绪即自动派发；人闸就是这一下）" onclick="releaseAll()">⇧ 全放行 ${items.length}</button></h4>`
         : s === '已归档' && (window._hiddenCnt || window._showHidden)
           ? `<h4>${s}<span class="cnt">${items.length}</span><button class="newdraft" title="隐藏归档：制作人湮灭的废案，默认不渲染" onclick="window._showHidden=!window._showHidden;route()">${window._showHidden ? '藏起' : `显隐藏 ${window._hiddenCnt}`}</button></h4>`
           : `<h4>${s}<span class="cnt">${items.length}</span></h4>`;
