@@ -250,7 +250,7 @@ app.post('/api/config/compat-pool', (req, res) => {
 app.post('/api/config/model', (req, res) => {
   if (!ready(res)) return;
   const { key, value } = req.body || {};
-  if (!['codex默认', 'claude默认', '质检', '代核', '代裁', '项管'].includes(key)) return res.status(400).json({ error: '不可调整：' + key });
+  if (!['codex默认', 'claude默认', '质检', '代核', '代裁', '核查', '仲裁', '项管'].includes(key)) return res.status(400).json({ error: '不可调整：' + key });
   const v = String(value || '').trim();
   cfg.模型 = cfg.模型 || {}; cfg.模型[key] = v; saveCfg();
   journal.append(ROOT, `模型档调整：${key} → ${v || '（CLI 默认）'}`);
@@ -648,6 +648,27 @@ app.get('/api/gates', async (req, res) => {
     res.json({ paused: require('./lib/core/state').read(ROOT).paused, locks: { codex: locks.codex, claude: locks.claude }, 推荐: rec });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// H69 评分仪表盘：岗位×模型矩阵聚合（均分+样本数，n<5 前端灰显）。只读仪表盘，不接奖惩。
+app.get('/api/scores', (req, res) => {
+  if (!ready(res)) return;
+  const all = require('./lib/pm/ledger').scores(ROOT);
+  const agg = {};
+  for (const s of all) {
+    let key;
+    if (s.线 === '审检评执行') key = `执行|${s.职能 || '?'}|${s.池 || '?'}${s.模型 ? '/' + s.模型 : ''}`;
+    else if (s.线 === '执行评拆单') key = `项管拆单|${s.切单人 || '项管'}|opus`;
+    else if (s.线 === '项管评审检') key = `审检报告|核查+质检|opus`;
+    else continue;
+    (agg[key] = agg[key] || { 总: 0, n: 0 }).总 += s.分; agg[key].n += 1;
+  }
+  const 误判 = all.filter((s) => s.线 === '审检误判');
+  const rows = Object.entries(agg).map(([k, v]) => {
+    const [线, 岗位, 模型] = k.split('|');
+    return { 线, 岗位, 模型, 均分: Math.round((v.总 / v.n) * 10) / 10, n: v.n };
+  });
+  res.json({ rows, 审检误判: { 漏判: 误判.filter((x) => x.类型 === '漏判').length, 误杀: 误判.filter((x) => x.类型 === '误杀').length, 明细: 误判.slice(-10) } });
+});
+
 // 编辑器锁（H64）：制作人开 Unity 前手动关锁=声明验收，派发挂起；用完编辑器退出自动开锁。
 app.post('/api/editor-lock', (req, res) => {
   if (!ready(res)) return;

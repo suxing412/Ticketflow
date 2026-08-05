@@ -8,6 +8,9 @@ const state = require('../lib/core/state');
 const store = require('../lib/core/store');
 const gates = require('../lib/gates');
 const { makeRoot, seed, CFG } = require('./helper');
+const quota = require('../lib/quota');
+// 测试隔离（2026-08-05 案：额度闸曾查真实订阅用量——codex 实际用量爬过 70% 时本套件假失败数版无人察觉）
+quota.getRateLimits = async () => null; quota.getClaudeUsage = async () => null;
 
 let passed = 0; const t = async (n, f) => { await f(); passed++; console.log('  ✓ ' + n); };
 console.log('runner 执行器测试（D30/D31/D32）');
@@ -162,7 +165,7 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.ok((r.代核 || []).includes('P-20'));
     assert.equal(store.find(root, 'P-20').state, '完成');
     assert.equal(store.find(root, 'P-20').fm.代核.结论, '通过');
-    assert.ok(fs.readFileSync(path.join(root, '回执', 'P-20.md'), 'utf8').includes('## 委托代核'));
+    assert.ok(fs.readFileSync(path.join(root, '回执', 'P-20.md'), 'utf8').includes('## 核查'));
     assert.equal(store.find(root, 'P-21').state, '待验收', '保留单碰都不碰');
   });
 
@@ -177,7 +180,7 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.equal(cur.state, '在途', '给方向回在途');
     assert.equal(cur.fm.代裁.结论, '给方向');
     assert.ok(cur.body.includes('## 定夺方向'), '方向写入正文');
-    assert.ok(fs.readFileSync(path.join(root, '回执', 'P-30.md'), 'utf8').includes('## 委托代裁'));
+    assert.ok(fs.readFileSync(path.join(root, '回执', 'P-30.md'), 'utf8').includes('## 仲裁'));
     // 已盖代裁章的单不再重裁（上呈态等用户）
     const root2 = makeRoot(); on(root2);
     seed(root2, '待定夺', { id: 'P-31', 职能: '程序', 主办: '程序-A', 代裁: { 结论: '上呈', 时间: 'x' } });

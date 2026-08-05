@@ -829,6 +829,17 @@ function costRankTable(rows) {
       <td class="${r.自修次数 ? 'warnc' : 'dim'}">${r.自修次数 || ''}</td></tr>`).join('') || '<tr><td colspan="5" class="dim">无数据</td></tr>'}</table></div>`;
 }
 // 项管台账卡（0.23.10：台账归报表——用户裁定）
+// H69 评分仪表盘卡：岗位×模型矩阵（均分+n，n<5 灰显「样本不足」）。只读仪表——供路由决策，不接奖惩。
+function scoreCard(sc) {
+  if (!sc || !sc.rows || !sc.rows.length) return '';
+  const rows = sc.rows.map((r) => `<tr class="${r.n < 5 ? 'dim' : ''}"><td>${esc(r.线)}</td><td>${esc(r.岗位)}</td><td class="mono">${esc(r.模型)}</td>
+      <td style="text-align:right"><b>${r.均分}</b></td><td style="text-align:right">${r.n}${r.n < 5 ? ' <span class="subnote">样本不足</span>' : ''}</td></tr>`).join('');
+  const 误 = sc.审检误判 || {};
+  return `<div class="rp-card card r14"><h4>评分仪表盘<span class="subnote" style="margin-left:10px">H69 · 三线互评 · 只观测不奖惩</span></h4>
+    <table class="rp-t"><tr><th>评分线</th><th>岗位</th><th>模型</th><th>均分</th><th>n</th></tr>${rows}</table>
+    <p class="subnote" style="margin-top:8px">审检误判（客观事件）：漏判 ${误.漏判 || 0} · 误杀 ${误.误杀 || 0}</p></div>`;
+}
+
 function pmLedgerCard(L) {
   const fee = L.管理费 || { token合计: 0, 次数: 0 };
   const caps = Object.entries(L.并发上限 || {}).map(([k, v]) => esc(k) + ' ≤' + v).join(' · ') || '—';
@@ -841,7 +852,7 @@ function pmLedgerCard(L) {
     + '<table class="rp-t"><tr><th>专项成本归集</th><th style="text-align:right">tokens</th></tr>' + costRows + '</table></div>';
 }
 async function viewReport() {
-  const [d, , pl] = await Promise.all([api('/api/report'), loadCfg(), api('/api/pm/ledger').catch(() => null)]);
+  const [d, , pl, sc] = await Promise.all([api('/api/report'), loadCfg(), api('/api/pm/ledger').catch(() => null), api('/api/scores').catch(() => null)]);
   const dispatch = !!(_cfg && _cfg.执行器 && _cfg.执行器.派发制);
   const p = projActive();
   // D42 项目语境：明细/分组按项目过滤（服务端全量，客户端切片——报表数据量小）
@@ -871,7 +882,7 @@ async function viewReport() {
       <td class="dim" title="${esc(r.实际消耗 || '')}">${esc((r.实际消耗 || '—').slice(0, 26))}</td></tr>`).join('');
   return `<div class="stat-strip card r14">${strip}</div>
     <div class="rp-grid">
-      <div>${gtable('按职能', dispatch && pl && pl.台账 ? [...d.按职能, { 名: '项目管理', 单数: (pl.台账.管理费 || {}).次数 || 0, 实际h合计: '—', 平均h: ((pl.台账.管理费 || {}).token合计 || 0).toLocaleString() + ' tk', 自修合计: 0 }] : d.按职能)}${dispatch ? costRankTable(rows) : gtable('按主办', d.按主办)}${dispatch && pl && pl.台账 ? pmLedgerCard(pl.台账) : ''}${gtable('按执行池', d.按池, '订阅额度去向')}</div>
+      <div>${gtable('按职能', dispatch && pl && pl.台账 ? [...d.按职能, { 名: '项目管理', 单数: (pl.台账.管理费 || {}).次数 || 0, 实际h合计: '—', 平均h: ((pl.台账.管理费 || {}).token合计 || 0).toLocaleString() + ' tk', 自修合计: 0 }] : d.按职能)}${dispatch ? costRankTable(rows) : gtable('按主办', d.按主办)}${dispatch && pl && pl.台账 ? pmLedgerCard(pl.台账) : ''}${gtable('按执行池', d.按池, '订阅额度去向')}${scoreCard(sc)}</div>
       <div><div class="rp-card card r14"><h4>每日交付<span class="subnote" style="margin-left:10px">近 14 天</span></h4>
         <div class="rp-days">${daysHtml}</div></div>
         ${gtable('按项目', d.按项目)}</div>

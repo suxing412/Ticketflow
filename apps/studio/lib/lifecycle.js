@@ -94,6 +94,12 @@ function 验收(root, id, 通过) {
   if (!t) return { ok: false, error: '不存在' };
   if (t.state !== '待验收') return { ok: false, error: `只有待验收单可验收（当前 ${t.state}）` };
   const to = 通过 ? '完成' : '已归档';
+  // H69 线③（客观误判事件）：核查说通过而制作人打回=漏判；核查说不过而制作人签通过=误杀
+  const 核查章 = t.fm.核查 || t.fm.代核;
+  if (核查章 && 核查章.结论) {
+    const 误 = !通过 && 核查章.结论 === '通过' ? '漏判' : (通过 && 核查章.结论 === '不过' ? '误杀' : null);
+    if (误) { try { require('./pm/ledger').score(root, { 线: '审检误判', 席: '核查', 单: id, 类型: 误 }); } catch { /* 不阻塞 */ } }
+  }
   const r = store.move(root, id, '待验收', to, (fm) => { if (!通过) fm.归档原因 = '验收打回'; }, nowIso());
   if (r.ok) journal.append(root, `验收 ${id}：${通过 ? '通过→完成' : '打回→已归档'}`);
   return r;
@@ -141,7 +147,7 @@ function 返修(root, id, 说明) {
   if (!['执行失败', '待验收'].includes(t.state)) return { ok: false, error: `只有执行失败/待验收单可返修（当前 ${t.state}）` };
   const r = store.move(root, id, t.state, '草稿', (fm) => {
     delete fm.主办; delete fm.领单时间; delete fm.交付时间; fm.放行 = false;
-    delete fm.代核; delete fm.初检; delete fm.质检人; delete fm.代核失败次数; delete fm.初检失败次数; // 下一轮重新过检（H67）
+    delete fm.核查; delete fm.代核; delete fm.初检; delete fm.质检人; delete fm.代核失败次数; delete fm.初检失败次数; // 下一轮重新过检（H67）
     fm.返修轮 = (fm.返修轮 || 0) + 1;
   }, nowIso());
   if (r.ok) {

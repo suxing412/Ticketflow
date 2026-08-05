@@ -76,4 +76,19 @@ function events(root, limit = 200) {
   } catch { return []; }
 }
 
-module.exports = { read, write, update, event, events, DIR, DEFAULT };
+// H69 评分仪表盘：三线评分寄生采集，append-only jsonl。定位=路由决策仪表盘，不接任何自动奖惩。
+const SCORES = (root) => path.join(DIR(root), '评分.jsonl');
+function score(root, rec) {
+  try {
+    fs.mkdirSync(DIR(root), { recursive: true });
+    fs.appendFileSync(SCORES(root), JSON.stringify({ t: new Date().toISOString(), ...rec }) + '\n', 'utf8');
+  } catch { /* 评分失败不阻塞主流程 */ }
+}
+function scores(root, limit = 2000) {
+  try {
+    return fs.readFileSync(SCORES(root), 'utf8').split(/\r?\n/).filter(Boolean).slice(-limit)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  } catch { return []; }
+}
+
+module.exports = { read, write, update, event, events, score, scores, DIR, DEFAULT };

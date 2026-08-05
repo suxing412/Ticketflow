@@ -39,8 +39,8 @@ function projectPath(cfg, t) {
 function pickModel(cfg, kind, agentCfg, poolName, 职能) {
   const m = cfg.模型 || {};
   if (kind === '质检') return m.质检 || m.claude默认 || '';
-  if (kind === '代核') return m.代核 || m.claude默认 || '';
-  if (kind === '代裁') return m.代裁 || m.代核 || m.claude默认 || ''; // D43③ 裁判档
+  if (kind === '代核') return m.核查 || m.代核 || m.claude默认 || ''; // H68：新键 核查 优先，旧键兼容
+  if (kind === '代裁') return m.仲裁 || m.代裁 || m.核查 || m.代核 || m.claude默认 || ''; // H68 新键优先
   // 职能覆盖（0.23.11：装配单事故率实证——装配上 opus）：config.模型.职能覆盖 = { 装配: 'opus', ... }
   return (agentCfg && agentCfg.模型) || (m.职能覆盖 && 职能 && m.职能覆盖[职能]) || m[poolName + '默认'] || '';
 }
@@ -164,18 +164,19 @@ function buildPrompt(root, t, proj) {
     '', '完成后按通用章程的回执格式输出完工报告，它会作为回执存档。',
   ].filter(Boolean).join('\n');
 }
-// 委托代核提示词（D34）：Claude 按验收标准逐条只读核验，结论行机器可读
+// 核查提示词（D34）：Claude 按验收标准逐条只读核验，结论行机器可读
 function buildAuditPrompt(root, t, proj, receiptPath) {
   const receipt = fs.existsSync(receiptPath) ? fs.readFileSync(receiptPath, 'utf8') : '（无回执）';
   return [
     `你代制作人层核验委托验收单 ${t.id}（${t.fm.title}）。只读核验，不改任何文件。`,
     `项目仓库：${proj.path}`,
     '对照工单验收标准逐条核验产出与回执，输出核验报告；',
+    '报告末尾输出一行「质量分：N」（N=1-5：验收标准达成度+回执诚实度+证据链质量，H69 仪表盘用，独立于结论）。',
     '最后单独一行输出机器可读结论：「结论：通过」或「结论：不过」。',
     '', '=== 工单正文 ===', t.body || '', '', '=== 主办回执 ===', receipt,
   ].join('\n');
 }
-// 委托代裁提示词（D43③）：QA 三振上呈的单，裁判档裁「给方向/上呈」；打回级判断永远留给制作人
+// 仲裁提示词（D43③）：QA 三振上呈的单，裁判档裁「给方向/上呈」；打回级判断永远留给制作人
 function buildArbPrompt(root, t, proj, receiptPath) {
   const receipt = fs.existsSync(receiptPath) ? fs.readFileSync(receiptPath, 'utf8') : '（无回执）';
   return [
@@ -198,6 +199,7 @@ function buildQaPrompt(root, t, proj, receiptPath) {
     `项目仓库：${proj.path}`,
     '对照工单验收标准逐条核验主办的产出与回执，按章程格式输出核验结论。',
     // 保留单三振案（TK-46）：判官对着签字项写不出通过/不过，结论散文化三轮判读失败
+    '报告倒数第二行输出「质量分：N」（N=1-5：产出工艺+回执诚实度，H69 仪表盘用，独立于结论）。',
     '【结论体裁铁律】报告最后一行必须是且只能是「结论：通过」或「结论：不过」，禁止任何其它措辞（如「有保留」「无法判定」）。',
     '【保留项豁免】标注【保留】的验收条目是制作人签字位，不在你的核验范围——跳过它们，只裁可核项；可核项全过即「结论：通过」，保留项未签不构成不过的理由。',
     '', '=== 工单正文 ===', t.body || '', '', '=== 主办回执 ===', receipt,
@@ -325,6 +327,10 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     if (kind === '质检') {
       if (!cur || cur.state !== '质检') return;
       store.update(root, t.id, (fm) => { fm.质检人 = agentId; delete fm.质检失败次数; });
+      { // H69 线②：质检席质量分
+        const mq = String(note).match(/质量分[:：]\s*([1-5])/);
+        if (mq) { try { require('./pm/ledger').score(root, { 线: '审检评执行', 席: '质检', 单: t.id, 职能: t.fm.职能, 池: t.fm.执行池 || 'claude', 分: Number(mq[1]) }); } catch { /* 不阻塞 */ } }
+      }
       const r = lifecycle.QA裁定(root, cfg, t.id, verdict); // 曾硬编码 true——QA 写"不过"也放行，自修/待定夺全成死代码（TK-31/33 空壳两连过的真凶）
       if (r.ok) journal.append(root, `质检执行完成 ${t.id}（${agentId} · ${note}）`);
     } else if (kind === '代裁') {
@@ -333,15 +339,15 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       if (!cur || cur.state !== '待定夺') return;
       const text = String(note);
       const rp = path.join(root, '回执', `${t.id}.md`);
-      try { fs.appendFileSync(rp, `\n\n## 委托代裁\n${text.slice(0, 6000)}\n`, 'utf8'); } catch { /* 无回执不阻塞 */ }
+      try { fs.appendFileSync(rp, `\n\n## 仲裁\n${text.slice(0, 6000)}\n`, 'utf8'); } catch { /* 无回执不阻塞 */ }
       const give = /结论[:：]\s*给方向/.test(text);
       const dir = give ? (text.match(/方向[:：]\s*([\s\S]{1,2000})/) || [])[1] : null;
       store.update(root, t.id, (fm) => { fm.代裁 = { 结论: give ? '给方向' : '上呈', 时间: new Date().toISOString() }; delete fm.代裁失败次数; });
       if (give && dir) {
         const r = lifecycle.定夺(root, t.id, '给方向', dir.trim(), '代裁·裁判档');
-        if (r.ok) journal.append(root, `委托代裁 ${t.id} → 给方向回在途（D43③，方向已写入正文）`);
+        if (r.ok) journal.append(root, `仲裁 ${t.id} → 给方向回在途（D43③，方向已写入正文）`);
       } else {
-        journal.append(root, `委托代裁 ${t.id} → 上呈：留待定夺等你裁（${give ? '方向缺失' : '裁判判断需制作人裁量'}）`);
+        journal.append(root, `仲裁 ${t.id} → 上呈：留待定夺等你裁（${give ? '方向缺失' : '裁判判断需制作人裁量'}）`);
       }
     } else if (kind === '初检') { // H67 两检制第一道：格式与规范
       if (!cur || cur.state !== '待验收') return;
@@ -359,15 +365,19 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       if (!cur || cur.state !== '待验收') return;
       // 核验报告追加进回执；通过→自动验收完成（D11 委托代劳），不过→留在待验收等用户裁
       const rp = path.join(root, '回执', `${t.id}.md`);
-      try { fs.appendFileSync(rp, `\n\n## 委托代核\n${String(note).slice(0, 6000)}\n`, 'utf8'); } catch { /* 无回执文件也不阻塞 */ }
-      store.update(root, t.id, (fm) => { fm.代核 = { 结论: verdict ? '通过' : '不过', 时间: new Date().toISOString() }; delete fm.代核失败次数; });
+      try { fs.appendFileSync(rp, `\n\n## 核查\n${String(note).slice(0, 6000)}\n`, 'utf8'); } catch { /* 无回执文件也不阻塞 */ }
+      store.update(root, t.id, (fm) => { fm.核查 = fm.代核 = { 结论: verdict ? '通过' : '不过', 时间: new Date().toISOString() }; delete fm.代核失败次数; }); // H68 双写：新章 核查 + 旧章 代核
+      { // H69 线②：核查评执行质量（质量分：N 机读行）
+        const mq = String(note).match(/质量分[:：]\s*([1-5])/);
+        if (mq) { try { require('./pm/ledger').score(root, { 线: '审检评执行', 席: '核查', 单: t.id, 职能: t.fm.职能, 池: t.fm.执行池 || 'claude', 模型: model || '', 分: Number(mq[1]) }); } catch { /* 不阻塞 */ } }
+      }
       if (verdict) {
         const r = lifecycle.验收(root, t.id, true);
-        if (r.ok) journal.append(root, `委托代核通过 ${t.id} → 验收完成（Claude 代劳，D11/D34）`);
+        if (r.ok) journal.append(root, `核查通过 ${t.id} → 验收完成（Claude 代劳，D11/D34）`);
       } else {
-        journal.append(root, `委托代核不过 ${t.id}：留在待验收，附核验报告等你裁（不自动打回）`);
+        journal.append(root, `核查不过 ${t.id}：留在待验收，附核验报告等你裁（不自动打回）`);
         inbox.post(root, '急', '代核不过', `${t.id} 核验报告待裁（返工草稿已备）`, { 单号: t.id });
-        // H65 同活同号：不再另开返工草稿（判官建议已在回执「委托代核」章，制作人点「返修」同号改写即可）
+        // H65 同活同号：不再另开返工草稿（判官建议已在回执「核查」章，制作人点「返修」同号改写即可）
       }
     } else {
       if (!cur || cur.state !== '在途') return; // 期间被收回/废弃，不硬交
@@ -386,7 +396,12 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
         return;
       }
       const r = lifecycle.交产出(root, t.id, note);
-      if (r.ok) journal.append(root, `执行完成 ${t.id}（${agentId} · ${kind}）`);
+      if (r.ok) {
+        journal.append(root, `执行完成 ${t.id}（${agentId} · ${kind}）`);
+        // H69 线①：执行编制评拆单质量（post-work 工单评分节）
+        const m0 = String(note).match(/##\s*工单评分[^\n]*\n+[\s\S]{0,200}?([1-5])\s*分/);
+        if (m0) { try { require('./pm/ledger').score(root, { 线: '执行评拆单', 单: t.id, 切单人: t.fm.切单人 || '项管', 分: Number(m0[1]) }); } catch { /* 不阻塞 */ } }
+      }
     }
   };
   const failLocal = (why) => {
@@ -637,20 +652,20 @@ async function tick(root, cfg, opts = {}) {
     if (t && await startWork(root, cfg, t, '两检初检', '初检', opts)) (result.初检 = result.初检 || []).push(t.id);
   }
 
-  // ④b 委托代核（D34 / H67 深检）：初检过（或两检关）的委托单，opus 核内容质量（一次一张，保守）
-  if (!running.has('委托代核')) {
+  // ④b 核查（D34 / H67 深检）：初检过（或两检关）的委托单，opus 核内容质量（一次一张，保守）
+  if (!running.has('核查')) {
     const t = store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !x.fm.代核
       && (!两检开 || (x.fm.初检 && x.fm.初检.结论 === '过'))
       && (Number(x.fm.代核失败次数) || 0) < 判官上限 && !busyTickets().has(x.id));
-    if (t && await startWork(root, cfg, t, '委托代核', '代核', opts)) (result.代核 = result.代核 || []).push(t.id);
+    if (t && await startWork(root, cfg, t, '核查', '代核', opts)) (result.代核 = result.代核 || []).push(t.id);
   }
 
-  // ⑤ 委托代裁（D43③）：待定夺且未裁过的单，裁判档裁「给方向/上呈」（一次一张）；
+  // ⑤ 仲裁（D43③）：待定夺且未裁过的单，裁判档裁「给方向/上呈」（一次一张）；
   // 打回级判断永远留给用户；执行器.代裁=false 可整体关闭
-  if ((cfg.执行器 || {}).代裁 !== false && !running.has('委托代裁')) {
+  if ((cfg.执行器 || {}).代裁 !== false && !running.has('仲裁')) {
     const t = store.list(root, '待定夺').find((x) => !x.fm.代裁
       && (Number(x.fm.代裁失败次数) || 0) < 判官上限 && !busyTickets().has(x.id));
-    if (t && await startWork(root, cfg, t, '委托代裁', '代裁', opts)) (result.代裁 = result.代裁 || []).push(t.id);
+    if (t && await startWork(root, cfg, t, '仲裁', '代裁', opts)) (result.代裁 = result.代裁 || []).push(t.id);
   }
 
   lastTick = result;
