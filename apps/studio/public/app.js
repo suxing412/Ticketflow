@@ -884,7 +884,7 @@ async function viewReport() {
   const stat = (l, v, c) => `<div class="grp"><span class="lbl">${l}</span><span class="num ${c || ''}">${v}</span></div>`;
   const strip = [
     stat('完成', o.完成), stat('归档', o.已归档), stat('实际工时', o.实际h合计 + 'h'),
-    stat('预估偏差', o.预估偏差pct == null ? '—' : o.预估偏差pct + '%', o.预估偏差pct > 150 ? 'err' : o.预估偏差pct != null && o.预估偏差pct <= 110 ? 'okc' : ''),
+    stat('实耗/预估', o.预估偏差pct == null ? '—' : o.预估偏差pct + '%', o.预估偏差pct > 150 ? 'err' : o.预估偏差pct != null && o.预估偏差pct <= 110 ? 'okc' : ''), // 100=踩点 <100=省 >150=严重超（旧名「预估偏差」误导）
     stat('自修轮次', o.自修总轮, o.自修总轮 ? 'warnc' : ''),
     stat('核查 过/不过', o.代核通过 + '/' + o.代核不过),
     stat('仲裁 向/呈', o.代裁给方向 + '/' + o.代裁上呈),
@@ -919,7 +919,7 @@ async function viewReport() {
    铁律：视图保持渲染——首屏立即画（额度先占位后原地填），调参只原地改数字，绝不整页重载 */
 const P6META = { 全局在途上限: '同时最多 N 张在途', 待验收积压闸: '≥N 停止建议投放', QA自修上限: '轮，超则上交四件套', 滞留超时小时: '小时，超则告警（不自动撤回）',
   速度窗口小时: '统计处理速度的回看窗口 N 小时', 每档处理数: '窗口内每处理 N 项决策，推荐 +1',
-  间隔秒: '每 N 秒扫一轮池（领单+起执行）', 执行超时分钟: '实弹单超 N 分钟树杀 → 执行失败', 记账间隔分钟: '每 N 分钟自动 git 落袋（0=关）',
+  间隔秒: '每 N 秒扫一轮（派发+起执行）', 执行超时分钟: 'N 分钟到点先验尸：仍在进展续命，停滞才树杀（硬顶 3N，H63）', 记账间隔分钟: '每 N 分钟自动 git 落袋（0=关）',
   额度刷新秒: '两次额度请求最小间隔 N 秒（防限流硬保证）' };
 const P6NAMES = { 滞留超时小时: '滞留超时', 速度窗口小时: '速度窗口', 每档处理数: '每档处理数',
   间隔秒: '扫池间隔', 执行超时分钟: '执行超时', 记账间隔分钟: '记账间隔', 额度刷新秒: '额度刷新间隔' };
@@ -1265,11 +1265,16 @@ async function viewDraft(editId, parent) {
   const stg = await api('/api/stages?项目=' + encodeURIComponent(dProj)).catch(() => ({ 阶段: [], 标准: {} }));
   window._dStd = stg.标准 || {};
   const fm = t ? t.fm : {};
+  // 2026-08-06 UI 评审：新草稿实算下一号预填（占位例「-22」在编号过百的仓里误导）
+  let nextId = '';
+  if (!editId && dProj) { try { const { all } = await loadBoard(); let mx = 0;
+    for (const x of all) { const m = String(x.id).match(/^(.+)-(\d+)$/); if (m && m[1] === dProj) mx = Math.max(mx, Number(m[2])); }
+    nextId = `${dProj}-${mx + 1}`; } catch { /* 留占位 */ } }
   const sec = parseSections(t ? t.body : '');
   const opts = (arr, cur) => arr.map((x) => `<option ${x === cur ? 'selected' : ''}>${x}</option>`).join('');
   return `<div class="p7grid">
     <div class="formcard card r16"><h3>工单属性</h3>
-      <div class="f-field"><label>编号</label><input id="d-id" class="mono" value="${esc(fm.id || '')}" placeholder="${esc(dProj ? dProj + '-22' : 'P-22')}" ${editId ? 'readonly' : ''}/></div>
+      <div class="f-field"><label>编号${nextId ? '（已按仓况预填下一号）' : ''}</label><input id="d-id" class="mono" value="${esc(fm.id || nextId)}" placeholder="${esc(dProj ? dProj + '-#' : 'P-#')}" ${editId ? 'readonly' : ''}/></div>
       <div class="f-field"><label>标题</label><input id="d-title" value="${esc(fm.title || '')}" placeholder="工单标题"/></div>
       <div class="f-2col">
         <div class="f-field"><label>职能</label><select id="d-fn">${opts(cfg.职能 && cfg.职能.length ? cfg.职能 : ['策划', '程序', '美术', 'QA'], fm.职能 || '策划')}</select></div>
@@ -1801,7 +1806,7 @@ async function route() {
     }
     if (h.startsWith('draft')) {
       const q = new URLSearchParams(h.split('?')[1] || '');
-      app.innerHTML = bshell('起草 · 编辑工单', '<span class="pill ok sm">Claude 已预填草稿 · 你可手改</span>', await viewDraft(q.get('edit'), q.get('parent')));
+      app.innerHTML = bshell('起草 · 编辑工单', '<span class="pill ok sm">正途走项管起草（H57）· 此页供手工起草与改稿</span>', await viewDraft(q.get('edit'), q.get('parent')));
       if (window._lastViewKey !== h) { const v = $('view'); if (v) v.classList.add('vin'); }
       window._lastViewKey = h;
       return;
