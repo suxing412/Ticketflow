@@ -1501,6 +1501,7 @@ window.act3 = async (name, id, 决定) => { const r = await post('/api/act/' + n
 const wkState = { entry: '', mode: 'read', q: '', cat: '' };
 // 极简 markdown 渲染（词条正文专用）：标题/加粗/行内码/列表/段落/[[双链]]。不引库，XSS 经 esc 全量转义。
 function wkMd(src, byName) {
+  src = String(src || '').replace(/<!--[\s\S]*?-->/g, ''); // HTML 注释不渲染（2026-08-06 UI 评审：入库回填注释块曾显形为正文）
   const link = (s) => s.replace(/\[\[([^\]|#]+?)(?:\|([^\]]*))?\]\]/g, (m, name, alias) => {
     const n = esc(name.trim());
     const exists = byName && byName[name.trim()];
