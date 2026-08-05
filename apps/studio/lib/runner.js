@@ -330,7 +330,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       } else {
         journal.append(root, `委托代核不过 ${t.id}：留在待验收，附核验报告等你裁（不自动打回）`);
         inbox.post(root, '急', '代核不过', `${t.id} 核验报告待裁（返工草稿已备）`, { 单号: t.id });
-        prepareReworkDraft(root, t, tail); // 0.23：判官报告自动预填返工草稿，制作人审后放行——文书归零
+        // H65 同活同号：不再另开返工草稿（判官建议已在回执「委托代核」章，制作人点「返修」同号改写即可）
       }
     } else {
       if (!cur || cur.state !== '在途') return; // 期间被收回/废弃，不硬交

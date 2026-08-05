@@ -34,7 +34,11 @@ function 交产出(root, id, 回执body) {
   if (t.fm.待复核) return { ok: false, error: `待复核未解除（上游 ${t.fm.待复核.锚号 || ''} 已改版），核对新版后先解除标记（D36）` };
   if (回执body) {
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
-    fs.writeFileSync(path.join(root, '回执', `${id}.md`), 回执body, 'utf8');
+    const rp = path.join(root, '回执', `${id}.md`);
+    const 轮 = t.fm.返修轮 || 0;
+    // H65 同活同号：返修轮次的回执分节追加，历史不覆盖
+    if (轮 > 0 && fs.existsSync(rp)) fs.appendFileSync(rp, `\n\n---\n## 第 ${轮 + 1} 轮回执（返修后）\n\n${回执body}`, 'utf8');
+    else fs.writeFileSync(rp, 回执body, 'utf8');
   }
   const qaOn = String(t.fm.QA || '').trim() !== '关'; // fail-closed（2026-08-05 TK-84 案：非标 QA 串被判「关」直达验收，空壳回执绕过判官）
   const to = qaOn ? '质检' : '待验收';
@@ -124,6 +128,24 @@ function 废弃(root, id) {
   if (r.ok) {
     journal.append(root, `废弃 ${id}（${t.state}→已归档）${悬空.length ? ` · 依赖悬空：${悬空.join('、')} 需改挂` : ''}`);
     if (悬空.length) { try { require('./inbox').post(root, '急', '依赖悬空', `${id} 被废弃，${悬空.join('、')} 的依赖需改挂接棒单`, { 单号: id }); } catch { /* 信箱失败不阻塞 */ } }
+  }
+  return r;
+}
+
+// 返修（H65，2026-08-05 用户拍板：同活同号）：执行失败/待验收 → 草稿，单号不动，
+// 失败次数/评估回呈轮累计不清零，返修轮+1；改字段/补正文后重新定稿放行。
+// 新开号只剩三种：验收标准变了（换活）、H59 边界重拆、推翻翻案。
+function 返修(root, id, 说明) {
+  const t = store.find(root, id);
+  if (!t) return { ok: false, error: '不存在' };
+  if (!['执行失败', '待验收'].includes(t.state)) return { ok: false, error: `只有执行失败/待验收单可返修（当前 ${t.state}）` };
+  const r = store.move(root, id, t.state, '草稿', (fm) => {
+    delete fm.主办; delete fm.领单时间; delete fm.交付时间; fm.放行 = false;
+    fm.返修轮 = (fm.返修轮 || 0) + 1;
+  }, nowIso());
+  if (r.ok) {
+    if (说明) store.update(root, id, (fm, t2) => ({ body: (t2.body || '') + `\n\n## 第 ${(fm.返修轮 || 1) + 1} 轮返修说明（${nowIso().slice(0, 10)}）\n${String(说明).slice(0, 2000)}\n` }));
+    journal.append(root, `返修 ${id}（${t.state}→草稿 · 第 ${(t.fm.返修轮 || 0) + 1} 轮 · 同号，计数保留）`);
   }
   return r;
 }
@@ -288,6 +310,6 @@ function 隐藏(root, id, 值) {
 }
 
 module.exports = {
-  定稿, 投池, 交产出, QA裁定, 定夺, 验收, 撤回, 废弃, 收回, 滞留检查, 返工, 执行失败, 失败分诊,
+  定稿, 投池, 交产出, QA裁定, 定夺, 验收, 撤回, 废弃, 收回, 返修, 滞留检查, 返工, 执行失败, 失败分诊,
   标记待复核, 解除待复核, 推翻, 隐藏,
 };
