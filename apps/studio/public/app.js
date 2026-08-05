@@ -526,10 +526,11 @@ async function viewFlow() {
       <div class="nt">${esc(n.t.title)}</div><span class="nh">${n.h}h</span></div>`).join('');
   window._flData = { ns: ns.map((n) => ({ id: n.id, deps: n.deps })), done: ns.filter((n) => DONE.has(n.t.state)).map((n) => n.id) };
   // 现在/接下来摘要条（2026-08-06 制作人用例：「主要看现在在做什么、后面还有什么」——答案端上面，不用进图里找）
-  const doing = nsAll.filter((t) => ['在途', '质检'].includes(t.state));
-  const ready2 = nsAll.filter((t) => t.state === '待投' && depsOf(t).every((d) => DONE.has((byId[d] || {}).state)));
-  const blocked2 = nsAll.filter((t) => t.state === '待投' && !depsOf(t).every((d) => DONE.has((byId[d] || {}).state)));
-  const chipRow = (arr, cap) => arr.slice(0, 6).map((t) => `<a class="pill sm mono" href="#/t/${esc(t.id)}" title="${esc(t.title)}">${esc(t.id)}</a>`).join(' ') + (arr.length > 6 ? `<span class="dim"> +${arr.length - 6}</span>` : '') || `<span class="dim">${cap}</span>`;
+  // 节点是包装对象（真单在 .t）——2026-08-06 02:49 制作人实拍抓包：曾拿包装层查 state 双误报「无」
+  const doing = nsAll.filter((n) => ['在途', '质检'].includes(n.t.state));
+  const ready2 = nsAll.filter((n) => n.t.state === '待投' && n.deps.every((d) => DONE.has((byId[d] || {}).state)));
+  const blocked2 = nsAll.filter((n) => n.t.state === '待投' && !n.deps.every((d) => DONE.has((byId[d] || {}).state)));
+  const chipRow = (arr, cap) => arr.slice(0, 6).map((n) => `<a class="pill sm mono" href="#/t/${esc(n.id)}" title="${esc(n.t.title)}">${esc(n.id)}</a>`).join(' ') + (arr.length > 6 ? `<span class="dim"> +${arr.length - 6}</span>` : '') || `<span class="dim">${cap}</span>`;
   const nowNext = `<div class="card r14" style="padding:12px 18px;margin-bottom:12px;display:flex;gap:26px;flex-wrap:wrap;align-items:baseline">
       <span><b style="font-size:12.5px">现在在做</b> ${chipRow(doing, '无')}</span>
       <span><b style="font-size:12.5px">下一步（就绪）</b> ${chipRow(ready2, '无')}</span>
