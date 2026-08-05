@@ -307,7 +307,7 @@ window.releaseAll = async () => {
   const { board } = await loadBoard();
   const items = board['待投'] || [];
   if (!items.length) return toast('待投区空');
-  if (!confirm(`整批投池 ${items.length} 张待投单？投池后执行器按依赖+优先级自动流转。`)) return;
+  if (!await ask(`整批放行 ${items.length} 张待投单？放行后按依赖+优先级自动派发。`)) return;
   let ok = 0, fail = 0;
   for (const t of items) { const r = await post('/api/act/投池', { id: t.id }); r.ok ? ok++ : fail++; }
   toast(`已投池 ${ok} 张${fail ? ` · 失败 ${fail} 张（看 journal）` : ''}`);
@@ -525,7 +525,16 @@ async function viewFlow() {
       <span class="nid">${esc(n.id)}</span><span class="nst">${n.cyc ? '⚠环' : esc(n.t.state)}</span>
       <div class="nt">${esc(n.t.title)}</div><span class="nh">${n.h}h</span></div>`).join('');
   window._flData = { ns: ns.map((n) => ({ id: n.id, deps: n.deps })), done: ns.filter((n) => DONE.has(n.t.state)).map((n) => n.id) };
-  return `<div class="fl-bar">
+  // 现在/接下来摘要条（2026-08-06 制作人用例：「主要看现在在做什么、后面还有什么」——答案端上面，不用进图里找）
+  const doing = nsAll.filter((t) => ['在途', '质检'].includes(t.state));
+  const ready2 = nsAll.filter((t) => t.state === '待投' && depsOf(t).every((d) => DONE.has((byId[d] || {}).state)));
+  const blocked2 = nsAll.filter((t) => t.state === '待投' && !depsOf(t).every((d) => DONE.has((byId[d] || {}).state)));
+  const chipRow = (arr, cap) => arr.slice(0, 6).map((t) => `<a class="pill sm mono" href="#/t/${esc(t.id)}" title="${esc(t.title)}">${esc(t.id)}</a>`).join(' ') + (arr.length > 6 ? `<span class="dim"> +${arr.length - 6}</span>` : '') || `<span class="dim">${cap}</span>`;
+  const nowNext = `<div class="card r14" style="padding:12px 18px;margin-bottom:12px;display:flex;gap:26px;flex-wrap:wrap;align-items:baseline">
+      <span><b style="font-size:12.5px">现在在做</b> ${chipRow(doing, '无')}</span>
+      <span><b style="font-size:12.5px">下一步（就绪）</b> ${chipRow(ready2, '无')}</span>
+      <span class="dim" style="font-size:12px">还压着 ${blocked2.length} 张等前置</span></div>`;
+  return nowNext + `<div class="fl-bar">
       <span class="subnote">横轴=阶段 · 泳道=系统 · 红=关键路径（预计时间加权）· 虚线=升阶链 · 点卡进详情</span>
       <span class="sp"></span>
       ${cp.len ? `<span class="fl-cp">关键路径 ${Math.round(cp.len * 10) / 10}h · ${cp.path.length} 单</span>` : ''}
@@ -639,7 +648,7 @@ window.tToggle = (id) => { if (tState.collapsed.has(id)) tState.collapsed.delete
 window.tExpandAll = () => { if (tState.collapsed.size) tState.collapsed.clear(); else { loadBoard().then(({ all }) => { buildTree(all).parents.forEach((p) => tState.collapsed.add(p.id)); saveCollapsed(); route(); }); return; } saveCollapsed(); route(); };
 window.tAcceptAll = async (pid) => {
   const { all } = await loadBoard(); const ch = all.filter((t) => t.父单 === pid && t.state === '待验收');
-  if (!confirm(`批量验收 ${pid} 下 ${ch.length} 张待验收子单？`)) return;
+  if (!await ask(`批量验收 ${pid} 下 ${ch.length} 张待验收子单？`)) return;
   for (const c of ch) await post('/api/act/验收', { id: c.id, 通过: true });
   toast(`已验收 ${ch.length} 张`); route();
 };
@@ -801,7 +810,7 @@ async function viewDecisions() {
         ${d.待定夺.map((t) => `<div class="qitem" onclick="dTab='escal';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2">${esc(t.title)} · QA 未过</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>'}</div></div></div>`;
 }
 window.dAct = async (name, id, 通过, 决定) => { const r = await post('/api/act/' + name, { id, 通过, 决定 }); toast(r.ok ? '已处理' : (r.error || '失败')); route(); };
-window.dReject = (id) => { if (confirm('打回将归档旧单，需另开新单重走流程。确认？')) dAct('验收', id, false); };
+window.dReject = async (id) => { if (await ask('打回将归档旧单，需另开新单重走流程。确认？')) dAct('验收', id, false); };
 
 /* ===== P5 风格库 ===== */
 async function viewStyleLib() {
@@ -830,12 +839,12 @@ async function viewStyleLib() {
         <p>完成态的美术/装配单详情页有「入美术库」——把产出文件精选进来，agent 领单前先看这里对齐风格。</p></div>`}</div></div>`;
 }
 window.axRemove = async (标题) => {
-  if (!confirm(`把「${标题}」移出标杆？`)) return;
+  if (!await ask(`把「${标题}」移出标杆？`)) return;
   const r = await post('/api/stylelib/axiom-remove', { 标题 });
   toast(r.ok ? '已移出' : (r.error || '失败')); if (r.ok) route();
 };
 window.artRemove = async (name) => {
-  if (!confirm(`把 ${name} 移出美术库？（文件会删除，来源仓库里的原件不受影响）`)) return;
+  if (!await ask(`把 ${name} 移出美术库？（文件会删除，来源仓库里的原件不受影响）`)) return;
   const r = await post('/api/stylelib/art-remove', { name });
   toast(r.ok ? '已移出' : (r.error || '失败')); if (r.ok) route();
 };
@@ -1168,7 +1177,7 @@ window.mAdd = async (pool) => {
 };
 // 实弹解锁开关（权力开关：解锁要求二次确认）
 window.liveSet = async (v) => {
-  if (v && !confirm('解锁实弹 = 授权 agent 真调 CLI 烧额度。确认解锁？')) return;
+  if (v && !await ask('解锁实弹 = 授权 agent 真调 CLI 烧额度。确认解锁？')) return;
   const r = await post('/api/config/live', { 解锁: v });
   if (!r.ok) return toast(r.error || '失败');
   document.querySelectorAll('.egbtn[data-lv]').forEach((b) => b.classList.toggle('on', (b.dataset.lv === '解锁') === !!r.实弹解锁));
@@ -1201,7 +1210,7 @@ function projRowsHtml(项目) {
     || '<p class="dim">尚无注册项目</p>';
 }
 window.projDel = async (name) => {
-  if (!confirm(`删除项目注册「${name}」？（有未完成单引用时会被拒绝）`)) return;
+  if (!await ask(`删除项目注册「${name}」？（有未完成单引用时会被拒绝）`)) return;
   const r = await post('/api/config/project', { 动作: '删除', 名称: name });
   if (!r.ok) return toast(r.error || '失败');
   if (window._p6cfg) window._p6cfg.项目 = r.项目;
@@ -1374,7 +1383,7 @@ async function viewDetail(id) {
   if (d.state === '待验收') ops.push(['返修', `不过关但同一件活：同号回草稿改写（第 ${(fm.返修轮 || 0) + 1} 轮，H65）`, `act2('返修','${id}')`]);
   if (d.state === '草稿') ops.push(['定稿', '草稿 → 待投', `act2('定稿','${id}')`]);
   if (d.state === '待投') ops.push(['投池', '释放进池（人闸）', `act2('投池','${id}')`]);
-  if (!['完成', '已归档'].includes(d.state)) ops.push(['废弃', '归档（非终态皆可）', `if(confirm('废弃并归档？'))act2('废弃','${id}')`]);
+  if (!['完成', '已归档'].includes(d.state)) ops.push(['废弃', '归档（非终态皆可）', `askAct2('废弃','${id}','废弃并归档？')`]);
   if (d.state === '草稿') ops.push(['编辑', '打开起草页修改', `location.hash='#/draft?edit=${id}'`]);
   if (d.state === '完成') { // 审批点④：入库（D12 精选制，唯一写者=制作人层）
     if (fm.职能 === '策划') ops.push(['入标杆', '提炼进设计公理（审批点④）', `axModal('${id}')`]);
@@ -1608,7 +1617,7 @@ async function viewWiki() {
 }
 window.wkOpen = (name) => { wkState.entry = name; wkState.mode = 'read'; route(); };
 window.wkApprove = async (f) => { const r = await post('/api/wiki/approve', { 文件: f, 项目: curProj() || projDefault() }); toast(r.ok ? `已入册「${r.名称}」` : (r.error || '失败')); route(); };
-window.wkReject = async (f) => { if (!confirm('退回将删除该待审稿（agent 提案不入史）。确认？')) return; const r = await post('/api/wiki/reject', { 文件: f, 项目: curProj() || projDefault() }); toast(r.ok ? '已退回' : (r.error || '失败')); route(); };
+window.wkReject = async (f) => { if (!await ask('退回将删除该待审稿（agent 提案不入史）。确认？')) return; const r = await post('/api/wiki/reject', { 文件: f, 项目: curProj() || projDefault() }); toast(r.ok ? '已退回' : (r.error || '失败')); route(); };
 // 力导向关系图：手写迭代（斥力+弹簧+向心），无外部库；拖拽节点、点击进词条。
 async function wkGraph(proj) {
   const cv = $('wk-g'); if (!cv) return;
@@ -1684,7 +1693,7 @@ window.ideaAdd = async () => {
   $('idea-t').value = ''; route();
 };
 window.ideaAct = async (动作, id) => {
-  if (动作 === '放弃' && !confirm('放弃这个想法？')) return;
+  if (动作 === '放弃' && !await ask('放弃这个想法？')) return;
   const r = await post('/api/ideas', { 动作, id });
   if (!r.ok) return toast(r.error || '失败');
   if (动作 === '拍板') { toast(`父单 ${r.父单} 已建——去补齐边界与验收标准`); location.hash = '#/draft?edit=' + encodeURIComponent(r.父单); return; }
@@ -1757,6 +1766,24 @@ async function viewRelay() {
       <div style="margin-top:12px;max-height:46vh;overflow-y:auto">${feedFlow}</div></div>
   </div>`;
 }
+// 应用内确认层（2026-08-06 制作人实测：Electron 壳内原生 confirm() 哑弹——放弃想法死按钮案，
+// 同族十个确认门全部换装。自绘 overlay，浏览器与 exe 行为一致）
+window.ask = (msg) => new Promise((res) => {
+  const ov = document.createElement('div'); ov.className = 'ask-ov';
+  ov.innerHTML = `<div class="ask-card card r16"><p>${esc(msg)}</p>
+    <div class="btns" style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+    <button class="btn h36" data-no>取消</button><button class="btn primary h36" data-yes>确认</button></div></div>`;
+  const done = (v) => { ov.remove(); document.removeEventListener('keydown', onKey); res(v); };
+  const onKey = (e) => { if (e.key === 'Escape') done(false); if (e.key === 'Enter') done(true); };
+  ov.addEventListener('click', (e) => { if (e.target === ov) done(false); });
+  ov.querySelector('[data-yes]').onclick = () => done(true);
+  ov.querySelector('[data-no]').onclick = () => done(false);
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(ov);
+  ov.querySelector('[data-yes]').focus();
+});
+window.askAct2 = async (a, id, msg) => { if (await ask(msg)) act2(a, id); };
+
 // 在途卡片原地展开工单详情（2026-08-05 制作人需求：不切窗口看在做什么）
 window.agExpand = async (id) => {
   const box = document.getElementById('agd-' + id);
