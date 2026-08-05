@@ -315,7 +315,7 @@ function adjudicateReferral(root, cfg, id, cb) {
 // 派单委托（H57，2026-08-04 用户裁定：派单权归项管，Claude 不得直接造单）：
 // 制作人层提需求 → 项管起草单张工单（草稿态）→ Claude 审 → 定稿放行。审批与起草分离。
 // 字段规范硬约束（2026-08-05：TK-82/83 连续两张草稿字段非标返修）——见 FIELD_RULES 注入。
-const FIELD_RULES = '字段规范（逐字遵守，违者返修）：职能 只能取 策划/程序/美术/QA/装配 五者之一，不得加括号后缀；优先级 只能取 P0/P1/P2/P3；QA 只能取 开/关；需求若点名依赖单号，frontmatter 必须含 依赖: 字段原样带上。';
+const FIELD_RULES = '字段规范（逐字遵守，违者返修）：职能 只能取 策划/程序/美术/QA/装配 五者之一，不得加括号后缀；优先级 只能取 P0/P1/P2/P3；QA 只能取 开/关；需求若点名依赖单号或执行池，frontmatter 必须含 依赖:/执行池: 字段原样带上。正文三章（背景/执行内容/验收标准）必须写在 ticket 代码块内部、frontmatter 的第二个 --- 之后——写在代码块外会被解析丢弃（TK-86 空壳案）。';
 function draftTicket(root, cfg, 需求, projPath, cb) {
   setWorking({ 用途: '起草' });
   const 单元 = (cfg.单元 || {});

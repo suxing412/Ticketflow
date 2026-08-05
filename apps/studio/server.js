@@ -720,6 +720,7 @@ function preflight(t, cfg2) {
     }
   }
   const body = t.body || '';
+  if (!/验收标准/.test(body)) errs.push('正文缺验收标准章（空壳/丢正文单不放行）——TK-86 案');
   for (const ch of ['unity-run', 'unity-build']) {
     if (body.includes(ch) && ch === 'unity-build') errs.push('正文点名 unity-build——该通道是占位未实装——TK-71 案');
   }
