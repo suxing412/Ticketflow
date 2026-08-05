@@ -757,7 +757,8 @@ async function viewDecisions() {
   const p = projActive();
   if (p) { await loadCfg(); d.待验收 = d.待验收.filter((t) => projOf(t) === p); d.待定夺 = d.待定夺.filter((t) => projOf(t) === p); }
   const cur = dTab === 'accept' ? (d.待验收[0] || null) : (d.待定夺[0] || null);
-  let main = '<div class="dmain card r16"><p class="dim">没有待处理项</p></div>';
+  let main = `<div class="dmain card r16"><p class="dim">没有待你处理的签字项——一切安好。</p>
+    <p class="subnote" style="margin-top:8px">要开新活：<a href="#/ideas" style="color:var(--accent-ink)">想法池拍板</a> · 要放行：<a href="#/board" style="color:var(--accent-ink)">工单池待投区</a> · 要验收 Unity：先关上面的编辑器锁</p></div>`;
   if (cur) {
     const tk = await api('/api/ticket?id=' + encodeURIComponent(cur.id));
     const preview = tk.回执 ? tk.回执.raw : tk.body || '';
@@ -796,7 +797,7 @@ async function viewDecisions() {
       <span class="tab ${dTab === 'escal' ? 'active' : ''}" onclick="dTab='escal';route()">待定夺 ${d.待定夺.length ? `<span class="badge">${d.待定夺.length}</span>` : ''}</span>
       <span class="backlog2">待验收积压 ${d.积压} / ${d.积压闸}</span></div>
     <div class="dgrid">${main}<div><div class="dside card r16"><h3>待验收队列</h3>${q1}</div>
-      <div class="dside card r16"><h3 class="err">待定夺 · ${d.待定夺.length}</h3>
+      <div class="dside card r16"><h3 class="${d.待定夺.length ? 'err' : ''}">待定夺 · ${d.待定夺.length}</h3>
         ${d.待定夺.map((t) => `<div class="qitem" onclick="dTab='escal';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2">${esc(t.title)} · QA 未过</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>'}</div></div></div>`;
 }
 window.dAct = async (name, id, 通过, 决定) => { const r = await post('/api/act/' + name, { id, 通过, 决定 }); toast(r.ok ? '已处理' : (r.error || '失败')); route(); };
