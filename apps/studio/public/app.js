@@ -196,7 +196,7 @@ async function viewOverview() {
   const groups = [['在途', n('在途') + n('质检'), ''], ['待验收', n('待验收'), ''], ['待定夺', n('待定夺'), n('待定夺') ? 'err' : ''], ['在池', n('池'), ''], ['待投', n('待投'), '']];
   const strip = groups.map(([l, v, c], i) => `${i ? '<div class="vdiv"></div>' : ''}<div class="grp"><span class="lbl">${l}</span><span class="num ${c}">${v}</span></div>`).join('');
   const inbox = [
-    ...(board['待验收'] || []).map((t) => ({ ...t, k: '待验收', note: t.验收方式 === '保留' ? '保留 · 待品味终审' : '委托 · Claude 可代核' })),
+    ...(board['待验收'] || []).map((t) => ({ ...t, k: '待验收', note: t.验收方式 === '保留' ? '保留 · 待品味终审' : '委托 · 核查可代签' })),
     ...(board['待定夺'] || []).map((t) => ({ ...t, k: '待定夺', note: 'QA 未过，四件套已备' })),
   ];
   const inboxHtml = inbox.map((r) => `<div class="inbox-row card" onclick="location.hash='#/t/${r.id}'">
@@ -693,7 +693,7 @@ function timelineHtml(agents, all, opts) {
       <div class="tlnow" style="left:${W - 1}px;height:${20 + colH}px"></div>
     </div></div></div></div>`;
 }
-/* ===== 在途 · 派发制视图（H49）：执行者因单而生、完成即销毁，常备的只有判官 ===== */
+/* ===== 在途 · 派发制视图（H49）：执行者因单而生、完成即销毁，常备的只有审检 ===== */
 function viewAgentsDispatch(d, all) {
   const lim = d.并发上限 || {};
   const cards = (d.在跑 || []).map((r) => {
@@ -711,7 +711,7 @@ function viewAgentsDispatch(d, all) {
         <div class="bar"><i style="width:${Math.min(1, elapsed / (4 * 3600000)) * 100}%"></i></div><div class="cap">滞留阈值 4h</div></div>
     </div>`;
   }).join('') || '<p class="dim" style="margin:26px 0;text-align:center">当前无在跑执行者 —— 派发制下没有常备军，就绪单一到即拉起，完成即销毁。</p>';
-  const judges = (d.判官 || []).map((j) => `<span class="pill sm ${j.忙 ? 'ok' : 'mut'}">${esc(j.id)}${j.忙 ? ' · 审 ' + esc(j.当前 || '') : ' · 待命'}</span>`).join(' ') || '<span class="dim">（未配置）</span>';
+  const judges = (d.判官 || d.审检 || []).map((j) => `<span class="pill sm ${j.忙 ? 'ok' : 'mut'}">${esc(j.id)}${j.忙 ? ' · 审 ' + esc(j.当前 || '') : ' · 待命'}</span>`).join(' ') || '<span class="dim">（未配置）</span>';
   const ready = (d.就绪队列 || []).map((q) => `<span class="pill sm mut mono">${esc(q.id || q)}</span>`).join(' ') || '<span class="dim">空 —— 无就绪待派单</span>';
   // 已跑计时秒级跳动（与领单视图同款：离开视图自动停）
   setTimeout(function tickTm() {
@@ -724,7 +724,7 @@ function viewAgentsDispatch(d, all) {
   return busyBanner + `<div class="sec-h" style="margin-top:26px"><h3 class="h17">在跑执行者</h3>
       <span class="subnote">派发制 · 因单而生、完成即销毁 · 并发 codex ≤${lim.codex != null ? lim.codex : '—'} / claude ≤${lim.claude != null ? lim.claude : '—'}（项管调配 · 代码硬顶 3）</span></div>
     ${cards}
-    <div class="sec-h" style="margin-top:26px"><h3 class="h17">判官编制</h3><span class="subnote">质检 / 代核 / 代裁 · 唯一常驻岗</span></div>
+    <div class="sec-h" style="margin-top:26px"><h3 class="h17">审检三席</h3><span class="subnote">质检 / 核查 / 仲裁 · 唯一常驻岗（H68）</span></div>
     <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${judges}</div>
     <div class="sec-h" style="margin-top:26px"><h3 class="h17">就绪队列</h3><span class="subnote">依赖已齐、等槽位或额度（项管台账）</span></div>
     <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${ready}</div>
@@ -760,7 +760,7 @@ async function viewDecisions() {
       <div class="dpane"><div class="ph">${dTab === 'accept' ? '验收标准（委托核查范围）' : '四件套'}</div>${dTab === 'accept' ? stdLines
         : `<div class="doc-line">结论：QA 未通过（自修 ${cur.自修次数 || 0} 轮）</div><div class="doc-line">问题/原因/解法：见回执异议与 QA 章节</div>`}
         ${isKeep && dTab === 'accept' ? '<div class="taste">待你品味：产出对不对味，只有你能签。</div>' : ''}</div></div>
-      ${dTab === 'accept' ? `<div class="dsign"><span>${isKeep ? '保留单 · 品味终审' : '委托单 · 可核项由 Claude 代核'}</span>
+      ${dTab === 'accept' ? `<div class="dsign"><span>${isKeep ? '保留单 · 品味终审' : '委托单 · 可核项由核查代签'}</span>
         <div class="btns"><button class="btn primary h36" onclick="dAct('验收','${esc(cur.id)}',true)">通过入库</button>
         <button class="btn h36" onclick="dReject('${esc(cur.id)}')">打回</button></div></div>`
       : `<div class="dsign"><span>QA 修不好 · 呈你我裁决</span><div class="btns">
@@ -852,8 +852,8 @@ async function viewReport() {
     stat('完成', o.完成), stat('归档', o.已归档), stat('实际工时', o.实际h合计 + 'h'),
     stat('预估偏差', o.预估偏差pct == null ? '—' : o.预估偏差pct + '%', o.预估偏差pct > 150 ? 'err' : o.预估偏差pct != null && o.预估偏差pct <= 110 ? 'okc' : ''),
     stat('自修轮次', o.自修总轮, o.自修总轮 ? 'warnc' : ''),
-    stat('代核 过/不过', o.代核通过 + '/' + o.代核不过),
-    stat('代裁 向/呈', o.代裁给方向 + '/' + o.代裁上呈),
+    stat('核查 过/不过', o.代核通过 + '/' + o.代核不过),
+    stat('仲裁 向/呈', o.代裁给方向 + '/' + o.代裁上呈),
     stat('token(agent自报)', o.token估计合计 ? o.token估计合计.toLocaleString() : '—'),
     ...(dispatch && pl && pl.台账 && pl.台账.管理费 ? [stat('管理费(项管)', (pl.台账.管理费.token合计 || 0).toLocaleString() + ' tk·' + (pl.台账.管理费.次数 || 0) + '次')] : []),
   ].join('<div class="vdiv"></div>');
@@ -983,7 +983,7 @@ async function viewParams() {
     return `<option value="" ${!cur ? 'selected' : ''}>CLI 默认</option>` + list.map((o) => `<option value="${esc(o)}" ${cur === o ? 'selected' : ''}>${esc(o)}</option>`).join('')
       + (cur && !list.includes(cur) ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''); };
   const mc = c.模型 || {};
-  const modelCards = [['claude默认', 'claude', 'claude 池体力档'], ['codex默认', 'codex', 'codex 池体力档'], ['质检', 'claude', 'QA 复核裁判档'], ['代核', 'claude', '委托代核裁判档'], ['代裁', 'claude', '待定夺代裁裁判档（D43，空=跟代核档）'], ['项管', 'claude', '项目管理切单/收口/答话档（H49，现值 fable）']]
+  const modelCards = [['claude默认', 'claude', 'claude 池体力档'], ['codex默认', 'codex', 'codex 池体力档'], ['质检', 'claude', 'QA 复核档（审检三席）'], ['代核', 'claude', '核查档（原代核·两检深检，H68）'], ['代裁', 'claude', '仲裁档（原代裁，空=跟核查档）'], ['项管', 'claude', '项目管理切单/收口/答话档（H49，现值 fable）']]
     .map(([k, pool, note]) => `<div class="paramcard card"><h4>${k}</h4><p class="pmeta">${note}</p>
       <div class="runbtn"><select class="mselect mono" onchange="mSet('${k}', this.value)">${mOpt(pool, mc[k] || '')}</select></div></div>`).join('')
     + `<div class="paramcard card"><h4>可选模型增补</h4><p class="pmeta">监测之外手动补（写进 config.模型.可选）</p>
@@ -1294,7 +1294,7 @@ async function viewDetail(id) {
     const live = (run.执行中 || []).find((x) => x.id === id) || null;
     if (live || d.state === '在途' || d.state === '质检') {
       const qaOn = fm.QA !== '关';
-      const judge = fm.验收方式 === '委托' ? '代核' : '你验收';
+      const judge = fm.验收方式 === '委托' ? '核查' : '你验收';
       const names = ['领单', '执行'].concat(qaOn ? ['质检'] : []).concat([judge, '落袋']);
       const doneUpto = { 在途: '领单', 质检: '执行', 待验收: qaOn ? '质检' : '执行', 待定夺: qaOn ? '质检' : '执行' }[d.state];
       const curName = live ? (live.kind === '执行' ? '执行' : live.kind === '质检' ? '质检' : judge)
@@ -1348,7 +1348,7 @@ async function viewDetail(id) {
         <div class="chipsrow">${fnPill(fm.职能)}<span class="pill mut">${esc(fm.产出物类型 || '')}</span>
           <span class="pill ${fm.验收方式 === '委托' ? 'mut' : 'ok'}">${esc(fm.验收方式 || '保留')}</span><span class="pill mut">${esc(fm.规模 || '')}</span>
           ${fm.待复核 ? `<span class="pill red" title="${esc(fm.待复核.说明 || '')}">待复核 · ${esc(fm.待复核.锚号 || '')}</span>` : ''}
-          ${fm.代核 ? `<span class="pill ${fm.代核.结论 === '通过' ? 'ok' : 'red'}">代核${esc(fm.代核.结论)}</span>` : ''}</div>
+          ${fm.代核 ? `<span class="pill ${fm.代核.结论 === '通过' ? 'ok' : 'red'}">核查${esc(fm.代核.结论)}</span>` : ''}</div>
         <div class="chain"><div class="clbl">追溯链</div>
           ${chainRow('父单', c.父子.父 ? `<a href="#/t/${c.父子.父}" style="color:var(--accent-ink)">${esc(c.父子.父)}</a>` : null)}
           ${chainRow('子单', kidsTxt)}
