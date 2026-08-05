@@ -729,6 +729,7 @@ function preflight(t, cfg2) {
   if (!职能表.includes(String(t.fm.职能 || ''))) errs.push(`职能「${t.fm.职能}」不在编制表（${职能表.join('/')}）——TK-82 案`);
   if (!/^P[0-3]$/.test(String(t.fm.优先级 || ''))) errs.push(`优先级「${t.fm.优先级}」非 P0-P3——TK-82 案`);
   if (!['开', '关'].includes(String(t.fm.QA || '').trim())) errs.push(`QA「${t.fm.QA}」非 开/关（非标串会被闸门误判）——TK-84 案`);
+  if (!['委托', '保留'].includes(String(t.fm.验收方式 || '').trim())) errs.push(`验收方式「${t.fm.验收方式}」非 委托/保留（非标串两检不接手，单会滞留待验收）——TK-88/83 案`);
   const 超时分 = (cfg2.执行器 || {}).执行超时分钟 ?? 30;
   const 预估分 = parseFloat(t.fm.预计时间) * 60;
   if (预估分 && 预估分 * 2 > 超时分) errs.push(`预计 ${预估分} 分钟 ×2 > 超时闸 ${超时分} 分钟，会话大概率被处决——TK-80 案（调预估或调闸）`);
@@ -1041,7 +1042,12 @@ function start() {
               if (!e) { anomalies.push(`${t.id} 在途但无执行会话`); patrolTails.delete(t.id); continue; }
               const prev = patrolTails.get(t.id);
               const tailNow = e.tail || '';
-              if (prev !== undefined && prev === tailNow && tailNow !== '') anomalies.push(`${t.id} 15 分钟进展尾巴无变化`);
+              // 引擎测试活跃时不计尾巴停滞（2026-08-06 狼来了案：会话前台等测试，尾巴静止是纪律不是僵死）
+              const engActive = (() => { try {
+                const reg = (cfg.项目 && cfg.项目.注册) || {}; const pj = t.fm.项目 && reg[t.fm.项目] && reg[t.fm.项目].路径;
+                return pj && (Date.now() - require('fs').statSync(require('path').join(pj, 'enginectl-test.log')).mtimeMs) < 5 * 60000;
+              } catch { return false; } })();
+              if (prev !== undefined && prev === tailNow && tailNow !== '' && !engActive) anomalies.push(`${t.id} 15 分钟进展尾巴无变化`);
               patrolTails.set(t.id, tailNow);
               const mins = (Date.now() - new Date(e.startedAt).getTime()) / 60000;
               const est = (parseFloat(t.fm.预计时间) * 60) || 30;
