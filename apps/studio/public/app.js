@@ -1688,16 +1688,28 @@ window.ideaAct = async (动作, id) => {
 /* ===== P13 项管信道（0.18.6，前身遥控传令板）：制作人 ↔ 项管问答 + 汇报流 ===== */
 function pmEventLine(e) {
   // e.t 是 UTC ISO 串，必须转本地时区再显示（用户实测：00:16 曾显示成 16:16）
+  // 当日事件只显 HH:MM（跨日才带月-日，窄列不折行——2026-08-06 UI 评审项管页）
   const d0 = new Date(e.t); const p2 = (n) => String(n).padStart(2, '0');
+  const sameDay = !isNaN(d0) && d0.toDateString() === new Date().toDateString();
   const t = isNaN(d0) ? String(e.t || '').slice(5, 16).replace('T', ' ')
+    : sameDay ? `${p2(d0.getHours())}:${p2(d0.getMinutes())}`
     : `${p2(d0.getMonth() + 1)}-${p2(d0.getDate())} ${p2(d0.getHours())}:${p2(d0.getMinutes())}`;
   if (e.类型 === '待审') return { t, txt: e.单 ? `受托起草：${e.单}（草稿待总监审）` : `拆单完成：${e.父单} → ${(e.子单 || []).join('、')}，简报呈 Claude 审批`, hot: true };
   if (e.类型 === '切单启动') return { t, txt: `开始拆单：${e.父单}（仓况盘点中）`, hot: true };
   if (e.类型 === '派发') return { t, txt: `派发 ${e.id} → ${e.池} 池` };
   if (e.类型 === '收口') return { t, txt: `专项收口：${e.父单}，收口报告已出`, hot: true };
-  if (e.类型 === '上呈') return { t, txt: `上呈制作人：${e.原因 || e.父单 || ''}`, hot: true };
+  if (e.类型 === '上呈') return { t, txt: `上呈制作人：${e.原因 || e.父单 || ''}${e.异常单 ? '（' + e.异常单.join('、') + '）' : ''}`, hot: true };
   if (e.类型 === '额度报警') return { t, txt: `额度报警：${e.详情 || ''}`, hot: true };
-  return { t, txt: `${e.类型}：${e.id || e.父单 || ''}` };
+  // 2026-08-06 UI 评审：新事件类型补渲染分支（此前落通用分支渲染成空行）
+  if (e.类型 === '裁决') return { t, txt: `评估回呈裁决 ${e.单 || ''}：${e.处置 || ''}`, hot: true };
+  if (e.类型 === '评估回呈') return { t, txt: `评估回呈 ${e.单 || ''}（第 ${e.轮 || 1} 轮）：执行会话判做不了，项管裁决中`, hot: true };
+  if (e.类型 === '宽限') return { t, txt: `软超时宽限 ${e.单 || ''}：仍在进展，续命（已跑 ${e.已跑分 || '?'} 分钟）` };
+  if (e.类型 === '巡检') return e.异常 ? { t, txt: `巡检异常 ×${e.异常}（在途 ${e.在途 ?? '?'}）`, hot: true } : null; // 无异常心跳不占流水
+  if (e.类型 === '派单委托') return { t, txt: `派单委托受理：${String(e.需求 || '').slice(0, 40)}…`, hot: true };
+  if (e.类型 === '定稿放行') return { t, txt: `定稿放行 ${e.单 || ''}` };
+  if (e.类型 === '收口待验') return { t, txt: `专项全落袋 ${e.父单 || ''}（子单 ${e.子单数 || '?'}）→ 收口报告生成中` };
+  if (e.类型 === '迁移') return { t, txt: `归位 ${e.id || ''}（池→待投）` };
+  return { t, txt: `${e.类型}：${e.id || e.单 || e.父单 || ''}` };
 }
 async function viewRelay() {
   // 0.23.9 信息架构定案（用户裁定）：只留三项——状态 / 关键汇报 / 详细流水。
@@ -1711,6 +1723,7 @@ async function viewRelay() {
   const KEY = new Set(['切单启动', '待审', '收口报告', '收口', '上呈', '额度报警', '切单失败', '派单委托', '定稿放行', '评估回呈', '裁决']);
   const evAll = pl.事件 || [];
   const line = (e) => { const v = pmEventLine(e);
+    if (!v) return ''; // null=不占流水（无异常巡检心跳）
     return `<div class="logrow"><time>${esc(v.t)}</time><span${v.hot ? ' style="color:var(--accent-ink);font-weight:600"' : ''}>${esc(v.txt)}</span></div>`; };
   const feedKey = evAll.filter((e) => KEY.has(e.类型)).slice(-12).reverse().map(line).join('')
     || '<p class="dim">暂无关键事件。</p>';
@@ -1718,7 +1731,7 @@ async function viewRelay() {
     || '<p class="dim">暂无流水。</p>';
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const cnt = {};
-  for (const e of evAll.filter((x) => new Date(x.t) >= today)) cnt[e.类型] = (cnt[e.类型] || 0) + 1;
+  for (const e of evAll.filter((x) => new Date(x.t) >= today && x.类型 !== '巡检')) cnt[e.类型] = (cnt[e.类型] || 0) + 1; // 巡检心跳不入今日概括
   const digest = Object.entries(cnt).map(([k, v]) => k + ' ' + v).join(' · ') || '今日无动作';
   const working = d.作业;
   const on = !!d.值守;
