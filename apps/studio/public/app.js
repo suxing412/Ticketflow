@@ -1827,7 +1827,13 @@ async function route() {
     if ((m = h.match(/^t\/(.+)$/))) {
       const id = decodeURIComponent(m[1]);
       const d = await api('/api/ticket?id=' + encodeURIComponent(id)).catch(() => ({}));
-      app.innerHTML = bshell(`${id} · ${d.fm ? d.fm.title : ''}`, d.state ? stPill(d.state) : '', await viewDetail(id));
+      let stBadge = d.state ? stPill(d.state) : '';
+      if (['待验收', '待定夺'].includes(d.state)) { // 目录态≠现场态：审检会话在跑时头部按会话报（制作人 03:18 指正）
+        const run = await api('/api/runner').catch(() => ({}));
+        const live = (run.执行中 || []).find((x) => x.id === id);
+        if (live) stBadge = `<span class="pill st-review">${esc(({ 初检: '初检中', 代核: '核查中', 核查: '核查中', 仲裁: '仲裁中' })[live.kind] || live.kind + '中')}</span>`;
+      }
+      app.innerHTML = bshell(`${id} · ${d.fm ? d.fm.title : ''}`, stBadge, await viewDetail(id));
       if (window._lastViewKey !== h) { const v = $('view'); if (v) v.classList.add('vin'); }
       window._lastViewKey = h;
       return;

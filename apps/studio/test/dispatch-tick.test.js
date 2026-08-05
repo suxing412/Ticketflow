@@ -4,6 +4,9 @@ const { makeRoot, seed } = require('./helper');
 const store = require('../lib/core/store');
 const runner = require('../lib/runner');
 const state = require('../lib/core/state');
+const quota = require('../lib/quota');
+// 测试隔离（同 runner.test 2026-08-05 案：额度闸查真实订阅用量，codex 爬过 70% 时本套件假失败）
+quota.getRateLimits = async () => null; quota.getClaudeUsage = async () => null;
 
 let passed = 0; const t = async (n, f) => { await f(); passed++; console.log('  ✓ ' + n); };
 console.log('dispatch-tick 派发制集成测试');
