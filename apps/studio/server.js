@@ -767,7 +767,7 @@ ACTIONS.定稿 = (b) => {
     if (t && ['战役','专项'].includes(t.fm.父单类型)) {
       const proj = t.fm.项目 && cfg.项目 && cfg.项目.注册 && cfg.项目.注册[t.fm.项目];
       require('./lib/pm/wake').onCampaignFinalized(ROOT, cfg, t, proj && proj.路径);
-      return { ...r, 项管: '切单已启动（fable），简报完成后进台账待审' };
+      return { ...r, 项管: `切单已启动（${(cfg.模型 || {}).项管 || 'opus'}），简报完成后进台账待审` };
     }
   }
   return r;

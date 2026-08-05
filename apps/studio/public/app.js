@@ -60,7 +60,7 @@ function shell(active, inner) {
   const p = projActive();
   return `<div class="topbar">
       <div class="tleft"><a class="logohome" href="#/hub" title="回项目启动页"><img class="logo" src="favicon.ico" alt="监制台"/></a><div>
-        <h1>监制台${p ? ` · ${esc(p)}` : ''}</h1><p class="tagline">布告栏 · 工单池 · 审批台——制作人的驾驶舱：你投池与拍板，agent 拉取执行</p></div></div>
+        <h1>监制台${p ? ` · ${esc(p)}` : ''}</h1><p class="tagline">工单 · 审检 · 决策台——制作人的驾驶舱：你拍板与放行，系统派发执行（H49）</p></div></div>
       <div class="tright"><div class="searchbox"><input id="gsearch" placeholder="搜索工单 编号 / 标题" autocomplete="off" oninput="gSearch(this.value)" onfocus="gSearch(this.value)" onkeydown="gEnter(event)"/><div id="gsr" class="gsr"></div></div>
         <a class="gear" href="#/params" title="全局参数与额度（单项目不经启动页也能到）">⚙</a></div></div>
     <nav class="snav">${tabs}</nav>
@@ -1003,7 +1003,7 @@ async function viewParams() {
     return `<option value="" ${!cur ? 'selected' : ''}>CLI 默认</option>` + list.map((o) => `<option value="${esc(o)}" ${cur === o ? 'selected' : ''}>${esc(o)}</option>`).join('')
       + (cur && !list.includes(cur) ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''); };
   const mc = c.模型 || {};
-  const modelCards = [['claude默认', 'claude', 'claude 池体力档'], ['codex默认', 'codex', 'codex 池体力档'], ['质检', 'claude', 'QA 复核档（审检三席）'], ['代核', 'claude', '核查档（原代核·两检深检，H68）'], ['代裁', 'claude', '仲裁档（原代裁，空=跟核查档）'], ['项管', 'claude', '项目管理切单/收口/答话档（H49，现值 fable）']]
+  const modelCards = [['claude默认', 'claude', 'claude 池体力档'], ['codex默认', 'codex', 'codex 池体力档'], ['质检', 'claude', 'QA 复核档（审检三席）'], ['代核', 'claude', '核查档（原代核·两检深检，H68）'], ['代裁', 'claude', '仲裁档（原代裁，空=跟核查档）'], ['项管', 'claude', '项目管理切单/收口/裁决/答话档（现值 opus，H49 后 2026-08-04 调）']]
     .map(([k, pool, note]) => `<div class="paramcard card"><h4>${k}</h4><p class="pmeta">${note}</p>
       <div class="runbtn"><select class="mselect mono" onchange="mSet('${k}', this.value)">${mOpt(pool, mc[k] || '')}</select></div></div>`).join('')
     + `<div class="paramcard card"><h4>可选模型增补</h4><p class="pmeta">监测之外手动补（写进 config.模型.可选）</p>
