@@ -120,9 +120,7 @@ async function viewHub() {
     const [run, g] = await Promise.all([api('/api/runner'), api('/api/gates')]);
     const el = $('hub-run');
     if (el) el.innerHTML = `<i class="${dotCls(run)}"></i><span style="font-size:14px;font-weight:500">${run.运行 ? (run.试跑 ? '试跑运行中' : '实弹运行中') : '已停'}</span>`;
-    const lk = $('hub-lock'); // H64 编辑器锁：关锁=我要开 Unity 验收（派发挂起）；开锁自动（编辑器退出）或手动
-    if (lk) { const locked = run.编辑器占用 && run.编辑器占用.length;
-      lk.innerHTML = `<button class="btn h32 ${locked ? 'accent' : ''}" onclick="editorLock(${locked ? 'false' : 'true'})" title="开 Unity 验收前先关锁；用完编辑器退出会自动开锁">${locked ? '🔒 验收中 · 点击开锁' : '🔓 开 Unity 前点我关锁'}</button>`; }
+    // H64 编辑器锁已迁决策台（2026-08-05 制作人指正：锁属验收流程，不落首页）
     setNum($('hub-cx'), g.locks.codex.fivePct != null ? g.locks.codex.fivePct + '%' : '—', 'num ' + (g.locks.codex.locked ? 'err' : 'okc'));
     setNum($('hub-cl'), g.locks.claude.fivePct != null ? g.locks.claude.fivePct + '%' : '—', 'num ' + (g.locks.claude.locked ? 'err' : 'dim'));
   } catch { /* 保持占位 */ } }, 0);
@@ -769,7 +767,17 @@ async function viewDecisions() {
         <button class="btn danger-o h36" onclick="dAct('定夺','${esc(cur.id)}',null,'打回')">打回</button></div></div>`}</div>`;
   }
   const q1 = d.待验收.map((t) => `<div class="qitem" onclick="dTab='accept';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2">${esc(t.title)} · ${esc(t.验收方式 || '保留')}</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>';
-  return `<div class="dtabs">
+  // H64 编辑器锁（2026-08-05 制作人指正：锁属验收流程，落决策台不落首页）——数据后到原地填
+  setTimeout(async () => { try {
+    const run = await api('/api/runner');
+    const el = $('dec-lock'); if (!el) return;
+    const locked = run.编辑器占用 && run.编辑器占用.length;
+    el.innerHTML = `<button class="btn h36 ${locked ? 'accent' : 'primary'}" onclick="editorLock(${locked ? 'false' : 'true'})" title="验收开 Unity 前先关锁（派发挂起）；用完关编辑器会自动开锁">${locked ? '🔒 验收锁已关 · 派发挂起中 · 点击手动开锁' : '🔓 要验收？先点我关锁再开 Unity'}</button>`;
+  } catch { /* 保持占位 */ } }, 0);
+  return `<div class="card r14" style="padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px">
+      <b style="font-size:13px">编辑器锁</b><span id="dec-lock" class="dim">…</span>
+      <span class="subnote">开 Unity 验收的第一步和最后一步都在这</span></div>
+    <div class="dtabs">
       <span class="tab ${dTab === 'accept' ? 'active' : ''}" onclick="dTab='accept';route()">验收签字</span>
       <span class="tab ${dTab === 'escal' ? 'active' : ''}" onclick="dTab='escal';route()">待定夺 ${d.待定夺.length ? `<span class="badge">${d.待定夺.length}</span>` : ''}</span>
       <span class="backlog2">待验收积压 ${d.积压} / ${d.积压闸}</span></div>
