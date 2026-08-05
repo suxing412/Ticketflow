@@ -26,16 +26,21 @@ $exe = Join-Path $DistDir "监制台 $Version.exe"
 if (-not (Test-Path $exe)) { Write-Error "产物不存在：$exe（先 npm run dist）"; exit 1 }
 Write-Host "目标版本：$Version"
 
-# 1) 等静默窗
+# 1) 等静默窗（执行会话 + 项管会话都要空——起草/收口/裁决被换装杀过两次：09:44 起草案、15:28 收口案）
 $deadline = (Get-Date).AddMinutes($WaitMinutes)
 while ($true) {
+  $busy = 0; $pmBusy = $false
   try {
     $st = Invoke-RestMethod "http://127.0.0.1:$Port/api/runner" -TimeoutSec 5
     $busy = @($st.执行中).Count
   } catch { $busy = 0 }  # 服务没起 = 可换
-  if ($busy -eq 0) { break }
-  if ((Get-Date) -gt $deadline) { Write-Error "等待静默窗超时（仍有 $busy 项执行中）"; exit 2 }
-  Write-Host "执行中 $busy 项，等待…"
+  try {
+    $relay = Invoke-RestMethod "http://127.0.0.1:$Port/api/relay" -TimeoutSec 5
+    if ($null -ne $relay.作业) { $pmBusy = $true }
+  } catch { $pmBusy = $false }
+  if (($busy -eq 0) -and (-not $pmBusy)) { break }
+  if ((Get-Date) -gt $deadline) { Write-Error "等待静默窗超时（执行中 $busy 项 / 项管忙 $pmBusy）"; exit 2 }
+  Write-Host "执行中 $busy 项 / 项管忙 $pmBusy，等待…"
   Start-Sleep -Seconds 20
 }
 
