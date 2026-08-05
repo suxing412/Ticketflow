@@ -697,17 +697,19 @@ function viewAgentsDispatch(d, all) {
   const cards = (d.在跑 || []).map((r) => {
     const since = r.环节起时 || r.领单时间 || '';
     const elapsed = since ? Date.now() - Date.parse(since) : 0;
-    return `<div class="arow2 card r14">
+    // 2026-08-05 制作人需求：点在跑卡片原地展开工单详情（正文+活尾巴），不切窗口
+    return `<div class="arow2 card r14" style="cursor:pointer" onclick="agExpand('${esc(r.id)}')" title="点击原地展开工单详情">
       <div class="av" style="background:${FNHEX[r.职能] || 'var(--ink3)'}">${esc((r.职能 || '').slice(0, 2))}</div>
       <div class="who">${esc(r.主办)}</div>
       <span class="poolp pill sm fn ${r.池 === 'claude' ? 'pool-claude' : 'pool-codex'}">${esc(r.池 || '?')} 池</span>
-      <div class="mid2"><span class="aid"><a href="#/t/${esc(r.id)}" style="color:inherit">${esc(r.id)}</a></span>
+      <div class="mid2"><span class="aid"><a href="#/t/${esc(r.id)}" style="color:inherit" onclick="event.stopPropagation()">${esc(r.id)}</a></span>
         <div class="at">${esc(r.title || '')}${r.尾 ? ` <span class="dim2">· ${esc(String(r.尾).slice(-60))}</span>` : ''}</div></div>
       <div class="chips">${fnPill(r.职能)}${stPill(r.state)}</div>
       <div class="rgt"><span class="lbl">${r.环节 ? esc(r.环节) + '中' : '衔接中'}</span><br/>
         <span class="tm" data-since="${esc(since)}">${fmtElapsed(elapsed)}</span>
         <div class="bar"><i style="width:${Math.min(1, elapsed / (4 * 3600000)) * 100}%"></i></div><div class="cap">滞留阈值 4h</div></div>
-    </div>`;
+    </div>
+    <div class="card r14 ag-detail" id="agd-${esc(r.id)}" style="display:none;margin:-6px 0 10px 46px;padding:14px 18px"><span class="dim">载入中…</span></div>`;
   }).join('') || '<p class="dim" style="margin:26px 0;text-align:center">当前无在跑执行者 —— 派发制下没有常备军，就绪单一到即拉起，完成即销毁。</p>';
   const judges = (d.判官 || d.审检 || []).map((j) => `<span class="pill sm ${j.忙 ? 'ok' : 'mut'}">${esc(j.id)}${j.忙 ? ' · 审 ' + esc(j.当前 || '') : ' · 待命'}</span>`).join(' ') || '<span class="dim">（未配置）</span>';
   const ready = (d.就绪队列 || []).map((q) => `<span class="pill sm mut mono">${esc(q.id || q)}</span>`).join(' ') || '<span class="dim">空 —— 无就绪待派单</span>';
@@ -1723,6 +1725,25 @@ async function viewRelay() {
       <div style="margin-top:12px;max-height:46vh;overflow-y:auto">${feedFlow}</div></div>
   </div>`;
 }
+// 在途卡片原地展开工单详情（2026-08-05 制作人需求：不切窗口看在做什么）
+window.agExpand = async (id) => {
+  const box = document.getElementById('agd-' + id);
+  if (!box) return;
+  if (box.style.display !== 'none') { box.style.display = 'none'; return; } // 再点收起
+  box.style.display = '';
+  try {
+    const tk = await api('/api/ticket?id=' + encodeURIComponent(id));
+    const secs = String(tk.body || '').split(/^## /m).filter(Boolean);
+    const pick = (name) => { const s = secs.find((x) => x.startsWith(name)); return s ? s.split('\n').slice(1).filter((l) => l.trim()).slice(0, 8) : []; };
+    const rng = pick('范围').concat(pick('执行内容')); const std = pick('验收标准');
+    const line = (l) => `<div class="doc-line">${esc(l)}</div>`;
+    box.innerHTML = `<div style="display:flex;gap:24px;flex-wrap:wrap">
+      <div style="flex:1;min-width:260px"><div class="ph">范围 / 执行内容</div>${rng.map(line).join('') || '<div class="doc-line dim">（工单未写）</div>'}</div>
+      <div style="flex:1;min-width:260px"><div class="ph">验收标准</div>${std.map(line).join('') || '<div class="doc-line dim">（工单未写）</div>'}</div></div>
+      <div style="margin-top:10px"><a class="btn h32" href="#/t/${esc(id)}">完整详情页 →</a></div>`;
+  } catch { box.innerHTML = '<span class="dim">详情载入失败</span>'; }
+};
+
 // H64 编辑器锁开关（默认项目）
 window.editorLock = async (关) => {
   const r = await post('/api/editor-lock', { 关 });
