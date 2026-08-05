@@ -685,8 +685,44 @@ const ACTIONS = {
 const legacy投池 = ACTIONS.投池;
 ACTIONS.投池 = (b) => (cfg.执行器 && cfg.执行器.派发制) ? ACTIONS.放行(b) : legacy投池(b);
 // H49 接线①：专项父单定稿 → 项管自动切单（拍板的下半步）
+// 定稿预检（H62，2026-08-05 制作人批准）：历史审漏案变机器闸——不过不放行。
+// 每条规则背后一个真实事故；新案入档时同步加规则。
+function preflight(t, cfg2) {
+  if (!t || ['战役', '专项'].includes(t.fm.父单类型)) return []; // 专项父单不预检（不执行）
+  const errs = [];
+  const 职能表 = ['策划', '程序', '美术', 'QA', '装配'];
+  if (!职能表.includes(String(t.fm.职能 || ''))) errs.push(`职能「${t.fm.职能}」不在编制表（${职能表.join('/')}）——TK-82 案`);
+  if (!/^P[0-3]$/.test(String(t.fm.优先级 || ''))) errs.push(`优先级「${t.fm.优先级}」非 P0-P3——TK-82 案`);
+  if (!['开', '关'].includes(String(t.fm.QA || '').trim())) errs.push(`QA「${t.fm.QA}」非 开/关（非标串会被闸门误判）——TK-84 案`);
+  const 超时分 = (cfg2.执行器 || {}).执行超时分钟 ?? 30;
+  const 预估分 = parseFloat(t.fm.预计时间) * 60;
+  if (预估分 && 预估分 * 2 > 超时分) errs.push(`预计 ${预估分} 分钟 ×2 > 超时闸 ${超时分} 分钟，会话大概率被处决——TK-80 案（调预估或调闸）`);
+  const deps = t.fm.依赖;
+  if (deps) {
+    const arr = Array.isArray(deps) ? deps.map(String) : String(deps).split(/[，,\s]+/).filter(Boolean);
+    for (const id of arr) {
+      const d = store.find(ROOT, id);
+      if (!d) errs.push(`依赖 ${id} 不存在——悬空死锁——TK-79 案`);
+      else if (d.state === '已归档' && d.fm.归档原因) errs.push(`依赖 ${id} 已带因归档（${d.fm.归档原因}），永不落袋——TK-79 案`);
+    }
+  }
+  const body = t.body || '';
+  for (const ch of ['unity-run', 'unity-build']) {
+    if (body.includes(ch) && ch === 'unity-build') errs.push('正文点名 unity-build——该通道是占位未实装——TK-71 案');
+  }
+  return errs;
+}
 const legacy定稿 = ACTIONS.定稿;
 ACTIONS.定稿 = (b) => {
+  const t0 = store.find(ROOT, b.id);
+  const errs = preflight(t0, cfg);
+  if (errs.length) {
+    journal.append(ROOT, `定稿预检拦截 ${b.id}：${errs.length} 条（H62）`);
+    return { ok: false, error: '预检不过：' + errs.join('；') };
+  }
+  if (t0 && !['战役', '专项'].includes(t0.fm.父单类型)) {
+    store.update(ROOT, b.id, (fm) => { fm.审批人 = '总监'; fm.审批时间 = new Date().toISOString(); }); // H62 归因记账：放行章落单
+  }
   const r = legacy定稿(b);
   // H57 透明化：定稿是 Claude 审批放行动作，入台账事件供项管视图可见
   if (r.ok) { try { require('./lib/ledger').event(ROOT, '定稿放行', { 单: b.id }); } catch { /**/ } }
