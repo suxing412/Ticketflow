@@ -139,9 +139,8 @@ async function viewHub() {
       <div class="grp"><span class="lbl">执行器</span><span class="num" id="hub-run" style="font-size:14px">—</span></div><div class="vdiv"></div>
       <div class="grp pool"><span class="lbl">codex 池</span><span class="num dim" id="hub-cx">—</span></div><div class="vdiv"></div>
       <div class="grp pool"><span class="lbl">claude 池</span><span class="num dim" id="hub-cl">—</span></div><div class="vdiv"></div>
-      <div class="grp pool"><span class="lbl">环境</span><span class="num dim" id="hub-env" title="全链路自检">—</span></div><div class="vdiv"></div>
-      <div class="grp" id="hub-lock">—</div>
-      <div class="spacer"></div><span class="subnote">需你处理的项目卡会亮红胶囊</span></div>
+      <div class="grp pool"><span class="lbl">环境</span><span class="num dim" id="hub-env" title="全链路自检">—</span></div>
+      <div class="spacer"></div><span class="subnote">需你处理的项目卡会亮红胶囊 · 编辑器锁在决策台</span></div>
     <div class="hubgrid">${cards}
       <a class="hubcard add card r16" href="#/proj-new"><span>＋ 注册新项目</span><span class="subnote">一份监制台管所有项目——注册即接管</span></a></div>`;
 }
@@ -200,8 +199,7 @@ async function viewOverview() {
   const inboxHtml = inbox.map((r) => `<div class="inbox-row card" onclick="location.hash='#/t/${r.id}'">
       <span class="rid">${esc(r.id)}</span><span class="rt">${esc(r.title)}</span><span class="rnote">${esc(r.note)}</span>
       ${stPill(r.k)}</div>`).join('') || '<p class="dim">收件箱空——没有需要你决定的</p>';
-  const pool = (board['池'] || []);
-  const sug = pool.length ? pool[0] : null;
+  // 池首投放建议已随拉取制退役（0.24.7 视图清仓）
   const lines = (jn.lines || []).slice(-5).reverse();
   const logHtml = lines.map((l) => { const m = String(l).match(/^\[([\d-]+ )?([\d:]{5})[^\]]*\]\s*(.*)$/); const tm = m ? m[2] : ''; const tx = m ? m[3] : String(l);
     const cls = /锁|超|告警|打回/.test(tx) ? 'err' : /通过|完成|验收/.test(tx) ? 'okc' : ''; return `<div class="logrow"><time>${esc(tm)}</time><span class="${cls}">${esc(tx.slice(0, 40))}</span></div>`; }).join('') || '<p class="dim">无动态</p>';
@@ -222,9 +220,10 @@ async function viewOverview() {
   let lastGatesJson = '';
   const fillGates = async () => {
     const g = await api('/api/gates');
-    const rec2 = g.推荐;
-    const recEl = $('ov-rec');
-    if (recEl) { setNum(recEl, rec2 ? String(rec2.推荐) : '—', 'num ' + (rec2 && rec2.当前 > rec2.推荐 ? 'err' : 'okc')); const grp = recEl.closest('.grp'); if (grp && rec2) grp.title = rec2.原因.join('；'); }
+    // 「推荐在途」已随精力档/拉取制退役（0.23.11 制度、0.24.7 视图清仓）——派发制的并发上限在项管台账
+    const pauseEl = $('ov-pause');
+    if (pauseEl) { const p = g.paused || {}; const on = p.global || p.codex || p.claude;
+      pauseEl.innerHTML = on ? `<span class="pill sm warn" style="font-weight:700">合闸${p.global ? '·全局' : ''}</span>` : '<span class="okc">开</span>'; }
     setNum($('ov-cx'), g.locks.codex.fivePct != null ? g.locks.codex.fivePct + '%' : '—', 'num ' + (g.locks.codex.locked ? 'err' : 'okc'));
     setNum($('ov-cl'), g.locks.claude.fivePct != null ? g.locks.claude.fivePct + '%' : '—', 'num ' + (g.locks.claude.locked ? 'err' : 'dim'));
     const key = JSON.stringify([g.locks.codex, g.locks.claude]);
@@ -250,7 +249,7 @@ async function viewOverview() {
   pollLoop('ov-env', 60000, fillEnv);
   return `<div class="stat-strip card r14">${strip}
       <div class="vdiv"></div>
-      <div class="grp"><span class="lbl">推荐在途</span><span class="num dim" id="ov-rec">—</span></div>
+      <div class="grp"><span class="lbl">派发闸</span><span class="num dim" id="ov-pause">—</span></div>
       <div class="spacer"></div>
       <div class="grp pool"><span class="lbl">codex 池</span><span class="num dim" id="ov-cx">—</span></div>
       <div class="vdiv"></div>
@@ -260,10 +259,10 @@ async function viewOverview() {
     <div class="p1-grid"><div>
       <div class="sec-h"><h3 class="h17">需你处理</h3><span class="subnote">${inbox.length} 项待你决定</span></div>
       ${inboxHtml}
-      <div class="sec-h" style="margin-top:28px"><span class="subnote" style="font-weight:500">投放建议</span></div>
-      <div class="suggest card">${sug ? `<div style="font-size:13px">池首 <b class="mono" style="font-size:12px">${esc(sug.id)}</b> ${esc(sug.title)} · ${esc(sug.职能)}</div>
-        <div class="subnote" style="margin:6px 0 12px">待投区 ${n('待投')} 单可释放；按钮在工单池</div>
-        <a class="btn accent h32" href="#/board">去工单池</a>` : '<span class="dim">池空——去起草或释放待投</span>'}</div>
+      <div class="sec-h" style="margin-top:28px"><span class="subnote" style="font-weight:500">派发窗（H49）</span></div>
+      <div class="suggest card">${n('待投') ? `<div style="font-size:13px">待投区 <b>${n('待投')}</b> 单——依赖就绪且已放行的会被自动派发</div>
+        <div class="subnote" style="margin:6px 0 12px">未放行的在工单池逐张放行；合闸时全部原地待命</div>
+        <a class="btn accent h32" href="#/board">去工单池</a>` : '<span class="dim">待投区空——想法拍板或派单委托产生新单</span>'}</div>
     </div><div>
       <div class="sec-h"><h3 class="h17">动态日志</h3>${projActive() ? '<span class="subnote">全局动态（journal 不分项目）</span>' : ''}</div>${logHtml}
       <div class="quota-card card r14"><b style="font-size:13px">额度双池</b>
