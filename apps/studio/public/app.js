@@ -582,7 +582,7 @@ async function viewTree() {
     const acceptN = isParent ? chn.filter((c) => c.state === '待验收').length : 0;
     const collapsed = tState.collapsed.has(t.id);
     const twist = isParent ? `<span class="twist2" onclick="event.stopPropagation();tToggle('${esc(t.id)}')">${collapsed ? '▸' : '▾'}</span>`
-      : (lv === 0 ? '<span class="twist2 none">▸</span>' : '<span class="twist2 none">·</span>');
+      : '<span class="twist2 none">·</span>'; // 叶子一律「·」——▸ 只留给真能开合的父行（2026-08-06 交互全测：同形箭头误导可点）
     return `<div class="trow2 ${isParent ? 'parent' : 'leaf'} ${lv ? 'lv' + Math.min(lv, 3) : ''} ${acceptN ? 'hasaccept' : ''}" onclick="location.hash='#/t/${t.id}'">
       ${twist}<span class="tid2">${esc(t.id)}</span><span class="tt2">${esc(t.title)}</span>
       ${isParent ? `<span class="kids">${chn.length} 子单${t.阶段 ? ' · ' + esc(t.阶段) : ''}</span>` : ''}
