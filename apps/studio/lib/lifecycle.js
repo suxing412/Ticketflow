@@ -36,7 +36,7 @@ function 交产出(root, id, 回执body) {
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
     fs.writeFileSync(path.join(root, '回执', `${id}.md`), 回执body, 'utf8');
   }
-  const qaOn = String(t.fm.QA) === '开';
+  const qaOn = String(t.fm.QA || '').trim() !== '关'; // fail-closed（2026-08-05 TK-84 案：非标 QA 串被判「关」直达验收，空壳回执绕过判官）
   const to = qaOn ? '质检' : '待验收';
   const r = store.move(root, id, '在途', to, (fm) => { fm.交付时间 = nowIso(); }, nowIso()); // 交付时刻：执行时间轴的段终点
   if (r.ok) journal.append(root, `交产出 ${id}（在途→${to}${qaOn ? '' : ' · QA关直达验收'}）`);
