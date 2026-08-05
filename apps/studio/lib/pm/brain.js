@@ -251,6 +251,67 @@ function answer(root, cfg, question, cb) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
+// 评估回呈裁决（H61，2026-08-05 用户拍板）：执行会话判定做不了 → 项管裁决 改单/改池/上呈。
+// 三轮封顶由 runner 把关（≥3 直接上呈总监不再进此函数）。
+function adjudicateReferral(root, cfg, id, cb) {
+  const t = store.find(root, id);
+  if (!t) return cb({ ok: false, error: '单不存在' });
+  let receipt = '';
+  try { receipt = fs.readFileSync(path.join(root, '回执', id + '.md'), 'utf8'); } catch { /* 无回执照裁 */ }
+  setWorking({ 用途: '裁决', 对象: id });
+  const prompt = [
+    '你是单流的「项目管理」职能。一张执行单的会话领单评估后判定做不了，回呈你裁决（H61）。',
+    '你的选项（只能选一）：改单（修字段/补正文让它可做）/ 改池（换执行池）/ 上呈（单子本身有问题，交总监）。',
+    '输出契约：先一段 100 字内裁决说明，然后一个 ```json 代码块：',
+    '{"处置":"改单|改池|上呈","执行池":"claude|codex|null","字段修改":{"优先级":"P0-P3 或省略","预计时间":"小时数或省略"},"正文补充":"改单时追加进工单正文的指令文本，其它情况空串","说明":"一句话"}',
+    '', '=== 工单全文 ===', fs.readFileSync(t.file, 'utf8').slice(0, 6000),
+    '', '=== 评估回呈 ===', receipt.slice(0, 3000),
+    '', '=== 该单历史（journal 摘录）===',
+    (() => { try { const jf = fs.readdirSync(path.join(root, 'journal')).sort().pop(); return fs.readFileSync(path.join(root, 'journal', jf), 'utf8').split(/\r?\n/).filter((l) => l.includes(id)).slice(-12).join('\n'); } catch { return '（无）'; } })(),
+  ].join(String.fromCharCode(10));
+  const cmd = cli();
+  const model = (cfg.模型 || {}).项管 || 'opus';
+  const child = spawn(cmd, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'],
+    { cwd: root, env: { ...process.env }, windowsHide: true, shell: String(cmd).endsWith('.cmd') });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; if (out.length > 400000) out = out.slice(-200000); });
+  const timer = setTimeout(() => { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch { /**/ } }, 5 * 60000);
+  if (timer.unref) timer.unref();
+  child.on('close', () => {
+    setWorking(null); clearTimeout(timer); billFee(root, '裁决', out);
+    const text = require('../runner').extractClaudeText(out);
+    let v = null;
+    try { v = JSON.parse((text.match(/```json\s*([\s\S]*?)```/) || [])[1]); } catch { /* 解析失败走上呈 */ }
+    const journal = require('../journal');
+    if (!v || !['改单', '改池', '上呈'].includes(v.处置)) {
+      try { require('../inbox').post(root, '急', '裁决异常', id + ' 项管裁决输出不可解析，按上呈处理', { 单号: id }); } catch { /**/ }
+      journal.append(root, `项管裁决 ${id}：输出不可解析 → 上呈总监`);
+      return cb({ ok: false, error: '裁决输出不可解析' });
+    }
+    ledger.event(root, '裁决', { 单: id, 处置: v.处置 });
+    try { require('../relay').append(root, '项管', `评估回呈裁决 ${id}：${v.处置}——${v.说明 || ''}`); } catch { /**/ }
+    if (v.处置 === '上呈') {
+      try { require('../inbox').post(root, '急', '裁决上呈', id + '：' + (v.说明 || '单子本身存疑'), { 单号: id }); } catch { /**/ }
+      journal.append(root, `项管裁决 ${id}：上呈总监（${v.说明 || ''}）`);
+      return cb({ ok: true, 处置: '上呈' });
+    }
+    store.update(root, id, (fm, t2) => {
+      const patch = { 放行: true };
+      if (v.处置 === '改池' && ['claude', 'codex'].includes(v.执行池)) patch.执行池 = v.执行池;
+      if (v.处置 === '改单') {
+        const f = v.字段修改 || {};
+        if (/^P[0-3]$/.test(String(f.优先级 || ''))) patch.优先级 = f.优先级;
+        if (f.预计时间) patch.预计时间 = String(f.预计时间);
+      }
+      Object.assign(fm, patch);
+      if (v.处置 === '改单' && v.正文补充) return { body: (t2.body || '') + '\n\n## 项管裁决改单（H61 · ' + new Date().toISOString().slice(0, 10) + '）\n' + String(v.正文补充).slice(0, 2000) + '\n' };
+    });
+    journal.append(root, `项管裁决 ${id}：${v.处置}${v.执行池 ? '→' + v.执行池 : ''}（带放行重新可派）`);
+    cb({ ok: true, 处置: v.处置 });
+  });
+  try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
+}
+
 // 派单委托（H57，2026-08-04 用户裁定：派单权归项管，Claude 不得直接造单）：
 // 制作人层提需求 → 项管起草单张工单（草稿态）→ Claude 审 → 定稿放行。审批与起草分离。
 // 字段规范硬约束（2026-08-05：TK-82/83 连续两张草稿字段非标返修）——见 FIELD_RULES 注入。
@@ -302,4 +363,4 @@ function draftTicket(root, cfg, 需求, projPath, cb) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
-module.exports = { cut, closeout, answer, draftTicket, buildCutPrompt, parseTickets, getWorking };
+module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, buildCutPrompt, parseTickets, getWorking };

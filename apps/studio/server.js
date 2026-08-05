@@ -954,6 +954,35 @@ function start() {
           setInterval(记, 记账分 * 60000).unref();
         }
       }
+      // 项管在途巡检（H61，2026-08-05 用户拍板）：每 15 分钟体检在途单——会话存活/进展尾巴/
+      // 耗时对预估。确定性检查零 token；异常入呼叫信箱上报总监裁决，台账留巡检心跳。
+      if (!initError) {
+        const patrolTails = new Map();
+        setInterval(() => {
+          try {
+            const runnerMod = require('./lib/runner');
+            const pmLedger = require('./lib/pm/ledger');
+            const inflight = store.list(ROOT, '在途').filter((t) => !['战役', '专项'].includes(t.fm.父单类型));
+            const anomalies = [];
+            for (const t of inflight) {
+              const e = [...runnerMod.running.values()].find((x) => x.id === t.id && x.kind === '执行');
+              if (!e) { anomalies.push(`${t.id} 在途但无执行会话`); patrolTails.delete(t.id); continue; }
+              const prev = patrolTails.get(t.id);
+              const tailNow = e.tail || '';
+              if (prev !== undefined && prev === tailNow && tailNow !== '') anomalies.push(`${t.id} 15 分钟进展尾巴无变化`);
+              patrolTails.set(t.id, tailNow);
+              const mins = (Date.now() - new Date(e.startedAt).getTime()) / 60000;
+              const est = (parseFloat(t.fm.预计时间) * 60) || 30;
+              if (mins > est * 2) anomalies.push(`${t.id} 已跑 ${Math.round(mins)} 分钟 > 预估 ${est} 分钟 ×2`);
+            }
+            pmLedger.event(ROOT, '巡检', { 在途: inflight.length, 异常: anomalies.length });
+            if (anomalies.length) {
+              journal.append(ROOT, `项管巡检异常：${anomalies.join('；')}`);
+              require('./lib/inbox').post(ROOT, '常', '巡检异常', anomalies.join('；').slice(0, 200));
+            }
+          } catch { /* 巡检失败不阻塞 */ }
+        }, 15 * 60000).unref();
+      }
       // 执行器随服务自动开工（D30 修订：开 exe 即开工厂，无需手动点启动）；
       // 停止按钮只管本次会话，"别干活"的常设语义交给暂停闸门/额度锁
       if (!initError) { try { require('./lib/runner').start(ROOT, () => cfg); } catch (e) { console.error('执行器启动失败：' + e.message); } }

@@ -1668,7 +1668,7 @@ async function viewRelay() {
   ]);
   const 模型档 = (_cfg && _cfg.模型 && _cfg.模型.项管) || '—';
   const L = pl.台账 || {};
-  const KEY = new Set(['切单启动', '待审', '收口报告', '收口', '上呈', '额度报警', '切单失败', '派单委托', '定稿放行']);
+  const KEY = new Set(['切单启动', '待审', '收口报告', '收口', '上呈', '额度报警', '切单失败', '派单委托', '定稿放行', '评估回呈', '裁决']);
   const evAll = pl.事件 || [];
   const line = (e) => { const v = pmEventLine(e);
     return `<div class="logrow"><time>${esc(v.t)}</time><span${v.hot ? ' style="color:var(--accent-ink);font-weight:600"' : ''}>${esc(v.txt)}</span></div>`; };

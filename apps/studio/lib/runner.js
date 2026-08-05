@@ -317,6 +317,20 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       }
     } else {
       if (!cur || cur.state !== '在途') return; // 期间被收回/废弃，不硬交
+      if (/##\s*评估回呈/.test(String(note))) { // H61：领单评估判做不了——不算失败，回池待项管裁决；三轮上呈总监
+        const rp0 = path.join(root, '回执', `${t.id}.md`);
+        try { fs.writeFileSync(rp0, String(note), 'utf8'); } catch { /* 尽力 */ }
+        const 轮 = (cur.fm.评估回呈轮 || 0) + 1;
+        store.move(root, t.id, '在途', '池', (fm) => { delete fm.主办; delete fm.领单时间; fm.放行 = false; fm.评估回呈轮 = 轮; }, new Date().toISOString());
+        journal.append(root, `评估回呈 ${t.id}（第 ${轮} 轮）：执行会话判定做不了，回池待项管裁决（H61）`);
+        try { require('./pm/ledger').event(root, '评估回呈', { 单: t.id, 轮 }); } catch { /* 不阻塞 */ }
+        if (轮 >= 3) {
+          inbox.post(root, '急', '三轮裁决不过', `${t.id} 评估回呈已 ${轮} 轮，按 H61 上呈总监查单`, { 单号: t.id });
+        } else {
+          try { require('./pm/brain').adjudicateReferral(root, cfg, t.id, () => { /* 结果走台账/信道 */ }); } catch (e) { journal.append(root, `裁决拉起失败 ${t.id}：${String(e.message).slice(0, 60)}`); }
+        }
+        return;
+      }
       const r = lifecycle.交产出(root, t.id, note);
       if (r.ok) journal.append(root, `执行完成 ${t.id}（${agentId} · ${kind}）`);
     }
