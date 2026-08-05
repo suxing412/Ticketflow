@@ -2,7 +2,7 @@
    本文件所有颜色/材质/阴影只准走 :root 令牌——主题切换 = html[data-theme] 换一套令牌值 */
 :root {
   color-scheme:light;
-  --paper:#FAFAF8; --card:#FFFFFF; --ink:#1A1D21; --ink2:#4B5563; --ink3:#8A929E;
+  --paper:#FAFAF8; --card:#FFFFFF; --ink:#1A1D21; --ink2:#4B5563; --ink3:#6B7380;
   --line:#E4E2DC; --ok:#0D7A5F; --okbg:#EBF7F1; --okln:#B9E0D2; --danger:#B4231F;
   --dangerbg:#FBEAE9; --accent:#4F46E5; --sect:#F0EFEA; --chip:#E3E2DD; --we:#F5F4F0;
   --inbg:#FCFCFB; --gatebg:#FDF3E3; --gateln:#E8CFA0; --gatetx:#7A5A1E;
@@ -315,7 +315,7 @@ a.gear { text-decoration:none; }
 .bcard2:hover { border-color:var(--ink3); }
 .bcard2 .cid { font-family:var(--mono); font-size:11px; color:var(--ink3); }
 .bcard2 .cpri { position:absolute; top:12px; right:14px; font-family:var(--mono); font-size:11px; color:var(--ink3); }
-.bcard2 .cpri.p0 { background:var(--dangerbg); color:var(--danger); font-size:9.5px; padding:1px 7px; border-radius:4px; top:11px; }
+.bcard2 .cpri.p0 { background:var(--dangerbg); color:var(--danger); font-size:10px; padding:1px 7px; border-radius:4px; top:11px; }
 .bcard2 .ct { font-size:12px; font-weight:500; margin-top:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .bcard2 > .pill { position:absolute; left:14px; bottom:10px; }
 .newdraft { display:inline-flex; align-items:center; height:26px; padding:0 11px; border-radius:13px;
@@ -329,14 +329,14 @@ a.gear { text-decoration:none; }
 .tlwho { height:30px; display:flex; align-items:center; font-size:11px; font-weight:500; width:64px; color:var(--ink2); }
 .tlscroll { flex:1; overflow-x:auto; min-width:0; padding-bottom:6px; }
 .tlaxis { position:relative; height:20px; }
-.tltick { position:absolute; top:2px; transform:translateX(-100%); font-family:var(--mono); font-size:9px; color:var(--ink3); }
+.tltick { position:absolute; top:2px; transform:translateX(-100%); font-family:var(--mono); font-size:10px; color:var(--ink3); }
 .tllane { position:relative; height:22px; margin:4px 0; background:var(--sect); border-radius:6px;
   box-shadow:inset 0 1px 2px var(--groove-soft); } /* 轨道凹槽 */
 .tlseg { position:absolute; top:3px; height:16px; border-radius:5px; opacity:.85; cursor:pointer;
   box-shadow:inset 0 1px 0 var(--edge-hl-soft); } /* 段条上缘受光，给"实体条"质感 */
 .tlseg:hover { opacity:1; }
 .tlseglb { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-  font-size:9px; font-style:normal; font-weight:600; color:rgba(0,0,0,.66); pointer-events:none; overflow:hidden; }
+  font-size:10px; font-style:normal; font-weight:600; color:rgba(0,0,0,.66); pointer-events:none; overflow:hidden; }
 .tlseg.on { outline:1.5px solid var(--ink); }
 .tlnow { position:absolute; top:0; width:0; border-left:1.5px dashed var(--danger); pointer-events:none; }
 
@@ -350,11 +350,11 @@ a.gear { text-decoration:none; }
 .fl-col { position:absolute; top:0; bottom:0; border-left:1px dashed var(--line); }
 .fl-head { position:absolute; top:0; text-align:center; cursor:help; }
 .fl-head b { font-size:13px; }
-.fl-head .sn { display:block; font-size:10px; color:var(--ink3); font-weight:400; }
+.fl-head .sn { display:block; font-size:10.5px; color:var(--ink3); font-weight:400; }
 .fl-lane { position:absolute; left:0; right:0; border-top:1px solid var(--line); }
 .fl-lab { position:absolute; left:0; font-size:11px; font-weight:700; color:var(--ink2); background:var(--sect);
   padding:3px 10px; border-radius:8px; transform:translateY(8px); display:flex; gap:8px; align-items:center; z-index:3; }
-.fl-lab .lst { font-family:var(--mono); font-size:9px; font-weight:500; padding:1px 7px; border-radius:999px; background:var(--chip); color:var(--ink2); }
+.fl-lab .lst { font-family:var(--mono); font-size:10px; font-weight:500; padding:1px 7px; border-radius:999px; background:var(--chip); color:var(--ink2); }
 .fl-lab .lst.lag { background:var(--gatebg); color:var(--gatetx); border:1px solid var(--gateln); }
 .fl-lab .lst.lead { background:var(--okbg); color:var(--ok); }
 .fl-node { position:absolute; width:146px; height:54px; background:var(--card); border:1px solid var(--line); border-radius:10px;
@@ -365,8 +365,8 @@ a.gear { text-decoration:none; }
 .fl-node .nid { font-family:var(--mono); font-size:10px; color:var(--ink3); line-height:1.3; }
 /* 标题右缘给工时角标留安全区（padding-right），省略号在撞上角标前截断；行高收紧防纵向溢出 */
 .fl-node .nt { font-size:11.5px; font-weight:500; line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; padding-right:26px; }
-.fl-node .nst { position:absolute; top:6px; right:8px; font-size:9px; padding:1px 7px; border-radius:999px; background:var(--chip); color:var(--ink2); }
-.fl-node .nh { position:absolute; bottom:5px; right:9px; font-family:var(--mono); font-size:9px; color:var(--ink3); }
+.fl-node .nst { position:absolute; top:6px; right:8px; font-size:10px; padding:1px 7px; border-radius:999px; background:var(--chip); color:var(--ink2); }
+.fl-node .nh { position:absolute; bottom:5px; right:9px; font-family:var(--mono); font-size:10px; color:var(--ink3); }
 .fl-node:hover { box-shadow:var(--shadow-md); border-color:var(--ink3); z-index:5; } /* 不上浮：卡动线不动=连线对不上（用户裁定） */
 .fl-node.done { opacity:.35; }
 .fl-node.doing { border-color:var(--accent); }
@@ -472,7 +472,7 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .arow2 .rgt .bar { margin-top:10px; height:6px; background:var(--sect); border-radius:3px; overflow:hidden; }
 .arow2 .rgt .bar i { display:block; height:100%; background:var(--accent); }
 .arow2 .rgt .bar i.rev { background:var(--ok); }
-.arow2 .rgt .cap { font-family:var(--mono); font-size:9.5px; color:var(--ink3); margin-top:4px; }
+.arow2 .rgt .cap { font-family:var(--mono); font-size:10px; color:var(--ink3); margin-top:4px; }
 .arow2 .pullbtn { position:absolute; right:40px; top:46px; }
 .logcard { border-radius:14px; padding:18px 24px; }
 
@@ -527,7 +527,7 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .mwrap .mback { position:fixed; inset:0; background:var(--mask); z-index:44; }
 .mwrap .modal2 { z-index:45; width:460px; padding:24px 28px; }
 .artcard .an { font-size:13px; font-weight:500; margin-top:12px; }
-.artcard .ac { font-family:var(--mono); font-size:9.5px; color:var(--ink3); margin-top:2px; }
+.artcard .ac { font-family:var(--mono); font-size:10px; color:var(--ink3); margin-top:2px; }
 .emptycard { background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px 26px; margin-top:20px; }
 .emptycard h5 { margin:0 0 8px; font-size:13px; color:var(--ink2); }
 .emptycard p { margin:0; font-size:12px; color:var(--ink3); }
@@ -545,7 +545,7 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .rp-days { display:flex; gap:8px; align-items:flex-end; min-height:80px; padding-top:6px; }
 .rp-day { display:flex; flex-direction:column; align-items:center; gap:4px; }
 .rp-day i { display:block; width:18px; border-radius:4px 4px 0 0; background:linear-gradient(180deg, var(--bar-to), var(--bar-from)); }
-.rp-day span { font-family:var(--mono); font-size:9px; color:var(--ink3); }
+.rp-day span { font-family:var(--mono); font-size:10px; color:var(--ink3); }
 
 /* ===== P6 参数与额度 ===== */
 .p6grid { display:grid; grid-template-columns:680fr 636fr; gap:40px; margin-top:24px; align-items:start; }

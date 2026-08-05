@@ -279,14 +279,13 @@ function gatebarHtml(g) {
   const lockNote = g && (g.locks.codex.locked || g.locks.claude.locked)
     ? `<span class="err" style="font-size:11px;font-weight:500">●锁${esc((g.locks.codex.locked ? g.locks.codex : g.locks.claude).resetAt || '')} 解冻</span>` : '';
   return `<div class="gatebar2 card">
-    <div class="gsec"><span class="glbl">暂停闸门</span><span class="gv"><span class="dot" style="${paused ? 'background:var(--danger)' : ''}"></span>
-      <b style="font-size:13px">${g ? (paused ? '已暂停' : '运行中') : '查询中'}</b>
-      <button class="btn h32" style="height:28px" onclick="togglePause(${g ? !g.paused.global : true})" ${g ? '' : 'disabled'}>${paused ? '恢复' : '暂停'}</button></span></div>
+    <div class="gsec"><span class="glbl">派发闸</span><span class="gv"><span class="dot" style="${paused ? 'background:var(--danger)' : ''}"></span>
+      <b style="font-size:13px">${g ? (paused ? '已合闸 · 不派新单' : '开闸派发中') : '查询中'}</b>
+      <button class="btn h32" style="height:28px" onclick="togglePause(${g ? !g.paused.global : true})" ${g ? '' : 'disabled'}>${paused ? '开闸' : '合闸'}</button></span></div>
     <div class="vdiv"></div>
     <div class="gsec"><span class="glbl">额度锁</span><span class="gv"><span class="mono" style="font-size:11px;color:var(--ink2)">codex</span> ${mini(g && g.locks.codex)}
       <span class="mono" style="font-size:11px;color:var(--ink2);margin-left:10px">claude</span> ${mini(g && g.locks.claude)} ${lockNote}</span></div>
-    <div class="backlog" title="${g && g.推荐 ? esc(g.推荐.原因.join('；')) : ''}"><span class="glbl">推荐在途</span><br/><b>${g && g.推荐 ? `${g.推荐.当前} / 推荐 ${g.推荐.推荐}` : '— / —'}</b></div>
-    <div class="backlog" style="margin-left:24px"><span class="glbl">待验收积压</span><br/><b id="backlogN">— / —</b></div></div>`;
+    <div class="backlog" style="margin-left:24px"><span class="glbl">待验收积压</span><br/><b id="backlogN">— / —</b></div></div>`; // 推荐在途已随拉取制退役（0.24.7 视图清仓）
 }
 window.togglePause = async (v) => { await post('/api/gate/pause', { scope: 'global', value: v }); gateCache = null; route(); };
 // D43 批量投池：当前项目语境的待投整批释放（人闸=这一次确认）
