@@ -45,11 +45,15 @@ function pickModel(cfg, kind, agentCfg, poolName, 职能) {
   return (agentCfg && agentCfg.模型) || (m.职能覆盖 && 职能 && m.职能覆盖[职能]) || m[poolName + '默认'] || '';
 }
 
-// ---- 编辑器占用监视（0.20.2）：UnityLockfile 在 + 本机有 Unity 进程 = 制作人在用编辑器。
-// 孤儿锁（进程已死）不算占用——enginectl 侧会自愈清除。探测结果 5s 缓存防 tasklist 刷屏。 ----
+// ---- 编辑器锁（H64，2026-08-05 制作人拍板）：自动探测误报家族退役（agent 自己的 batch 测试
+// 曾反复触发占用挂起）。制作人开 Unity 前在监制台手动关锁=声明验收；不关锁一律视为编辑器未开。
+// 探测仅服务「用完自动开锁」：锁关后见过编辑器、随后连续两拍探不到 → 自动开锁恢复派发。 ----
 let editorProbeCache = { at: 0, busy: new Set() };
-let editorBusyLast = new Set();
-function editorBusyProjects(cfg) {
+let editorSeenPrevTick = new Set();
+function manualLockedProjects(root) {
+  try { return new Set(Object.keys(require('./core/state').read(root).编辑器锁 || {})); } catch { return new Set(); }
+}
+function editorDetect(cfg) { // 非 batch 判定不可靠（CIM 竞态），此处只作开锁参考，不作挂起依据
   if (Date.now() - editorProbeCache.at < 5000) return editorProbeCache.busy;
   const busy = new Set();
   const reg = (cfg.项目 && cfg.项目.注册) || {};
@@ -61,10 +65,23 @@ function editorBusyProjects(cfg) {
   editorProbeCache = { at: Date.now(), busy };
   return busy;
 }
-function reportEditorBusy(root, busy) {
-  for (const name of busy) if (!editorBusyLast.has(name)) { journal.append(root, `编辑器占用 ${name}：涉该项目派发挂起（关编辑器自动恢复）`); inbox.post(root, '常', '编辑器占用', `${name} 派发挂起`); }
-  for (const name of editorBusyLast) if (!busy.has(name)) journal.append(root, `编辑器占用解除 ${name}：派发恢复`);
-  editorBusyLast = new Set(busy);
+function autoUnlockTick(root, cfg) {
+  const state = require('./core/state');
+  const locks = (state.read(root) || {}).编辑器锁 || {};
+  const names = Object.keys(locks);
+  if (!names.length) { editorSeenPrevTick = new Set(); return; }
+  const seen = editorDetect(cfg);
+  for (const name of names) {
+    const L = locks[name] || {};
+    if (seen.has(name)) {
+      if (!L.见过编辑器) state.update(root, (st) => { if (st.编辑器锁 && st.编辑器锁[name]) st.编辑器锁[name].见过编辑器 = true; });
+    } else if (L.见过编辑器 && !editorSeenPrevTick.has(name)) {
+      state.update(root, (st) => { if (st.编辑器锁) delete st.编辑器锁[name]; });
+      journal.append(root, `编辑器锁自动开锁 ${name}：编辑器已退出（H64），派发恢复`);
+      inbox.post(root, '常', '编辑器锁', `${name} 验收结束自动开锁，派发恢复`);
+    }
+  }
+  editorSeenPrevTick = seen;
 }
 
 // ---- 实弹 CLI 定位：exe 的 GUI 进程 PATH 不全（探针实证），按候选绝对路径解析 ----
@@ -430,11 +447,35 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     } else entry.tail = out.replace(/\s+/g, ' ').trim().slice(-300);
   });
   child.stderr.on('data', (d) => { errout += d; if (errout.length > 20000) errout = errout.slice(-10000); });
+  // H63 软超时（2026-08-05 制作人拍板：不到点即杀，盯进程判余量）：闸到点先验尸——
+  // 尾巴仍在动或回执已落盘 → 续 10 分钟再查；进展停滞才处决。硬顶=闸×3（跑飞保险）。
   const timeoutMs = (rc.执行超时分钟 ?? 30) * 60000;
-  const killer = setTimeout(() => { // 超时树杀（中台同款）：整棵进程树掐掉再标失败
+  const hardMs = timeoutMs * 3;
+  const spawnAt = Date.now();
+  let lastTailSnap = null;
+  let killer;
+  const checkDeadline = () => {
+    if (!running.has(agentId)) return; // 已收场
+    const elapsed = Date.now() - spawnAt;
+    const rp0 = path.join(root, '回执', `${t.id}.md`);
+    const receiptFresh = (() => { try { return fs.statSync(rp0).mtimeMs > spawnAt; } catch { return false; } })();
+    const tailNow = entry.tail || '';
+    const wasFirst = lastTailSnap === null; // 首拍无对照快照：给一次续命建立基线
+    const progressing = !wasFirst && tailNow !== lastTailSnap;
+    lastTailSnap = tailNow;
+    if (elapsed < hardMs && (progressing || receiptFresh || wasFirst)) {
+      journal.append(root, `宽限 ${t.id}：闸到点但${receiptFresh ? '回执已在写' : '仍在进展'}（H63 验尸续命），续 10 分钟（已跑 ${Math.round(elapsed / 60000)} 分钟）`);
+      try { require('./pm/ledger').event(root, '宽限', { 单: t.id, 已跑分: Math.round(elapsed / 60000) }); } catch { /* 不阻塞 */ }
+      killer = setTimeout(checkDeadline, 10 * 60000);
+      if (killer.unref) killer.unref();
+      return;
+    }
     try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch { /* 尽力 */ }
-    failLocal(`执行超时 ${rc.执行超时分钟 ?? 30} 分钟，已树杀`);
-  }, timeoutMs);
+    failLocal(elapsed >= hardMs
+      ? `执行超硬顶 ${Math.round(hardMs / 60000)} 分钟，已树杀（H63 天花板）`
+      : `执行超时且进展停滞（尾巴 10 分钟未动），已树杀（H63 验尸不过）`);
+  };
+  killer = setTimeout(checkDeadline, timeoutMs);
   if (killer.unref) killer.unref();
   child.on('error', (e) => { clearTimeout(killer); failLocal('CLI 错误：' + e.message); });
   child.on('close', (code) => {
@@ -489,14 +530,14 @@ async function tick(root, cfg, opts = {}) {
       // 编辑器占用监视（用户提议，0.20.2）：制作人开着 Unity 编辑器时该项目的派发挂起，
       // 关编辑器下个周期自动恢复——agent 与人抢工程锁的对撞从派发源头消除（TK-62 超时案）。
       const readyAll = dispatch.readySet(root, pool.criticalSet(root));
-      const busyProjects = editorBusyProjects(cfg);
+      autoUnlockTick(root, cfg); // H64：锁关期间盯编辑器退出，自动开锁
+      const busyProjects = manualLockedProjects(root);
       const ready = readyAll.filter((r2) => {
         const t2 = store.find(root, r2.id);
         const pj = t2 && projectPath(cfg, t2);
-        if (pj && busyProjects.has(pj.name)) { result.拒因.push(`${r2.id} 挂起：项目 ${pj.name} 编辑器占用中`); return false; }
+        if (pj && busyProjects.has(pj.name)) { result.拒因.push(`${r2.id} 挂起：项目 ${pj.name} 编辑器锁关（制作人验收中）`); return false; }
         return true;
       });
-      reportEditorBusy(root, busyProjects);
       const picks = dispatch.pickNext(cfg, ready, runningByPool, gatesInfo, ledger.并发上限);
       for (const p of picks) {
         const t0 = store.find(root, p.id);
@@ -595,7 +636,8 @@ function status(root, cfg) {
     间隔秒: (cfg.执行器 || {}).间隔秒 ?? 15,
     执行中: [...running.entries()].map(([agent, e]) => ({ agent, id: e.id, kind: e.kind, startedAt: e.startedAt, tail: e.tail || null })),
     执行失败数: store.list(root, '执行失败').length,
-    编辑器占用: [...editorBusyProjects(cfg)],
+    编辑器占用: [...manualLockedProjects(root)], // H64：口径=手动锁（自动探测不再作挂起依据）
+    编辑器锁: (() => { try { return require('./core/state').read(root).编辑器锁 || {}; } catch { return {}; } })(),
     上轮: lastTick,
   };
 }

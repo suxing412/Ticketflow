@@ -120,6 +120,9 @@ async function viewHub() {
     const [run, g] = await Promise.all([api('/api/runner'), api('/api/gates')]);
     const el = $('hub-run');
     if (el) el.innerHTML = `<i class="${dotCls(run)}"></i><span style="font-size:14px;font-weight:500">${run.运行 ? (run.试跑 ? '试跑运行中' : '实弹运行中') : '已停'}</span>`;
+    const lk = $('hub-lock'); // H64 编辑器锁：关锁=我要开 Unity 验收（派发挂起）；开锁自动（编辑器退出）或手动
+    if (lk) { const locked = run.编辑器占用 && run.编辑器占用.length;
+      lk.innerHTML = `<button class="btn h32 ${locked ? 'accent' : ''}" onclick="editorLock(${locked ? 'false' : 'true'})" title="开 Unity 验收前先关锁；用完编辑器退出会自动开锁">${locked ? '🔒 验收中 · 点击开锁' : '🔓 开 Unity 前点我关锁'}</button>`; }
     setNum($('hub-cx'), g.locks.codex.fivePct != null ? g.locks.codex.fivePct + '%' : '—', 'num ' + (g.locks.codex.locked ? 'err' : 'okc'));
     setNum($('hub-cl'), g.locks.claude.fivePct != null ? g.locks.claude.fivePct + '%' : '—', 'num ' + (g.locks.claude.locked ? 'err' : 'dim'));
   } catch { /* 保持占位 */ } }, 0);
@@ -138,7 +141,8 @@ async function viewHub() {
       <div class="grp"><span class="lbl">执行器</span><span class="num" id="hub-run" style="font-size:14px">—</span></div><div class="vdiv"></div>
       <div class="grp pool"><span class="lbl">codex 池</span><span class="num dim" id="hub-cx">—</span></div><div class="vdiv"></div>
       <div class="grp pool"><span class="lbl">claude 池</span><span class="num dim" id="hub-cl">—</span></div><div class="vdiv"></div>
-      <div class="grp pool"><span class="lbl">环境</span><span class="num dim" id="hub-env" title="全链路自检">—</span></div>
+      <div class="grp pool"><span class="lbl">环境</span><span class="num dim" id="hub-env" title="全链路自检">—</span></div><div class="vdiv"></div>
+      <div class="grp" id="hub-lock">—</div>
       <div class="spacer"></div><span class="subnote">需你处理的项目卡会亮红胶囊</span></div>
     <div class="hubgrid">${cards}
       <a class="hubcard add card r16" href="#/proj-new"><span>＋ 注册新项目</span><span class="subnote">一份监制台管所有项目——注册即接管</span></a></div>`;
@@ -1698,6 +1702,13 @@ async function viewRelay() {
       <div style="margin-top:12px;max-height:46vh;overflow-y:auto">${feedFlow}</div></div>
   </div>`;
 }
+// H64 编辑器锁开关（默认项目）
+window.editorLock = async (关) => {
+  const r = await post('/api/editor-lock', { 关 });
+  if (!r.ok) return toast(r.error || '失败');
+  toast(关 ? '已关锁：派发挂起，放心开 Unity 验收' : '已开锁：派发恢复');
+  route();
+};
 const markIn = (key) => { if (window._lastViewKey !== key) { const v = $('view') || $('app').firstElementChild; if (v) v.classList.add('vin'); } window._lastViewKey = key; };
 async function route() {
   const h = location.hash.replace(/^#\//, '');

@@ -648,6 +648,19 @@ app.get('/api/gates', async (req, res) => {
     res.json({ paused: require('./lib/core/state').read(ROOT).paused, locks: { codex: locks.codex, claude: locks.claude }, 推荐: rec });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// 编辑器锁（H64）：制作人开 Unity 前手动关锁=声明验收，派发挂起；用完编辑器退出自动开锁。
+app.post('/api/editor-lock', (req, res) => {
+  if (!ready(res)) return;
+  const { 项目, 关 } = req.body || {};
+  const name = 项目 || (cfg.项目 && cfg.项目.默认) || 'TK';
+  require('./lib/core/state').update(ROOT, (s) => {
+    s.编辑器锁 = s.编辑器锁 || {};
+    if (关) s.编辑器锁[name] = { 关: true, 关时: new Date().toISOString(), 见过编辑器: false };
+    else delete s.编辑器锁[name];
+  });
+  journal.append(ROOT, `编辑器锁 ${name} → ${关 ? '关（制作人要开 Unity 验收，派发挂起）' : '开（手动解锁，派发恢复）'}`);
+  res.json({ ok: true, 编辑器锁: require('./lib/core/state').read(ROOT).编辑器锁 || {} });
+});
 app.post('/api/gate/pause', (req, res) => {
   if (!ready(res)) return;
   const { scope, value } = req.body || {};
