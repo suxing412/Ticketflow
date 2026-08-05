@@ -242,7 +242,26 @@ function prepareReworkDraft(root, t, verdictTail) {
   } catch (e) { journal.append(root, `返工草稿预生成失败（${t.id}）：${e.message}`); }
 }
 
-const JUDGE_KINDS = new Set(['质检', '代核', '代裁']);
+// 两检初检提示词（H67）：只核格式与规范，不判内容质量——那是深检（opus）的事
+function buildPrecheckPrompt(root, t, receiptPath) {
+  let receipt = '';
+  try { receipt = fs.readFileSync(receiptPath, 'utf8'); } catch { /* 无回执也初检（本身就是缺项） */ }
+  return [
+    '你是单流的「两检初检」环节：只核对回执的格式与规范，不评价内容质量与技术对错。',
+    '逐项核对（缺一项记一条缺项）：',
+    '① 存在「自测结果」类章节，且对工单每条验收标准逐条给出 ✓/✗ 判定',
+    '② 存在「实际消耗」：用时 + token 双报（缺任一即缺项）',
+    '③ 存在「异议」章节（内容可为"无"）',
+    '④ 禁语检查：出现 "In progress" / "Waiting" / 「跑完后补」类字样 = 空壳标志，直接缺项',
+    '⑤ 验收标准若要求具体数字（阈值/计数/秒数），回执有对应的具体数字（不必核对数字对错，只核存在）',
+    '⑥ 工单 frontmatter 有 返修轮 时，回执开头有「相对上轮改了什么」说明',
+    '输出：一行结论 + 一个 ```json 代码块：{"初检":"过"或"不过","缺项":["…"]}（无缺项时空数组，"过"）。',
+    '', '=== 工单 ===', (() => { try { return fs.readFileSync(t.file, 'utf8').slice(0, 5000); } catch { return '（读取失败）'; } })(),
+    '', '=== 回执 ===', receipt.slice(0, 12000) || '（回执文件不存在——这本身就是缺项）',
+  ].join(String.fromCharCode(10));
+}
+
+const JUDGE_KINDS = new Set(['质检', '代核', '代裁', '初检']);
 function settleClose(kind, code, out, errout, ticketId, finishOk, failLocal) {
   const text = String(out).trim();
   if (code !== 0) {
@@ -262,6 +281,12 @@ function settleClose(kind, code, out, errout, ticketId, finishOk, failLocal) {
     return;
   }
   const tail = text.slice(-8000);
+  if (kind === '初检') { // H67：初检结论必须是机器可读 JSON，解析失败按判官失败重试
+    let v = null;
+    try { v = JSON.parse((text.match(/```json\s*([\s\S]*?)```/) || [])[1]); } catch { /* 下方兜底 */ }
+    if (!v || !['过', '不过'].includes(v.初检)) { failLocal('初检输出不可解析（需 ```json {"初检":"过|不过","缺项":[]}```）——按判官失败重试'); return; }
+    return finishOk(JSON.stringify(v), v.初检 === '过');
+  }
   // 代核结论机器可读行：找不到"结论：通过"一律按不过处理（保守，不误自动完成）
   if (kind === '代核') return finishOk(tail, /结论[:：]\s*通过/.test(tail));
   if (kind === '质检') {
@@ -318,6 +343,18 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       } else {
         journal.append(root, `委托代裁 ${t.id} → 上呈：留待定夺等你裁（${give ? '方向缺失' : '裁判判断需制作人裁量'}）`);
       }
+    } else if (kind === '初检') { // H67 两检制第一道：格式与规范
+      if (!cur || cur.state !== '待验收') return;
+      let v = {}; try { v = JSON.parse(note); } catch { /* finishOk 已保证可解析 */ }
+      const 缺 = (v.缺项 || []).slice(0, 10);
+      const rp0 = path.join(root, '回执', `${t.id}.md`);
+      try { fs.appendFileSync(rp0, `\n\n## 两检初检（${(cfg.执行器 && cfg.执行器.两检 && cfg.执行器.两检.模型) || 'deepseek-v4-flash'}）\n结论：${v.初检}${缺.length ? '\n缺项：' + 缺.join('；') : ''}\n`, 'utf8'); } catch { /* 不阻塞 */ }
+      store.update(root, t.id, (fm) => { fm.初检 = { 结论: v.初检, ...(缺.length ? { 缺项: 缺 } : {}), 时间: new Date().toISOString() }; delete fm.初检失败次数; });
+      if (verdict) journal.append(root, `两检初检过 ${t.id} → 进深检（opus 内容质量）`);
+      else {
+        journal.append(root, `两检初检不过 ${t.id}：${缺.join('；').slice(0, 120)}——留待验收（返修或人工裁），未烧深检`);
+        inbox.post(root, '常', '初检不过', `${t.id} 格式规范缺项：${缺.join('；').slice(0, 150)}`, { 单号: t.id });
+      }
     } else if (kind === '代核') {
       if (!cur || cur.state !== '待验收') return;
       // 核验报告追加进回执；通过→自动验收完成（D11 委托代劳），不过→留在待验收等用户裁
@@ -361,11 +398,11 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   const failLocalInner = (why) => { // D31：失败入位为纯本地操作，任何网络状况下都能落位
     running.delete(agentId);
     const cap = rc.判官重试上限 ?? 3; // 判官类（质检/代核/代裁）失败重试封顶，可配
-    if (kind === '代核' || kind === '代裁') {
+    if (kind === '代核' || kind === '代裁' || kind === '初检') {
       // 判官失败不动单不盖章（TK-21：空输出/网络抖动都走这里）：计失败次数，
       // 封顶前 tick 下轮自动重试，封顶后停拉等人工（清计数字段即可重启重审）
-      const 场 = kind === '代核' ? '待验收' : '待定夺';
-      const field = kind === '代核' ? '代核失败次数' : '代裁失败次数';
+      const 场 = kind === '代裁' ? '待定夺' : '待验收';
+      const field = kind === '代核' ? '代核失败次数' : kind === '初检' ? '初检失败次数' : '代裁失败次数';
       const cur0 = store.find(root, t.id);
       if (cur0 && cur0.state === 场) {
         const n = (Number(cur0.fm[field]) || 0) + 1;
@@ -412,15 +449,18 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   // ---- 实弹（D32）：真调无头 CLI。经济后果由 实弹解锁 开关把门（server 侧已拦） ----
   const proj = projectPath(cfg, t);
   if (!proj) { failLocal('项目未注册或路径不存在（config.项目）'); return true; }
-  const poolName = t.fm.执行池 || 'claude';
+  // H67 两检制：初检走便宜池（默认 deepseek-flash），只核格式与规范；深检（代核）保持 opus
+  const 两检cfg = (cfg.执行器 || {}).两检 || {};
+  const poolName = kind === '初检' ? (两检cfg.池 || 'deepseek') : (t.fm.执行池 || 'claude');
   const agentCfg = (cfg.agents || []).find((a) => a.id === agentId);
-  const model = pickModel(cfg, kind, agentCfg, poolName, t.fm.职能);
-  const compat = kind === '执行' && cfg.执行池 && cfg.执行池[poolName] && cfg.执行池[poolName].兼容;
-  const { cmd, args, stream } = resolveCli(kind === '执行' ? poolName : 'claude', compat ? (compat.模型 || model) : model, (cfg.执行器 || {}).放行工具); // 质检/代核都走 claude
+  const model = kind === '初检' ? (两检cfg.模型 || 'deepseek-v4-flash') : pickModel(cfg, kind, agentCfg, poolName, t.fm.职能);
+  const compat = (kind === '执行' || kind === '初检') && cfg.执行池 && cfg.执行池[poolName] && cfg.执行池[poolName].兼容;
+  const { cmd, args, stream } = resolveCli((kind === '执行' || kind === '初检') ? poolName : 'claude', compat ? (kind === '初检' ? model : (compat.模型 || model)) : model, (cfg.执行器 || {}).放行工具); // 质检/代核/代裁走 claude
   const receiptPath = path.join(root, '回执', `${t.id}.md`);
   const prompt = kind === '质检' ? buildQaPrompt(root, t, proj, receiptPath)
     : kind === '代核' ? buildAuditPrompt(root, t, proj, receiptPath)
     : kind === '代裁' ? buildArbPrompt(root, t, proj, receiptPath)
+    : kind === '初检' ? buildPrecheckPrompt(root, t, receiptPath)
     : buildPrompt(root, t, proj);
   let child;
   try {
@@ -587,9 +627,20 @@ async function tick(root, cfg, opts = {}) {
   // ④⑤ 判官失败封顶（TK-21）：失败计数到上限的单不再自动拉，等人工（清计数字段可重审）
   const 判官上限 = (cfg.执行器 || {}).判官重试上限 ?? 3;
 
-  // ④ 委托代核（D34）：待验收且验收方式=委托、未核过的单，Claude 代劳核验（一次一张，保守）
+  // ④a 两检制·初检（H67，2026-08-05 用户拍板）：便宜模型先核格式与规范（回执契约/禁语/报数存在性），
+  // 不过直接打回不烧 opus；过了才进 ④b 深检。开关与池在 config.执行器.两检。
+  const 两检 = (cfg.执行器 || {}).两检 || {};
+  const 两检开 = 两检.开 !== false && (cfg.执行池 || {})[两检.池 || 'deepseek'];
+  if (两检开 && !running.has('两检初检')) {
+    const t = store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !x.fm.初检 && !x.fm.代核
+      && (Number(x.fm.初检失败次数) || 0) < 判官上限 && !busyTickets().has(x.id));
+    if (t && await startWork(root, cfg, t, '两检初检', '初检', opts)) (result.初检 = result.初检 || []).push(t.id);
+  }
+
+  // ④b 委托代核（D34 / H67 深检）：初检过（或两检关）的委托单，opus 核内容质量（一次一张，保守）
   if (!running.has('委托代核')) {
     const t = store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !x.fm.代核
+      && (!两检开 || (x.fm.初检 && x.fm.初检.结论 === '过'))
       && (Number(x.fm.代核失败次数) || 0) < 判官上限 && !busyTickets().has(x.id));
     if (t && await startWork(root, cfg, t, '委托代核', '代核', opts)) (result.代核 = result.代核 || []).push(t.id);
   }

@@ -141,6 +141,7 @@ function 返修(root, id, 说明) {
   if (!['执行失败', '待验收'].includes(t.state)) return { ok: false, error: `只有执行失败/待验收单可返修（当前 ${t.state}）` };
   const r = store.move(root, id, t.state, '草稿', (fm) => {
     delete fm.主办; delete fm.领单时间; delete fm.交付时间; fm.放行 = false;
+    delete fm.代核; delete fm.初检; delete fm.质检人; delete fm.代核失败次数; delete fm.初检失败次数; // 下一轮重新过检（H67）
     fm.返修轮 = (fm.返修轮 || 0) + 1;
   }, nowIso());
   if (r.ok) {
