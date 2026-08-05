@@ -1278,7 +1278,7 @@ async function viewDraft(editId, parent) {
       <div class="f-sec"><div class="sh">验收标准 · 要点清单</div><textarea id="d-s3" rows="3" placeholder="□ 要点一　□ 要点二">${esc(sec.验收标准)}</textarea></div>
       <div class="f-sec"><div class="sh">完工要求</div><textarea id="d-s4" rows="2">${esc(sec.完工要求)}</textarea></div>
       <div class="p7foot"><button class="btn h44" onclick="dSave(false)">存为待投</button>
-        <button class="btn accent h44" onclick="dSave(true)">投池（释放）</button></div></div></div>`;
+        <button class="btn accent h44" onclick="dSave(true)">定稿并放行</button></div></div></div>`;
 }
 // D43：选阶段时，验收标准为空则自动带入 阶段标准.md 里该职能该阶段的口径
 window.dStgFill = () => {
