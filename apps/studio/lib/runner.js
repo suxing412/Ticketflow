@@ -413,7 +413,12 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
         const rp0 = path.join(root, '回执', `${t.id}.md`);
         try { fs.writeFileSync(rp0, String(note), 'utf8'); } catch { /* 尽力 */ }
         const 轮 = (cur.fm.评估回呈轮 || 0) + 1;
-        store.move(root, t.id, '在途', '池', (fm) => { delete fm.主办; delete fm.领单时间; fm.放行 = false; fm.评估回呈轮 = 轮; }, new Date().toISOString());
+        // 施工令-012：回呈原因同样落库（优化-D 通则）——本轮回池，若后续再走三振/失败分诊进待定夺，
+        // 那两处会用各自的原因覆盖；在此之前详情页读到的就是这条真原因，不用 grep 流水猜。
+        store.move(root, t.id, '在途', '池', (fm) => {
+          delete fm.主办; delete fm.领单时间; fm.放行 = false; fm.评估回呈轮 = 轮;
+          fm.上呈原因 = `评估回呈第 ${轮} 轮：执行会话领单评估判定做不了，回池待项管裁决（H61）`;
+        }, new Date().toISOString());
         journal.append(root, `评估回呈 ${t.id}（第 ${轮} 轮）：执行会话判定做不了，回池待项管裁决（H61）`);
         try { require('./pm/ledger').event(root, '评估回呈', { 单: t.id, 轮 }); } catch { /* 不阻塞 */ }
         if (轮 >= 3) {

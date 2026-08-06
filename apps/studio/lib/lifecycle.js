@@ -8,6 +8,12 @@ const inbox = require('./inbox');
 
 const nowIso = () => new Date().toISOString();
 
+// 上呈原因落库（施工令-012 / 巡礼 P2-3，通则见「优化-D」）：凡是要端到制作人面前当判断依据的
+// 结论，一律在流转时写进 frontmatter，前端只读字段——不再靠 grep 流水回答一个本该有字段的问题。
+// 老病灶：跨月后 journal.readLatest 只读当月文件，原始上呈行整体消失，兜底正则把「滞留告警」
+// 这类噪声行顶上来，卷宗最重要的一栏越拖越准地误导。
+const 记上呈原因 = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+
 function 定稿(root, id) { // 草稿→待投（写好了，攥在手里）
   const t = store.find(root, id);
   if (!t) return { ok: false, error: '不存在' };
@@ -64,7 +70,9 @@ function QA裁定(root, cfg, id, 通过) {
     if (r.ok) journal.append(root, `QA 不过自修 ${id} 第 ${c}/${上限} 轮（质检→在途）`);
     return r;
   }
-  const r = store.move(root, id, '质检', '待定夺', (fm) => { fm.自修次数 = c; }, nowIso());
+  const r = store.move(root, id, '质检', '待定夺', (fm) => {
+    fm.自修次数 = c; fm.上呈原因 = 记上呈原因(`QA 自修 ${c} 轮仍未过（上限 ${上限}）→ 三振上呈，四件套待裁`);
+  }, nowIso());
   if (r.ok) { journal.append(root, `QA 修不好 ${id} → 待定夺（四件套呈你我）`); inbox.post(root, '急', '三振上呈', `${id} QA 修不好，四件套待裁`, { 单号: id }); }
   return r;
 }
@@ -223,7 +231,10 @@ function 失败分诊(root, id, 决定) {
     return r;
   }
   if (决定 === '上呈') {
-    const r = store.move(root, id, '执行失败', '待定夺', null, nowIso());
+    const 因 = String(t.fm.失败原因 || '').trim();
+    const r = store.move(root, id, '执行失败', '待定夺', (fm) => {
+      fm.上呈原因 = 记上呈原因(`失败分诊上呈：执行失败${t.fm.失败次数 ? ` ${t.fm.失败次数} 次` : ''}${因 ? ` · ${因}` : ''}——需你拍板`);
+    }, nowIso());
     if (r.ok) journal.append(root, `失败分诊 ${id}：上呈（执行失败→待定夺 · 需用户拍板）`);
     return r;
   }

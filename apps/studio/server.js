@@ -13,6 +13,7 @@ const life = require('./lib/lifecycle');
 const trace = require('./lib/trace');
 const quota = require('./lib/quota');
 const journal = require('./lib/journal');
+const dialogscan = require('./lib/dialogscan'); // 原生对话框哑弹扫描（施工令-012），/api/env 自检用
 
 const ROOT = config.resolveRoot();
 let cfg = null; let initError = null;
@@ -449,6 +450,15 @@ app.get('/api/env', async (req, res) => {
   if (cfg.项目 && cfg.项目.默认 && !reg[cfg.项目.默认]) lint.push('默认项目未注册');
   协议配置.push(lint.length ? item('config 完整性', lint.some((x) => x.includes('领单会失败')) ? '红' : '黄', lint.join('；'))
     : item('config 完整性', '绿', '职能↔池映射 / 编制 / 默认项目 全部合法'));
+  // 原生对话框扫描（施工令-012 / 巡礼 P1）：prompt/confirm/alert 在 Electron 壳内是哑弹，
+  // 浏览器预览却一切正常——只在浏览器巡礼必漏。换装前的 grep 从此变成开机自检的一项。
+  try {
+    const 前端 = path.join(__dirname, 'public', 'app.js');
+    const hits = dialogscan.scan(fs.readFileSync(前端, 'utf8'), { 文件: 'app.js' });
+    协议配置.push(hits.length
+      ? item('原生对话框扫描', '黄', `Electron 壳内哑弹：${dialogscan.摘要(hits)}——确认门改自绘 ask()，输入框改自绘 askInput()`)
+      : item('原生对话框扫描', '绿', '前端零命中 prompt/confirm/alert（自绘 ask / askInput 家族）'));
+  } catch (e) { 协议配置.push(item('原生对话框扫描', '黄', '前端源码不可读，未能扫描：' + String(e.message).slice(0, 50))); }
 
   // 总灯：有红=阻断；无红有黄=降级；全绿=就绪
   const all = [...运行时, ...凭据额度, ...项目目录, ...协议配置];
@@ -504,6 +514,9 @@ app.get('/api/agents', (req, res) => {
     const 在跑 = [...fl.filter((t) => ['在途', '质检'].includes(t.state) || liveByTicket[t.id]), ...审中].filter((t) => !isParent(t)).map((t) => ({
       主办: t.fm.主办 || '（衔接中）', id: t.id, title: t.fm.title, state: t.state,
       职能: t.fm.职能, 池: t.fm.执行池 || '', 领单时间: t.fm.领单时间 || null, 项目: t.fm.项目 || '',
+      // 建设性①（施工令-012）：有没有执行会话直接下发，前端不再靠「进度.阶段==='领单'」猜。
+      // 更新时间＝进本状态的时刻，无会话卡据此报「已等 N 分钟」。
+      有会话: !!liveByTicket[t.id], 更新时间: t.fm.更新时间 || null,
       环节: (liveByTicket[t.id] || {}).kind || null, 环节起时: (liveByTicket[t.id] || {}).startedAt || null,
       尾: (liveByTicket[t.id] || {}).tail || null,
       进度: 进度Of(t, liveByTicket[t.id] || null), // 施工令-004：卡片不点详情就看得见百分比与阶段

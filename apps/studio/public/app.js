@@ -24,10 +24,16 @@ function pollLoop(guardId, ms, fn) {
 // 执行器状态灯：红呼吸=实弹运行中（H81：运行即实弹）；灰=已停（传状态非装饰）
 function dotCls(r) { return 'dot ' + (r.运行 ? 'on live' : 'off'); }
 // 执行器副标题：运行即实弹（H81），只补一句执行中清单
+// 施工令-012：逐单号清单长度随并发无上界增长，会把参数卡撑破（巡礼 P2-2）——超 3 张收敛成「+N」，
+// 全量清单挂 title 悬停可查（runMetaFull）。
+function runIds(r) { return ((r && r.执行中) || []).map((x) => x.id); }
 function runMeta(r) {
+  const ids = runIds(r);
+  const 清单 = ids.length > 3 ? `${ids.slice(0, 3).join(' / ')} +${ids.length - 3}` : ids.join(' / ');
   return (r.运行 ? '实弹：运行即真调 CLI · 停手闸在单闸' : '已停：不再拉新单')
-    + (r.执行中 && r.执行中.length ? ` · 执行中 ${r.执行中.map((x) => x.id).join(' / ')}` : '');
+    + (清单 ? ` · 执行中 ${清单}` : '');
 }
+function runMetaFull(r) { const ids = runIds(r); return ids.length ? `执行中 ${ids.length} 张：${ids.join(' / ')}` : ''; }
 // 文本变了才写并跳字（轮询下防无谓闪动）
 function setNum(el, text, cls) {
   if (!el) return;
@@ -802,9 +808,23 @@ function 计时Html(p, 环节起时, 领单时间) {
   const est = p && p.预估分钟 ? fmtElapsed(p.预估分钟 * 60000) : null;
   return `${tm(环节起时 || 领单时间, !!(p && p.超时))}${est ? ` / 预估 ${est}` : ' · 无预估（阶段内不插值）'}`;
 }
+// 无会话已等时长（建设性①）：基准取「进本状态的时刻」= 更新时间，回落领单时间。
+// 用更新时间而非领单时间，是因为质检态无会话时领单时间早已过期，报出来的分钟数会失真。
+function 无会话分钟(r) {
+  const t = Date.parse(r.更新时间 || r.领单时间 || '');
+  return Number.isNaN(t) ? null : Math.max(0, Math.round((Date.now() - t) / 60000));
+}
 // 右列内容（百分比+阶段名+计时）：整块可原地重画，活体轮询只换这一块
 function pctHtml(r) {
   const p = r.进度 || {};
+  // 建设性①（施工令-012）：「卡住的单」和「正在跑的单」原先视觉完全同形，只有阶段名一处小字写着
+  // 「衔接中」，制作人得逐张读小字才分得出。无会话态改成一眼自证：阶段名直说、计时行直写已等多久。
+  if (r.有会话 === false) {
+    const n = 无会话分钟(r);
+    return `<div class="pct">${p.百分比 != null ? p.百分比 : '—'}<small>%</small></div>
+      <div class="ar-stage nosess"><span class="dot"></span>无执行会话</div>
+      <div class="ar-timer nosess">${n == null ? '未起会话' : `已等 ${n} 分钟未起会话`}</div>`;
+  }
   return `<div class="pct">${p.百分比 != null ? p.百分比 : '—'}<small>%</small></div>
     <div class="ar-stage ${进度态(p)}"><span class="dot"></span>${esc(p.阶段名 || (r.环节 ? r.环节 + '中' : '衔接中'))}</div>
     <div class="ar-timer">${计时Html(p, r.环节起时, r.领单时间)}</div>`;
@@ -817,8 +837,10 @@ function viewAgentsDispatch(d, all) {
     const avc = 判官 ? 'var(--fn-qa)' : (FNHEX[r.职能] || 'var(--ink3)');
     // 施工令-005：展开区与卡片本体信息重复，已删；整卡点击直达该单详情页（Enter 同效）
     const go = `location.hash='#/t/${esc(r.id)}'`;
-    return `<div class="arow2 card r14" onclick="${go}" tabindex="0" role="button" aria-label="打开工单 ${esc(r.id)} 详情"
-      onkeydown="if(event.key==='Enter'){${go}}" title="点击查看工单详情">
+    const 无会话 = r.有会话 === false; // 建设性①：降饱和 + 虚线边，与真在跑的实心卡一眼可分
+    return `<div class="arow2 card r14${无会话 ? ' noagent' : ''}" id="agc-${esc(r.id)}" onclick="${go}" tabindex="0" role="button"
+      aria-label="打开工单 ${esc(r.id)} 详情${无会话 ? '（在途但无执行会话）' : ''}"
+      onkeydown="if(event.key==='Enter'){${go}}" title="${无会话 ? '在途但无执行会话——点击查看工单详情' : '点击查看工单详情'}">
       <div class="ar-row">
         <div class="av" style="background:color-mix(in srgb, ${avc} 15%, transparent);color:${avc}">${esc(判官 ? p.阶段 : (r.职能 || '').slice(0, 2))}</div>
         <div class="ar-id">
@@ -833,7 +855,8 @@ function viewAgentsDispatch(d, all) {
       ${r.尾 ? `<div class="ar-tail"><b>›</b> ${esc(String(r.尾).slice(-160))}</div>` : ''}
     </div>`;
   }).join('') || '<p class="dim" style="margin:26px 0;text-align:center">当前无在跑执行者 —— 派发制下没有常备军，就绪单一到即拉起，完成即销毁。</p>';
-  const judges = (d.判官 || d.审检 || []).map((j) => `<span class="pill sm ${j.忙 ? 'ok' : 'mut'}">${esc(j.id)}${j.忙 ? ' · 审 ' + esc(j.当前 || '') : ' · 待命'}</span>`).join(' ') || '<span class="dim">（未配置）</span>';
+  // 外项目：席位账号级共享，本项目语境下不列他项目的单号，但也不谎称「待命」（施工令-012）
+  const judges = (d.判官 || d.审检 || []).map((j) => `<span class="pill sm ${j.忙 ? 'ok' : 'mut'}">${esc(j.id)}${j.忙 ? ' · 审 ' + esc(j.当前 || '') : (j.外项目 ? ' · 忙于他项目单' : ' · 待命')}</span>`).join(' ') || '<span class="dim">（未配置）</span>';
   const ready = (d.就绪队列 || []).map((q) => `<span class="pill sm mut mono">${esc(q.id || q)}</span>`).join(' ') || '<span class="dim">空 —— 无就绪待派单</span>';
   // 已跑计时秒级跳动（与领单视图同款：离开视图自动停）
   setTimeout(function tickTm() {
@@ -846,11 +869,12 @@ function viewAgentsDispatch(d, all) {
   // 在跑张数变了才整页重画（新单派发/收工），否则永远原地更新。
   const 在跑数 = (d.在跑 || []).length;
   pollLoop('ag-cards', 15000, async () => {
-    const nd = await api('/api/agents');
+    const nd = agentsScoped(await api('/api/agents'), all); // 与首屏同一道项目闸，否则张数永远对不上→无限整页重画
     if ((nd.在跑 || []).length !== 在跑数) { route(); return; }
     for (const r of (nd.在跑 || [])) {
       const pe = $('agp-' + r.id); if (pe) pe.innerHTML = pctHtml(r);
       const se = $('ags-' + r.id); if (se) se.outerHTML = segbarHtml(r.进度 || {}, 'ags-' + r.id);
+      const ce = $('agc-' + r.id); if (ce) ce.classList.toggle('noagent', r.有会话 === false); // 会话起来了就退出「卡住」形态
     }
   });
   const busyBanner = (d.编辑器占用||[]).length ? `<div class="r14" style="padding:10px 16px;margin-top:16px;background:var(--gatebg);border:1px solid var(--gateln);color:var(--gatetx)"><b>编辑器锁已关（验收中）</b> · 项目 ${d.编辑器占用.map(esc).join('、')} 派发挂起——制作人用完关闭编辑器即自动开锁（H64），或在决策台手动开锁</div>` : '';
@@ -864,10 +888,26 @@ function viewAgentsDispatch(d, all) {
     ${timelineHtml([], all, { byFn: true })}`;
 }
 
+/* D42 项目语境过滤（施工令-012 / 巡礼 P2-1）：在途页原先把 /api/agents 原样交给渲染，
+   他项目工单混进驾驶舱，而同页下方的执行时间轴吃的是过滤后的 all——上半页有、下半页没有。
+   口径与决策台/报表/风格库一致：在跑按单自带的项目章过滤，就绪队列/判官按「在不在本项目盘面」判，
+   保证在途页上下半页同源。轮询回来的数据也走这道闸（否则张数对不上会无限整页重画）。 */
+function agentsScoped(d, all) {
+  const p = projActive();
+  if (!p) return d;
+  const ids = new Set((all || []).map((t) => t.id));
+  const 判官 = (d.判官 || d.审检 || []).map((j) => (j.忙 && j.当前 && !ids.has(j.当前)
+    ? { ...j, 忙: false, 当前: null, 环节: null, 外项目: true } : j));
+  return { ...d,
+    在跑: (d.在跑 || []).filter((r) => (r.项目 || projDefault()) === p),
+    就绪队列: (d.就绪队列 || []).filter((q) => ids.has(q.id || q)),
+    滞留告警: (d.滞留告警 || []).filter((x) => ids.has(x.id)),
+    判官, 审检: undefined };
+}
 async function viewAgents() {
   const [d, { all }] = await Promise.all([api('/api/agents'), loadBoard()]);
   // 0.23：拉取制视图退役——派发制是唯一现实（H49/H56 清仓）
-  return viewAgentsDispatch(d, all);
+  return viewAgentsDispatch(agentsScoped(d, all), all);
 }
 
 /* ===== P4 决策台 ===== */
@@ -1100,7 +1140,7 @@ async function viewParams() {
   // 执行器：派发调度循环的仪表与开关（H49）
   const rcfg = c.执行器 || {};
   const runCards = `<div class="paramcard card" id="run-card"><h4><i class="${dotCls(run)}" id="run-dot"></i>执行器 <span id="run-state">${run.运行 ? '运行中' : '已停'}</span></h4>
-      <p class="pmeta" id="run-meta">${runMeta(run)}</p>
+      <p class="pmeta" id="run-meta" title="${esc(runMetaFull(run))}">${esc(runMeta(run))}</p>
       <div class="runbtn"><button class="btn h32 ${run.运行 ? '' : 'primary'}" id="run-toggle" onclick="runToggle()">${run.运行 ? '停止' : '启动'}</button></div></div>
     ${[['间隔秒', run.间隔秒, 5], ['执行超时分钟', rcfg.执行超时分钟 ?? 30, 5], ['记账间隔分钟', rcfg.记账间隔分钟 ?? 10, 5]].map(([k, v, st]) => `<div class="paramcard card" data-runkey="${k}"><h4>${P6NAMES[k]}</h4><p class="pmeta">${esc(P6META[k].replace('N', v))}</p>
       <div class="stepper"><button onclick="rrStep('${k}',-${st})">−</button><span class="val">${v}</span><button onclick="rrStep('${k}',${st})">＋</button></div></div>`).join('')}
@@ -1173,7 +1213,7 @@ async function viewParams() {
         const dot = $('run-dot'); if (dot) dot.className = dotCls(r);
         const st = $('run-state'); if (st) st.textContent = r.运行 ? '运行中' : '已停';
         const bt = $('run-toggle'); if (bt) { bt.textContent = r.运行 ? '停止' : '启动'; bt.className = 'btn h32' + (r.运行 ? '' : ' primary'); }
-        const meta = $('run-meta'); if (meta) meta.textContent = runMeta(r);
+        const meta = $('run-meta'); if (meta) { meta.textContent = runMeta(r); meta.title = runMetaFull(r); }
       } catch { /* 下轮再试 */ }
       pollRun();
     }, 5000);
@@ -1450,6 +1490,28 @@ function 最新QA摘要(raw, body) {
   };
   return pick(raw) || pick(body) || '';
 }
+/* 待定夺卷宗「上呈原因」取数（施工令-012 / 巡礼 P2-3）。
+   ① fm.上呈原因 是事实源——lifecycle 在流转进待定夺时就落库（优化-D 通则）。
+   ② 只有没有该字段的老单才退回 grep 流水，且先剔噪声行：滞留检查每 30 分钟给滞留单追加一条
+      「滞留告警 X（待定夺 停留 7h…）」，旧的二级正则 /上呈|待定夺/ 正好命中它，把卷宗最重要的
+      一栏顶成误导信息；「待定夺裁决」是裁决结果不是上呈原因，同样排除。
+   ③ 二级兜底收紧为「上呈」或明确的「→ 待定夺」转移行，不再见「待定夺」三字就收。
+   纯函数，无 DOM 依赖——test/escalation.test.js 按下面的标记原样抽出来跑。 */
+// @testable-begin escalReason
+function escalReason(fm, lines, id) {
+  const f = fm || {};
+  const 字段 = String(f.上呈原因 || '').trim();
+  if (字段) return 字段;
+  const 噪声 = /滞留告警|滞留检查|巡检|待定夺裁决|心跳/;
+  const rev = (lines || []).filter((l) => String(l).includes(id) && !噪声.test(l)).reverse();
+  const 上呈行 = rev.find((l) => /修不好|失败分诊|评估回呈|仲裁/.test(l))
+    || rev.find((l) => /上呈|→\s*待定夺/.test(l)) || '';
+  return 上呈行
+    || (f.自修次数 ? `QA 自修 ${f.自修次数} 轮未过 → 三振上呈` : '')
+    || (f.失败原因 ? `执行失败上呈：${String(f.失败原因).slice(0, 120)}` : '')
+    || '（流水与工单里都没记到上呈原因）';
+}
+// @testable-end escalReason
 
 async function viewDetail(id) {
   const d = await api('/api/ticket?id=' + encodeURIComponent(id));
@@ -1500,13 +1562,7 @@ async function viewDetail(id) {
   let escalHtml = '';
   if (d.state === '待定夺') {
     const jl = await api('/api/journal').catch(() => ({ lines: [] }));
-    const mine = (jl.lines || []).filter((l) => l.includes(id));
-    // 先找本单自己的上呈事件（三振/失败分诊/评估回呈/仲裁），找不到再退而求其次收任何带「上呈」的行——
-    // 否则会被战役级「连环异常上呈」这类旁支流水盖住真正的原因（实机取证 2026-08-06）
-    const rev = [...mine].reverse();
-    const 上呈行 = rev.find((l) => /修不好|失败分诊|评估回呈|仲裁/.test(l)) || rev.find((l) => /上呈|待定夺/.test(l)) || '';
-    const 原因 = 上呈行 || (fm.自修次数 ? `QA 自修 ${fm.自修次数} 轮未过 → 三振上呈` : '')
-      || (fm.失败原因 ? `执行失败上呈：${String(fm.失败原因).slice(0, 120)}` : '') || '（流水与工单里都没记到上呈原因）';
+    const 原因 = escalReason(fm, jl.lines || [], id);
     const qa = 最新QA摘要(d.回执 ? d.回执.raw : '', d.body);
     const dirs = String(d.body || '').split(/^## /m).filter((p) => p.startsWith('定夺方向')).reverse();
     const arb = fm.代裁 ? `<span class="pill sm ${fm.代裁.结论 === '给方向' ? 'ok' : 'mut'}">代裁 · ${esc(fm.代裁.结论)}</span>` : '';
@@ -2011,6 +2067,30 @@ window.ask = (msg) => new Promise((res) => {
   ov.querySelector('[data-yes]').focus();
 });
 window.askAct2 = async (a, id, msg) => { if (await ask(msg)) act2(a, id); };
+// 应用内输入层（施工令-012 / 巡礼 P1：Electron 壳内原生 prompt() 与 confirm() 同族哑弹——
+// typeof window.prompt 是 "function"（假在位），真调抛 "prompt() is and will not be supported."，
+// async 调用点里异常沉进 promise rejection，连报错都不给。与 ask() 同一视觉家族，浏览器与 exe 行为一致）
+// 取消（按钮/Esc/点遮罩）一律返回 null，与「输入了空串」区分开，调用方据此中止整条流程。
+window.askInput = (label, def, opts) => new Promise((res) => {
+  const o = opts || {};
+  const ov = document.createElement('div'); ov.className = 'ask-ov';
+  ov.innerHTML = `<div class="ask-card card r16"><p>${esc(label)}</p>
+    <input class="askin${o.password ? '' : ' mono'}" type="${o.password ? 'password' : 'text'}"
+      value="${esc(def == null ? '' : def)}" placeholder="${esc(o.placeholder || '')}"/>
+    ${o.note ? `<p class="asknote">${esc(o.note)}</p>` : ''}
+    <div class="btns" style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+    <button class="btn h36" data-no>取消</button><button class="btn primary h36" data-yes>确认</button></div></div>`;
+  const inp = ov.querySelector('.askin');
+  const done = (v) => { ov.remove(); document.removeEventListener('keydown', onKey); res(v); };
+  const onKey = (e) => { if (e.key === 'Escape') done(null); };
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); done(inp.value); } });
+  ov.addEventListener('click', (e) => { if (e.target === ov) done(null); });
+  ov.querySelector('[data-yes]').onclick = () => done(inp.value);
+  ov.querySelector('[data-no]').onclick = () => done(null);
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(ov);
+  inp.focus(); inp.select();
+});
 
 // H64 编辑器锁开关（默认项目）
 window.editorLock = async (关) => {
@@ -2121,18 +2201,30 @@ setInterval(async () => {
   try { const d = await api('/api/pulse'); if (lastPulse && d.token !== lastPulse) route(); lastPulse = d.token; } catch { /* offline */ }
 }, 3000);
 
-/* 兼容池编辑（0.22.1）：轻量三问式，密钥留空=保留旧值；仅本机端点会拒远程 */
+/* 兼容池编辑（0.22.1）：轻量四问式，密钥留空=保留旧值；仅本机端点会拒远程
+   施工令-012：四次原生 prompt() 换装成自绘 askInput()（巡礼 P1：exe 内彻底死按钮，
+   浏览器预览却完全正常——「预览过、exe 死」的教科书复现）。任何一步取消即整条中止。 */
 window.compatEdit = async (name) => {
-  const 池名 = name || (prompt('池名（小写英文标识，如 kimi / glm / minimax）：') || '').trim();
-  if (!池名) return;
-  const base = (prompt('Anthropic 兼容端点 base URL：', name ? '' : 'https://') || '').trim();
-  const key = (prompt('API 密钥（更新时留空=保留旧值）：') || '').trim();
-  const 模型 = (prompt('模型名（厂商侧模型 ID，留空=CLI 默认）：') || '').trim();
-  const body = { 池名 };
-  if (base && base !== 'https://') body.base = base;
-  if (key) body.key = key;
-  if (模型) body.模型 = 模型;
-  const r = await post('/api/config/compat-pool', body);
-  toast(r.ok ? `兼容池 ${池名} 已保存` : (r.error || '失败'));
-  if (r.ok) { _cfg = null; route(); }
+  try {
+    let 池名 = name;
+    if (!池名) {
+      const v = await askInput('新增兼容池 · 池名（小写英文标识，如 kimi / glm / minimax）：', '', { placeholder: 'kimi' });
+      if (v === null) return;
+      池名 = v.trim();
+    }
+    if (!池名) return toast('池名不能为空');
+    const base = await askInput(`兼容池 ${池名} · Anthropic 兼容端点 base URL：`, name ? '' : 'https://', { placeholder: 'https://api.example.com' });
+    if (base === null) return;
+    const key = await askInput(`兼容池 ${池名} · API 密钥`, '', { password: true, note: '留空 = 保留旧值 · 只存本机 config，界面与远程只显尾四位' });
+    if (key === null) return;
+    const 模型 = await askInput(`兼容池 ${池名} · 模型名（厂商侧模型 ID）`, '', { note: '留空 = 用 CLI 默认模型' });
+    if (模型 === null) return;
+    const body = { 池名 };
+    if (base.trim() && base.trim() !== 'https://') body.base = base.trim();
+    if (key.trim()) body.key = key.trim();
+    if (模型.trim()) body.模型 = 模型.trim();
+    const r = await post('/api/config/compat-pool', body);
+    toast(r.ok ? `兼容池 ${池名} 已保存` : (r.error || '失败'));
+    if (r.ok) { _cfg = null; route(); }
+  } catch (e) { toast((e && e.message) ? String(e.message).slice(0, 120) : '兼容池保存失败'); } // 兜底：异常不再沉进 promise rejection
 };
