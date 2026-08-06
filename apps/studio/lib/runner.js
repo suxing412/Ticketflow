@@ -601,10 +601,17 @@ async function tick(root, cfg, opts = {}) {
         const t0 = store.find(root, p.id);
         if (!t0 || t0.state !== '待投') continue;
         const 主办 = `${t0.fm.职能}·${p.id}`; // 一次性 agent：一人一单一生命周期
-        const mv = store.move(root, p.id, '待投', '在途', (fm) => { fm.主办 = 主办; fm.执行池 = p.池; fm.领单时间 = opts.nowIso || new Date().toISOString(); }, opts.nowIso || new Date().toISOString());
+        const mv = store.move(root, p.id, '待投', '在途', (fm) => {
+          fm.主办 = 主办; fm.执行池 = p.池; fm.领单时间 = opts.nowIso || new Date().toISOString();
+          if (p.改挂) fm.临时改池 = `${p.改挂.原池}→${p.池}（${p.改挂.因}）`; // H85 死局自愈留痕：工单上看得见它为什么不在本职池跑
+        }, opts.nowIso || new Date().toISOString());
         if (!mv.ok) continue;
         journal.append(root, `派发 ${p.id}（待投→在途 · ${主办} · ${p.池} · H49 派发制）`);
         pmLedger.event(root, '派发', { id: p.id, 池: p.池 });
+        if (p.改挂) { // H85：临时改池是自动动作，必须同时进 journal 与项管台账，事后可追
+          journal.append(root, `临时改池：${p.id} ${p.改挂.原池} → ${p.池}（${p.改挂.因}）`);
+          pmLedger.event(root, '临时改池', { id: p.id, 原池: p.改挂.原池, 新池: p.池, 因: p.改挂.因 });
+        }
         require('./pm/wake').onChildDispatched(root, t0.fm.父单); // H53：首子单派发 → 战役父单进在途
         result.领单.push(p.id);
         const t1 = store.find(root, p.id);

@@ -114,10 +114,7 @@ input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outlin
 .prow .pn { font-size:11px; color:var(--ink2); flex-shrink:0; }
 .paddrow { display:flex; gap:8px; margin-top:12px; align-items:center; }
 .paddrow input { height:32px; padding:0 10px; font-size:11.5px; border-radius:8px; min-width:0; }
-/* D38 模型档下拉：胶囊形小选择器，嵌在编制行内 */
-.teamrow .mselect { height:26px; border-radius:13px; padding:0 10px; font-size:11px;
-  background:var(--sect); border:1px solid var(--line); color:var(--ink2); cursor:pointer; }
-.teamrow .mselect:hover { border-color:var(--ink3); color:var(--ink); }
+/* D38 编制行内的模型/池下拉已随 H85 编制权下放项管拆除（编制快照是只读的，没有控件） */
 .snav { display:flex; gap:10px; margin:14px 0 0; flex-wrap:wrap; padding-bottom:18px; border-bottom:1px solid var(--line); }
 .snav a { display:inline-flex; align-items:center; height:34px; padding:0 18px; border-radius:17px;
   font-size:14px; color:var(--ink2); background:var(--card); border:1px solid var(--line); text-decoration:none; }
@@ -671,8 +668,8 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 /* 沟通护城河提示：中性告知（这是设定内的行为，不是故障），走警示色不走危险红 */
 .poolcard .moat { margin-top:12px; font-size:11.5px; line-height:1.5; padding:7px 12px; border-radius:8px;
   background:var(--gatebg); color:var(--gatetx); border:1px solid var(--gateln); cursor:help; }
-/* 编制行：左缘 4px 职能色书脊条（暖纸 2.0），颜色由行内 var 注入 */
-.teamrow { border-radius:12px; height:56px; display:flex; align-items:center; gap:14px; padding:0 24px; margin-bottom:12px; position:relative;
+/* 编制行（H85 起只用于项管页只读编制快照）：左缘 4px 职能色书脊条（暖纸 2.0），颜色由行内 var 注入 */
+.teamrow { border-radius:12px; height:56px; display:flex; align-items:center; gap:12px; padding:0 24px; margin-bottom:12px; position:relative;
   border-left:4px solid var(--line); }
 .teamrow b { font-size:13px; }
 .teamrow .stpill { position:absolute; right:20px; }

@@ -53,5 +53,23 @@ const CFG = {
     assert.equal(store.list(root, '待投').length, 3, '其余排队');
   });
 
+  await t('H85 死局自愈接线：本职池冻结 → 改挂可用池，工单落 临时改池 + 台账记账', async () => {
+    const gates = require('../lib/gates');
+    const 原 = gates.allLocks;
+    gates.allLocks = async () => ({ codex: { fivePct: 99, locked: true }, claude: { fivePct: 10, locked: false } });
+    try {
+      const root = makeRoot();
+      state.update(root, (s) => { s.执行器 = { 运行: true }; });
+      const cfg = { ...CFG, agents: [{ id: '程序-A', 职能: '程序', 执行池: 'codex' }] };
+      seed(root, '待投', { id: 'H-1', 职能: '程序', 放行: true, QA: '关' });
+      await runner.tick(root, cfg, { durMs: 0 });
+      const h = store.find(root, 'H-1');
+      assert.equal(h.fm.执行池, 'claude', 'codex 冻结应改挂 claude（当前 ' + h.fm.执行池 + '）');
+      assert.ok(String(h.fm.临时改池 || '').startsWith('codex→claude'), '工单须留 临时改池 痕迹：' + h.fm.临时改池);
+      const evs = require('../lib/pm/ledger').events(root, 200);
+      assert.ok(evs.some((e) => e.类型 === '临时改池' && e.id === 'H-1' && e.原池 === 'codex' && e.新池 === 'claude'), '台账须有 临时改池 记账');
+    } finally { gates.allLocks = 原; }
+  });
+
   console.log(`全部通过：${passed} 项`);
 })();

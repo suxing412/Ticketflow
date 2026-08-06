@@ -1066,36 +1066,9 @@ function poolCardHtml(name, l, cfg2, moat) {
     ${row('周', wpct, `周阈值 ${wth}%`, '管周窗', wpct != null && wpct >= wth)}
     ${moatHtml}`;
 }
-function teamRowsHtml(agents) {
-  // D38：模型档可选——下拉 = 池默认 + 监测/配置的可选项（window._models 由参数页加载）
-  const m = (window._p6cfg && window._p6cfg.模型) || {};
-  const av = window._models || {};
-  const pools = Object.keys((window._p6cfg && window._p6cfg.执行池) || { codex: 1, claude: 1 });
-  return (agents || []).map((a) => {
-    const pool = a.执行池 || 'claude';
-    const poolDefault = m[pool + '默认'] || '';
-    const opts = ((av[pool] && av[pool].可选) || []);
-    const sel = `<select class="mselect mono" title="模型档：个体覆盖 > 池默认 > CLI 默认" onchange="aModel('${esc(a.id)}', this.value)">
-        <option value="" ${!a.模型 ? 'selected' : ''}>池默认${poolDefault ? '·' + esc(poolDefault) : ''}</option>
-        ${opts.map((o) => `<option value="${esc(o)}" ${a.模型 === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
-        ${a.模型 && !opts.includes(a.模型) ? `<option value="${esc(a.模型)}" selected>${esc(a.模型)}</option>` : ''}
-      </select>`;
-    const psel = `<select class="mselect mono" title="执行池：决定 CLI 归属与额度闸；切池清模型覆盖，下一单生效" onchange="aPool('${esc(a.id)}', this.value)">
-        ${pools.map((p) => `<option value="${esc(p)}" ${pool === p ? 'selected' : ''}>${esc(p)} 池</option>`).join('')}
-      </select>`;
-    return `<div class="teamrow card" style="border-left-color:${FNHEX[a.职能] || 'var(--line)'}">
-      <b>${esc(a.id)}</b>${fnPill(a.职能)}${psel}${sel}
-      <span class="stpill pill sm ${a.上线 === false ? 'mut' : 'ok'}">${a.上线 === false ? '退役待归' : '在岗'}</span></div>`;
-  }).join('');
-}
-// 模型档切换：POST 后原地重画编制表，不重载
-window.aModel = async (id, v) => {
-  const r = await post('/api/agent-model', { id, 模型: v });
-  if (!r.ok) return toast(r.error || '失败');
-  if (window._p6cfg) window._p6cfg.agents = r.agents;
-  const tl = $('team-list'); if (tl) tl.innerHTML = teamRowsHtml(r.agents);
-  toast(`${id} 模型档 → ${v || '池默认'}`);
-};
+// H85 编制权下放项管（2026-08-06 制作人裁决）：参数页的「agent 编制 · 执行池」管理区已整体拆除
+// （下拉框/在岗徽章/交互面）。编制是项管所辖数据，只在项管页以只读快照呈现（rosterSnapHtml），
+// 调整走 /api/pm/roster（项管调用 + 总监代劳），监制台不再提供编辑界面。
 // 主题 C：双主题切换——令牌层在 style.css，这里只负责钉 data-theme + 本机记忆 + 同步窗口底色
 const THEME_BG = { paper: '#FAFAF8', glass: '#0B0D10' };
 window.curTheme = () => (document.documentElement.dataset.theme === 'glass' ? 'glass' : 'paper');
@@ -1108,14 +1081,6 @@ window.themeSet = (v) => {
 };
 if (window.studio && window.studio.setThemeBg) window.studio.setThemeBg(THEME_BG[window.curTheme()]);
 
-// 执行池切换：切池清模型覆盖（服务端保证），重画后模型下拉自动换成新池的可选清单
-window.aPool = async (id, v) => {
-  const r = await post('/api/agent-pool', { id, 池: v });
-  if (!r.ok) return toast(r.error || '失败');
-  if (window._p6cfg) window._p6cfg.agents = r.agents;
-  const tl = $('team-list'); if (tl) tl.innerHTML = teamRowsHtml(r.agents);
-  toast(`${id} → ${v} 池 · 模型回池默认（下一单生效）`);
-};
 async function viewParams() {
   const [c, run, models] = await Promise.all([api('/api/config'), api('/api/runner'), api('/api/models').catch(() => ({}))]);
   window._p6cfg = c;
@@ -1174,7 +1139,6 @@ async function viewParams() {
       <div class="stepper"><button onclick="pStep('${k}',-1)">−</button><span class="val">${v}</span><button onclick="pStep('${k}',1)">＋</button></div></div>`).join('');
   const recCards = ''; // 精力档/推荐在途（D28）已随拉取制退役（0.23.11）
   void staffCards; void capCard; void recCards; // 退役占位，仅为注释留痕
-  const team = teamRowsHtml(c.agents);
   // 额度不阻塞首屏：先占位骨架，数据回来原地填（footprint 不变），随后 5s 活体轮询
   let lastPoolJson = '';
   const fillPools = async () => {
@@ -1213,11 +1177,10 @@ async function viewParams() {
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">执行池阈值</h3><span class="subnote">额度锁的杆（D26）</span></div>${poolCards}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">额度双池</h3></div>
       <div class="poolcard card" id="pool-codex">${poolCardHtml('codex', null, c.执行池 && c.执行池.codex)}</div>
-      <div class="poolcard card" id="pool-claude">${poolCardHtml('claude', null, c.执行池 && c.执行池.claude)}</div>
-      <div class="sec-h" style="margin-top:26px"><h3 style="font-size:15px;margin:0;font-weight:700">agent 编制 · 执行池</h3></div><div id="team-list">${team}</div></div></div>`;
+      <div class="poolcard card" id="pool-claude">${poolCardHtml('claude', null, c.执行池 && c.执行池.claude)}</div></div></div>`;
 }
 // 编制步进：POST 后原地更新该职能人数、在途上限推导值、右侧编制表——视图保持渲染，不整页重载
-// sStep（编制步进）已随拉取制退役（0.23.11）
+// sStep（编制步进）已随拉取制退役（0.23.11）；编制管理区整体归项管（H85）
 
 // 调参：POST 后只原地更新该卡片的数字与说明，视图保持渲染、不重载
 window.pStep = async (k, delta) => {
@@ -1281,7 +1244,6 @@ window.mSet = async (key, v) => {
   const r = await post('/api/config/model', { key, value: v });
   if (!r.ok) return toast(r.error || '失败');
   if (window._p6cfg) window._p6cfg.模型 = r.模型;
-  const tl = $('team-list'); if (tl && window._p6cfg) tl.innerHTML = teamRowsHtml(window._p6cfg.agents); // 池默认变了编制表跟着变
   toast(`${key} → ${v || mEmptyLbl(key)}`);
 };
 // 可选模型增补
@@ -1953,12 +1915,28 @@ function pmEventLine(e) {
   if (e.类型 === '迁移') return { t, txt: `归位 ${e.id || ''}（池→待投）` };
   return { t, txt: `${e.类型}：${e.id || e.单 || e.父单 || ''}` };
 }
+// 编制快照（H85）：一行一 agent——职能/池/档位/可用性。纯展示，无编辑控件（编制是项管所辖数据，
+// 调整走 /api/pm/roster）。可用性不在前端另算一套：服务端用 dispatch.poolFrozen 实算后下发，
+// 池冻结就显黄「池冻结·止派」——案源 2026-08-06 美术-A 唯一编制挂冻结池却全绿的假健康。
+function rosterSnapHtml(编制) {
+  if (!编制 || !编制.length) return '<p class="dim">（无编制数据）</p>';
+  return 编制.map((a) => {
+    const cls = a.可用 === true ? 'ok' : a.可用 === false ? 'warn' : 'mut';
+    return `<div class="teamrow card" style="border-left-color:${FNHEX[a.职能] || 'var(--line)'}">
+      <b>${esc(a.id)}</b>${fnPill(a.职能)}
+      <span class="poolp pill sm fn ${a.池 === 'claude' ? 'pool-claude' : 'pool-codex'}">${esc(a.池 || '?')} 池</span>
+      <span class="pill sm mut mono">${esc(a.模型 || '池默认')}</span>
+      <span class="stpill pill sm ${cls}">${esc(a.态 || '')}</span></div>`;
+  }).join('');
+}
 async function viewRelay() {
   // 0.23.9 信息架构定案（用户裁定）：只留三项——状态 / 关键汇报 / 详细流水。
   // 台账与对话区退出 UI（机制层 API 保留：制作人层通道走 /api/relay，台账走 /api/pm/ledger）。
-  const [d, pl] = await Promise.all([
+  // H85 追加第四项：编制快照（只读）——用工权归项管后，编制现况在项管页看。
+  const [d, pl, rs] = await Promise.all([
     api('/api/relay').catch(() => ({ 消息: [] })),
     api('/api/pm/ledger').catch(() => ({ 事件: [], 台账: {} })),
+    api('/api/pm/roster').catch(() => ({ 编制: [] })),
   ]);
   const 模型档 = (_cfg && _cfg.模型 && _cfg.模型.项管) || '—';
   const L = pl.台账 || {};
@@ -1985,6 +1963,9 @@ async function viewRelay() {
       <div style="flex:1"><b style="font-size:16px">${stateText}</b>
         <p class="dim" style="margin:4px 0 0;font-size:12.5px">项管 ${esc(模型档)} · 在跑 ${Object.keys(L.在跑 || {}).length} 项 · 就绪 ${(L.就绪队列 || []).length} 单 · 今日：${esc(digest)}</p></div>
     </div>
+    <div class="logcard card r14" style="margin-bottom:16px"><b style="font-size:13px">编制快照</b>
+      <span class="subnote" style="margin-left:8px">项管所辖 · 只读 · 可用性按池锁实算（调整走 /api/pm/roster）</span>
+      <div style="margin-top:12px">${rosterSnapHtml(rs.编制)}</div></div>
     <div class="logcard card r14" style="margin-bottom:16px"><b style="font-size:13px">关键汇报</b>
       <span class="subnote" style="margin-left:8px">拆单 / 待审 / 收口 / 上呈 / 报警</span>
       <div style="margin-top:12px">${feedKey}</div></div>

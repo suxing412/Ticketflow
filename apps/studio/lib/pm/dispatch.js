@@ -56,20 +56,61 @@ function moatBlocked(cfg, gatesInfo, poolName) {
 // 硬顶（代码级）：任何情况下每池并发不得超过此值——项管只能在此以内调
 const HARD_CAP = { codex: 3, claude: 3, deepseek: 3 };
 
+// 池冻结判据（H85）：额度锁 或 沟通护城河——两者都是「这个池现在一张都不许派」。
+// 并发满不算冻结：那是等下个周期就有的槽位，为它改挂只会把路由搅乱。
+function poolFrozen(cfg, gatesInfo, poolName) {
+  if (moatBlocked(cfg, gatesInfo, poolName)) return true;
+  return !!(gatesInfo && gatesInfo[poolName] && gatesInfo[poolName].locked);
+}
+
+// 职能编制所挂的池（H85 用工权归项管）：按 config.agents 出现顺序去重，退役待归者不算编制。
+// 编制即「这个职能有活人挂在哪些池上」——死局自愈的第一顺位候选来源。
+function rosterPools(cfg, 职能) {
+  const out = [];
+  for (const a of (cfg.agents || [])) {
+    if (a.上线 === false) continue;
+    if (职能 && a.职能 !== 职能) continue;
+    const p = a.执行池 || pool.poolFor(cfg, a.职能);
+    if (p && !out.includes(p)) out.push(p);
+  }
+  return out;
+}
+
+// 派发死局自愈（H85）：案源 2026-08-06——美术-A 唯一编制挂冻结的 codex 池，
+// 派发静默滞留而 UI 仍显「在岗」全绿，制作人亲自发现假健康。
+// 三态：①编制里还有人挂在没冻结的池 → 用可用者，不改挂（编制照旧，只是换个人干）
+//       ②编制全挂在冻结池上 → 临时借调到第一个可用池，打 改挂 标记（工单落 fm.临时改池 + journal + 台账）
+//       ③一个可用池都没有 → 返回 null，本轮滞留，交给零派发告警看门狗
+// 池章直通（工单 frontmatter 已盖 执行池，如工程单钉死 deepseek）不参与自愈：那是刻意的成本选择。
+function routePool(cfg, r, gatesInfo) {
+  const 章 = r.执行池;
+  const base = 章 || pool.poolFor(cfg, r.职能) || 'claude';
+  if (章 || !poolFrozen(cfg, gatesInfo, base)) return { 池: base };
+  const roster = rosterPools(cfg, r.职能);
+  if (!roster.length) return null; // 该职能零编制：没有用工事实可依，不臆造路由，照旧滞留
+  const 编制内 = roster.find((p) => !poolFrozen(cfg, gatesInfo, p));
+  if (编制内) return { 池: 编制内 }; // ①部分冻结：编制里还有可用池，正常路由，不算改挂
+  const 全池 = [...roster, ...Object.keys(cfg.执行池 || {})];
+  const 借调 = 全池.find((p) => !poolFrozen(cfg, gatesInfo, p));
+  if (!借调) return null; // ③全冻结无处可去
+  return { 池: 借调, 改挂: { 原池: base, 因: `${base} 池冻结 · ${r.职能}编制无可用池，临时借调` } }; // ②
+}
+
 // 挑单：给定在跑计数与闸态，返回本轮可拉起的清单（不执行，纯决策——可测）
 function pickNext(cfg, ready, runningByPool, gatesInfo, caps) {
   const picks = [];
   const cnt = { ...runningByPool };
   for (const r of sortReady(ready)) {
-    const poolName = r.执行池 || pool.poolFor(cfg, r.职能) || 'claude';
+    const route = routePool(cfg, r, gatesInfo);
+    if (!route) continue; // 死局：无可用池，滞留等零派发告警
+    const poolName = route.池;
     const cap = Math.min(Number((caps || {})[poolName]) || 1, HARD_CAP[poolName] || 1);
     if ((cnt[poolName] || 0) >= cap) continue;
-    if (moatBlocked(cfg, gatesInfo, poolName)) continue;
-    if (gatesInfo && gatesInfo[poolName] && gatesInfo[poolName].locked) continue; // 额度锁保险丝
-    picks.push({ id: r.id, 池: poolName });
+    if (poolFrozen(cfg, gatesInfo, poolName)) continue; // 保险丝：自愈选出来的池也得过一遍闸
+    picks.push({ id: r.id, 池: poolName, ...(route.改挂 ? { 改挂: route.改挂 } : {}) });
     cnt[poolName] = (cnt[poolName] || 0) + 1;
   }
   return picks;
 }
 
-module.exports = { depsDone, readySet, sortReady, moatBlocked, pickNext, HARD_CAP };
+module.exports = { depsDone, readySet, sortReady, moatBlocked, poolFrozen, rosterPools, routePool, pickNext, HARD_CAP };

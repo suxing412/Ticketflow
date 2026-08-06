@@ -624,6 +624,55 @@ app.post('/api/pm/cut', (req, res) => {
   res.json({ ok: true, 状态: `切单进行中（${(cfg.模型 || {}).项管 || '项管档'}），完成后拆单简报进台账待审` });
 });
 
+// ---- 编制（H85，2026-08-06 制作人裁决「编制只需要存一单数据放在项管那让项管自己管理」）----
+// 用工权随派单权归项管（H57 延伸）：config.agents 仍是存储位，语义已变为「项管所辖数据」。
+// GET = 只读快照（可用性用 dispatch.poolFrozen 实算——UI 与调度同一把尺，绝不各算各的）；
+// POST = 批量调整，仅供项管调用与总监代劳，监制台不提供编辑界面。
+app.get('/api/pm/roster', async (req, res) => {
+  if (!ready(res)) return;
+  const D = require('./lib/pm/dispatch');
+  let gi = null;
+  try { const locks = await gates.allLocks(cfg); gi = { codex: locks.codex, claude: locks.claude }; } catch { /* 读数盲飞：可用性按未知呈报，不假绿 */ }
+  const 编制 = (cfg.agents || []).map((a) => {
+    const 池 = a.执行池 || require('./lib/pool').poolFor(cfg, a.职能) || 'claude';
+    const 退役 = a.上线 === false;
+    const 冻结 = gi ? D.poolFrozen(cfg, gi, 池) : null;
+    return { id: a.id, 职能: a.职能, 池, 模型: a.模型 || '', 上线: !退役,
+      可用: 退役 ? false : (冻结 === null ? null : !冻结),
+      态: 退役 ? '退役待归' : 冻结 === null ? '额度读数中' : 冻结 ? '池冻结·止派' : '在岗' };
+  });
+  res.json({ 编制, 池态: gi });
+});
+app.post('/api/pm/roster', (req, res) => {
+  if (!ready(res)) return;
+  const { 改动, 理由 } = req.body || {};
+  const list = Array.isArray(改动) ? 改动 : [];
+  if (!list.length) return res.status(400).json({ error: '改动必填（[{id,执行池?,模型?}]）' });
+  // 先全量校验再落盘：一条不合法则整批不写，避免半截生效的编制
+  for (const c of list) {
+    const a = (cfg.agents || []).find((x) => x.id === (c && c.id));
+    if (!a) return res.status(400).json({ error: 'agent 不存在：' + ((c && c.id) || '') });
+    if (c.执行池 != null && String(c.执行池).trim() && !(cfg.执行池 || {})[String(c.执行池).trim()]) {
+      return res.status(400).json({ error: '未知池：' + c.执行池 });
+    }
+  }
+  const 生效 = [];
+  for (const c of list) {
+    const a = cfg.agents.find((x) => x.id === c.id);
+    const 前 = { 执行池: a.执行池 || '', 模型: a.模型 || '' };
+    const 池 = c.执行池 != null ? String(c.执行池).trim() : null;
+    if (池 && a.执行池 !== 池) { a.执行池 = 池; delete a.模型; } // 切池清模型覆盖：旧池的模型名对新池无意义
+    if (c.模型 != null) { const m = String(c.模型).trim(); if (m) a.模型 = m; else delete a.模型; }
+    const 后 = { 执行池: a.执行池 || '', 模型: a.模型 || '' };
+    if (前.执行池 !== 后.执行池 || 前.模型 !== 后.模型) 生效.push({ id: a.id, 前, 后 });
+  }
+  saveCfg();
+  const 摘 = 生效.map((v) => `${v.id} 池 ${v.前.执行池 || '—'}→${v.后.执行池 || '—'} 模型 ${v.前.模型 || '池默认'}→${v.后.模型 || '池默认'}`).join('；') || '（无实际变化）';
+  journal.append(ROOT, `项管编制调整（H85）：${摘}｜理由：${String(理由 || '未述').slice(0, 120)}`);
+  pmLedger.event(ROOT, '编制调整', { 生效, 理由: String(理由 || '').slice(0, 200) });
+  res.json({ ok: true, 生效, agents: cfg.agents });
+});
+
 // ---- 产出调起：打开文件/所在文件夹（仅限该单所属项目仓内，越界拒）----
 app.post('/api/open', (req, res) => {
   if (!ready(res)) return;
@@ -904,18 +953,7 @@ app.get('/api/models', (req, res) => {
   });
 });
 
-// ---- 单个 agent 模型档调整（D38）：空 = 清覆盖回池默认 ----
-app.post('/api/agent-model', (req, res) => {
-  if (!ready(res)) return;
-  const { id, 模型 } = req.body || {};
-  const a = (cfg.agents || []).find((x) => x.id === id);
-  if (!a) return res.status(400).json({ error: 'agent 不存在：' + id });
-  const v = String(模型 || '').trim();
-  if (v) a.模型 = v; else delete a.模型;
-  fs.writeFileSync(path.join(ROOT, 'studio.config.json'), JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-  journal.append(ROOT, `模型档调整：${id} → ${v || '（池默认）'}`);
-  res.json({ ok: true, agents: cfg.agents });
-});
+// 单个 agent 模型档调整（D38）已并入 /api/pm/roster（H85 编制权下放项管）——参数页编制区已拆，不再有第二条写路径
 
 // ---- 消耗报表（停车场老待办落地）：明文事实源只读聚合，项目过滤走查询参数 ----
 const report = require('./lib/report');
@@ -933,23 +971,8 @@ app.get('/api/stages', (req, res) => {
   res.json({ 阶段: stages.stagesFor(cfg, proj), 标准: stages.parseStandards(ROOT) });
 });
 
-// ---- 单个 agent 执行池切换：决定 CLI 归属与额度闸。切池清模型个体覆盖（旧池模型名对新池无意义）；
-// 在途安全：领单时池名已盖章进工单 frontmatter，执行器只认章——切池只影响下一单 ----
-app.post('/api/agent-pool', (req, res) => {
-  if (!ready(res)) return;
-  const { id, 池 } = req.body || {};
-  const a = (cfg.agents || []).find((x) => x.id === id);
-  if (!a) return res.status(400).json({ error: 'agent 不存在：' + id });
-  const v = String(池 || '').trim();
-  if (!cfg.执行池 || !cfg.执行池[v]) return res.status(400).json({ error: '未知池：' + v });
-  if (a.执行池 !== v) {
-    const hadModel = !!a.模型;
-    a.执行池 = v; delete a.模型;
-    saveCfg();
-    journal.append(ROOT, `执行池切换：${id} → ${v} 池${hadModel ? '（模型覆盖已清，回池默认）' : ''}`);
-  }
-  res.json({ ok: true, agents: cfg.agents });
-});
+// 单个 agent 执行池切换已并入 /api/pm/roster（H85）。在途安全性不变：领单时池名已盖章进工单
+// frontmatter，执行器只认章——改编制只影响下一单。
 
 // ---- 上游改动标记（复查#8 = D36）：锚号改版 → 引用它的未完成单全标待复核 ----
 app.post('/api/review-flag', (req, res) => {
