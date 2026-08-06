@@ -20,6 +20,7 @@
   --glow-ok:rgba(13,122,95,.35); --glow-live:rgba(180,35,31,.45); --glow-warn:rgba(122,90,30,.4);
   --accent-glow:rgba(79,70,229,.30);
   --bar-from:rgba(79,70,229,.45); --bar-to:#4F46E5;
+  --sweep:rgba(255,255,255,.55); /* 在跑段右缘扫光（施工令-004）：只在实色进度条上滑，两主题同强度 */
   --ease-out:cubic-bezier(0.22,1,0.36,1); /* out-quint：干脆的减速，不弹跳 */
   /* 纸张层次阴影（墨色染影，不用纯黑）：sm=桌上的纸页 md=拿起来的纸页（双层=贴地+浮起） lg=悬浮层 */
   --shadow-sm:0 1px 2px rgba(26,29,33,.04);
@@ -46,6 +47,7 @@ html[data-theme="glass"] {
   --glow-ok:rgba(47,214,160,.4); --glow-live:rgba(255,93,87,.5); --glow-warn:rgba(232,180,90,.45);
   --accent-glow:rgba(110,99,255,.45);
   --bar-from:rgba(110,99,255,.5); --bar-to:#6E63FF;
+  --sweep:rgba(255,255,255,.55);
   --shadow-sm:0 1px 2px rgba(0,0,0,.4);
   --shadow-md:0 6px 18px rgba(0,0,0,.5), 0 1px 2px rgba(0,0,0,.35);
   --shadow-lg:0 16px 40px rgba(0,0,0,.6), 0 2px 8px rgba(0,0,0,.4);
@@ -458,28 +460,75 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
   border-radius:13px; font-size:11px; font-weight:500; background:var(--okbg); border:1px solid var(--okln); color:var(--ok); }
 .tree-note { font-size:11px; color:var(--ink3); margin-top:14px; }
 
-/* ===== P3 在途 ===== */
-.arow2 { border-radius:14px; height:132px; margin-bottom:14px; position:relative; }
-.arow2 .av { position:absolute; left:24px; top:43px; width:46px; height:46px; border-radius:13px;
-  display:flex; align-items:center; justify-content:center; color:var(--on-accent); font-weight:700; font-size:14px; }
-.arow2 .av.idle { background:var(--chip); color:var(--ink3); }
-.arow2 .who { position:absolute; left:90px; top:34px; font-size:15px; font-weight:700; }
-.arow2 .poolp { position:absolute; left:90px; top:62px; }
+/* ===== P3 在途 · 在跑卡（施工令-004 设计稿定稿）=====
+   制作人 14:57 裁决：不点详情就要看见执行进度与百分比。百分比是这张卡的主角，
+   分段条给「走到哪一段」，当前段内填充给「这一段走了多少」。色值一律走语义令牌。 */
+.arow2 { border-radius:14px; padding:16px 20px; margin-bottom:14px; }
+.arow2 .ar-row { display:flex; align-items:center; gap:16px; }
+.arow2 .av { width:44px; height:44px; border-radius:10px; flex:none;
+  display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; }
+.arow2 .ar-id { min-width:0; flex:1; }
+.arow2 .ar-idline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.arow2 .aid { font-family:var(--mono); font-size:12px; color:var(--accent-ink); }
+.arow2 .ar-who { font-size:11px; color:var(--ink3); }
+.arow2 .at { font-size:14px; font-weight:600; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .poolp.pool-claude { color:var(--pool-claude); }
 .poolp.pool-codex { color:var(--pool-codex); }
-.arow2 .mid2 { position:absolute; left:330px; top:24px; right:400px; }
-.arow2 .mid2 .aid { font-family:var(--mono); font-size:12px; color:var(--ink3); font-weight:500; }
-.arow2 .mid2 .at { font-size:15px; font-weight:500; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.arow2 .mid2 .at.dim2 { color:var(--ink3); }
-.arow2 .chips { position:absolute; left:330px; top:78px; display:flex; gap:10px; align-items:center; font-size:11px; color:var(--ink3); }
-.arow2 .rgt { position:absolute; right:40px; top:26px; width:180px; }
-.arow2 .rgt .lbl { font-size:11px; color:var(--ink3); font-weight:500; }
-.arow2 .rgt .tm { font-family:var(--mono); font-size:20px; font-weight:500; }
-.arow2 .rgt .bar { margin-top:10px; height:6px; background:var(--sect); border-radius:3px; overflow:hidden; }
-.arow2 .rgt .bar i { display:block; height:100%; background:var(--accent); }
-.arow2 .rgt .bar i.rev { background:var(--ok); }
-.arow2 .rgt .cap { font-family:var(--mono); font-size:10px; color:var(--ink3); margin-top:4px; }
-.arow2 .pullbtn { position:absolute; right:40px; top:46px; }
+/* 右列：百分比醒目，阶段名如实（判官阶段绝不冒充执行），计时贴在下面 */
+.arow2 .ar-pct { flex:none; text-align:right; min-width:150px; }
+.arow2 .pct { font-family:var(--mono); font-size:30px; font-weight:600; line-height:1;
+  letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
+.arow2 .pct small { font-size:15px; color:var(--ink3); font-weight:400; }
+.arow2 .ar-stage { font-size:11px; color:var(--ink2); margin-top:4px; }
+.arow2 .ar-stage .dot { display:inline-block; width:6px; height:6px; border-radius:99px; background:var(--accent);
+  margin-right:5px; vertical-align:1px; animation:arpulse 1.6s ease-out infinite; }
+.arow2 .ar-stage.judge .dot { background:var(--fn-qa); }
+.arow2 .ar-stage.warn { color:var(--danger); }
+.arow2 .ar-stage.warn .dot { background:var(--danger); animation:none; }
+.arow2 .ar-timer { font-family:var(--mono); font-size:11px; color:var(--ink3); margin-top:3px;
+  font-variant-numeric:tabular-nums; }
+.arow2 .ar-timer .over { color:var(--danger); }
+@keyframes arpulse { 0% { opacity:1; } 50% { opacity:.35; } 100% { opacity:1; } }
+/* 阶段分段条：填满=已过 · 当前=段内进度条（右缘扫光示意「活着」）· 未到=灰槽 */
+.segbar { display:flex; gap:6px; margin-top:14px; }
+.segbar .seg { flex:1; min-width:0; }
+.segbar .seg i { display:block; height:5px; border-radius:99px; background:var(--chip); position:relative; overflow:hidden; }
+.segbar .seg.done i { background:var(--ok); }
+.segbar .seg.cur i em { position:absolute; inset:0; width:var(--fill,0%); border-radius:99px;
+  background:var(--accent); box-shadow:0 0 10px var(--accent-glow); transition:width .4s var(--ease-out); }
+.segbar .seg.cur i em::after { content:''; position:absolute; top:0; right:0; width:14px; height:100%;
+  background:linear-gradient(90deg, transparent, var(--sweep)); animation:arsweep 1.8s ease-out infinite; }
+.segbar .seg.cur.judge i em { background:var(--fn-qa); box-shadow:none; }
+.segbar .seg.cur.warn i em { background:var(--danger); box-shadow:0 0 10px var(--glow-live); }
+.segbar .seg.cur.warn i em::after { animation:none; opacity:0; } /* 超时：填满转红、停扫光 */
+.segbar .seg span { display:block; font-size:10px; color:var(--ink3); margin-top:5px; text-align:center;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.segbar .seg.cur span { color:var(--ink); font-weight:600; }
+.segbar .seg.done span { color:var(--ok); }
+@keyframes arsweep { 0% { opacity:0; } 50% { opacity:1; } 100% { opacity:0; } }
+@media (prefers-reduced-motion: reduce) {
+  .arow2 .ar-stage .dot { animation:none; }
+  .segbar .seg.cur i em { transition:none; }
+  .segbar .seg.cur i em::after { animation:none; opacity:0; }
+}
+/* 总览在跑摘要（施工令-004 第 4 条）：规格从简，一行一单——百分比 + 阶段名 */
+.ovrun { padding:6px 14px; margin-bottom:12px; }
+.ovrun-row { display:flex; align-items:center; gap:10px; padding:8px 2px; text-decoration:none; color:inherit;
+  border-bottom:1px solid var(--line); }
+.ovrun-row:last-child { border-bottom:0; }
+.ovrun-row .rid { font-size:11px; color:var(--ink3); flex:none; }
+.ovrun-row .rt { font-size:12.5px; color:var(--ink2); flex:1; min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ovrun-row .pct { font-size:14px; font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums; }
+.ovrun-row .pct.over { color:var(--danger); }
+.ovrun-row .st { font-size:11px; color:var(--ink3); flex:none; }
+.ovrun-row:hover .rt { color:var(--ink); }
+.ovrun-row:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:6px; }
+
+/* 尾行：最近一行输出，mono 弱化——正文不是重点，进度才是 */
+.arow2 .ar-tail { font-family:var(--mono); font-size:11px; color:var(--ink3); margin-top:12px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.arow2 .ar-tail b { color:var(--ink2); font-weight:400; }
 .logcard { border-radius:14px; padding:18px 24px; }
 
 /* ===== P4 决策台 ===== */
@@ -740,6 +789,21 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 /* 在途原地展开详情（2026-08-06 夜班体检批3）：与决策台 doc-line 同语汇，作用域独立 */
 .ag-detail .ph { font-size:11px; font-weight:700; color:var(--ink3); text-transform:none; letter-spacing:.02em; margin-bottom:2px; }
 .ag-detail .doc-line { font-size:12.5px; color:var(--ink2); margin:8px 0; line-height:1.55; }
+/* 施工令-004 展开区改版：首屏=大进度条 + 最近 3 行输出 + 详情链接；工单正文默认折叠 */
+.ag-detail .segbar { margin-top:0; }
+.ag-detail .segbar .seg i { height:7px; }
+.ag-detail .tail3 { font-family:var(--mono); font-size:11px; color:var(--ink3); line-height:1.7;
+  white-space:pre-line; margin-top:14px; word-break:break-word; }
+.ag-detail .tail3 b { color:var(--ink2); font-weight:400; }
+.ag-detail .expfoot { display:flex; gap:16px; align-items:center; margin-top:12px; font-size:12px; }
+.ag-detail .expfoot a { color:var(--accent-ink); text-decoration:none; }
+.ag-detail .expfoot a:hover { text-decoration:underline; }
+.ag-detail .foldbtn { color:var(--ink3); font-size:12px; }
+.ag-detail .foldbtn:hover { color:var(--ink2); }
+.ag-detail .foldbtn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
+.ag-detail .agbody { margin-top:14px; border-top:1px solid var(--line); padding-top:12px;
+  display:flex; gap:24px; flex-wrap:wrap; }
+.ag-detail .agbody > div { flex:1; min-width:260px; }
 .ag-detail { animation:agdIn .18s var(--ease-out); }
 @keyframes agdIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:none; } }
 @media (prefers-reduced-motion: reduce) { .ag-detail { animation:none; } }

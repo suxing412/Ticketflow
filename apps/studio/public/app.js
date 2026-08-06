@@ -221,8 +221,20 @@ window.projNewSave = async (btn) => {
 window.enterProj = (n) => { setProj(n); if (location.hash === '#/' || location.hash === '') route(); else location.hash = '#/'; };
 
 /* ===== P1 总览 ===== */
+// 总览在跑摘要（施工令-004 第 4 条，规格从简）：数字 + 阶段名，点进在途页看全貌
+function ovRunHtml(ag) {
+  const rows = (ag && ag.在跑) || [];
+  if (!rows.length) return '';
+  return `<div class="card r14 ovrun">${rows.map((r) => {
+    const p = r.进度 || {};
+    return `<a class="ovrun-row" href="#/t/${esc(r.id)}"><span class="mono rid">${esc(r.id)}</span>
+      <span class="rt">${esc(r.title || '')}</span>
+      <b class="mono pct ${p.超时 ? 'over' : ''}">${p.百分比 != null ? p.百分比 : '—'}%</b>
+      <span class="st">${esc(p.阶段名 || (r.环节 ? r.环节 + '中' : '衔接中'))}</span></a>`;
+  }).join('')}</div>`;
+}
 async function viewOverview() {
-  const [{ all, board }, jn] = await Promise.all([loadBoard(), api('/api/journal').catch(() => ({}))]);
+  const [{ all, board }, jn, ag] = await Promise.all([loadBoard(), api('/api/journal').catch(() => ({})), api('/api/agents').catch(() => ({}))]);
   const n = (s) => (board[s] || []).length;
   const groups = [['在途', n('在途') + n('质检'), ''], ['待验收', n('待验收'), ''], ['待定夺', n('待定夺'), n('待定夺') ? 'err' : ''], ['在池', n('池'), ''], ['待投', n('待投'), '']];
   const strip = groups.map(([l, v, c], i) => `${i ? '<div class="vdiv"></div>' : ''}<div class="grp"><span class="lbl">${l}</span><span class="num ${c}">${v}</span></div>`).join('');
@@ -295,6 +307,7 @@ async function viewOverview() {
       <div class="sec-h"><h3 class="h17">需你处理</h3><span class="subnote">${inbox.length} 项待你决定</span></div>
       ${inboxHtml}
       <div class="sec-h" style="margin-top:28px"><span class="subnote" style="font-weight:500">派发窗（H49）</span></div>
+      ${ovRunHtml(ag)}
       <div class="suggest card">${n('待投') ? `<div style="font-size:13px">待投区 <b>${n('待投')}</b> 单——依赖就绪且已放行的会被自动派发</div>
         <div class="subnote" style="margin:6px 0 12px">未放行的在工单池逐张放行；合闸时全部原地待命</div>
         <a class="btn accent h32" href="#/board">去工单池</a>` : '<span class="dim">待投区空——想法拍板或派单委托产生新单</span>'}</div>
@@ -747,23 +760,48 @@ function timelineHtml(agents, all, opts) {
     </div></div></div></div>`;
 }
 /* ===== 在途 · 派发制视图（H49）：执行者因单而生、完成即销毁，常备的只有审检 ===== */
+// 进度渲染三件套（施工令-004）：口径全在服务端 lib/progress.js 算好，这里只负责画。
+const 进度态 = (p) => (p && p.超时 ? 'warn' : p && p.判官 ? 'judge' : '');
+function segbarHtml(p, id) {
+  const cls = 进度态(p);
+  return `<div class="segbar"${id ? ` id="${esc(id)}"` : ''}>${((p && p.段) || []).map((s) => `<div class="seg ${s.态}${s.态 === 'cur' && cls ? ' ' + cls : ''}">
+      <i>${s.态 === 'cur' ? `<em style="--fill:${Math.round((s.填充 || 0) * 100)}%"></em>` : ''}</i><span>${esc(s.名)}</span></div>`).join('')}</div>`;
+}
+// 计时：判官阶段报「本步 · 全程」，执行阶段报「已跑 / 预估」（超时转红，一眼可捞）
+function 计时Html(p, 环节起时, 领单时间) {
+  const tm = (iso, over) => iso && !Number.isNaN(Date.parse(iso))
+    ? `<span class="tm${over ? ' over' : ''}" data-since="${esc(iso)}">${fmtElapsed(Date.now() - Date.parse(iso))}</span>` : '<span>--:--</span>';
+  if (p && p.判官) return `${tm(环节起时)} 本步${领单时间 ? ` · ${tm(领单时间)} 全程` : ''}`;
+  const est = p && p.预估分钟 ? fmtElapsed(p.预估分钟 * 60000) : null;
+  return `${tm(环节起时 || 领单时间, !!(p && p.超时))}${est ? ` / 预估 ${est}` : ' · 无预估（阶段内不插值）'}`;
+}
+// 右列内容（百分比+阶段名+计时）：整块可原地重画，活体轮询只换这一块，不动展开区
+function pctHtml(r) {
+  const p = r.进度 || {};
+  return `<div class="pct">${p.百分比 != null ? p.百分比 : '—'}<small>%</small></div>
+    <div class="ar-stage ${进度态(p)}"><span class="dot"></span>${esc(p.阶段名 || (r.环节 ? r.环节 + '中' : '衔接中'))}</div>
+    <div class="ar-timer">${计时Html(p, r.环节起时, r.领单时间)}</div>`;
+}
 function viewAgentsDispatch(d, all) {
   const lim = d.并发上限 || {};
   const cards = (d.在跑 || []).map((r) => {
-    const since = r.环节起时 || r.领单时间 || '';
-    const elapsed = since ? Date.now() - Date.parse(since) : 0;
+    const p = r.进度 || {};
+    const 判官 = !!p.判官;
+    const avc = 判官 ? 'var(--fn-qa)' : (FNHEX[r.职能] || 'var(--ink3)');
     // 2026-08-05 制作人需求：点在跑卡片原地展开工单详情（正文+活尾巴），不切窗口
-    return `<div class="arow2 card r14" style="cursor:pointer" onclick="agExpand('${esc(r.id)}')" title="点击原地展开工单详情">
-      <div class="av" style="background:${FNHEX[r.职能] || 'var(--ink3)'}">${esc((r.职能 || '').slice(0, 2))}</div>
-      <div class="who">${esc(r.主办)}</div>
-      <span class="poolp pill sm fn ${r.池 === 'claude' ? 'pool-claude' : 'pool-codex'}">${esc(r.池 || '?')} 池</span>
-      ${engJobPill((d.引擎作业 || {})[r.项目])}
-      <div class="mid2"><span class="aid"><a href="#/t/${esc(r.id)}" style="color:inherit" onclick="event.stopPropagation()">${esc(r.id)}</a></span>
-        <div class="at">${esc(r.title || '')}${r.尾 ? ` <span class="dim2">· ${esc(String(r.尾).slice(-60))}</span>` : ''}</div></div>
-      <div class="chips">${fnPill(r.职能)}${stPill(r.state)}</div>
-      <div class="rgt"><span class="lbl">${r.环节 ? esc(r.环节) + '中' : '衔接中'}</span><br/>
-        <span class="tm" data-since="${esc(since)}">${fmtElapsed(elapsed)}</span>
-        <div class="bar"><i style="width:${Math.min(1, elapsed / (4 * 3600000)) * 100}%"></i></div><div class="cap">滞留阈值 4h</div></div>
+    return `<div class="arow2 card r14" style="cursor:pointer" onclick="agExpand('${esc(r.id)}')" title="点击原地展开进度与最近输出">
+      <div class="ar-row">
+        <div class="av" style="background:color-mix(in srgb, ${avc} 15%, transparent);color:${avc}">${esc(判官 ? p.阶段 : (r.职能 || '').slice(0, 2))}</div>
+        <div class="ar-id">
+          <div class="ar-idline"><span class="aid"><a href="#/t/${esc(r.id)}" style="color:inherit" onclick="event.stopPropagation()">${esc(r.id)}</a></span>
+            <span class="poolp pill sm fn ${r.池 === 'claude' ? 'pool-claude' : 'pool-codex'}">${esc(r.池 || '?')} 池</span>
+            ${engJobPill((d.引擎作业 || {})[r.项目])}<span class="ar-who">${esc(r.主办 || '')}</span></div>
+          <div class="at" title="${esc(r.title || '')}">${esc(r.title || '')}</div>
+        </div>
+        <div class="ar-pct" id="agp-${esc(r.id)}">${pctHtml(r)}</div>
+      </div>
+      ${segbarHtml(p, 'ags-' + r.id)}
+      ${r.尾 ? `<div class="ar-tail"><b>›</b> ${esc(String(r.尾).slice(-160))}</div>` : ''}
     </div>
     <div class="card r14 ag-detail" id="agd-${esc(r.id)}" style="display:none;margin:-6px 0 10px 46px;padding:14px 18px"><span class="dim">载入中…</span></div>`;
   }).join('') || '<p class="dim" style="margin:26px 0;text-align:center">当前无在跑执行者 —— 派发制下没有常备军，就绪单一到即拉起，完成即销毁。</p>';
@@ -776,10 +814,21 @@ function viewAgentsDispatch(d, all) {
     els.forEach((el) => { const t = Date.parse(el.dataset.since); if (!isNaN(t)) el.textContent = fmtElapsed(Date.now() - t); });
     setTimeout(tickTm, 1000);
   }, 1000);
+  // 百分比与分段条活体刷新（施工令-004）：只换右列与段条，展开区不被打断；
+  // 在跑张数变了才整页重画（新单派发/收工），否则永远原地更新。
+  const 在跑数 = (d.在跑 || []).length;
+  pollLoop('ag-cards', 15000, async () => {
+    const nd = await api('/api/agents');
+    if ((nd.在跑 || []).length !== 在跑数) { route(); return; }
+    for (const r of (nd.在跑 || [])) {
+      const pe = $('agp-' + r.id); if (pe) pe.innerHTML = pctHtml(r);
+      const se = $('ags-' + r.id); if (se) se.outerHTML = segbarHtml(r.进度 || {}, 'ags-' + r.id);
+    }
+  });
   const busyBanner = (d.编辑器占用||[]).length ? `<div class="r14" style="padding:10px 16px;margin-top:16px;background:var(--gatebg);border:1px solid var(--gateln);color:var(--gatetx)"><b>编辑器锁已关（验收中）</b> · 项目 ${d.编辑器占用.map(esc).join('、')} 派发挂起——制作人用完关闭编辑器即自动开锁（H64），或在决策台手动开锁</div>` : '';
   return busyBanner + `<div class="sec-h" style="margin-top:26px"><h3 class="h17">在跑执行者</h3>
       <span class="subnote">派发制 · 因单而生、完成即销毁 · 并发 codex ≤${lim.codex != null ? lim.codex : '—'} / claude ≤${lim.claude != null ? lim.claude : '—'}（项管调配 · 代码硬顶 3）</span></div>
-    ${cards}
+    <div id="ag-cards">${cards}</div>
     <div class="sec-h" style="margin-top:26px"><h3 class="h17">审检三席</h3><span class="subnote">质检 / 核查 / 仲裁 · 唯一常驻岗（H68）</span></div>
     <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${judges}</div>
     <div class="sec-h" style="margin-top:26px"><h3 class="h17">就绪队列</h3><span class="subnote">依赖已齐、等槽位或额度（项管台账）</span></div>
@@ -1918,23 +1967,42 @@ window.ask = (msg) => new Promise((res) => {
 });
 window.askAct2 = async (a, id, msg) => { if (await ask(msg)) act2(a, id); };
 
-// 在途卡片原地展开工单详情（2026-08-05 制作人需求：不切窗口看在做什么）
+// 在途卡片原地展开（2026-08-05 制作人需求：不切窗口看在做什么 / 施工令-004 改版：
+// 制作人明确不在乎正文——首屏 = 大进度条 + 执行 tail 最近 3 行 + 完整详情页链接，正文默认折叠）
 window.agExpand = async (id) => {
   const box = document.getElementById('agd-' + id);
   if (!box) return;
   if (box.style.display !== 'none') { box.style.display = 'none'; return; } // 再点收起
   box.style.display = '';
   try {
-    const tk = await api('/api/ticket?id=' + encodeURIComponent(id));
+    const [tk, run] = await Promise.all([
+      api('/api/ticket?id=' + encodeURIComponent(id)),
+      api('/api/runner').catch(() => ({})),
+    ]);
+    const live = (run.执行中 || []).find((x) => x.id === id) || null;
+    const p = live && live.进度 ? live.进度 : null;
     const secs = String(tk.body || '').split(/^## /m).filter(Boolean);
     const pick = (name) => { const s = secs.find((x) => x.startsWith(name)); return s ? s.split('\n').slice(1).filter((l) => l.trim()).slice(0, 8) : []; };
     const rng = pick('范围').concat(pick('执行内容')); const std = pick('验收标准');
     const line = (l) => `<div class="doc-line">${esc(l)}</div>`;
-    box.innerHTML = `<div style="display:flex;gap:24px;flex-wrap:wrap">
-      <div style="flex:1;min-width:260px"><div class="ph">范围 / 执行内容</div>${rng.map(line).join('') || '<div class="doc-line dim">（工单未写）</div>'}</div>
-      <div style="flex:1;min-width:260px"><div class="ph">验收标准</div>${std.map(line).join('') || '<div class="doc-line dim">（工单未写）</div>'}</div></div>
-      <div style="margin-top:10px"><a class="btn h32" href="#/t/${esc(id)}">完整详情页 →</a></div>`;
+    const 尾行 = (live && live.tail3 && live.tail3.length ? live.tail3 : (live && live.tail ? [live.tail] : [])).slice(-3);
+    box.innerHTML = `${p ? segbarHtml(p) : ''}
+      <div class="tail3">${尾行.length ? 尾行.map((l) => `<b>›</b> ${esc(l)}`).join('\n') : '<span class="dim">（尚无输出）</span>'}</div>
+      <div class="expfoot"><a href="#/t/${esc(id)}">完整详情页 →</a>
+        <button class="foldbtn" id="agf-${esc(id)}" aria-expanded="false" onclick="agBody('${esc(id)}')">▸ 工单正文</button></div>
+      <div class="agbody" id="agb-${esc(id)}" style="display:none">
+        <div><div class="ph">范围 / 执行内容</div>${rng.map(line).join('') || '<div class="doc-line dim">（工单未写）</div>'}</div>
+        <div><div class="ph">验收标准</div>${std.map(line).join('') || '<div class="doc-line dim">（工单未写）</div>'}</div></div>`;
   } catch { box.innerHTML = '<span class="dim">详情载入失败</span>'; }
+};
+// 展开区里的「工单正文」折叠块（默认折叠——制作人要的是进度，不是正文）
+window.agBody = (id) => {
+  const b = document.getElementById('agb-' + id); const f = document.getElementById('agf-' + id);
+  if (!b || !f) return;
+  const 开 = b.style.display === 'none';
+  b.style.display = 开 ? '' : 'none';
+  f.textContent = (开 ? '▾' : '▸') + ' 工单正文';
+  f.setAttribute('aria-expanded', String(开));
 };
 
 // H64 编辑器锁开关（默认项目）

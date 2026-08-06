@@ -8,12 +8,15 @@ const pool = require('../pool');
 const ledger = require('./ledger');
 const inbox = require('../inbox');
 const journal = require('../journal');
+const progress = require('../progress');
 
 const 门槛 = 2;      // 连续几个巡检周期零派发才报
 const 复报间隔 = 4;  // 报过之后每隔几个周期再提醒一次（防信箱刷屏，也防报一次就沉默）
+const 停滞分钟 = 20; // 打点停滞判据（施工令-004）：最后打点超过这么久没前进才提醒
 
 // 按仓记忆（一个进程只服务一个仓；测试各用各的临时仓，天然隔离）
 const 记忆 = new Map();
+const 打点记忆 = new Map(); // root → Map(单号 → { 打点, 打点时, 尾, 尾时, 已报 })
 
 function 派发累计(root) {
   try { return ledger.events(root, 2000).filter((e) => e.类型 === '派发').length; } catch { return 0; }
@@ -48,6 +51,51 @@ function 零派发告警(root, cfg, opts = {}) {
   return { 就绪: ready.map((r) => r.id), 连续零: m.连续零, 告警 };
 }
 
-function 重置(root) { if (root) 记忆.delete(root); else 记忆.clear(); }
+// ---- 打点停滞看门狗（施工令-004 追加范围）----
+// 打点是软契约：缺失不告警不判罚。本条只管「曾经打过点、然后不动了」——
+// 判据：在跑执行会话 且 曾出现打点 且 最后打点 >20 分钟未前进 且 tail 无新输出 → 信箱普通级一条。
+// 无打点的单不适用（它压根没签这份软契约，缺席不是过错）。
+// 一次停滞只报一次：打点或 tail 任一前进即解除并重新计时。
+function 打点停滞(root, cfg, opts = {}) {
+  const now = opts.now != null ? opts.now : Date.now();
+  const 在跑 = opts.执行中 != null ? opts.执行中 : 执行中表(root);
+  const mem = 打点记忆.get(root) || new Map();
+  const 活着 = new Set();
+  const 告警 = [];
+  for (const e of 在跑) {
+    if (!e || e.kind !== '执行' || !e.id) continue;
+    活着.add(e.id);
+    const 尾 = e.tail || '';
+    const 点 = progress.解析打点(尾);
+    const 点串 = 点 ? `${点.k}/${点.n}` : null;
+    const m = mem.get(e.id) || { 打点: null, 打点时: now, 尾: null, 尾时: now, 已报: false };
+    if (点串 && 点串 !== m.打点) { m.打点 = 点串; m.打点时 = now; m.已报 = false; } // 打点前进：解除并重计时
+    if (尾 !== m.尾) { m.尾 = 尾; m.尾时 = now; m.已报 = false; }                   // 还有新输出：不算停滞
+    mem.set(e.id, m);
+    if (!m.打点) continue;                                                          // 从没打过点：本条不适用
+    const 停 = now - m.打点时; const 静 = now - m.尾时;
+    if (停 > 停滞分钟 * 60000 && 静 > 停滞分钟 * 60000 && !m.已报) {
+      m.已报 = true;
+      const 文 = `打点停滞：${e.id} 最后打点 ${m.打点} 已 ${Math.round(停 / 60000)} 分钟未前进，tail 同期无新输出——盯一眼是不是卡住了`;
+      inbox.post(root, '常', '打点停滞', 文.slice(0, 300), { 单号: e.id });
+      try { journal.append(root, 文); } catch { /* 留痕失败不阻塞告警 */ }
+      try { ledger.event(root, '打点停滞', { 单: e.id, 打点: m.打点, 停滞分: Math.round(停 / 60000) }); } catch { /* 记账失败不阻塞 */ }
+      告警.push(文);
+    }
+  }
+  for (const id of [...mem.keys()]) if (!活着.has(id)) mem.delete(id); // 会话收场即忘，不留幽灵
+  打点记忆.set(root, mem);
+  void cfg; // 判据只用在跑表；留 cfg 参保持巡检调用签名一致
+  return { 盯守: [...mem.keys()], 告警 };
+}
 
-module.exports = { 零派发告警, 重置, 门槛, 复报间隔 };
+function 执行中表(root) {
+  try { return [...require('../runner').running.values()].filter((e) => e.kind === '执行'); }
+  catch { return []; } // 取不到在跑表：本条静默跳过（软契约不因探测失败而误报）
+}
+
+function 重置(root) {
+  if (root) { 记忆.delete(root); 打点记忆.delete(root); } else { 记忆.clear(); 打点记忆.clear(); }
+}
+
+module.exports = { 零派发告警, 打点停滞, 重置, 门槛, 复报间隔, 停滞分钟 };

@@ -189,7 +189,26 @@ app.post('/api/config/gate', (req, res) => {
 
 // ---- 执行器（D30 / H81 常开单闸制）：内嵌调度循环 = 监制台版监听器。运行即实弹，无模式开关 ----
 const runner = require('./lib/runner');
-app.get('/api/runner', (req, res) => { if (!ready(res)) return; res.json(runner.status(ROOT, cfg)); });
+const progress = require('./lib/progress');
+// 执行进度（施工令-004）：口径唯一在 lib/progress.js，服务端算好随 /api/runner /api/agents 下发，
+// 前端只负责显示——两处视图不许各算各的。
+function 进度Of(t, live) {
+  return progress.compute({
+    state: t ? t.state : '', kind: live ? live.kind : null,
+    QA: t && t.fm ? t.fm.QA : '开', 验收方式: t && t.fm ? t.fm.验收方式 : '委托',
+    预计时间: t && t.fm ? t.fm.预计时间 : null, 初检: !!(t && t.fm && t.fm.初检),
+    阶段起时: live ? live.startedAt : null, tail: live ? live.tail : null,
+  });
+}
+function runnerStatus() {
+  const st = runner.status(ROOT, cfg);
+  st.执行中 = (st.执行中 || []).map((e) => {
+    let t = null; try { t = store.find(ROOT, e.id); } catch { /* 单已挪走：按无单算 */ }
+    return { ...e, 进度: 进度Of(t, e) };
+  });
+  return st;
+}
+app.get('/api/runner', (req, res) => { if (!ready(res)) return; res.json(runnerStatus()); });
 app.post('/api/runner/start', (req, res) => {
   if (!ready(res)) return;
   runner.start(ROOT, () => cfg);
@@ -483,15 +502,21 @@ app.get('/api/agents', (req, res) => {
     const runStatus = require('./lib/runner').status(ROOT, cfg);
     const liveByTicket = Object.fromEntries((runStatus.执行中 || []).map((e) => [e.id, e]));
     const isParent = (t) => ['战役','专项'].includes(t.fm.父单类型) || ['战役','专项'].includes(t.fm.主办); // H53：组织容器不是执行者
-    const 在跑 = fl.filter((t) => ['在途', '质检'].includes(t.state) && !isParent(t)).map((t) => ({
+    // 判官会话在跑的单（初检/核查落在待验收）也是在跑执行者——设计稿-004 状态 B：
+    // 核查中的卡就该出现在在途页，阶段名如实显示「核查中 · 深检」，不冒充执行也不消失
+    const 审中 = (runStatus.执行中 || []).filter((e) => e.kind !== '执行' && !fl.some((t) => t.id === e.id))
+      .map((e) => { try { return store.find(ROOT, e.id); } catch { return null; } }).filter(Boolean);
+    const 在跑 = [...fl.filter((t) => ['在途', '质检'].includes(t.state) || liveByTicket[t.id]), ...审中].filter((t) => !isParent(t)).map((t) => ({
       主办: t.fm.主办 || '（衔接中）', id: t.id, title: t.fm.title, state: t.state,
       职能: t.fm.职能, 池: t.fm.执行池 || '', 领单时间: t.fm.领单时间 || null, 项目: t.fm.项目 || '',
       环节: (liveByTicket[t.id] || {}).kind || null, 环节起时: (liveByTicket[t.id] || {}).startedAt || null,
       尾: (liveByTicket[t.id] || {}).tail || null,
+      进度: 进度Of(t, liveByTicket[t.id] || null), // 施工令-004：卡片不点详情就看得见百分比与阶段
     }));
     const 判官 = (cfg.agents || []).filter((a) => a.职能 === 'QA').map((a) => {
-      const busy = (runStatus.执行中 || []).find((e) => e.kind !== '执行' && e.id && (fl.find((t) => t.id === e.id)));
-      return { id: a.id, 忙: !!busy, 当前: busy ? busy.id : null };
+      // 判官单多在「待验收」，不在 inFlight 口径内——按单是否还在库判在岗（原 fl 口径漏判成待命）
+      const busy = (runStatus.执行中 || []).find((e) => e.kind !== '执行' && e.id && (() => { try { return !!store.find(ROOT, e.id); } catch { return false; } })());
+      return { id: a.id, 忙: !!busy, 当前: busy ? busy.id : null, 环节: busy ? busy.kind : null };
     });
     const l = pmLedger.read(ROOT);
     return res.json({ 模式: '派发', 在跑, 判官, 就绪队列: l.就绪队列 || [], 并发上限: l.并发上限, 滞留告警: 滞留, 编辑器占用: runStatus.编辑器占用 || [], 引擎作业: runStatus.引擎作业 || {} });
@@ -1023,6 +1048,8 @@ function start() {
             }
             // H81 零派发看门狗：有放行就绪单却连续 ≥2 个周期零派发零执行 → 信箱告警（换装漏开闸案）
             require('./lib/pm/patrol').零派发告警(ROOT, cfg);
+            // 施工令-004 打点停滞：签了打点软契约却不动了才提醒（无打点的单不适用）
+            require('./lib/pm/patrol').打点停滞(ROOT, cfg);
           } catch { /* 巡检失败不阻塞 */ }
         }, 15 * 60000).unref();
       }

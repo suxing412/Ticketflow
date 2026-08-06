@@ -1,0 +1,176 @@
+<!doctype html>
+<html data-theme="glass"><head><meta charset="utf-8"><title>在途卡设计稿 · 施工令-004</title>
+<style>
+:root{ --mono:"Roboto Mono",ui-monospace,"Cascadia Mono",Consolas,monospace; }
+html{ background:#0B0D10; }
+body{ margin:0; padding:40px; font-family:"Noto Sans SC",-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  color:#F2F4F8; background:#0B0D10; }
+.note{ color:#76808F; font-size:12px; margin:0 0 8px; }
+h1{ font-size:18px; margin:0 0 4px; }
+h2{ font-size:13px; color:#B9C1CD; margin:34px 0 10px; font-weight:600; }
+.card{ background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.10); border-radius:16px;
+  padding:16px 20px; max-width:980px; }
+.row{ display:flex; align-items:center; gap:16px; }
+.avatar{ width:44px; height:44px; border-radius:10px; background:rgba(47,214,160,.15); color:#2FD6A0;
+  display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; flex:none; }
+.avatar.qa{ background:rgba(155,166,181,.15); color:#9BA6B5; }
+.idcol{ min-width:0; flex:1; }
+.idline{ display:flex; align-items:center; gap:10px; }
+.tid{ font-family:var(--mono); font-size:12px; color:#9D93FF; }
+.pool{ font-size:10px; color:#9D8FFF; border:1px solid rgba(157,143,255,.35); border-radius:99px; padding:1px 8px; }
+.ttl{ font-size:14px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:3px; }
+/* 右侧：百分比是这张卡的主角 */
+.pctcol{ flex:none; text-align:right; min-width:120px; }
+.pct{ font-family:var(--mono); font-size:30px; font-weight:600; line-height:1; letter-spacing:-.02em; }
+.pct small{ font-size:15px; color:#76808F; font-weight:400; }
+.stage{ font-size:11px; color:#B9C1CD; margin-top:4px; }
+.stage .dot{ display:inline-block; width:6px; height:6px; border-radius:99px; background:#6E63FF; margin-right:5px;
+  vertical-align:1px; animation:pulse 1.6s ease-out infinite; }
+.stage.judge .dot{ background:#9BA6B5; }
+.stage.warn .dot{ background:#FF5D57; animation:none; }
+.timer{ font-family:var(--mono); font-size:11px; color:#76808F; margin-top:3px; }
+.timer .over{ color:#FF5D57; }
+@keyframes pulse{ 0%{opacity:1} 50%{opacity:.35} 100%{opacity:1} }
+@media (prefers-reduced-motion:reduce){ .stage .dot{ animation:none } }
+/* 阶段分段条：填满=已过（绿），当前=靛蓝呼吸，未到=灰槽 */
+.segbar{ display:flex; gap:6px; margin-top:14px; }
+.seg{ flex:1; }
+.seg i{ display:block; height:5px; border-radius:99px; background:rgba(255,255,255,.08); position:relative; overflow:hidden; }
+.seg.done i{ background:#2FD6A0; }
+/* 当前段=段内进度条：填充宽度=段内插值（耗时/预估），右缘微光扫动示意「活着」 */
+.seg.cur i em{ position:absolute; inset:0; width:var(--fill,40%); border-radius:99px; background:#6E63FF;
+  box-shadow:0 0 10px rgba(110,99,255,.45); }
+.seg.cur i em::after{ content:""; position:absolute; top:0; right:0; width:14px; height:100%;
+  background:linear-gradient(90deg, transparent, rgba(255,255,255,.55)); animation:sweep 1.8s ease-out infinite; }
+@keyframes sweep{ 0%{opacity:0} 50%{opacity:1} 100%{opacity:0} }
+@media (prefers-reduced-motion:reduce){ .seg.cur i em::after{ animation:none; opacity:0 } }
+.seg.cur.judge i em{ background:#9BA6B5; box-shadow:none; }
+.seg.cur.warn i em{ background:#FF5D57; box-shadow:0 0 10px rgba(255,93,87,.4); }
+.seg.cur.warn i em::after{ animation:none; opacity:0; }
+.seg span{ display:block; font-size:10px; color:#76808F; margin-top:5px; text-align:center; }
+.seg.cur span{ color:#F2F4F8; font-weight:600; }
+.seg.done span{ color:#2FD6A0; }
+/* 尾行：最近输出一行，mono 弱化 */
+.tail{ font-family:var(--mono); font-size:11px; color:#76808F; margin-top:12px; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+.tail b{ color:#B9C1CD; font-weight:400; }
+/* 展开区示意 */
+.exp{ border-top:1px solid rgba(255,255,255,.10); margin-top:16px; padding-top:14px; }
+.exp .tail3{ white-space:pre-line; overflow:visible; text-overflow:clip; line-height:1.7; }
+.expfoot{ display:flex; gap:14px; margin-top:12px; font-size:12px; }
+.expfoot a{ color:#9D93FF; text-decoration:none; }
+.fold{ color:#76808F; cursor:pointer; }
+.badge-engine{ display:inline-block; font-size:10px; color:#4CC3E0; border:1px solid rgba(76,195,224,.35);
+  border-radius:99px; padding:1px 8px; margin-left:8px; }
+</style></head><body>
+
+<h1>在途页 · 在跑卡片设计稿（施工令-004）</h1>
+<p class="note">口径：百分比=阶段锚点+阶段内按耗时/预估插值，超时封顶不回退，落袋前永不 100%。判官阶段如实命名。三态如下。</p>
+
+<h2>状态 A · 执行中（正常推进，预估内）</h2>
+<div class="card">
+  <div class="row">
+    <div class="avatar">程序</div>
+    <div class="idcol">
+      <div class="idline"><span class="tid">TK-97</span><span class="pool">claude 池</span><span class="badge-engine">引擎在跑 · log 12s 前</span></div>
+      <div class="ttl">拆除 worldScale 四档预设系统（钉死 A 档 100）</div>
+    </div>
+    <div class="pctcol">
+      <div class="pct">42<small>%</small></div>
+      <div class="stage"><span class="dot"></span>执行中</div>
+      <div class="timer">12:41 / 预估 30:00</div>
+    </div>
+  </div>
+  <div class="segbar">
+    <div class="seg done"><i></i><span>领单</span></div>
+    <div class="seg cur"><i><em style="--fill:67%"></em></i><span>执行</span></div>
+    <div class="seg"><i></i><span>质检</span></div>
+    <div class="seg"><i></i><span>初检</span></div>
+    <div class="seg"><i></i><span>核查</span></div>
+    <div class="seg"><i></i><span>落袋</span></div>
+  </div>
+  <div class="tail"><b>›</b> Baseline confirmed (193/193/0). Launching the full EditMode run…</div>
+</div>
+
+<h2>状态 B · 核查中（判官阶段如实显示，灰系不冒充执行）</h2>
+<div class="card">
+  <div class="row">
+    <div class="avatar qa">核查</div>
+    <div class="idcol">
+      <div class="idline"><span class="tid">TK-95</span><span class="pool">claude 池</span></div>
+      <div class="ttl">地图观感打磨装配与全量交付</div>
+    </div>
+    <div class="pctcol">
+      <div class="pct">87<small>%</small></div>
+      <div class="stage judge"><span class="dot"></span>核查中 · 深检</div>
+      <div class="timer">03:15 本步 · 1:14:02 全程</div>
+    </div>
+  </div>
+  <div class="segbar">
+    <div class="seg done"><i></i><span>领单</span></div>
+    <div class="seg done"><i></i><span>执行</span></div>
+    <div class="seg done"><i></i><span>质检</span></div>
+    <div class="seg done"><i></i><span>初检</span></div>
+    <div class="seg cur judge"><i><em style="--fill:47%"></em></i><span>核查</span></div>
+    <div class="seg"><i></i><span>落袋</span></div>
+  </div>
+  <div class="tail"><b>›</b> 我来逐条核验。先取证据。</div>
+</div>
+
+<h2>状态 C · 超时预警（封顶不回退，计时转红，一眼可捞）</h2>
+<div class="card">
+  <div class="row">
+    <div class="avatar">程序</div>
+    <div class="idcol">
+      <div class="idline"><span class="tid">TK-84</span><span class="pool">codex 池</span></div>
+      <div class="ttl">测试套件挂死根因排查</div>
+    </div>
+    <div class="pctcol">
+      <div class="pct">60<small>%</small></div>
+      <div class="stage warn"><span class="dot"></span>执行超预估 · 软超时盯守中</div>
+      <div class="timer"><span class="over">47:22</span> / 预估 30:00</div>
+    </div>
+  </div>
+  <div class="segbar">
+    <div class="seg done"><i></i><span>领单</span></div>
+    <div class="seg cur warn"><i><em style="--fill:100%"></em></i><span>执行</span></div>
+    <div class="seg"><i></i><span>质检</span></div>
+    <div class="seg"><i></i><span>初检</span></div>
+    <div class="seg"><i></i><span>核查</span></div>
+    <div class="seg"><i></i><span>落袋</span></div>
+  </div>
+  <div class="tail"><b>›</b> SampleRasterFallbackWorldY reloading GeoMapData… (37k vertices)</div>
+</div>
+
+<h2>展开态（点卡片）· 首屏=进度+最近输出，正文默认折叠</h2>
+<div class="card">
+  <div class="row">
+    <div class="avatar">程序</div>
+    <div class="idcol">
+      <div class="idline"><span class="tid">TK-97</span><span class="pool">claude 池</span></div>
+      <div class="ttl">拆除 worldScale 四档预设系统（钉死 A 档 100）</div>
+    </div>
+    <div class="pctcol">
+      <div class="pct">42<small>%</small></div>
+      <div class="stage"><span class="dot"></span>执行中</div>
+      <div class="timer">12:41 / 预估 30:00</div>
+    </div>
+  </div>
+  <div class="segbar">
+    <div class="seg done"><i></i><span>领单</span></div>
+    <div class="seg cur"><i><em style="--fill:67%"></em></i><span>执行</span></div>
+    <div class="seg"><i></i><span>质检</span></div>
+    <div class="seg"><i></i><span>初检</span></div>
+    <div class="seg"><i></i><span>核查</span></div>
+    <div class="seg"><i></i><span>落袋</span></div>
+  </div>
+  <div class="exp">
+    <div class="tail tail3"><b>›</b> Baseline confirmed (193/193/0, red list empty).
+<b>›</b> Launching full EditMode via enginectl (run_in_background)…
+<b>›</b> Polling enginectl-results.xml mtime — waiting for landing (~16 min).</div>
+    <div class="expfoot"><a href="#">完整详情页 →</a><span class="fold">▸ 工单正文（默认折叠）</span></div>
+  </div>
+</div>
+
+<p class="note" style="margin-top:30px">备注：日间「暖纸」主题同构换令牌；分段条动画在 prefers-reduced-motion 下静止；百分比与计时均 mono 对齐防跳动。</p>
+</body></html>

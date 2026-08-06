@@ -498,8 +498,16 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     // 活尾巴：stream-json 取最近一个 text 块的可读文本，纯文本流原样截尾
     if (stream) {
       const ms = out.match(/"text":"((?:[^"\\]|\\.)*)"/g);
-      if (ms) { try { entry.tail = JSON.parse('"' + ms[ms.length - 1].slice(8, -1) + '"').replace(/\s+/g, ' ').trim().slice(-300); } catch { /* 保持旧尾 */ } }
-    } else entry.tail = out.replace(/\s+/g, ' ').trim().slice(-300);
+      if (ms) { try {
+        const dec = (s) => JSON.parse('"' + s.slice(8, -1) + '"').replace(/\s+/g, ' ').trim();
+        entry.tail = dec(ms[ms.length - 1]).slice(-300);
+        // 展开区「最近 3 行」（施工令-004）：另存最近三个文本块，tail 语义原样不动（软超时判据依赖它）
+        entry.tail3 = ms.slice(-3).map(dec).filter(Boolean).map((x) => x.slice(-200));
+      } catch { /* 保持旧尾 */ } }
+    } else {
+      entry.tail = out.replace(/\s+/g, ' ').trim().slice(-300);
+      entry.tail3 = out.split('\n').map((l) => l.trim()).filter(Boolean).slice(-3).map((x) => x.slice(-200));
+    }
   });
   child.stderr.on('data', (d) => { errout += d; if (errout.length > 20000) errout = errout.slice(-10000); });
   // H63 软超时（2026-08-05 制作人拍板：不到点即杀，盯进程判余量）：闸到点先验尸——
@@ -694,7 +702,7 @@ function status(root, cfg) {
   return {
     运行: !!st.运行,
     间隔秒: (cfg.执行器 || {}).间隔秒 ?? 15,
-    执行中: [...running.entries()].map(([agent, e]) => ({ agent, id: e.id, kind: e.kind, startedAt: e.startedAt, tail: e.tail || null })),
+    执行中: [...running.entries()].map(([agent, e]) => ({ agent, id: e.id, kind: e.kind, startedAt: e.startedAt, tail: e.tail || null, tail3: e.tail3 || null })),
     执行失败数: store.list(root, '执行失败').length,
     编辑器占用: [...manualLockedProjects(root)], // H64：口径=手动锁（自动探测不再作挂起依据）
     编辑器锁: (() => { try { return require('./core/state').read(root).编辑器锁 || {}; } catch { return {}; } })(),

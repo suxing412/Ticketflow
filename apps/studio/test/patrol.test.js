@@ -78,4 +78,70 @@ t('持续滞留不刷屏也不沉默：报过之后按复报间隔再提醒', ()
   assert.equal(告警数(root), 2);
 });
 
+// ---- 打点停滞看门狗（施工令-004 追加范围）：打点是软契约，缺席不罚，签了却不动才提醒 ----
+console.log('patrol 打点停滞看门狗测试（施工令-004）');
+const 停滞数 = (root) => inbox.list(root, 200).filter((e) => e.类型 === '打点停滞').length;
+const 会话 = (id, tail) => ({ id, kind: '执行', tail });
+const T0 = Date.parse('2026-08-06T10:00:00.000Z');
+const 分 = (n) => T0 + n * 60000;
+
+t('曾有打点 + 最后打点 >20 分钟未前进 + tail 无新输出 → 信箱普通级一条', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  const 尾 = 'building… [进度 2/7 骨架搭好]';
+  const r0 = patrol.打点停滞(root, CFG, { 执行中: [会话('S-1', 尾)], now: T0 });
+  assert.equal(r0.告警.length, 0, '首次观测只建基线');
+  const r1 = patrol.打点停滞(root, CFG, { 执行中: [会话('S-1', 尾)], now: 分(19) });
+  assert.equal(r1.告警.length, 0, '未满 20 分钟不报');
+  const r2 = patrol.打点停滞(root, CFG, { 执行中: [会话('S-1', 尾)], now: 分(21) });
+  assert.equal(r2.告警.length, 1, '超过 20 分钟才报');
+  assert.ok(r2.告警[0].includes('S-1') && r2.告警[0].includes('2/7'), '告警含单号与最后打点');
+  const 信 = inbox.list(root, 50).filter((e) => e.类型 === '打点停滞');
+  assert.equal(信.length, 1);
+  assert.equal(信[0].级别, '常', '级别普通不急');
+  assert.equal(信[0].单号, 'S-1');
+  assert.ok(ledger.events(root, 50).some((e) => e.类型 === '打点停滞'), '台账留痕');
+  // 同一次停滞不刷屏
+  patrol.打点停滞(root, CFG, { 执行中: [会话('S-1', 尾)], now: 分(40) });
+  assert.equal(停滞数(root), 1, '一次停滞只报一次');
+});
+
+t('无打点的单不适用本条：跑再久也不报（软契约缺席不判罚）', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  const 尾 = '一直在输出，但从来没打过点';
+  for (const m of [0, 21, 60, 300]) patrol.打点停滞(root, CFG, { 执行中: [会话('N-1', 尾)], now: 分(m) });
+  assert.equal(停滞数(root), 0);
+});
+
+t('打点前进 → 解除并重新计时，不报', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  patrol.打点停滞(root, CFG, { 执行中: [会话('P-1', '[进度 1/5 起手]')], now: T0 });
+  patrol.打点停滞(root, CFG, { 执行中: [会话('P-1', '[进度 2/5 推进]')], now: 分(15) });
+  const r = patrol.打点停滞(root, CFG, { 执行中: [会话('P-1', '[进度 2/5 推进]')], now: 分(30) });
+  assert.equal(r.告警.length, 0, '打点在 15 分处前进过，30 分时才停 15 分钟');
+  assert.equal(停滞数(root), 0);
+});
+
+t('打点没动但 tail 还在吐字 → 不报（会话活着，只是没吆喝）', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  patrol.打点停滞(root, CFG, { 执行中: [会话('L-1', '[进度 3/9 干着]')], now: T0 });
+  patrol.打点停滞(root, CFG, { 执行中: [会话('L-1', '[进度 3/9 干着] 编译中…')], now: 分(15) });
+  const r = patrol.打点停滞(root, CFG, { 执行中: [会话('L-1', '[进度 3/9 干着] 编译中… 还在跑')], now: 分(30) });
+  assert.equal(r.告警.length, 0);
+  assert.equal(停滞数(root), 0);
+});
+
+t('非执行会话（判官）与空在跑表不适用：不报不炸', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  patrol.打点停滞(root, CFG, { 执行中: [{ id: 'J-1', kind: '代核', tail: '[进度 1/3 核着]' }], now: T0 });
+  patrol.打点停滞(root, CFG, { 执行中: [{ id: 'J-1', kind: '代核', tail: '[进度 1/3 核着]' }], now: 分(60) });
+  const r = patrol.打点停滞(root, CFG, { 执行中: [], now: 分(90) });
+  assert.deepEqual(r.盯守, [], '会话收场即忘，不留幽灵');
+  assert.equal(停滞数(root), 0);
+});
+
 console.log(`全部通过：${passed} 项`);
