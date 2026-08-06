@@ -56,4 +56,18 @@ function checkProject(reg, env) {
     : { 级别: '黄', note: 'unreal 未装（30-100GB 级，按需再装；引擎单不可用）' };
 }
 
-module.exports = { TYPES, findGodot, findUnityVersions, findUnreal, checkProject };
+// 引擎作业状态（2026-08-06 TK-97 案：会话前台等 Unity 测试，界面看不出「在跑」还是「僵死」）。
+// 口径与 套件/enginectl 一致：.enginectl-lock/pid 存在=作业持锁；enginectl-test.log mtime=心跳。
+// 任何文件缺失一律静默：没锁就是没作业，没日志就是没心跳，不报错不出灯。
+const 停更告警秒 = 7 * 60;
+function jobStatus(projPath, now) {
+  if (!projPath) return null;
+  let pid = null;
+  try { pid = fs.readFileSync(path.join(projPath, '.enginectl-lock', 'pid'), 'utf8').trim() || null; } catch { /* 无锁 */ }
+  if (!pid) return null; // 无锁不出行（施工令：有锁才显示）
+  let log秒 = null;
+  try { log秒 = Math.max(0, Math.round(((now || Date.now()) - fs.statSync(path.join(projPath, 'enginectl-test.log')).mtimeMs) / 1000)); } catch { /* 无日志 */ }
+  return { 锁: true, pid, log秒, 停滞: log秒 != null && log秒 > 停更告警秒 };
+}
+
+module.exports = { TYPES, findGodot, findUnityVersions, findUnreal, checkProject, jobStatus, 停更告警秒 };

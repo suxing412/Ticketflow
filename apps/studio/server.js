@@ -485,7 +485,7 @@ app.get('/api/agents', (req, res) => {
     const isParent = (t) => ['战役','专项'].includes(t.fm.父单类型) || ['战役','专项'].includes(t.fm.主办); // H53：组织容器不是执行者
     const 在跑 = fl.filter((t) => ['在途', '质检'].includes(t.state) && !isParent(t)).map((t) => ({
       主办: t.fm.主办 || '（衔接中）', id: t.id, title: t.fm.title, state: t.state,
-      职能: t.fm.职能, 池: t.fm.执行池 || '', 领单时间: t.fm.领单时间 || null,
+      职能: t.fm.职能, 池: t.fm.执行池 || '', 领单时间: t.fm.领单时间 || null, 项目: t.fm.项目 || '',
       环节: (liveByTicket[t.id] || {}).kind || null, 环节起时: (liveByTicket[t.id] || {}).startedAt || null,
       尾: (liveByTicket[t.id] || {}).tail || null,
     }));
@@ -494,7 +494,7 @@ app.get('/api/agents', (req, res) => {
       return { id: a.id, 忙: !!busy, 当前: busy ? busy.id : null };
     });
     const l = pmLedger.read(ROOT);
-    return res.json({ 模式: '派发', 在跑, 判官, 就绪队列: l.就绪队列 || [], 并发上限: l.并发上限, 滞留告警: 滞留, 编辑器占用: runStatus.编辑器占用 || [] });
+    return res.json({ 模式: '派发', 在跑, 判官, 就绪队列: l.就绪队列 || [], 并发上限: l.并发上限, 滞留告警: 滞留, 编辑器占用: runStatus.编辑器占用 || [], 引擎作业: runStatus.引擎作业 || {} });
   }
   const byAgent = {};
   for (const t of fl) if (t.fm.主办) byAgent[t.fm.主办] = { id: t.id, title: t.fm.title, state: t.state, 职能: t.fm.职能, 领单时间: t.fm.领单时间 };
@@ -517,7 +517,10 @@ app.get('/api/ticket', (req, res) => {
     const proj = t.fm.项目 && cfg.项目 && cfg.项目.注册 && cfg.项目.注册[t.fm.项目];
     if (proj) 产出 = require('./lib/artifacts').locate(raw, proj.路径);
   }
-  res.json({ id, state: t.state, fm: t.fm, body: t.body, html: mdHtml(t.body), 链: trace.chains(ROOT, id), 回执, 产出 });
+  // 引擎作业（TK-97 案）：该单所属项目仓的 enginectl 锁与心跳；无项目/无锁/文件缺失一律 null
+  const projReg = t.fm.项目 && cfg.项目 && cfg.项目.注册 && cfg.项目.注册[t.fm.项目];
+  const 引擎作业 = (() => { try { return require('./lib/engines').jobStatus(projReg && projReg.路径); } catch { return null; } })();
+  res.json({ id, state: t.state, fm: t.fm, body: t.body, html: mdHtml(t.body), 链: trace.chains(ROOT, id), 回执, 产出, 引擎作业 });
 });
 
 // ---- 项管信道（0.18.6，前身遥控传令板）：制作人 ↔ 项管（fable）问答 + 汇报流（明文 jsonl 留档）----
@@ -682,7 +685,7 @@ const ACTIONS = {
   收回: (b) => { runner.killTicket(ROOT, b.id); return life.收回(ROOT, b.id); },
   交产出: (b) => life.交产出(ROOT, b.id, b.回执),
   QA裁定: (b) => life.QA裁定(ROOT, cfg, b.id, !!b.通过),
-  定夺: (b) => life.定夺(ROOT, b.id, b.决定),
+  定夺: (b) => life.定夺(ROOT, b.id, b.决定, b.方向, b.裁决人), // 方向文本随 给方向 落工单正文（D43③）
   验收: (b) => life.验收(ROOT, b.id, !!b.通过),
   失败分诊: (b) => life.失败分诊(ROOT, b.id, b.决定), // D31：重投/上呈（废弃走通用废弃）
   解除复核: (b) => life.解除待复核(ROOT, b.id, b.说明), // D36：核对新版后解除

@@ -71,6 +71,8 @@ function QA裁定(root, cfg, id, 通过) {
 
 // 待定夺裁决（D10）：接受→待验收；给方向→在途(单未死，不违 D6)；打回→已归档(+新单另调 返工)。
 // D43③ 扩展：给方向可附方向文本（追加进工单正文，主办 agent 重执行时能读到）+ 裁决人署名。
+// 给方向清计数（2026-08-06 TK-97 六分钟连环三振案）：回炉是裁决给的新起点，旧自修次数已顶到
+// 上限，不清则回在途后 QA 一次不过即再超上限→秒回待定夺，死循环。接受/打回不动计数。
 function 定夺(root, id, 决定, 方向, 裁决人) {
   const t = store.find(root, id);
   if (!t) return { ok: false, error: '不存在' };
@@ -78,7 +80,9 @@ function 定夺(root, id, 决定, 方向, 裁决人) {
   const map = { 接受: '待验收', 给方向: '在途', 打回: '已归档' };
   const to = map[决定];
   if (!to) return { ok: false, error: `未知决定：${决定}` };
-  const r = store.move(root, id, '待定夺', to, 决定 === '打回' ? (fm) => { fm.归档原因 = '定夺打回'; } : null, nowIso()); // 归档来路补全（夜班推演 #4）
+  const patch = 决定 === '打回' ? (fm) => { fm.归档原因 = '定夺打回'; }
+    : 决定 === '给方向' ? (fm) => { fm.自修次数 = 0; } : null;
+  const r = store.move(root, id, '待定夺', to, patch, nowIso()); // 归档来路补全（夜班推演 #4）
   if (r.ok) {
     if (决定 === '给方向' && 方向) {
       store.update(root, id, (fm, t2) => ({ body: (t2.body || '') + `\n\n## 定夺方向（${裁决人 || '制作人'} · ${nowIso().slice(0, 10)}）\n${String(方向).slice(0, 2000)}\n` }));

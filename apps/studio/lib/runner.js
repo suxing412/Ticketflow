@@ -698,8 +698,23 @@ function status(root, cfg) {
     执行失败数: store.list(root, '执行失败').length,
     编辑器占用: [...manualLockedProjects(root)], // H64：口径=手动锁（自动探测不再作挂起依据）
     编辑器锁: (() => { try { return require('./core/state').read(root).编辑器锁 || {}; } catch { return {}; } })(),
+    引擎作业: engineJobs(cfg), // 项目名 → 引擎作业状态（无锁的项目不出键）
     上轮: lastTick,
   };
+}
+
+// 各注册项目的引擎作业（H83 后续 · TK-97 案）：读锁与测试日志心跳，任何缺失静默跳过。
+function engineJobs(cfg) {
+  const out = {};
+  try {
+    const engines = require('./engines');
+    const reg = (cfg && cfg.项目 && cfg.项目.注册) || {};
+    for (const [name, r] of Object.entries(reg)) {
+      const s = r && r.路径 && engines.jobStatus(r.路径);
+      if (s) out[name] = s;
+    }
+  } catch { /* 状态面板不因探测失败而崩 */ }
+  return out;
 }
 
 // 按单终止（2026-08-05 推演补漏）：收回/废弃在途单时同步掐掉执行会话——此前文件挪走、进程仍在跑
@@ -714,4 +729,4 @@ function killTicket(root, id) {
   return false;
 }
 
-module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket };
+module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs };

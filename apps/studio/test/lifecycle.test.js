@@ -56,6 +56,33 @@ t('待定夺裁决：接受→待验收 / 给方向→在途 / 打回→已归�
   assert.equal(mk('打回'), '已归档');
 });
 
+t('给方向清自修次数（接受/打回不动）', () => {
+  const mk = (dec) => {
+    const root = makeRoot();
+    seed(root, '待定夺', { id: 'D', 自修次数: 3 });
+    life.定夺(root, 'D', dec);
+    return store.find(root, 'D').fm.自修次数;
+  };
+  assert.equal(mk('给方向'), 0);
+  assert.equal(mk('接受'), 3);
+  assert.equal(mk('打回'), 3);
+});
+
+t('回炉后 QA 不过走自修不三振（TK-97 连环三振案）', () => {
+  const root = makeRoot();
+  seed(root, '质检', { id: 'P-04b', QA: '开', 主办: 'A', 自修次数: 2 }); // 已到上限
+  life.QA裁定(root, CFG, 'P-04b', false); // 超上限 → 待定夺
+  assert.equal(st(root, 'P-04b'), '待定夺');
+  assert.equal(store.find(root, 'P-04b').fm.自修次数, 3);
+  life.定夺(root, 'P-04b', '给方向', '按这个方向重做');
+  assert.equal(st(root, 'P-04b'), '在途');
+  assert.equal(store.find(root, 'P-04b').fm.自修次数, 0);
+  store.move(root, 'P-04b', '在途', '质检'); // 回炉重做后再交质检
+  life.QA裁定(root, CFG, 'P-04b', false);
+  assert.equal(st(root, 'P-04b'), '在途'); // 走自修而非直接三振
+  assert.equal(store.find(root, 'P-04b').fm.自修次数, 1);
+});
+
 t('验收不过 → 已归档', () => {
   const root = makeRoot();
   seed(root, '待验收', { id: 'P-05' });

@@ -757,6 +757,7 @@ function viewAgentsDispatch(d, all) {
       <div class="av" style="background:${FNHEX[r.职能] || 'var(--ink3)'}">${esc((r.职能 || '').slice(0, 2))}</div>
       <div class="who">${esc(r.主办)}</div>
       <span class="poolp pill sm fn ${r.池 === 'claude' ? 'pool-claude' : 'pool-codex'}">${esc(r.池 || '?')} 池</span>
+      ${engJobPill((d.引擎作业 || {})[r.项目])}
       <div class="mid2"><span class="aid"><a href="#/t/${esc(r.id)}" style="color:inherit" onclick="event.stopPropagation()">${esc(r.id)}</a></span>
         <div class="at">${esc(r.title || '')}${r.尾 ? ` <span class="dim2">· ${esc(String(r.尾).slice(-60))}</span>` : ''}</div></div>
       <div class="chips">${fnPill(r.职能)}${stPill(r.state)}</div>
@@ -1348,6 +1349,41 @@ window.dSave = async (release) => {
 };
 
 /* ===== P8 详情 ===== */
+// 引擎作业行（TK-97 案：会话前台等引擎测试，界面上看不出在跑还是卡死）。
+// 无锁 → 空串不出行；log 停更 >7 分钟 → 告警色。数据源 /api/ticket.引擎作业 与 /api/runner.引擎作业。
+function engJobHtml(j) {
+  if (!j) return '';
+  const 秒 = j.log秒 == null ? '未见 enginectl-test.log' : `log ${j.log秒} 秒前更新`;
+  return `<span class="pill sm ${j.停滞 ? 'red' : 'ok'}">引擎作业在跑</span>
+    <span class="mono subnote">pid ${esc(j.pid)}</span>
+    <span class="${j.停滞 ? 'err' : 'dim'}" style="font-size:12px">${esc(秒)}${j.停滞 ? ' · 已停更 >7 分钟，疑似卡死' : ''}</span>`;
+}
+function engJobPill(j) {
+  if (!j) return '';
+  return `<span class="pill sm ${j.停滞 ? 'red' : 'ok'}" title="引擎作业持锁 pid ${esc(j.pid)}${j.log秒 == null ? '（未见测试日志）' : ` · log ${j.log秒} 秒前更新`}">引擎${j.停滞 ? '停更' : '在跑'}</span>`;
+}
+// 回执最新一轮：多轮回执按「## 第 N 轮回执」或「# 完工报告」切，取最后一段（旧单单轮原样返回）
+function 回执最新轮(raw) {
+  const s = String(raw || '');
+  const rounds = s.split(/^(?=##\s*第\s*\d+\s*轮回执)/m).filter((x) => x.trim());
+  if (rounds.length > 1) return { 段: rounds[rounds.length - 1], 轮: `第 ${rounds.length} 轮（最新）` };
+  const reports = s.split(/^(?=#\s+完工报告)/m).filter((x) => x.trim());
+  if (reports.length > 1) return { 段: reports[reports.length - 1], 轮: `最新一份（共 ${reports.length} 份）` };
+  return { 段: s, 轮: '' };
+}
+// 正文/回执中最后一个 QA 章的结论摘要（≤10 行）：优先结论/不过项行，无则取章首几行
+function 最新QA摘要(raw, body) {
+  const pick = (src) => {
+    const secs = String(src || '').split(/^##+\s*/m).filter((p) => /^(QA|质检|核验|QA\s*核验)/i.test(p.trim()));
+    if (!secs.length) return '';
+    const 章 = secs[secs.length - 1];
+    const lines = 章.split('\n').slice(1).map((l) => l.trim()).filter(Boolean);
+    const hit = lines.filter((l) => /结论|不过|未过|失败|缺|问题|原因|建议/.test(l));
+    return (hit.length ? hit : lines).slice(0, 10).join('\n');
+  };
+  return pick(raw) || pick(body) || '';
+}
+
 async function viewDetail(id) {
   const d = await api('/api/ticket?id=' + encodeURIComponent(id));
   if (d.error) return `<p class="err" style="margin-top:30px">${esc(d.error)}</p>`;
@@ -1377,16 +1413,73 @@ async function viewDetail(id) {
       setTimeout(() => lvStart(id, live ? live.startedAt : null, fm.领单时间 || fm.更新时间 || null, live ? live.kind : null), 0);
     }
   }
+  // ---- 引擎作业（有锁才出行）：会话在前台等 Unity/Godot 测试时，界面得看得见它在跑 ----
+  let engHtml = '';
+  if (d.引擎作业) {
+    engHtml = `<div class="card r14" id="engjob" style="padding:10px 16px;margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <b style="font-size:13px">引擎作业</b>${engJobHtml(d.引擎作业)}
+      <span class="subnote">项目 ${esc(fm.项目 || '—')} · 锁 .enginectl-lock</span></div>`;
+    // 心跳原地刷新：离开详情页自动停（pollLoop 以元素存在为守卫）
+    pollLoop('engjob', 5000, async () => {
+      const r = await api('/api/runner');
+      const j = (r.引擎作业 || {})[fm.项目];
+      const el = $('engjob');
+      if (!el) return;
+      if (!j) { el.remove(); return; } // 锁没了＝作业收工，行自行消失
+      el.innerHTML = `<b style="font-size:13px">引擎作业</b>${engJobHtml(j)}<span class="subnote">项目 ${esc(fm.项目 || '—')} · 锁 .enginectl-lock</span>`;
+    });
+  }
+  // ---- 待定夺卷宗（TK-97 案：待定夺时详情页看不到发生了什么）----
+  let escalHtml = '';
+  if (d.state === '待定夺') {
+    const jl = await api('/api/journal').catch(() => ({ lines: [] }));
+    const mine = (jl.lines || []).filter((l) => l.includes(id));
+    // 先找本单自己的上呈事件（三振/失败分诊/评估回呈/仲裁），找不到再退而求其次收任何带「上呈」的行——
+    // 否则会被战役级「连环异常上呈」这类旁支流水盖住真正的原因（实机取证 2026-08-06）
+    const rev = [...mine].reverse();
+    const 上呈行 = rev.find((l) => /修不好|失败分诊|评估回呈|仲裁/.test(l)) || rev.find((l) => /上呈|待定夺/.test(l)) || '';
+    const 原因 = 上呈行 || (fm.自修次数 ? `QA 自修 ${fm.自修次数} 轮未过 → 三振上呈` : '')
+      || (fm.失败原因 ? `执行失败上呈：${String(fm.失败原因).slice(0, 120)}` : '') || '（流水与工单里都没记到上呈原因）';
+    const qa = 最新QA摘要(d.回执 ? d.回执.raw : '', d.body);
+    const dirs = String(d.body || '').split(/^## /m).filter((p) => p.startsWith('定夺方向')).reverse();
+    const arb = fm.代裁 ? `<span class="pill sm ${fm.代裁.结论 === '给方向' ? 'ok' : 'mut'}">代裁 · ${esc(fm.代裁.结论)}</span>` : '';
+    const dirHtml = dirs.length ? dirs.map((p) => {
+      const nl = p.indexOf('\n');
+      return `<div class="rsec"><div class="rl">${esc((nl < 0 ? p : p.slice(0, nl)).replace(/^定夺方向/, '定夺方向 '))}</div>
+        <div class="rv" style="white-space:pre-line">${esc((nl < 0 ? '' : p.slice(nl + 1)).trim().split('\n').slice(0, 12).join('\n'))}</div></div>`;
+    }).join('') : '<div class="rsec"><div class="rl">历史定夺方向</div><div class="rv dim">（尚未给过方向——这是第一次上呈）</div></div>';
+    escalHtml = `<div class="p8main card r16" style="border-color:var(--gateln)">
+      <b style="font-size:13px">待定夺卷宗</b>
+      <span class="subnote" style="margin-left:8px">为什么呈到你手上 · 判官说了什么 · 之前给过什么方向</span>
+      ${fm.自修次数 ? `<span class="pill sm red" style="margin-left:8px">自修 ${esc(fm.自修次数)} 轮</span>` : ''}${arb}
+      <div class="rsec"><div class="rl">上呈原因</div><div class="rv" style="white-space:pre-line">${esc(原因)}</div></div>
+      <div class="rsec"><div class="rl">最新 QA 结论</div><div class="rv" style="white-space:pre-line">${esc(qa || '（回执与正文里都没找到 QA 章）')}</div></div>
+      ${dirHtml}</div>`;
+  }
   const chainRow = (k, v, cls) => `<div class="crow"><span class="ck">${k}</span><span class="cv ${cls || ''}">${v || '—'}</span></div>`;
   const kidsTxt = (c.父子.子 || []).map((x) => `<a href="#/t/${x.id}" style="color:var(--accent-ink)">${esc(x.id)}</a>(${esc(x.state)})`).join('、');
   let rsecs = '';
   if (d.回执) {
+    // 多轮回执只解析最新一轮（返修/自修追加在同一文件里，旧轮章节会盖住新轮）
+    const { 段, 轮 } = 回执最新轮(d.回执.raw);
     const secs = { 验收步骤: '', 做了什么: '', 'QA 章节': '', 实际消耗: '', 异议: '' };
     const SECLN = { 验收步骤: 8, 做了什么: 4 }; // 验收步骤给足行数——制作人按此动手（用户定稿）
-    d.回执.raw.split(/^## /m).forEach((p) => { const nl = p.indexOf('\n'); const h = p.slice(0, nl < 0 ? undefined : nl).trim();
+    段.split(/^## /m).forEach((p) => { const nl = p.indexOf('\n'); const h = p.slice(0, nl < 0 ? undefined : nl).trim();
       for (const k of Object.keys(secs)) if (h.startsWith(k) || (k === 'QA 章节' && /QA/.test(h))) secs[k] = (nl < 0 ? '' : p.slice(nl + 1)).trim().split('\n').slice(0, SECLN[k] || 1).join('\n'); });
     if (!secs.验收步骤) delete secs.验收步骤; // 委托单免写，不占位
-    rsecs = Object.entries(secs).map(([k, v]) => `<div class="rsec"><div class="rl">${k}</div><div class="rv" style="white-space:pre-line">${esc(v || '—')}</div></div>`).join('');
+    // 判「标准回执」以 做了什么 为准：这章都没有的，四件套摆出来就是一排「—」的空壳（TK-97 案），
+    // 一律补末尾 8 行原文——宁可给制作人原文，也不给他一屏破折号。
+    const 标准 = !!(secs.做了什么 && secs.做了什么.trim());
+    const 有货 = Object.entries(secs).filter(([, v]) => v && v.trim());
+    const 章节Html = (list) => list.map(([k, v]) => `<div class="rsec"><div class="rl">${k}</div><div class="rv" style="white-space:pre-line">${esc(v || '—')}</div></div>`).join('');
+    if (标准) {
+      rsecs = (轮 ? `<div class="subnote" style="margin:8px 0 2px">${esc(轮)}</div>` : '') + 章节Html(Object.entries(secs));
+    } else {
+      const tail = 段.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-8).join('\n');
+      rsecs = `<div class="subnote" style="margin:8px 0 2px">非标回执（未见「做了什么」章）${轮 ? ' · ' + esc(轮) : ''} · 附末尾 8 行原文</div>
+        ${章节Html(有货)}
+        <div class="rsec"><div class="rl">回执原文</div><div class="rv mono" style="white-space:pre-line">${esc(tail || '（回执为空文件）')}</div></div>`;
+    }
   }
   const ops = [];
   if (['池', '待投'].includes(d.state)) ops.push(['撤回', '回草稿（仅在池 / 待投）', `act2('撤回','${id}')`]);
@@ -1396,6 +1489,11 @@ async function viewDetail(id) {
     ops.push(['重投', `清执行痕迹回池重领${fm.失败原因 ? '（' + esc(String(fm.失败原因).slice(0, 24)) + '）' : ''}`, `act3('失败分诊','${id}','重投')`]);
     ops.push(['返修', `同号回草稿改写（第 ${(fm.返修轮 || 0) + 1} 轮，计数保留，H65）`, `act2('返修','${id}')`]);
     ops.push(['上呈', '转待定夺，由你拍板', `act3('失败分诊','${id}','上呈')`]);
+  }
+  if (d.state === '待定夺') { // D10 裁决三出路，与决策台等价（走同一 /api/act/定夺）
+    ops.push(['接受', 'QA 说不过但你认了 → 待验收', `act3('定夺','${id}','接受')`]);
+    ops.push(['给方向', '写清怎么改 → 回在途重做（自修计数清零）', `dirModal('${id}')`]);
+    ops.push(['打回', '这活不成立 → 归档（返工另开新单）', `askDecide('${id}','打回','打回将归档本单，需另开新单重走流程。确认？')`]);
   }
   if (d.state === '待验收') ops.push(['返修', `不过关但同一件活：同号回草稿改写（第 ${(fm.返修轮 || 0) + 1} 轮，H65）`, `act2('返修','${id}')`]);
   if (d.state === '草稿') ops.push(['定稿', '草稿 → 待投', `act2('定稿','${id}')`]);
@@ -1408,7 +1506,7 @@ async function viewDetail(id) {
   }
   if (['完成', '已归档'].includes(d.state)) ops.push(['推翻重做', '翻案：归档旧单+自动开返工草稿（须写理由）', `overturnModal('${id}')`]);
   if (d.state === '已归档') ops.push([fm.隐藏 ? '取消隐藏' : '隐藏归档', fm.隐藏 ? '重新出现在归档列表' : '从一切默认视图湮灭（纸面仍可考）', `toggleHide('${id}',${fm.隐藏 ? 'false' : 'true'})`]);
-  return `${liveHtml}<div class="p8grid"><div>
+  return `${engHtml}${liveHtml}<div class="p8grid"><div>
       <div class="p8main card r16"><h2>${esc(id)} · ${esc(fm.title)}</h2>
         <div class="chipsrow">${fnPill(fm.职能)}<span class="pill mut">${esc(fm.产出物类型 || '')}</span>
           <span class="pill ${fm.验收方式 === '委托' ? 'mut' : 'ok'}">${esc(fm.验收方式 || '保留')}</span><span class="pill mut">${esc(fm.规模 || '')}</span>
@@ -1420,6 +1518,7 @@ async function viewDetail(id) {
           ${chainRow('返工自', c.返工自 ? esc(c.返工自) : null)}
           ${chainRow('依据', c.依据 ? `<span style="color:var(--accent-ink)">${esc(c.依据)}</span>` : null)}
           ${chainRow('依赖', (c.依赖 || []).map((x) => `${esc(x.id)}(${esc(x.state)})`).join('、'), 'okc')}</div></div>
+      ${escalHtml}
       ${d.产出 && d.产出.产出.length ? `<div class="p8main card r16"><b style="font-size:13px">产出速览</b>
         <span class="subnote" style="margin-left:8px">${d.产出.来源 === '结构化' ? '回执产出章节' : '从回执正文解析'} · 点击调起本机查看</span>
         ${d.产出.产出.map((a) => `<div class="prow" style="margin-top:8px">
@@ -1527,6 +1626,23 @@ window.artSubmit = async (id, btn) => {
   toast('已入美术库：' + r.name);
 };
 window.act3 = async (name, id, 决定) => { const r = await post('/api/act/' + name, { id, 决定 }); toast(r.ok ? `${决定} 完成` : (r.error || '失败')); route(); };
+window.askDecide = async (id, 决定, msg) => { if (await ask(msg)) act3('定夺', id, 决定); };
+// 给方向弹框（D43③）：方向文本随裁决落进工单正文，重执行的会话能读到；自修计数由 lifecycle 清零
+window.dirModal = (id) => showModal(`<h3>给方向 ${esc(id)}</h3>
+  <p class="subnote" style="margin-top:6px">写清「哪里不行 + 要往哪改」。文本追加进工单正文（## 定夺方向），单回在途重做，自修次数清零重新计。</p>
+  <textarea id="dir-t" style="width:100%;height:110px;margin-top:12px" placeholder="如：核心循环没问题，但数值曲线太陡——把 3-8 关的经验需求压到现在的 60%，其余不动"></textarea>
+  <div class="p7foot" style="margin-top:14px"><button class="btn h32" onclick="this.closest('.mwrap').remove()">取消</button>
+  <button class="btn accent h32" onclick="doGiveDir('${esc(id)}',this)">回炉重做</button></div>`);
+window.doGiveDir = async (id, btn) => {
+  const 方向 = $('dir-t').value.trim();
+  if (!方向) return toast('方向必填——不写方向的回炉等于让它再猜一遍');
+  btn.disabled = true;
+  const r = await post('/api/act/定夺', { id, 决定: '给方向', 方向, 裁决人: '制作人' });
+  if (!r.ok) { btn.disabled = false; return toast(r.error || '失败'); }
+  btn.closest('.mwrap').remove();
+  toast('已给方向 → 回在途重做');
+  route();
+};
 
 /* ===== 路由 ===== */
 /* ===== P16 Wiki（0.20，H52 第三类实体）：设计事实源——分类树 + 词条双链 + 信息栏 + 待审人闸 + 关系图 ===== */
