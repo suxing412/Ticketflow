@@ -318,14 +318,22 @@ a.gear { text-decoration:none; }
 .bcol2 h4 { margin:0 6px 14px; font-size:12.5px; display:flex; justify-content:space-between; align-items:center; }
 .bcol2 h4 .cnt { font-family:var(--mono); font-size:12px; color:var(--ink3); font-weight:400; }
 .bcol2.hot h4 { color:var(--danger); }
-.bcard2 { background:var(--card); border:1px solid var(--line); border-radius:10px; height:92px;
-  padding:12px 14px; margin-bottom:12px; cursor:pointer; position:relative; }
+/* 施工令-005 第4条：改流式布局——胶囊排在标题块之后（不再 absolute），卡高随两行标题自适应。
+   原 height:92px + 胶囊 absolute bottom 的组合，在 002 的两行截断落地后会让胶囊压住标题第二行。 */
+.bcard2 { background:var(--card); border:1px solid var(--line); border-radius:10px; min-height:92px;
+  padding:12px 14px; margin-bottom:12px; cursor:pointer; position:relative;
+  display:flex; flex-direction:column; }
 .bcard2:hover { border-color:var(--ink3); }
-.bcard2 .cid { font-family:var(--mono); font-size:11px; color:var(--ink3); }
+/* align-self:flex-start 让编号行回到"贴文字宽"（flex 项默认拉伸会撑满卡宽，撞上右上角
+   absolute 的优先级角标）；max-width 是超长单号的兜底，宁可省略也不钻到角标底下 */
+.bcard2 .cid { font-family:var(--mono); font-size:11px; color:var(--ink3);
+  align-self:flex-start; max-width:calc(100% - 40px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .bcard2 .cpri { position:absolute; top:12px; right:14px; font-family:var(--mono); font-size:11px; color:var(--ink3); }
 .bcard2 .cpri.p0 { background:var(--dangerbg); color:var(--danger); font-size:10px; padding:1px 7px; border-radius:4px; top:11px; }
-.bcard2 .ct { font-size:12px; font-weight:500; margin-top:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.bcard2 > .pill { position:absolute; left:14px; bottom:10px; }
+.bcard2 .ct { font-size:12px; font-weight:500; margin:5px 0 8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* margin-top:auto 吃掉剩余空间把胶囊顶到卡底（短标题维持原观感）；.ct 的 margin-bottom
+   是两行标题时的最小气口——flex 容器内不会外边距合并，所以两者叠加即最小间距。 */
+.bcard2 > .pill { align-self:flex-start; margin-top:auto; flex:none; }
 .newdraft { display:inline-flex; align-items:center; height:26px; padding:0 11px; border-radius:13px;
   border:1px solid var(--accent-ink); color:var(--accent-ink); font-size:11px; font-weight:500; background:var(--card); }
 
@@ -786,33 +794,18 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .fl-pipehead { position:absolute; left:8px; right:8px; height:30px; display:flex; align-items:center; gap:8px;
   font-size:13px; border-bottom:0.5px solid var(--line); padding:0 6px; }
 
-/* 在途原地展开详情（2026-08-06 夜班体检批3）：与决策台 doc-line 同语汇，作用域独立 */
-.ag-detail .ph { font-size:11px; font-weight:700; color:var(--ink3); text-transform:none; letter-spacing:.02em; margin-bottom:2px; }
-.ag-detail .doc-line { font-size:12.5px; color:var(--ink2); margin:8px 0; line-height:1.55; }
-/* 施工令-004 展开区改版：首屏=大进度条 + 最近 3 行输出 + 详情链接；工单正文默认折叠 */
-.ag-detail .segbar { margin-top:0; }
-.ag-detail .segbar .seg i { height:7px; }
-.ag-detail .tail3 { font-family:var(--mono); font-size:11px; color:var(--ink3); line-height:1.7;
-  white-space:pre-line; margin-top:14px; word-break:break-word; }
-.ag-detail .tail3 b { color:var(--ink2); font-weight:400; }
-.ag-detail .expfoot { display:flex; gap:16px; align-items:center; margin-top:12px; font-size:12px; }
-.ag-detail .expfoot a { color:var(--accent-ink); text-decoration:none; }
-.ag-detail .expfoot a:hover { text-decoration:underline; }
-.ag-detail .foldbtn { color:var(--ink3); font-size:12px; }
-.ag-detail .foldbtn:hover { color:var(--ink2); }
-.ag-detail .foldbtn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
-.ag-detail .agbody { margin-top:14px; border-top:1px solid var(--line); padding-top:12px;
-  display:flex; gap:24px; flex-wrap:wrap; }
-.ag-detail .agbody > div { flex:1; min-width:260px; }
-.ag-detail { animation:agdIn .18s var(--ease-out); }
+/* 施工令-005：在途原地展开区已删（与卡片本体信息重复），整卡点击直达详情页。
+   agdIn 关键帧保留——确认层 .ask-ov 仍在用。 */
 @keyframes agdIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:none; } }
-@media (prefers-reduced-motion: reduce) { .ag-detail { animation:none; } }
 
 /* 2026-08-06 UI 评审 · hub 页：H-1 最近动态行 / H-2 零值灰显 / H-3 焦点环 */
 .hubcard .hlast { font-family:var(--mono); font-size:10.5px; color:var(--ink3); margin-top:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-height:14px; }
 .hubcard .hc i.z { color:var(--ink3); font-weight:500; }
 .hubcard:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .inbox-row:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+/* 施工令-005：在跑卡整卡可点（直达详情页），补指针与焦点环 */
+.arow2[role="button"] { cursor:pointer; }
+.arow2[role="button"]:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 
 /* 应用内确认层（confirm 哑弹案，2026-08-06）：mask 铺底 + 居中卡，浏览器与 exe 同行为 */
 .ask-ov { position:fixed; inset:0; background:var(--mask); display:flex; align-items:center; justify-content:center; z-index:60; animation:agdIn .15s var(--ease-out); }
