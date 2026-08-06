@@ -646,6 +646,30 @@ app.post('/api/pm/roster', (req, res) => {
   res.json({ ok: true, 生效: r.生效, 编制: cfg.编制 });
 });
 
+// ---- 并发调配（施工令-010，制作人 2026-08-06 23:59 批准）----
+// 并发调配权随编制权一并归项管（H85 同规格下放）：项管按待验收/待定夺积压动态调审检并发与池并发。
+// 硬顶＝成本保险丝，仅制作人可改（config.并发.硬顶 / dispatch.HARD_CAP），越顶一律 400。
+// GET = 聚合快照（审检+零输出在 config、池并发在台账，一处看得全）；
+// POST = {审检?,零输出分钟?,池?:{codex,claude,deepseek},理由}，整批校验通过才落，记账口径同编制调整。
+const concurrency = require('./lib/concurrency');
+app.get('/api/pm/concurrency', (req, res) => {
+  if (!ready(res)) return;
+  res.json(concurrency.view(cfg, pmLedger.read(ROOT).并发上限));
+});
+app.post('/api/pm/concurrency', (req, res) => {
+  if (!ready(res)) return;
+  const { 理由, ...改动 } = req.body || {};
+  const 池前 = pmLedger.read(ROOT).并发上限 || {};
+  const r = concurrency.apply(cfg, 改动, 池前);
+  if (!r.ok) return res.status(400).json({ error: r.error, ...(r.越顶 ? { 越顶: true } : {}) });
+  concurrency.write(cfg, r.并发); saveCfg();
+  if (JSON.stringify(r.池) !== JSON.stringify(池前)) pmLedger.update(ROOT, (l) => { l.并发上限 = r.池; });
+  const 摘 = r.生效.map((v) => v.摘).join('；');
+  journal.append(ROOT, `并发调配（施工令-010）：${摘}｜理由：${String(理由 || '未述').slice(0, 120)}`);
+  pmLedger.event(ROOT, '并发调配', { 生效: r.生效, 理由: String(理由 || '').slice(0, 200) });
+  res.json({ ok: true, 生效: r.生效, ...concurrency.view(cfg, pmLedger.read(ROOT).并发上限) });
+});
+
 // ---- 产出调起：打开文件/所在文件夹（仅限该单所属项目仓内，越界拒）----
 app.post('/api/open', (req, res) => {
   if (!ready(res)) return;
@@ -1052,6 +1076,8 @@ function start() {
             require('./lib/pm/patrol').零派发告警(ROOT, cfg);
             // 施工令-004 打点停滞：签了打点软契约却不动了才提醒（无打点的单不适用）
             require('./lib/pm/patrol').打点停滞(ROOT, cfg);
+            // 施工令-010 零输出看门狗：会话拉起 ≥config.并发.零输出分钟 仍一个字没吐 → 急件（TK-102 挂死 48 分钟案）
+            require('./lib/pm/patrol').零输出(ROOT, cfg);
           } catch { /* 巡检失败不阻塞 */ }
         }, 15 * 60000).unref();
       }

@@ -89,13 +89,52 @@ function 打点停滞(root, cfg, opts = {}) {
   return { 盯守: [...mem.keys()], 告警 };
 }
 
+// ---- 零输出看门狗（施工令-010，制作人 2026-08-06 23:59 批准）----
+// 案源 TK-102：codex 执行会话拉起后 tail 恒空、挂死 48 分钟无人察觉（2026-08-07 00:06 制作人亲自问出）。
+// 既有三只狗全不适用：零派发狗看的是「零在跑」（这里在跑数 >0）；打点停滞狗只管「打过点又不动了」
+// （这会话一个字都没吐过）；软超时验尸要等 30 分钟闸到点才验。零输出是独立病征，得独立一只狗。
+// 判据（确定性，零 token）：执行会话拉起 ≥ config.并发.零输出分钟（默认 8）且**全程零输出** → 信箱急件一条。
+// 「零输出」= tail 空 **且** 收字节为 0（施工令-010 第 5 条：活性 = stdout∪stderr 任一有新字节）——
+// codex 的过程行全在 stderr，只看 stdout 会把每一个正常跑着的 codex 会话都报成挂死。
+// 同一会话只报一次（键 = 单号@拉起时间：同单重投是新会话，看门狗重新武装）；会话收场即忘。
+const 零输出记忆 = new Map(); // root → Set(会话键)
+function 零输出(root, cfg, opts = {}) {
+  const now = opts.now != null ? opts.now : Date.now();
+  const 在跑 = opts.执行中 != null ? opts.执行中 : 执行中表(root);
+  const 门分 = require('../concurrency').零输出分钟(cfg);
+  const 报过 = 零输出记忆.get(root) || new Set();
+  const 活着 = new Set();
+  const 告警 = [];
+  for (const e of 在跑) {
+    if (!e || e.kind !== '执行' || !e.id) continue;
+    const 起 = Date.parse(e.startedAt || '');
+    if (!Number.isFinite(起)) continue;                 // 无拉起时间戳：不臆测历时，本条不适用
+    const key = `${e.id}@${e.startedAt}`;
+    活着.add(key);
+    if (String(e.tail || '').trim() || Number(e.收字节) > 0) continue; // 吐过字节（任一路）：不是零输出（后来停了那是打点停滞狗的活）
+    const 历时 = now - 起;
+    if (历时 < 门分 * 60000 || 报过.has(key)) continue;
+    报过.add(key);
+    const 分 = Math.round(历时 / 60000);
+    const 文 = `零输出告警：${e.id} 会话已拉起 ${分} 分钟（池 ${e.池 || '—'}）仍零输出——会话疑似挂死，去看一眼`;
+    try { inbox.post(root, '急', '零输出', 文.slice(0, 300), { 单号: e.id }); } catch { /* 信箱失败不阻塞留痕 */ }
+    try { journal.append(root, 文); } catch { /* 留痕失败不阻塞告警 */ }
+    try { ledger.event(root, '零输出', { 单: e.id, 池: e.池 || '', 已历时分: 分, 门槛分: 门分 }); } catch { /* 记账失败不阻塞 */ }
+    告警.push(文);
+  }
+  for (const k of [...报过]) if (!活着.has(k)) 报过.delete(k); // 会话收场即忘，不留幽灵
+  零输出记忆.set(root, 报过);
+  return { 盯守: [...活着], 告警 };
+}
+
 function 执行中表(root) {
   try { return [...require('../runner').running.values()].filter((e) => e.kind === '执行'); }
   catch { return []; } // 取不到在跑表：本条静默跳过（软契约不因探测失败而误报）
 }
 
 function 重置(root) {
-  if (root) { 记忆.delete(root); 打点记忆.delete(root); } else { 记忆.clear(); 打点记忆.clear(); }
+  if (root) { 记忆.delete(root); 打点记忆.delete(root); 零输出记忆.delete(root); }
+  else { 记忆.clear(); 打点记忆.clear(); 零输出记忆.clear(); }
 }
 
-module.exports = { 零派发告警, 打点停滞, 重置, 门槛, 复报间隔, 停滞分钟 };
+module.exports = { 零派发告警, 打点停滞, 零输出, 重置, 门槛, 复报间隔, 停滞分钟 };

@@ -134,6 +134,28 @@ function extractClaudeText(raw) {
   return texts.join('\n\n');
 }
 
+// ---- 活尾巴取样（施工令-010 第 5 条 · 总监 2026-08-07 00:23 实测定谳）----
+// codex CLI 的**过程输出全走 stderr**，stdout 只在收尾吐最终答案（实测：过程行「codex」「tokens used」
+// 在 stderr，stdout 仅 6 字节终答）。旧样 tail 只喂 stdout ⇒ codex 会话全程显示「尚无输出」，
+// 看着像挂死：TK-102 挂死 48 分钟无人察觉是它，00:01 一次冤杀收回也是它（H63 软超时验尸拿 tail 判进展）。
+// 现口径：stdout 有货优先（真报告永远比过程噪声值钱），stdout 还空就用 stderr 最近行兜底；
+// 两路都先洗 ANSI 与裸控制符（codex 过程行带颜色码与光标序列，原样进 UI 是乱码）。
+// 只服务「显示与活性判据」——settleClose 的收线裁决仍只认 stdout，判定逻辑一字不改。
+// 正则用字符串构造（源码里不留裸控制字节，免得改文件的编辑器把它吃掉）
+const CSI = new RegExp('\u001B\\[[0-9;?]*[ -/]*[@-~]', 'g');   // 颜色 / 光标 / 擦除
+const ESCSEQ = new RegExp('\u001B[@-Z\\-_]', 'g');            // 其余 ESC 序列（含 OSC 起始）
+const CTRL = new RegExp('[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]', 'g'); // 裸控制符（保留 tab/换行/回车）
+function stripAnsi(s) {
+  return String(s).replace(CSI, '').replace(ESCSEQ, '').replace(CTRL, '');
+}
+function tailFrom(out, errout) {
+  const src = stripAnsi(String(out || '').trim() ? out : (errout || ''));
+  return {
+    tail: src.replace(/\s+/g, ' ').trim().slice(-300),
+    tail3: src.split('\n').map((l) => l.trim()).filter(Boolean).slice(-3).map((x) => x.slice(-200)),
+  };
+}
+
 // 代理注入（中台验证过的坑：claude 无头调用必须带代理 env）。
 // 服务启动时已按 环境→注册表→config默认 注入进程环境，这里兜底再补一层 config 默认。
 function proxyEnv(cfg) {
@@ -499,7 +521,8 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name} · 超时闸 ${rc.执行超时分钟 ?? 30}m 派发时快照）`); // 夜班推演 #3：热改超时不作用于在跑会话，快照值写明防误判
   let out = '', errout = '';
   child.stdout.on('data', (d) => { out += d; if (out.length > 800000) out = out.slice(-400000);
-    // 活尾巴：stream-json 取最近一个 text 块的可读文本，纯文本流原样截尾
+    entry.收字节 = (entry.收字节 || 0) + d.length; // 活性字节（施工令-010）：零输出看门狗的判据 = stdout∪stderr
+    // 活尾巴：stream-json 取最近一个 text 块的可读文本，纯文本流走 tailFrom（stdout 优先、stderr 兜底）
     if (stream) {
       const ms = out.match(/"text":"((?:[^"\\]|\\.)*)"/g);
       if (ms) { try {
@@ -509,11 +532,14 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
         entry.tail3 = ms.slice(-3).map(dec).filter(Boolean).map((x) => x.slice(-200));
       } catch { /* 保持旧尾 */ } }
     } else {
-      entry.tail = out.replace(/\s+/g, ' ').trim().slice(-300);
-      entry.tail3 = out.split('\n').map((l) => l.trim()).filter(Boolean).slice(-3).map((x) => x.slice(-200));
+      Object.assign(entry, tailFrom(out, errout));
     }
   });
-  child.stderr.on('data', (d) => { errout += d; if (errout.length > 20000) errout = errout.slice(-10000); });
+  child.stderr.on('data', (d) => { errout += d; if (errout.length > 20000) errout = errout.slice(-10000);
+    entry.收字节 = (entry.收字节 || 0) + d.length;
+    // codex 的过程行只在这条路上——不在 stderr 也刷一次尾巴，tail 就永远是空的（施工令-010 第 5 条）
+    if (!stream) Object.assign(entry, tailFrom(out, errout));
+  });
   // H63 软超时（2026-08-05 制作人拍板：不到点即杀，盯进程判余量）：闸到点先验尸——
   // 尾巴仍在动或回执已落盘 → 续 10 分钟再查；进展停滞才处决。硬顶=闸×3（跑飞保险）。
   const timeoutMs = (rc.执行超时分钟 ?? 30) * 60000;
@@ -656,30 +682,49 @@ async function tick(root, cfg, opts = {}) {
   // ④⑤ 判官失败封顶（TK-21）：失败计数到上限的单不再自动拉，等人工（清计数字段可重审）
   const 判官上限 = (cfg.执行器 || {}).判官重试上限 ?? 3;
 
+  // ---- 审检并发去写死（施工令-010，制作人 2026-08-06 23:59 批准）----
+  // 旧样是 running.has('两检初检'/'核查'/'仲裁') 的席位单槽写死：一把裁判尺一次只准开一个会话。
+  // H85 编制权归项管的同规格延伸——槽数改读 config.并发.审检（默认 1、硬顶 2，项管按积压动态调）。
+  // 语义：**同类判官在跑数 < 配额才开新槽**。配额=1 时与旧写法逐位等价（首席位沿用原名，
+  // journal / 进度条 / 状态面板口径一字不改），配额>1 才多开 席位·2 这样的并发席。
+  // 判官逻辑本身一个字不动——本段只改「槽数从哪来」。
+  const 审检配额 = require('./concurrency').审检(cfg);
+  const 在跑同类 = (k) => [...running.values()].filter((e) => e.kind === k).length;
+  const 空席 = (base) => {
+    for (let i = 1; i <= 审检配额; i++) { const id = i === 1 ? base : `${base}·${i}`; if (!running.has(id)) return id; }
+    return null;
+  };
+  // 本轮可开的新槽数在进循环前算死（不在循环里重算）：模拟执行（测试钩子 durMs=0）会当场收线，
+  // 循环里重算就会一轮把待验收全抽干——配额=1 必须仍是「一轮一张，保守推进」，与旧样逐位一致。
+  const 开审检 = async (kind, 席位名, 场, 挑) => {
+    for (let n = 审检配额 - 在跑同类(kind); n > 0; n--) {
+      const 席 = 空席(席位名);
+      if (!席) break;
+      const t = 挑();
+      if (!t || !(await startWork(root, cfg, t, 席, kind, opts))) break;
+      (result[场] = result[场] || []).push(t.id);
+    }
+  };
+
   // ④a 两检制·初检（H67，2026-08-05 用户拍板）：便宜模型先核格式与规范（回执契约/禁语/报数存在性），
   // 不过直接打回不烧 opus；过了才进 ④b 深检。开关与池在 config.执行器.两检。
   const 两检 = (cfg.执行器 || {}).两检 || {};
   const 两检开 = 两检.开 !== false && (cfg.执行池 || {})[两检.池 || 'deepseek'];
-  if (两检开 && !running.has('两检初检')) {
-    const t = store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !['战役', '专项'].includes(x.fm.父单类型) && !x.fm.初检 && !x.fm.代核
-      && (Number(x.fm.初检失败次数) || 0) < 判官上限 && !busyTickets().has(x.id));
-    if (t && await startWork(root, cfg, t, '两检初检', '初检', opts)) (result.初检 = result.初检 || []).push(t.id);
+  if (两检开) {
+    await 开审检('初检', '两检初检', '初检', () => store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !['战役', '专项'].includes(x.fm.父单类型) && !x.fm.初检 && !x.fm.代核
+      && (Number(x.fm.初检失败次数) || 0) < 判官上限 && !busyTickets().has(x.id)));
   }
 
-  // ④b 核查（D34 / H67 深检）：初检过（或两检关）的委托单，opus 核内容质量（一次一张，保守）
-  if (!running.has('核查')) {
-    const t = store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !x.fm.代核
-      && (!两检开 || (x.fm.初检 && x.fm.初检.结论 === '过'))
-      && (Number(x.fm.代核失败次数) || 0) < 判官上限 && !busyTickets().has(x.id));
-    if (t && await startWork(root, cfg, t, '核查', '代核', opts)) (result.代核 = result.代核 || []).push(t.id);
-  }
+  // ④b 核查（D34 / H67 深检）：初检过（或两检关）的委托单，opus 核内容质量（配额内逐张）
+  await 开审检('代核', '核查', '代核', () => store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !x.fm.代核
+    && (!两检开 || (x.fm.初检 && x.fm.初检.结论 === '过'))
+    && (Number(x.fm.代核失败次数) || 0) < 判官上限 && !busyTickets().has(x.id)));
 
-  // ⑤ 仲裁（D43③）：待定夺且未裁过的单，裁判档裁「给方向/上呈」（一次一张）；
+  // ⑤ 仲裁（D43③）：待定夺且未裁过的单，裁判档裁「给方向/上呈」（配额内逐张）；
   // 打回级判断永远留给用户；执行器.代裁=false 可整体关闭
-  if ((cfg.执行器 || {}).代裁 !== false && !running.has('仲裁')) {
-    const t = store.list(root, '待定夺').find((x) => !x.fm.代裁
-      && (Number(x.fm.代裁失败次数) || 0) < 判官上限 && !busyTickets().has(x.id));
-    if (t && await startWork(root, cfg, t, '仲裁', '代裁', opts)) (result.代裁 = result.代裁 || []).push(t.id);
+  if ((cfg.执行器 || {}).代裁 !== false) {
+    await 开审检('代裁', '仲裁', '代裁', () => store.list(root, '待定夺').find((x) => !x.fm.代裁
+      && (Number(x.fm.代裁失败次数) || 0) < 判官上限 && !busyTickets().has(x.id)));
   }
 
   lastTick = result;
@@ -748,4 +793,4 @@ function killTicket(root, id) {
   return false;
 }
 
-module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs };
+module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi };

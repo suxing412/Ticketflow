@@ -251,20 +251,25 @@ async function viewOverview() {
   const lines = (jn.lines || []).slice(-5).reverse();
   const logHtml = lines.map((l) => { const m = String(l).match(/^\[([\d-]+ )?([\d:]{5})[^\]]*\]\s*(.*)$/); const tm = m ? m[2] : ''; const tx = m ? m[3] : String(l);
     const cls = /锁|超|告警|打回/.test(tx) ? 'err' : /通过|完成|验收/.test(tx) ? 'okc' : ''; return `<div class="logrow"><time>${esc(tm)}</time><span class="${cls}" title="${esc(tx)}">${esc(tx.slice(0, 56))}</span></div>`; }).join('') || '<p class="dim">无动态</p>';
-  // 额度卡双杆：5h + 周（周额度烧穿是灾难级，必须可见）；陈旧读数带时间戳
+  // 额度卡按池实际窗口画杆（施工令-010）：窗口清单由 /api/gates 直供（lib/gates.poolLock.窗口），
+  // claude 双窗画 5小时+周，codex 现实只有周窗就只画一条周条——旧样写死两杆，codex 那条空的
+  // 「5h ··」既误导又占版面。周额度烧穿是灾难级，周条永远在。陈旧读数带时间戳。
   const qbarLine = (lbl, pct, hot) => `<div class="qrow2"><span class="qn">${lbl}</span><div class="qbar"><i class="${hot ? 'hot' : ''}" style="width:${pct || 0}%"></i></div>
       <span class="qp ${hot ? 'err' : ''}">${pct == null ? '—' : pct + '%'}</span></div>`;
   const qrow = (name, l) => {
     const hot = l && l.locked;
     const staleTag = l && l.陈旧 && l.更新于 ? `（${new Date(l.更新于).toTimeString().slice(0, 5)} 读数）` : '';
+    const wins = l && Array.isArray(l.窗口) ? l.窗口 : null;
+    const bars = wins
+      ? (wins.length ? wins.map((w) => qbarLine(esc(w.label), w.pct, !!w.已越)).join('') : qbarLine('窗口', null, false))
+      : `${qbarLine('5h', l ? l.fivePct : null, hot)}${qbarLine('周', l ? l.weekPct : null, hot && l.weekPct != null && l.weekPct >= 90)}`;
     return `<div class="qgrp"><div class="qhead">${name}${hot ? ` <span class="err" style="font-size:10.5px">●锁${l.resetAt ? ' ' + esc(l.resetAt) + ' 解冻' : ''}</span>` : ''}<span class="qstale">${staleTag}</span></div>
-      ${qbarLine('5h', l ? l.fivePct : null, hot)}
-      ${qbarLine('周', l ? l.weekPct : null, hot && l.weekPct != null && l.weekPct >= 90)}</div>`;
+      ${bars}</div>`;
   };
   // 框架即时渲染，数据原地填；之后 5s 活体轮询本地缓存（查询频率另有纪律，显示不受限）
+  // 骨架不预设窗口名：各池窗口构成不同（codex 只有周窗），预写「5h」会先闪一帧假标签
   const qskel = (name) => `<div class="qgrp"><div class="qhead">${name}</div>
-      <div class="qrow2"><span class="qn">5h</span><div class="qbar"><i class="ghosting" style="width:0%"></i></div><span class="qp dim">—</span></div>
-      <div class="qrow2"><span class="qn">周</span><div class="qbar"><i class="ghosting" style="width:0%"></i></div><span class="qp dim">—</span></div></div>`;
+      <div class="qrow2"><span class="qn">窗口</span><div class="qbar"><i class="ghosting" style="width:0%"></i></div><span class="qp dim">—</span></div></div>`;
   let lastGatesJson = '';
   const fillGates = async () => {
     const g = await api('/api/gates');
@@ -1061,9 +1066,16 @@ function poolCardHtml(name, l, cfg2, moat) {
   const moatHtml = (moat && moat.已越 && name === moat.池)
     ? `<div class="moat" title="lib/pm/dispatch.js · moatBlocked：claude 池 5h 余量 ≤ 沟通保留线即停拉生产单，对话与项管不受影响">
         ${moat.窗口} 余 ${moat.余量}% · 沟通保留线 ${moat.保留线}% 已越 — claude 生产单停拉（额度留给对话）</div>` : '';
+  // 一窗一行的「窗」由服务端如实给（施工令-010 · gates.poolLock.窗口）：codex 现实只有周窗，
+  // 旧样硬摆一行「5h ··」，制作人看见的是个永远读不出数的假窗。读数拿不到时也不假造窗名。
+  const wins = l && Array.isArray(l.窗口) ? l.窗口 : null;
+  const rows = wins
+    ? (wins.length ? wins.map((w) => row(esc(w.label), w.pct, `阈值 ${w.阈值}%`, `管${esc(w.label)}窗`, !!w.已越)).join('')
+      : row('窗口', null, '阈值 —', '额度读数不可用', false))
+    : `${row('5h', pct, `阈值 ${th}%`, '管 5h 窗', pct != null && pct >= th)}
+    ${row('周', wpct, `周阈值 ${wth}%`, '管周窗', wpct != null && wpct >= wth)}`;
   return `<div class="pr"><h4>${name} 池</h4><span class="pstat ${hot ? 'err' : 'dim'}">${l ? (hot ? '●锁 ' + esc(l.resetAt || '') + ' 解冻' : '正常') : '查询中…'}</span></div>
-    ${row('5h', pct, `阈值 ${th}%`, '管 5h 窗', pct != null && pct >= th)}
-    ${row('周', wpct, `周阈值 ${wth}%`, '管周窗', wpct != null && wpct >= wth)}
+    ${rows}
     ${moatHtml}`;
 }
 // H85 编制权下放项管（2026-08-06 制作人裁决）：参数页的「agent 编制 · 执行池」管理区已整体拆除

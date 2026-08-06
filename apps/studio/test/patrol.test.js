@@ -144,4 +144,64 @@ t('非执行会话（判官）与空在跑表不适用：不报不炸', () => {
   assert.equal(停滞数(root), 0);
 });
 
+// ---- 零输出看门狗（施工令-010 第 3 条）：案源 TK-102 codex 会话零输出挂死 48 分钟无人察觉 ----
+console.log('patrol 零输出看门狗测试（施工令-010）');
+const 零输出数 = (root) => inbox.list(root, 200).filter((e) => e.类型 === '零输出').length;
+const 执session = (id, o = {}) => ({ id, kind: '执行', 池: o.池 || 'codex', startedAt: new Date(T0).toISOString(), tail: o.tail || '', 收字节: o.收字节 || 0 });
+
+t('零输出超时 → 信箱急件一条，含单号 / 池 / 已历时', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  const r0 = patrol.零输出(root, CFG, { 执行中: [执session('Z-1')], now: 分(7) });
+  assert.equal(r0.告警.length, 0, '门槛 8 分钟内不报');
+  const r1 = patrol.零输出(root, CFG, { 执行中: [执session('Z-1')], now: 分(9) });
+  assert.equal(r1.告警.length, 1, '过门槛才报');
+  assert.ok(r1.告警[0].includes('Z-1'), '含单号');
+  assert.ok(r1.告警[0].includes('codex'), '含池');
+  assert.ok(/9 分钟/.test(r1.告警[0]), '含已历时：' + r1.告警[0]);
+  const 信 = inbox.list(root, 50).filter((e) => e.类型 === '零输出');
+  assert.equal(信.length, 1);
+  assert.equal(信[0].级别, '急', '零输出＝疑似挂死，走急件');
+  assert.equal(信[0].单号, 'Z-1');
+  const ev = ledger.events(root, 50).filter((e) => e.类型 === '零输出');
+  assert.equal(ev.length, 1); assert.equal(ev[0].单, 'Z-1'); assert.equal(ev[0].已历时分, 9);
+});
+
+t('有输出不报：tail 有字 / 只在 stderr 收到字节（codex 常态）都算活着', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  patrol.零输出(root, CFG, { 执行中: [执session('Z-2', { tail: '正在读工单…' })], now: 分(60) });
+  assert.equal(零输出数(root), 0, 'tail 有字不报');
+  // 施工令-010 第 5 条：codex 过程行全走 stderr——收字节 >0 即活性，tail 就算一时为空也不误报
+  patrol.零输出(root, CFG, { 执行中: [执session('Z-3', { 收字节: 512 })], now: 分(60) });
+  assert.equal(零输出数(root), 0, 'stderr-only 会话不误报');
+});
+
+t('同一会话只报一次；会话收场即忘（同单重投＝新会话，重新武装）', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  for (const m of [9, 20, 48, 90]) patrol.零输出(root, CFG, { 执行中: [执session('Z-4')], now: 分(m) });
+  assert.equal(零输出数(root), 1, '四轮巡检只报一次');
+  const r = patrol.零输出(root, CFG, { 执行中: [], now: 分(120) });
+  assert.deepEqual(r.盯守, [], '会话收场即忘');
+  // 同单重投：startedAt 变了就是新会话，重新武装
+  patrol.零输出(root, CFG, { 执行中: [{ id: 'Z-4', kind: '执行', 池: 'codex', startedAt: new Date(分(120)).toISOString(), tail: '' }], now: 分(140) });
+  assert.equal(零输出数(root), 2, '新会话重新武装');
+});
+
+t('门槛读 config.并发.零输出分钟；判官会话与无时间戳会话不适用', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  const cfg20 = { ...CFG, 并发: { 零输出分钟: 20 } };
+  patrol.零输出(root, cfg20, { 执行中: [执session('Z-5')], now: 分(15) });
+  assert.equal(零输出数(root), 0, '配额调到 20 分钟后 15 分钟不报');
+  patrol.零输出(root, cfg20, { 执行中: [执session('Z-5')], now: 分(21) });
+  assert.equal(零输出数(root), 1);
+  patrol.重置(root);
+  const root2 = makeRoot();
+  patrol.零输出(root2, CFG, { 执行中: [{ id: 'J-9', kind: '代核', startedAt: new Date(T0).toISOString(), tail: '' }], now: 分(99) });
+  patrol.零输出(root2, CFG, { 执行中: [{ id: 'N-9', kind: '执行', tail: '' }], now: 分(99) });
+  assert.equal(零输出数(root2), 0, '判官会话/无拉起时间戳一律不适用');
+});
+
 console.log(`全部通过：${passed} 项`);

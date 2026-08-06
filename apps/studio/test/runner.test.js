@@ -195,6 +195,78 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.equal(store.find(root, 'P-21').state, '待验收', '保留单碰都不碰');
   });
 
+  // ---- 施工令-010 第 1 条：审检并发去写死（判官槽数读 config.并发.审检，默认 1＝旧单槽） ----
+  await t('审检并发默认 1：两张委托待验收一轮只核一张（与旧 running.has 单槽逐位一致）', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    for (const id of ['C-01', 'C-02']) {
+      fs.writeFileSync(path.join(root, '回执', `${id}.md`), `# 完工报告 ${id}\n`, 'utf8');
+      seed(root, '待验收', { id, 职能: '程序', 验收方式: '委托' });
+    }
+    const r = await runner.tick(root, CFG, UN);
+    assert.equal((r.代核 || []).length, 1, '默认配额 1 → 一轮一张（实际 ' + JSON.stringify(r.代核) + '）');
+    const r2 = await runner.tick(root, CFG, UN);
+    assert.equal((r2.代核 || []).length, 1, '第二轮补完另一张');
+    assert.ok(['C-01', 'C-02'].every((id) => store.find(root, id).state === '完成'));
+  });
+
+  await t('审检并发=2：同一轮两张待验收并行核查，席位号 核查 / 核查·2', async () => {
+    const root = makeRoot(); on(root);
+    const cfg2 = { ...CFG, 并发: { 审检: 2 } };
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    for (const id of ['C-11', 'C-12', 'C-13']) {
+      fs.writeFileSync(path.join(root, '回执', `${id}.md`), `# 完工报告 ${id}\n`, 'utf8');
+      seed(root, '待验收', { id, 职能: '程序', 验收方式: '委托' });
+    }
+    const r = await runner.tick(root, cfg2, UN);
+    assert.equal((r.代核 || []).length, 2, '配额 2 → 一轮开两槽（实际 ' + JSON.stringify(r.代核) + '）');
+    assert.equal((r.代核 || []).length, new Set(r.代核).size, '两槽拿的是不同的单');
+    assert.equal(store.find(root, 'C-13').state, '待验收', '第三张等下一轮，不越配额');
+    // 席位号：并发席真开出来了（durMs=0 当场收线，改用悬挂会话验席位占用）
+    const t3 = store.find(root, 'C-13');
+    await runner.startWork(root, cfg2, t3, '核查', '代核', { durMs: 60000 });
+    const r2 = await runner.tick(root, cfg2, { durMs: 0 });
+    assert.equal((r2.代核 || []).length, 0, '首席位被占且无余单 → 不开新槽');
+    assert.ok(runner.running.has('核查'), '首席位沿用原名');
+    runner.running.clear();
+  });
+
+  await t('审检并发=2 且首席位在跑：新单落到 核查·2 并发席', async () => {
+    const root = makeRoot(); on(root);
+    const cfg2 = { ...CFG, 并发: { 审检: 2 } };
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    for (const id of ['C-21', 'C-22']) {
+      fs.writeFileSync(path.join(root, '回执', `${id}.md`), `# 完工报告 ${id}\n`, 'utf8');
+      seed(root, '待验收', { id, 职能: '程序', 验收方式: '委托' });
+    }
+    await runner.startWork(root, cfg2, store.find(root, 'C-21'), '核查', '代核', { durMs: 60000 }); // 悬挂占首席
+    await runner.tick(root, cfg2, { durMs: 0 });
+    assert.equal(store.find(root, 'C-22').state, '完成', '并发席把第二张核完了');
+    assert.ok(runner.running.has('核查'), '首席位仍被悬挂会话占着');
+    assert.ok(!runner.running.has('核查·2'), '并发席用完即还');
+    runner.running.clear();
+  });
+
+  await t('审检并发越硬顶按 2 截：配置写 9 也只开 2 槽（成本保险丝）', async () => {
+    const root = makeRoot(); on(root);
+    const cfg9 = { ...CFG, 并发: { 审检: 9 } };
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    for (const id of ['C-31', 'C-32', 'C-33', 'C-34']) {
+      fs.writeFileSync(path.join(root, '回执', `${id}.md`), `# 完工报告 ${id}\n`, 'utf8');
+      seed(root, '待验收', { id, 职能: '程序', 验收方式: '委托' });
+    }
+    const r = await runner.tick(root, cfg9, UN);
+    assert.equal((r.代核 || []).length, 2, '硬顶 2 封死（实际 ' + JSON.stringify(r.代核) + '）');
+  });
+
+  await t('审检并发=2 对仲裁同样生效（同类判官各算各的配额）', async () => {
+    const root = makeRoot(); on(root);
+    const cfg2 = { ...CFG, 并发: { 审检: 2 } };
+    for (const id of ['C-41', 'C-42']) seed(root, '待定夺', { id, 职能: '程序', 主办: '程序-A', 自修次数: 3 });
+    const r = await runner.tick(root, cfg2, UN);
+    assert.equal((r.代裁 || []).length, 2, '两张待定夺同轮裁完');
+  });
+
   await t('委托代裁（D43③）：待定夺自动裁给方向 → 回在途 + 方向进正文 + 代裁戳；已裁过不重裁', async () => {
     const root = makeRoot(); on(root);
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
@@ -378,6 +450,50 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.ok(p && p.name === 'TK');
     assert.equal(runner.projectPath(cfgP, { fm: { 项目: '不存在' } }), null);
     assert.equal(runner.projectPath(CFG, fake), null, '无注册表 → null');
+  });
+
+  // ---- 施工令-010 第 5 条：codex tail 观测盲区（过程输出全走 stderr，stdout 只在收尾吐终答）----
+  await t('活尾巴 tailFrom：stdout 优先、无 stdout 则收 stderr、ANSI 控制符洗净', () => {
+    const E = String.fromCharCode(27); const NL = String.fromCharCode(10);
+    const 过程 = `${E}[32mcodex${E}[0m${NL}${E}[2mtokens used: 1234${E}[0m${NL}`;
+    const 只有stderr = runner.tailFrom('', 过程);
+    assert.ok(只有stderr.tail.includes('tokens used: 1234'), 'stderr-only 也取得到尾巴：' + JSON.stringify(只有stderr.tail));
+    assert.ok(!只有stderr.tail.includes(E), 'ANSI 控制符已洗净');
+    assert.deepEqual(只有stderr.tail3, ['codex', 'tokens used: 1234'], '最近三行也走同一口径');
+    assert.equal(runner.tailFrom('最终答案', 过程).tail, '最终答案', 'stdout 有货就优先（真报告比过程噪声值钱）');
+    assert.equal(runner.tailFrom('   ', 过程).tail.includes('tokens used'), true, 'stdout 只有空白＝没货，回落 stderr');
+    assert.deepEqual(runner.tailFrom('', ''), { tail: '', tail3: [] }, '两路皆空＝真零输出');
+    assert.equal(runner.stripAnsi('plain 32m text [ok]'), 'plain 32m text [ok]', '正常文本零误伤');
+  });
+
+  await t('实测形状（stderr-only 子进程）：tail 有内容且零输出看门狗不误报', async () => {
+    // 真起一个「过程行全 stderr、stdout 只在收尾吐终答」的子进程——这就是 codex CLI 的实测形状
+    const { spawn } = require('child_process');
+    const E = String.fromCharCode(27);
+    const src = `const E=String.fromCharCode(27);`
+      + `process.stderr.write(E+'[32mcodex'+E+'[0m\\n');`
+      + `process.stderr.write(E+'[2mtokens used: 1234'+E+'[0m\\n');`
+      + `setTimeout(()=>process.stdout.write('done'),60);`;
+    const child = spawn(process.execPath, ['-e', src], { windowsHide: true });
+    const entry = { id: 'S-1', kind: '执行', 池: 'codex', startedAt: new Date(Date.now() - 30 * 60000).toISOString() };
+    let out = '', errout = '';
+    child.stdout.on('data', (d) => { out += d; entry.收字节 = (entry.收字节 || 0) + d.length; Object.assign(entry, runner.tailFrom(out, errout)); });
+    child.stderr.on('data', (d) => { errout += d; entry.收字节 = (entry.收字节 || 0) + d.length; Object.assign(entry, runner.tailFrom(out, errout)); });
+    // 过程期（stdout 还空）：尾巴必须已经有内容，且看门狗不许报
+    await new Promise((r) => setTimeout(r, 40));
+    assert.ok(entry.tail && entry.tail.includes('tokens used'), '过程期尾巴有内容（旧样这里是空的）：' + JSON.stringify(entry.tail));
+    assert.ok(entry.收字节 > 0, '活性字节 = stdout∪stderr');
+    const patrol = require('../lib/pm/patrol');
+    const root = makeRoot(); patrol.重置(root);
+    const r1 = patrol.零输出(root, CFG, { 执行中: [entry] });
+    assert.equal(r1.告警.length, 0, '跑了 30 分钟但一路在 stderr 吐字 → 不许误报挂死');
+    await new Promise((r) => child.on('close', r));
+    assert.equal(out, 'done', '终答仍只从 stdout 取（收线裁决口径不变）');
+    assert.equal(entry.tail, 'done', 'stdout 一有货，尾巴立刻切回真报告');
+    assert.ok(!entry.tail.includes(E));
+    // 对照组：真·零输出会话（一个字节没收到）照报不误
+    const 死 = { id: 'D-1', kind: '执行', 池: 'codex', startedAt: new Date(Date.now() - 30 * 60000).toISOString(), tail: '', 收字节: 0 };
+    assert.equal(patrol.零输出(root, CFG, { 执行中: [死] }).告警.length, 1, '真零输出照报');
   });
 
   console.log(`全部通过：${passed} 项`);

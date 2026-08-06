@@ -72,6 +72,43 @@ t('额度锁拦领单：claude 池锁死时 claude 岗领不到单', async () =>
   assert.equal(require('../lib/core/store').find(root, 'A').state, '池'); // 没被领走
 });
 
+// ---- 施工令-010 第 4 条：codex 窗口正名（现实只有周窗，锁文案不得再写「5小时」）----
+t('codex 只有周窗：锁文案按真窗口 label 呈现，不出「5小时」字样', () => {
+  // 实机形状（node lib/quota.js 实读）：primary.windowDurationMins=10080、secondary=null
+  const rl = { primary: { usedPercent: 77, windowDurationMins: 10080, resetsAt: 1786243868 }, secondary: null };
+  const l = gates.poolLock(CFG, 'codex', rl, null);
+  assert.equal(l.locked, true, '77% ≥ 阈值 70% 照锁（判定逻辑不变）');
+  assert.ok(l.reason.includes('周已用 77%'), '如实说周窗：' + l.reason);
+  assert.ok(!l.reason.includes('5小时'), '文案里不许再有「5小时」：' + l.reason);
+  assert.deepEqual(l.窗口.map((w) => w.label), ['周'], 'codex 只出一个窗口（额度卡据此只画周条）');
+  assert.equal(l.窗口[0].pct, 77);
+  assert.equal(l.窗口[0].阈值, 70);
+  assert.equal(l.窗口[0].已越, true);
+  assert.equal(l.fivePct, 77, '老字段口径不动（护城河/概览数字仍在读）');
+});
+
+t('claude 双窗不受影响：5小时 + 周两条都在，各挂各的杆', () => {
+  const cu = { fiveHour: { utilization: 30, resets_at: '2026-08-07T05:50:00Z' },
+    sevenDay: { utilization: 95, resets_at: '2026-08-09T05:50:00Z' } };
+  const l = gates.poolLock(CFG, 'claude', null, cu);
+  assert.deepEqual(l.窗口.map((w) => w.label), ['5小时', '周']);
+  assert.deepEqual(l.窗口.map((w) => w.阈值), [70, 90], '5小时归 阈值、周归 周阈值');
+  assert.deepEqual(l.窗口.map((w) => w.已越), [false, true]);
+  assert.equal(l.locked, true);
+  assert.ok(l.reason.includes('周已用 95%'), '周窗锁的文案是周：' + l.reason);
+  // 5h 越线时文案仍写 5小时（claude 真有这个窗）
+  const l2 = gates.poolLock(CFG, 'claude', null, { fiveHour: { utilization: 88, resets_at: 0 } });
+  assert.ok(l2.reason.includes('5小时已用 88%'), l2.reason);
+  assert.deepEqual(l2.窗口.map((w) => w.label), ['5小时'], '没有周窗读数就不画周条，不假造');
+});
+
+t('读数拿不到：窗口清单为空（额度卡不摆假窗），fail-open 不锁', () => {
+  const l = gates.poolLock(CFG, 'codex', null, null);
+  assert.deepEqual(l.窗口, []);
+  assert.equal(l.locked, false);
+  assert.equal(l.fivePct, null);
+});
+
 t('额度锁 fail-open：查询失败视为不锁', async () => {
   const root = makeRoot();
   quota.getRateLimits = async () => { throw new Error('boom'); };
