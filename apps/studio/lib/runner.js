@@ -2,7 +2,7 @@
 // 每轮 tick 三种工作：
 //   ① 自动领单：空闲在岗 agent 从池拉单（双闸/额度锁/依赖/一人一张全在 claim 路径）
 //   ② 执行：在途单起执行（真调 codex/claude 无头 CLI；H81 常开单闸制：运行即实弹，无解锁开关）
-//   ③ 质检执行：质检单派给空闲 QA agent 复核 → 走 D10 QA 裁定（QA 只裁不开单）
+//   ③ 质检执行：编制里有 QA 这一行就起「QA」会话复核 → 走 D10 QA 裁定（QA 只裁不开单）
 // 失败路径（D31）：CLI 崩溃/超时/非零退出 → lifecycle.执行失败（纯本地目录改名，零网络依赖），
 // 由 Claude 会话分诊（重投/上呈/废弃）。停止=不领新单，执行中跑完（同 D26 暂停语义）。
 const path = require('path');
@@ -12,6 +12,7 @@ const { spawn } = require('child_process');
 const store = require('./core/store');
 const state = require('./core/state');
 const pool = require('./pool');
+const roster = require('./roster');
 const lifecycle = require('./lifecycle');
 const journal = require('./journal');
 const inbox = require('./inbox');
@@ -37,14 +38,17 @@ function projectPath(cfg, t) {
 }
 
 // ---- 模型分级（D38 = 停车场 P-5 落地）：贵模型当裁判，便宜模型干体力 ----
-// 解析顺序：agent 个体覆盖(config.agents[].模型) > 工种/池默认(config.模型) > CLI 自带默认(空)
-function pickModel(cfg, kind, agentCfg, poolName, 职能) {
+// 解析顺序：编制档位(config.编制[].池序[].档) > 工种/池默认(config.模型) > CLI 自带默认(空)
+// H85 补章：第一顺位由「agent 个体覆盖」改为「职能在该池上的档」——去岗位化后没有个体，
+// 档挂在 职能×池 上（借调到别的池时自然换成那个池的档，不会把 codex 的模型名带去 claude）。
+function pickModel(cfg, kind, 档, poolName, 职能) {
   const m = cfg.模型 || {};
   if (kind === '质检') return m.质检 || m.claude默认 || '';
   if (kind === '代核') return m.核查 || m.代核 || m.claude默认 || ''; // H68：新键 核查 优先，旧键兼容
   if (kind === '代裁') return m.仲裁 || m.代裁 || m.核查 || m.代核 || m.claude默认 || ''; // H68 新键优先
   // 职能覆盖（0.23.11：装配单事故率实证——装配上 opus）：config.模型.职能覆盖 = { 装配: 'opus', ... }
-  return (agentCfg && agentCfg.模型) || (m.职能覆盖 && 职能 && m.职能覆盖[职能]) || m[poolName + '默认'] || '';
+  const 个体 = (档 && typeof 档 === 'object') ? 档.模型 : 档; // 宽进：旧调用传 agentCfg 对象也认
+  return 个体 || (m.职能覆盖 && 职能 && m.职能覆盖[职能]) || m[poolName + '默认'] || '';
 }
 
 // ---- 编辑器锁（H64，2026-08-05 制作人拍板）：自动探测误报家族退役（agent 自己的 batch 测试
@@ -467,8 +471,8 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   // H67 两检制：初检走便宜池（默认 deepseek-flash），只核格式与规范；深检（代核）保持 opus
   const 两检cfg = (cfg.执行器 || {}).两检 || {};
   const poolName = kind === '初检' ? (两检cfg.池 || 'deepseek') : (t.fm.执行池 || 'claude');
-  const agentCfg = (cfg.agents || []).find((a) => a.id === agentId);
-  const model = kind === '初检' ? (两检cfg.模型 || 'deepseek-v4-flash') : pickModel(cfg, kind, agentCfg, poolName, t.fm.职能);
+  const 档 = roster.modelFor(cfg, t.fm.职能, poolName); // H85 补章：档挂在 职能×池 上，不再按人头查
+  const model = kind === '初检' ? (两检cfg.模型 || 'deepseek-v4-flash') : pickModel(cfg, kind, 档, poolName, t.fm.职能);
   const compat = (kind === '执行' || kind === '初检') && cfg.执行池 && cfg.执行池[poolName] && cfg.执行池[poolName].兼容;
   const { cmd, args, stream } = resolveCli((kind === '执行' || kind === '初检') ? poolName : 'claude', compat ? (kind === '初检' ? model : (compat.模型 || model)) : model, (cfg.执行器 || {}).放行工具); // 质检/代核/代裁走 claude
   const receiptPath = path.join(root, '回执', `${t.id}.md`);
@@ -555,7 +559,7 @@ async function tick(root, cfg, opts = {}) {
   if (!isOn(root)) return { skipped: true, reason: '执行器未运行' };
   const sim = isSim(opts);
   const result = { at: opts.nowIso || new Date().toISOString(), 领单: [], 执行: [], 质检: [], 拒因: [] };
-  const agents = (cfg.agents || []).filter((a) => a.上线 !== false);
+  const agents = roster.agents(cfg).filter((a) => a.上线 !== false); // 拉取制兼容视图（去岗位化后 id 即职能名）
 
   const st = state.read(root);
 
@@ -639,14 +643,14 @@ async function tick(root, cfg, opts = {}) {
     }
   }
 
-  // ③ 质检执行：派给空闲在岗 QA agent（QA 只裁不开单，D10）
-  const qaFree = agents.filter((a) => a.职能 === 'QA' && !running.has(a.id)
-    && !pool.inFlight(root).some((x) => x.fm.主办 === a.id));
-  for (const t of store.list(root, '质检')) {
-    if (busyTickets().has(t.id)) continue;
-    const qa = qaFree.shift();
-    if (!qa) break;
-    if (await startWork(root, cfg, t, qa.id, '质检', opts)) result.质检.push(t.id);
+  // ③ 质检执行（QA 只裁不开单，D10）。H85 补章去岗位化：不再从人头册里挑空闲 QA——
+  // 判据改为「编制表里有没有 QA 这一行」，会话标签就用职能名（与判官三席 核查/两检初检/代裁 同款），
+  // 一轮一张保守推进（判官会话都是单例，避免同一把裁判尺并发漂移）。
+  if (roster.has(cfg, 'QA') && !running.has('QA')) {
+    for (const t of store.list(root, '质检')) {
+      if (busyTickets().has(t.id)) continue;
+      if (await startWork(root, cfg, t, 'QA', '质检', opts)) { result.质检.push(t.id); break; }
+    }
   }
 
   // ④⑤ 判官失败封顶（TK-21）：失败计数到上限的单不再自动拉，等人工（清计数字段可重审）

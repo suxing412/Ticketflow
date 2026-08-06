@@ -15,7 +15,8 @@ console.log('dispatch-tick 派发制集成测试');
 const CFG = {
   执行器: { 派发制: true },
   执行池: { codex: { 职能: ['程序'] }, claude: { 职能: ['策划', 'QA', '装配'] } },
-  agents: [{ id: 'QA-A', 职能: 'QA', 执行池: 'claude' }],
+  编制: [{ 职能: 'QA', 池序: [{ 池: 'claude', 档: '' }] }], // H85 补章：每职能一行 + 池序
+
   闸值: {},
 };
 
@@ -60,7 +61,7 @@ const CFG = {
     try {
       const root = makeRoot();
       state.update(root, (s) => { s.执行器 = { 运行: true }; });
-      const cfg = { ...CFG, agents: [{ id: '程序-A', 职能: '程序', 执行池: 'codex' }] };
+      const cfg = { ...CFG, 编制: [{ 职能: '程序', 池序: [{ 池: 'codex', 档: '' }] }] };
       seed(root, '待投', { id: 'H-1', 职能: '程序', 放行: true, QA: '关' });
       await runner.tick(root, cfg, { durMs: 0 });
       const h = store.find(root, 'H-1');

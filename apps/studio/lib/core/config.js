@@ -19,7 +19,17 @@ function load(root) {
   // 容忍 UTF-8 BOM（﻿）：PowerShell 5.1 的 -Encoding UTF8 与记事本都会写 BOM，
   // 直接 JSON.parse 会炸——0.8.1 套件 E2E 实测：部署脚本改完配置，exe 启动即崩。
   const raw = fs.readFileSync(path.join(root, 'studio.config.json'), 'utf8');
-  return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+  const cfg = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+  // 编制去岗位化迁移（H85 补章）：旧 config.agents（程序-A/程序-B 岗位册）→ 新 config.编制
+  // （每职能一行 + 池序）。读盘即迁移、迁移即落盘——生产配置的实际改形由运行时完成，不手改。
+  // 幂等：已是新形态则 migrate 返回 false，不产生多余写盘。写失败不拦启动（内存态已是新形态）。
+  try { if (require('../roster').migrate(cfg)) save(root, cfg); } catch { /* 只读盘/权限不足：本次内存迁移照常生效 */ }
+  return cfg;
 }
 
-module.exports = { load, resolveRoot };
+// 配置落盘的唯一实现（server 的 saveCfg 也走这里）：JSON 2 空格 + 末尾换行，无 BOM。
+function save(root, cfg) {
+  fs.writeFileSync(path.join(root, 'studio.config.json'), JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+}
+
+module.exports = { load, save, resolveRoot };

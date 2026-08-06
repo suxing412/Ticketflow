@@ -63,8 +63,10 @@ function depsSatisfied(root, t) {
 
 // 领单：某 agent 领本职能队首可领单。校验 职能匹配 / 闸门额度锁 / 在途上限 / 一人一张 / 依赖。
 async function claim(root, cfg, agentId, now) {
-  const agent = (cfg.agents || []).find((a) => a.id === agentId);
-  if (!agent) return { ok: false, error: `agent 未注册：${agentId}` };
+  // 编制读取统一走 lib/roster（H85 补章去岗位化）：新形态下一个职能就是一个执行位、id 即职能名；
+  // 仍持旧 config.agents 的内存态 cfg 由 roster 兼容返回，本函数行为不变。
+  const agent = require('./roster').agents(cfg).find((a) => a.id === agentId);
+  if (!agent) return { ok: false, error: `执行位未注册：${agentId}（编制表里没有这个职能）` };
   if (agent.上线 === false) return { ok: false, error: `${agentId} 未上线` };
   const 职能 = agent.职能;
   const poolName = agent.执行池 || poolFor(cfg, 职能);

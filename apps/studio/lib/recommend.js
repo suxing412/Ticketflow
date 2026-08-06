@@ -34,8 +34,11 @@ function recommend(root, cfg, locks, nowMs) {
   const 窗口 = rc.速度窗口小时 ?? 2;
   const 每档 = rc.每档处理数 ?? 2;
 
-  const agents = (cfg.agents || []).filter((a) => a.上线 !== false);
-  const 上限 = agents.length; // D17 走到底：编制即上限
+  // H85 补章去岗位化：编制表每职能一行，「在岗人数」的语义变为「有编制的职能数」——
+  // 上限仍是编制即上限，只是数的是职能行而不是人头（-A/-B 已随岗位制退役）。
+  const 编制 = require('./roster').read(cfg);
+  const 上限 = 编制.length;
+  const agents = 编制; // 下文口径沿用（长度=行数）
   const 原因 = [];
   const paused = state.read(root).paused;
   const inFlight = [...store.list(root, '在途'), ...store.list(root, '质检'), ...store.list(root, '待定夺')];
@@ -46,7 +49,12 @@ function recommend(root, cfg, locks, nowMs) {
 
   const lockedPools = new Set();
   if (locks) for (const [k, l] of Object.entries(locks)) if (l && l.locked) lockedPools.add(k);
-  const avail = agents.filter((a) => !lockedPools.has(a.执行池));
+  // 可用 = 池序里还有没被锁的池（池序全锁才算这条职能停摆——与派发路由同一把尺）
+  const poolFor = require('./pool').poolFor;
+  const avail = agents.filter((r) => {
+    const 池序 = r.池序.length ? r.池序.map((p) => p.池) : [poolFor(cfg, r.职能)].filter(Boolean);
+    return 池序.some((p) => !lockedPools.has(p));
+  });
   const 池注 = lockedPools.size ? `，${[...lockedPools].join('/')} 池不可用，可用 ${avail.length}/${agents.length}` : `，可用 ${avail.length}/${agents.length}`;
 
   const backlog = store.list(root, '待验收').length;

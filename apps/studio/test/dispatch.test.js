@@ -58,55 +58,70 @@ t('挑单：按并发余量+池路由+锁态出清单，硬顶封死', () => {
   assert.ok(!locked.some((p) => p.池 === 'codex'));
 });
 
-// ---- H85 派发死局自愈：编制全挂冻结池 → 临时改挂；部分冻结 → 用可用者；无处可去 → 滞留 ----
-// 案源 2026-08-06：美术-A 唯一编制挂冻结的 codex 池，派发静默滞留而 UI 全绿（假健康）。
+// ---- H85 派发死局自愈（施工令-008 去岗位化后改造：编制=每职能一行，池序即路由优先级）----
+// 案源 2026-08-06：美术编制唯一挂在冻结的 codex 池，派发静默滞留而 UI 全绿（假健康）。
+// 三态语义沿用 007：①池序内顺位（不算改挂）②整条全冻→借调打标 ③无处可去→滞留。
 const 冻 = (p) => ({ fivePct: 10, locked: p === 'codex' });
 const 全冻 = { codex: { fivePct: 10, locked: true }, claude: { fivePct: 10, locked: true } };
 const R_ART = [{ id: 'a1', 职能: '美术', 优先级: 'P1', 红链: false, 创建时间: '1' }];
+const 编制 = (池序) => ({ 执行池: { codex: { 职能: ['程序', '美术'] }, claude: { 职能: ['策划'] } },
+  编制: [{ 职能: '美术', 池序: 池序.map((p) => ({ 池: p, 档: '' })) }] });
 
-t('死局自愈①：唯一编制挂冻结池 → 自动改挂到可用池并带改挂标记', () => {
-  const cfg = { 执行池: { codex: { 职能: ['程序', '美术'] }, claude: { 职能: ['策划'] } },
-    agents: [{ id: '美术-A', 职能: '美术', 执行池: 'codex' }] };
-  const picks = D.pickNext(cfg, R_ART, {}, { codex: 冻('codex'), claude: 冻('claude') }, { codex: 2, claude: 2 });
+t('死局自愈①：池序整条全冻 → 借调可用池并带改挂标记', () => {
+  const picks = D.pickNext(编制(['codex']), R_ART, {}, { codex: 冻('codex'), claude: 冻('claude') }, { codex: 2, claude: 2 });
   assert.equal(picks.length, 1);
   assert.equal(picks[0].池, 'claude');
   assert.ok(picks[0].改挂 && picks[0].改挂.原池 === 'codex', '必须带改挂留痕');
 });
 
-t('死局自愈②：多编制部分冻结 → 用编制内可用池，不算改挂', () => {
-  const cfg = { 执行池: { codex: { 职能: ['美术'] }, claude: { 职能: ['策划'] } },
-    agents: [{ id: '美术-A', 职能: '美术', 执行池: 'codex' }, { id: '美术-B', 职能: '美术', 执行池: 'claude' }] };
-  const picks = D.pickNext(cfg, R_ART, {}, { codex: 冻('codex'), claude: 冻('claude') }, { codex: 2, claude: 2 });
+t('死局自愈②：池序部分冻结 → 顺位取下一个池，不算改挂', () => {
+  const picks = D.pickNext(编制(['codex', 'claude']), R_ART, {}, { codex: 冻('codex'), claude: 冻('claude') }, { codex: 2, claude: 2 });
   assert.equal(picks.length, 1);
   assert.equal(picks[0].池, 'claude');
-  assert.ok(!picks[0].改挂, '编制内本来就有可用池，不该打临时改挂标记');
+  assert.ok(!picks[0].改挂, '池序内切换是编制本来就授权的，不该打临时改挂标记');
 });
 
 t('死局自愈③：全池冻结无可用池 → 不派发，滞留等零派发告警', () => {
-  const cfg = { 执行池: { codex: { 职能: ['美术'] }, claude: { 职能: ['策划'] } },
-    agents: [{ id: '美术-A', 职能: '美术', 执行池: 'codex' }] };
-  assert.deepEqual(D.pickNext(cfg, R_ART, {}, 全冻, { codex: 2, claude: 2 }), []);
+  assert.deepEqual(D.pickNext(编制(['codex']), R_ART, {}, 全冻, { codex: 2, claude: 2 }), []);
+});
+
+t('池序即优先级：首位未冻结就走首位，第二位不抢跑', () => {
+  const picks = D.pickNext(编制(['claude', 'codex']), R_ART, {}, { codex: { fivePct: 10 }, claude: { fivePct: 10 } }, { codex: 2, claude: 2 });
+  assert.deepEqual(picks.map((p) => p.池), ['claude']);
+  const 反 = D.pickNext(编制(['codex', 'claude']), R_ART, {}, { codex: { fivePct: 10 }, claude: { fivePct: 10 } }, { codex: 2, claude: 2 });
+  assert.deepEqual(反.map((p) => p.池), ['codex']);
 });
 
 t('死局自愈边界：池章直通单不自愈（工程单钉死 deepseek 是刻意的成本选择）', () => {
   const cfg = { 执行池: { codex: {}, claude: {}, deepseek: {} },
-    agents: [{ id: '程序-A', 职能: '程序', 执行池: 'codex' }] };
+    编制: [{ 职能: '程序', 池序: [{ 池: 'codex', 档: '' }] }] };
   const ready = [{ id: 'e1', 职能: '程序', 优先级: 'P1', 红链: false, 创建时间: '1', 执行池: 'deepseek' }];
   const gi = { deepseek: { fivePct: 10, locked: true }, claude: { fivePct: 10 }, codex: { fivePct: 10 } };
   assert.deepEqual(D.pickNext(cfg, ready, {}, gi, { deepseek: 2, claude: 2 }), []);
 });
 
 t('死局自愈边界：零编制职能不臆造路由（照旧滞留）', () => {
-  const cfg = { 执行池: { codex: { 职能: ['美术'] }, claude: { 职能: ['策划'] } }, agents: [] };
+  const cfg = { 执行池: { codex: { 职能: ['美术'] }, claude: { 职能: ['策划'] } }, 编制: [] };
   assert.deepEqual(D.pickNext(cfg, R_ART, {}, { codex: 冻('codex'), claude: 冻('claude') }, { codex: 2, claude: 2 }), []);
+  // 零编制且默认池没冻 → 照常走职能默认池（不因为没编制就停派）
+  const ok = D.pickNext(cfg, R_ART, {}, { codex: { fivePct: 10 }, claude: { fivePct: 10 } }, { codex: 2, claude: 2 });
+  assert.deepEqual(ok.map((p) => p.池), ['codex']);
 });
 
-t('编制池盘点 rosterPools：退役待归不算编制，按 config 顺序去重', () => {
+t('编制池序 rosterPools：读的是 config.编制，每职能一行', () => {
   const cfg = { 执行池: { codex: { 职能: ['美术'] }, claude: {} },
-    agents: [{ id: '美术-A', 职能: '美术', 执行池: 'codex' }, { id: '美术-B', 职能: '美术', 执行池: 'claude' },
-      { id: '美术-C', 职能: '美术', 执行池: 'codex' }, { id: '美术-D', 职能: '美术', 执行池: 'deepseek', 上线: false }] };
+    编制: [{ 职能: '美术', 池序: [{ 池: 'codex', 档: '' }, { 池: 'claude', 档: 'opus' }] }] };
   assert.deepEqual(D.rosterPools(cfg, '美术'), ['codex', 'claude']);
   assert.deepEqual(D.rosterPools(cfg, '程序'), []);
+});
+
+t('旧岗位册形状仍能路由（内存态未迁移的 cfg 兼容读，行为与新形态一致）', () => {
+  const 旧 = { 执行池: { codex: { 职能: ['程序', '美术'] }, claude: { 职能: ['策划'] } },
+    agents: [{ id: '美术-A', 职能: '美术', 执行池: 'codex' }, { id: '美术-B', 职能: '美术', 执行池: 'claude' }] };
+  assert.deepEqual(D.rosterPools(旧, '美术'), ['codex', 'claude']);
+  const picks = D.pickNext(旧, R_ART, {}, { codex: 冻('codex'), claude: 冻('claude') }, { codex: 2, claude: 2 });
+  assert.equal(picks[0].池, 'claude');
+  assert.ok(!picks[0].改挂);
 });
 
 t('池冻结判据 poolFrozen：额度锁与护城河都算冻结，并发满不算', () => {

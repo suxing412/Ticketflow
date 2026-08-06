@@ -39,21 +39,45 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.ok(fs.existsSync(path.join(root, '回执', 'P-01.md')));
   });
 
-  await t('QA 开 + 有 QA agent：同轮走完 执行→质检→QA复核→待验收，落 质检人', async () => {
+  await t('QA 开 + 编制有 QA：同轮走完 执行→质检→QA复核→待验收，质检人=职能名', async () => {
     const root = makeRoot(); on(root);
     seed(root, '池', { id: 'P-02', 职能: '程序', QA: '开' });
     const r = await runner.tick(root, CFG, UN);
     assert.ok(r.质检.includes('P-02'), '质检执行被派发');
     const cur = store.find(root, 'P-02');
     assert.equal(cur.state, '待验收');
-    assert.equal(cur.fm.质检人, 'QA-A');
+    // H85 补章去岗位化：质检会话不再冒充「QA-A」这个人头，标签就是职能名（判官三席同款单例会话）
+    assert.equal(cur.fm.质检人, 'QA');
   });
 
-  await t('QA 开 + 无 QA agent：停在质检等复核（不越权）', async () => {
+  await t('QA 开 + 编制无 QA 这一行：停在质检等复核（不越权）', async () => {
     const root = makeRoot(); on(root);
     seed(root, '池', { id: 'P-03', 职能: '程序', QA: '开' });
     await runner.tick(root, NO_QA, UN);
     assert.equal(store.find(root, 'P-03').state, '质检');
+  });
+
+  // ---- 施工令-008 去岗位化：新形态 config.编制（每职能一行 + 池序）驱动同一条流水 ----
+  await t('新形态编制：领单/质检照常走通，QA 挑人只看编制存在性不看人头', async () => {
+    const 新 = { ...CFG, agents: undefined, 编制: [
+      { 职能: '程序', 池序: [{ 池: 'codex', 档: '' }, { 池: 'claude', 档: '' }] },
+      { 职能: 'QA', 池序: [{ 池: 'claude', 档: '' }] },
+    ] };
+    const root = makeRoot(); on(root);
+    seed(root, '池', { id: 'P-90', 职能: '程序', QA: '开' });
+    const r = await runner.tick(root, 新, UN);
+    assert.deepEqual(r.领单, ['P-90'], '编制去岗位化后拉取制按职能领单（id 即职能名）');
+    const cur = store.find(root, 'P-90');
+    assert.equal(cur.fm.主办, '程序', '主办=职能名，不再有 -A 岗位号');
+    assert.equal(cur.fm.执行池, 'codex', '池序首位即默认落点');
+    assert.equal(cur.fm.质检人, 'QA');
+    assert.equal(cur.state, '待验收');
+    // 编制里抽掉 QA 这一行 → 质检无人可派，停在质检等复核
+    const 无QA = { ...新, 编制: 新.编制.filter((x) => x.职能 !== 'QA') };
+    const root2 = makeRoot(); on(root2);
+    seed(root2, '池', { id: 'P-91', 职能: '程序', QA: '开' });
+    await runner.tick(root2, 无QA, UN);
+    assert.equal(store.find(root2, 'P-91').state, '质检');
   });
 
   await t('一个 QA 一轮只审一张，下一轮接着审（一人一张同源约束）', async () => {

@@ -8,6 +8,7 @@ const config = require('./lib/core/config');
 const store = require('./lib/core/store');
 const gates = require('./lib/gates');
 const pool = require('./lib/pool');
+const roster = require('./lib/roster');
 const life = require('./lib/lifecycle');
 const trace = require('./lib/trace');
 const quota = require('./lib/quota');
@@ -221,7 +222,7 @@ app.post('/api/runner/stop', (req, res) => {
 });
 // /api/runner/mode（试跑↔实弹）已随 H81 常开单闸制拆除：运行即实弹，停手闸是暂停总闸
 // ---- 全量配置入 UI（2026-07-11 用户指示）：以下均为白名单化分区写回 ----
-const saveCfg = () => fs.writeFileSync(path.join(ROOT, 'studio.config.json'), JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+const saveCfg = () => config.save(ROOT, cfg); // 落盘口径唯一在 core/config（无 BOM · 2 空格 · 末尾换行）
 
 // 执行池阈值（额度锁的杆）
 app.post('/api/config/pool', (req, res) => {
@@ -441,10 +442,13 @@ app.get('/api/env', async (req, res) => {
   协议配置.push(missing.length ? item('岗位协议', '黄', '缺：' + missing.join('、')) : item('岗位协议', '绿', charters.length + ' 份齐全'));
   const lint = [];
   for (const fn of cfg.职能 || []) if (!pool.poolFor(cfg, fn)) lint.push(`职能「${fn}」无执行池归属（领单会失败）`);
-  for (const a of cfg.agents || []) if (!(cfg.职能 || []).includes(a.职能)) lint.push(`agent ${a.id} 的职能不在职能表`);
+  for (const r of roster.read(cfg)) {
+    if (!(cfg.职能 || []).includes(r.职能)) lint.push(`编制行「${r.职能}」的职能不在职能表`);
+    for (const p of r.池序) if (!(cfg.执行池 || {})[p.池]) lint.push(`编制行「${r.职能}」池序里的 ${p.池} 池未注册`);
+  }
   if (cfg.项目 && cfg.项目.默认 && !reg[cfg.项目.默认]) lint.push('默认项目未注册');
   协议配置.push(lint.length ? item('config 完整性', lint.some((x) => x.includes('领单会失败')) ? '红' : '黄', lint.join('；'))
-    : item('config 完整性', '绿', '职能↔池映射 / agents / 默认项目 全部合法'));
+    : item('config 完整性', '绿', '职能↔池映射 / 编制 / 默认项目 全部合法'));
 
   // 总灯：有红=阻断；无红有黄=降级；全绿=就绪
   const all = [...运行时, ...凭据额度, ...项目目录, ...协议配置];
@@ -480,17 +484,8 @@ app.post('/api/config/recommend', (req, res) => {
   res.json({ ok: true, 推荐: cfg.推荐 });
 });
 
-// ---- 职能编制变更（P6）：直接调各职能人数，编制即上限 ----
-app.post('/api/config/staff', (req, res) => {
-  if (!ready(res)) return;
-  const { 职能, count } = req.body || {};
-  const staff = require('./lib/staff');
-  const r = staff.setStaff(ROOT, cfg, String(职能 || ''), Number(count));
-  if (!r.ok) return res.status(400).json(r);
-  fs.writeFileSync(path.join(ROOT, 'studio.config.json'), JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-  journal.append(ROOT, `编制变更：${r.职能} → ${r.count} 人${r.新增.length ? `（新增 ${r.新增.join('、')}）` : ''}${r.退役.length ? `（退役待归 ${r.退役.join('、')}）` : ''}${r.移除.length ? `（移除 ${r.移除.join('、')}）` : ''}`);
-  res.json({ ...r, 在途上限: staff.onlineCount(cfg) });
-});
+// ---- 职能编制变更（P6 · 已退役）：按人数扩缩编（职能-A/-B/-C）随 H85 补章「去岗位化」一并拆除。
+// 编制表现在每职能一行，唯一写口是 /api/pm/roster（改的是池序，不是人头）。lib/staff.js 已删除。
 
 // ---- 在途 agent 视角（P3）----
 app.get('/api/agents', (req, res) => {
@@ -513,18 +508,20 @@ app.get('/api/agents', (req, res) => {
       尾: (liveByTicket[t.id] || {}).tail || null,
       进度: 进度Of(t, liveByTicket[t.id] || null), // 施工令-004：卡片不点详情就看得见百分比与阶段
     }));
-    const 判官 = (cfg.agents || []).filter((a) => a.职能 === 'QA').map((a) => {
+    // 判官席（H85 补章去岗位化）：不再列人头，编制有 QA 这一行就有一席，会话标签即职能名
+    const 判官 = roster.has(cfg, 'QA') ? [(() => {
       // 判官单多在「待验收」，不在 inFlight 口径内——按单是否还在库判在岗（原 fl 口径漏判成待命）
       const busy = (runStatus.执行中 || []).find((e) => e.kind !== '执行' && e.id && (() => { try { return !!store.find(ROOT, e.id); } catch { return false; } })());
-      return { id: a.id, 忙: !!busy, 当前: busy ? busy.id : null, 环节: busy ? busy.kind : null };
-    });
+      return { id: 'QA', 忙: !!busy, 当前: busy ? busy.id : null, 环节: busy ? busy.kind : null };
+    })()] : [];
     const l = pmLedger.read(ROOT);
     return res.json({ 模式: '派发', 在跑, 判官, 就绪队列: l.就绪队列 || [], 并发上限: l.并发上限, 滞留告警: 滞留, 编辑器占用: runStatus.编辑器占用 || [], 引擎作业: runStatus.引擎作业 || {} });
   }
   const byAgent = {};
   for (const t of fl) if (t.fm.主办) byAgent[t.fm.主办] = { id: t.id, title: t.fm.title, state: t.state, 职能: t.fm.职能, 领单时间: t.fm.领单时间 };
-  const agents = (cfg.agents || []).map((a) => ({ ...a, 手持: byAgent[a.id] || null }));
-  res.json({ agents, 在途数: fl.length, 上限: require('./lib/staff').onlineCount(cfg), 滞留告警: 滞留 });
+  // 拉取制视图（旧路径，可回退）：去岗位化后一个职能=一个执行位，id 即职能名；上限=编制行数
+  const agents = roster.agents(cfg).map((a) => ({ ...a, 手持: byAgent[a.id] || null }));
+  res.json({ agents, 在途数: fl.length, 上限: roster.read(cfg).length, 滞留告警: 滞留 });
 });
 
 // ---- 工单详情（P8）：正文 + 四追溯链 + 回执 ----
@@ -624,53 +621,29 @@ app.post('/api/pm/cut', (req, res) => {
   res.json({ ok: true, 状态: `切单进行中（${(cfg.模型 || {}).项管 || '项管档'}），完成后拆单简报进台账待审` });
 });
 
-// ---- 编制（H85，2026-08-06 制作人裁决「编制只需要存一单数据放在项管那让项管自己管理」）----
-// 用工权随派单权归项管（H57 延伸）：config.agents 仍是存储位，语义已变为「项管所辖数据」。
+// ---- 编制（H85，2026-08-06 制作人裁决「编制只需要存一单数据放在项管那让项管自己管理」；
+//      同日补章「去岗位化」：编制表每职能一行，-A/-B 岗位册退役，存储位改为 config.编制）----
+// 用工权随派单权归项管（H57 延伸）。业务在 lib/roster（snapshot/apply 可单测），此处只做路由。
 // GET = 只读快照（可用性用 dispatch.poolFrozen 实算——UI 与调度同一把尺，绝不各算各的）；
-// POST = 批量调整，仅供项管调用与总监代劳，监制台不提供编辑界面。
+// POST = 批量调整 {改动:[{职能,池序?}],理由}，仅供项管调用与总监代劳，监制台不提供编辑界面。
 app.get('/api/pm/roster', async (req, res) => {
   if (!ready(res)) return;
   const D = require('./lib/pm/dispatch');
   let gi = null;
   try { const locks = await gates.allLocks(cfg); gi = { codex: locks.codex, claude: locks.claude }; } catch { /* 读数盲飞：可用性按未知呈报，不假绿 */ }
-  const 编制 = (cfg.agents || []).map((a) => {
-    const 池 = a.执行池 || require('./lib/pool').poolFor(cfg, a.职能) || 'claude';
-    const 退役 = a.上线 === false;
-    const 冻结 = gi ? D.poolFrozen(cfg, gi, 池) : null;
-    return { id: a.id, 职能: a.职能, 池, 模型: a.模型 || '', 上线: !退役,
-      可用: 退役 ? false : (冻结 === null ? null : !冻结),
-      态: 退役 ? '退役待归' : 冻结 === null ? '额度读数中' : 冻结 ? '池冻结·止派' : '在岗' };
-  });
+  const 编制 = roster.snapshot(cfg, gi ? ((p) => D.poolFrozen(cfg, gi, p)) : null);
   res.json({ 编制, 池态: gi });
 });
 app.post('/api/pm/roster', (req, res) => {
   if (!ready(res)) return;
   const { 改动, 理由 } = req.body || {};
-  const list = Array.isArray(改动) ? 改动 : [];
-  if (!list.length) return res.status(400).json({ error: '改动必填（[{id,执行池?,模型?}]）' });
-  // 先全量校验再落盘：一条不合法则整批不写，避免半截生效的编制
-  for (const c of list) {
-    const a = (cfg.agents || []).find((x) => x.id === (c && c.id));
-    if (!a) return res.status(400).json({ error: 'agent 不存在：' + ((c && c.id) || '') });
-    if (c.执行池 != null && String(c.执行池).trim() && !(cfg.执行池 || {})[String(c.执行池).trim()]) {
-      return res.status(400).json({ error: '未知池：' + c.执行池 });
-    }
-  }
-  const 生效 = [];
-  for (const c of list) {
-    const a = cfg.agents.find((x) => x.id === c.id);
-    const 前 = { 执行池: a.执行池 || '', 模型: a.模型 || '' };
-    const 池 = c.执行池 != null ? String(c.执行池).trim() : null;
-    if (池 && a.执行池 !== 池) { a.执行池 = 池; delete a.模型; } // 切池清模型覆盖：旧池的模型名对新池无意义
-    if (c.模型 != null) { const m = String(c.模型).trim(); if (m) a.模型 = m; else delete a.模型; }
-    const 后 = { 执行池: a.执行池 || '', 模型: a.模型 || '' };
-    if (前.执行池 !== 后.执行池 || 前.模型 !== 后.模型) 生效.push({ id: a.id, 前, 后 });
-  }
+  const r = roster.apply(cfg, 改动); // 先全量校验再整批落：一条不合法则整批不写
+  if (!r.ok) return res.status(400).json({ error: r.error });
   saveCfg();
-  const 摘 = 生效.map((v) => `${v.id} 池 ${v.前.执行池 || '—'}→${v.后.执行池 || '—'} 模型 ${v.前.模型 || '池默认'}→${v.后.模型 || '池默认'}`).join('；') || '（无实际变化）';
-  journal.append(ROOT, `项管编制调整（H85）：${摘}｜理由：${String(理由 || '未述').slice(0, 120)}`);
-  pmLedger.event(ROOT, '编制调整', { 生效, 理由: String(理由 || '').slice(0, 200) });
-  res.json({ ok: true, 生效, agents: cfg.agents });
+  const 摘 = r.生效.map((v) => v.摘).join('；') || '（无实际变化）';
+  journal.append(ROOT, `项管编制调整（H85 去岗位化）：${摘}｜理由：${String(理由 || '未述').slice(0, 120)}`);
+  pmLedger.event(ROOT, '编制调整', { 生效: r.生效, 理由: String(理由 || '').slice(0, 200) });
+  res.json({ ok: true, 生效: r.生效, 编制: cfg.编制 });
 });
 
 // ---- 产出调起：打开文件/所在文件夹（仅限该单所属项目仓内，越界拒）----
@@ -873,7 +846,7 @@ app.get('/api/config', (req, res) => {
   // 兼容池密钥脱敏（0.22.1）：config 会流向远程客户端，密钥只留尾四位指纹
   const pools = JSON.parse(JSON.stringify(cfg.执行池 || {}));
   for (const p of Object.values(pools)) if (p.兼容 && p.兼容.key) p.兼容.key = '●●●●' + String(p.兼容.key).slice(-4);
-  res.json({ 闸值: cfg.闸值, 执行池: pools, agents: cfg.agents, 职能: cfg.职能, 推荐: cfg.推荐 || {}, 项目: cfg.项目 || {}, 模型: cfg.模型 || {}, 执行器: cfg.执行器 || {}, quota: cfg.quota || {}, server: cfg.server || {} });
+  res.json({ 闸值: cfg.闸值, 执行池: pools, 编制: cfg.编制 || roster.read(cfg), 职能: cfg.职能, 推荐: cfg.推荐 || {}, 项目: cfg.项目 || {}, 模型: cfg.模型 || {}, 执行器: cfg.执行器 || {}, quota: cfg.quota || {}, server: cfg.server || {} });
 });
 app.get('/api/quota', async (req, res) => {
   if (!ready(res)) return;

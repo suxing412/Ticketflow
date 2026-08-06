@@ -201,7 +201,7 @@ function viewProjNew() {
       <div class="doc2">
         <p>· <b>一份监制台管所有项目</b>——注册后启动页多一张监控卡，点卡进入该项目的驾驶舱，工单按项目隔离。</p>
         <p>· <b>执行 agent 会写入这个仓库</b>：领到盖着该项目章的工单后，codex/claude 在此仓库内产出代码与文档（写权限见岗位协议）。</p>
-        <p>· <b>共享资源不用重配</b>：执行器、agent 编制、额度双闸、岗位协议全局一套，新项目即刻可用。</p>
+        <p>· <b>共享资源不用重配</b>：执行器、职能编制、额度双闸、岗位协议全局一套，新项目即刻可用。</p>
         <p>· 起草工单时在「项目」下拉里选它；编号建议按 <span class="mono">项目名-序号</span> 起，防跨项目撞号。</p>
         <p class="dim">改名/删除/换默认在 启动页 ⚙ → 项目注册。</p></div></div></div>`;
 }
@@ -1915,18 +1915,26 @@ function pmEventLine(e) {
   if (e.类型 === '迁移') return { t, txt: `归位 ${e.id || ''}（池→待投）` };
   return { t, txt: `${e.类型}：${e.id || e.单 || e.父单 || ''}` };
 }
-// 编制快照（H85）：一行一 agent——职能/池/档位/可用性。纯展示，无编辑控件（编制是项管所辖数据，
-// 调整走 /api/pm/roster）。可用性不在前端另算一套：服务端用 dispatch.poolFrozen 实算后下发，
-// 池冻结就显黄「池冻结·止派」——案源 2026-08-06 美术-A 唯一编制挂冻结池却全绿的假健康。
+// 编制快照（H85 补章「去岗位化」）：**每职能一行**——职能 / 池序（带优先级箭头 + 各池档位）/ 可用性。
+// -A/-B 岗位号已随常驻岗位时代退役：派发制下执行者因单而生，编制记的是「这职能能在哪些池上干、按什么顺序」。
+// 纯展示，无编辑控件（编制是项管所辖数据，调整走 /api/pm/roster）。可用性不在前端另算一套：
+// 服务端用 dispatch.poolFrozen 实算后下发——首个可用池绿「在岗」、池序全冻黄「止派」，
+// 案源 2026-08-06 美术编制唯一挂冻结池却全绿的假健康。
 function rosterSnapHtml(编制) {
   if (!编制 || !编制.length) return '<p class="dim">（无编制数据）</p>';
-  return 编制.map((a) => {
-    const cls = a.可用 === true ? 'ok' : a.可用 === false ? 'warn' : 'mut';
-    return `<div class="teamrow card" style="border-left-color:${FNHEX[a.职能] || 'var(--line)'}">
-      <b>${esc(a.id)}</b>${fnPill(a.职能)}
-      <span class="poolp pill sm fn ${a.池 === 'claude' ? 'pool-claude' : 'pool-codex'}">${esc(a.池 || '?')} 池</span>
-      <span class="pill sm mut mono">${esc(a.模型 || '池默认')}</span>
-      <span class="stpill pill sm ${cls}">${esc(a.态 || '')}</span></div>`;
+  return 编制.map((r) => {
+    const cls = r.可用 === true ? 'ok' : r.可用 === false ? 'warn' : 'mut';
+    const 池序 = (r.池序 || []).map((p, i) => {
+      const 冻 = p.冻结 === true;
+      const 走 = p.池 === r.首个可用; // 当前实际会走的那个池：加粗描边，一眼看出优先级落点
+      return `${i ? '<span class="dim" style="margin:0 4px">→</span>' : ''}<span class="poolp pill sm fn ${p.池 === 'claude' ? 'pool-claude' : 'pool-codex'}"`
+        + `${冻 ? ' style="opacity:.45;text-decoration:line-through"' : (走 ? ' style="outline:1.5px solid var(--ok);outline-offset:1px"' : '')}`
+        + ` title="${冻 ? '该池已冻结（额度锁/护城河）' : 走 ? '当前路由落点' : '备选池'}">${esc(p.池)}${p.档 ? ' · ' + esc(p.档) : ''}${p.默认 ? ' · 职能默认' : ''}</span>`;
+    }).join('') || '<span class="pill sm mut">未挂池</span>';
+    return `<div class="teamrow card" style="border-left-color:${FNHEX[r.职能] || 'var(--line)'}">
+      <b>${esc(r.职能)}</b>${fnPill(r.职能)}
+      <span style="display:inline-flex;align-items:center;flex-wrap:wrap">${池序}</span>
+      <span class="stpill pill sm ${cls}">${esc(r.态 || '')}</span></div>`;
   }).join('');
 }
 async function viewRelay() {
@@ -1964,7 +1972,7 @@ async function viewRelay() {
         <p class="dim" style="margin:4px 0 0;font-size:12.5px">项管 ${esc(模型档)} · 在跑 ${Object.keys(L.在跑 || {}).length} 项 · 就绪 ${(L.就绪队列 || []).length} 单 · 今日：${esc(digest)}</p></div>
     </div>
     <div class="logcard card r14" style="margin-bottom:16px"><b style="font-size:13px">编制快照</b>
-      <span class="subnote" style="margin-left:8px">项管所辖 · 只读 · 可用性按池锁实算（调整走 /api/pm/roster）</span>
+      <span class="subnote" style="margin-left:8px">每职能一行 · 池序即路由优先级 · 只读（调整走 /api/pm/roster）</span>
       <div style="margin-top:12px">${rosterSnapHtml(rs.编制)}</div></div>
     <div class="logcard card r14" style="margin-bottom:16px"><b style="font-size:13px">关键汇报</b>
       <span class="subnote" style="margin-left:8px">拆单 / 待审 / 收口 / 上呈 / 报警</span>
