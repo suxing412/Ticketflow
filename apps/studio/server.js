@@ -656,7 +656,13 @@ app.get('/api/gates', async (req, res) => {
   try {
     const locks = await gates.allLocks(cfg);
     const rec = require('./lib/recommend').recommend(ROOT, cfg, { codex: locks.codex, claude: locks.claude });
-    res.json({ paused: require('./lib/core/state').read(ROOT).paused, locks: { codex: locks.codex, claude: locks.claude }, 推荐: rec });
+    // 沟通护城河读数（施工令-006）：UI 此前完全不提示，制作人看不出「claude 生产单为什么不动」。
+    // 判定不另写一套——直接问 dispatch.moatBlocked，UI 与调度同一把尺，绝不各算各的。
+    const gi = { codex: locks.codex, claude: locks.claude };
+    const 保留 = Number((cfg.额度 || {}).沟通保留 ?? 20);
+    const moat = { 池: 'claude', 保留线: 保留, 窗口: '5h', 余量: locks.claude.fivePct == null ? null : 100 - locks.claude.fivePct,
+      已越: require('./lib/pm/dispatch').moatBlocked(cfg, gi, 'claude') };
+    res.json({ paused: require('./lib/core/state').read(ROOT).paused, locks: gi, 推荐: rec, 护城河: moat });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // H69 评分仪表盘：岗位×模型矩阵聚合（均分+样本数，n<5 前端灰显）。只读仪表盘，不接奖惩。

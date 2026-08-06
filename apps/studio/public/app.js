@@ -442,13 +442,33 @@ async function viewFlow() {
   });
   // 历史折叠进布局（不再 display:none 留空白）：全完成的子泳道整体不排，头行计数提示
   const foldHist = (() => { try { return (localStorage.getItem('fl_fold') || 'on') !== 'off'; } catch { return true; } })();
+  // 签字位常驻（施工令-006）：折叠判据 = 组内**全部**为 完成/已归档，且要连容器单一起数。
+  // 旧判据只数叶子节点，而专项/阶段父单不出节点——「子单全完成、专项父单还挂在待验收」
+  // 的组于是被整道折进历史，制作人的签字队列凭空消失（2026-08-06 实拍病灶）。
+  const SIGN = new Set(['待验收', '待定夺']); // 等制作人落笔的两态
+  // 容器单归到它当家的那条道：根专项归自己那道，中间层父单归其根专项那道（与叶子的 laneKey 同构）
+  const laneKeyOfBox = (t) => { const pid = pipeOf(t); const spec = rootOf(t); return pid ? `${pid}::${spec.id}` : `::${spec.id}`; };
+  const laneBoxes = {};
+  for (const t of all) if (hasKids.has(t.id)) { const k = laneKeyOfBox(t); (laneBoxes[k] = laneBoxes[k] || []).push(t); }
   const laneDone = {};
   for (const n of nsAll) { (laneDone[n.lane] = laneDone[n.lane] || []).push(DONE.has(n.t.state)); }
-  const foldedLanes = new Set(Object.entries(laneDone).filter(([, arr]) => arr.every(Boolean)).map(([k]) => k));
+  const laneSign = {}; // 泳道 → 等签字的单（叶子 + 容器一起收）
+  const pushSign = (k, t) => { if (SIGN.has(t.state)) (laneSign[k] = laneSign[k] || []).push(t); };
+  for (const n of nsAll) pushSign(n.lane, n.t);
+  for (const k in laneBoxes) for (const t of laneBoxes[k]) pushSign(k, t);
+  const laneAllDone = (k) => (laneDone[k] || []).every(Boolean) && (laneBoxes[k] || []).every((t) => DONE.has(t.state));
+  const foldedLanes = new Set(Object.keys(laneDone).filter(laneAllDone));
   const foldedByPipe = {};
   if (foldHist) for (const k of foldedLanes) { const pid = k.split('::')[0]; foldedByPipe[pid] = (foldedByPipe[pid] || 0) + 1; }
   const ns = foldHist ? nsAll.filter((n) => !foldedLanes.has(n.lane)) : nsAll;
-  if (!ns.length) return `<div class="emptycard" style="margin-top:30px"><h5>流程空${foldHist && foldedLanes.size ? `（${foldedLanes.size} 组历史已折叠）` : ''}</h5><p>起草工单（选阶段、填依赖/父单）后，这里按 管线×专项 铺出项目流动。${foldHist && foldedLanes.size ? '点「显示历史」看完成组。' : ''}</p></div>`;
+  if (!ns.length) {
+    const fN = foldHist ? foldedLanes.size : 0;
+    // 死胡同修复：文案让点「显示历史」，按钮本体就得在卡里——空态时主工具条整条不渲染，
+    // 光有文案没有钮 = 指路指到墙上（2026-08-06 实拍病灶）。
+    return `<div class="emptycard" style="margin-top:30px"><h5>流程空${fN ? `（${fN} 组已完成的历史被折叠）` : ''}</h5>
+      <p>起草工单（选阶段、填依赖/父单）后，这里按 管线×专项 铺出项目流动。${fN ? '待验收/待定夺的组不会被折——签字位常驻。' : ''}</p>
+      ${fN ? `<div class="emptyact"><button class="btn h32 on" id="fl-fold-btn" onclick="flFold(this)">显示历史（${fN} 组）</button></div>` : ''}</div>`;
+  }
   const nById = Object.fromEntries(ns.map((n) => [n.id, n]));
   ns.forEach((n) => { n.deps = n.deps.filter((d) => nById[d]); });
   const SIDX = Object.fromEntries(STG.map((s, i) => [s.代号, i]));
@@ -560,10 +580,12 @@ async function viewFlow() {
     const title = (L.mine[0] || {}).laneTitle || ln.split('::')[1] || ln;
     const lag = !misc && SIDX[ls] < SIDX[mainStage] && L.mine.some((n) => !DONE.has(n.t.state));
     const lead = !misc && SIDX[ls] > SIDX[mainStage];
-    const wait = L.mine.some((n) => n.t.state === '待验收' && n.t.验收方式 === '保留');
-    const allDone = L.mine.every((n) => DONE.has(n.t.state));
+    // 签字标记：叶子 + 容器单一起数（专项父单挂待验收也算这道在等你落笔）
+    const signs = laneSign[ln] || [];
+    const signTip = signs.map((t) => `${t.id} ${t.state}${t.验收方式 === '保留' ? '（保留 · 只你能签）' : ''}`).join('\n');
+    const allDone = laneAllDone(ln);
     return `<div class="fl-lane" style="top:${L.top}px"></div>
-      <div class="fl-lab" style="top:${L.top}px">${esc(title)}${allDone ? '<span class="lst" style="opacity:.6">已完成</span>' : `<span class="lst ${lag ? 'lag' : lead ? 'lead' : ''}">${esc(ls)}${lag ? ' 滞后' : lead ? ' 超前' : ''}</span>`}${wait ? '<span class="lst lag" style="background:var(--dangerbg);color:var(--danger);border-color:transparent">待你验收</span>' : ''}</div>`;
+      <div class="fl-lab" style="top:${L.top}px">${esc(title)}${allDone ? '<span class="lst" style="opacity:.6">已完成</span>' : `<span class="lst ${lag ? 'lag' : lead ? 'lead' : ''}">${esc(ls)}${lag ? ' 滞后' : lead ? ' 超前' : ''}</span>`}${signs.length ? `<span class="lst sign" title="${esc(signTip)}">✍ 等制作人签字${signs.length > 1 ? ' ×' + signs.length : ''}</span>` : ''}</div>`;
   }).join('');
   const nodeHtml = ns.map((n) => `<div class="fl-node ${flCls(n)}${crit.has(n.id) ? ' crit' : ''}" id="fl-${esc(n.id)}"
       style="left:${n.x}px;top:${n.y}px;--fn:${FNHEX[n.t.职能] || 'var(--ink3)'}" data-nid="${esc(n.id)}"
@@ -585,7 +607,7 @@ async function viewFlow() {
       <span class="subnote">横轴=阶段 · 泳道=系统 · 红=关键路径（预计时间加权）· 虚线=升阶链 · 点卡进详情</span>
       <span class="sp"></span>
       ${cp.len ? `<span class="fl-cp">关键路径 ${Math.round(cp.len * 10) / 10}h · ${cp.path.length} 单</span>` : ''}
-      <button class="btn h32 ${foldHist ? 'on' : ''}" id="fl-fold-btn" onclick="flFold(this)">${foldHist ? '显示历史' : '折叠已完成'}</button></div>
+      <button class="btn h32 ${foldHist ? 'on' : ''}" id="fl-fold-btn" onclick="flFold(this)">${foldHist ? `显示历史${foldedLanes.size ? `（${foldedLanes.size} 组）` : ''}` : '折叠已完成'}</button></div>
     <div class="fl-wrap"><div class="fl-stage" style="width:${xa + 20}px;height:${yy + 16}px">
       <svg class="fl-svg" width="${xa + 20}" height="${yy + 16}">${paths}</svg>
       ${heads}${pipeHeadHtml}${laneHtml}${nodeHtml}</div></div>`;
@@ -642,7 +664,7 @@ async function viewTree() {
     return `<div class="trow2 ${isParent ? 'parent' : 'leaf'} ${lv ? 'lv' + Math.min(lv, 3) : ''} ${acceptN ? 'hasaccept' : ''}" onclick="location.hash='#/t/${t.id}'">
       ${twist}<span class="tid2">${esc(t.id)}</span><span class="tt2 clamp2" title="${esc(t.title)}">${esc(t.title)}</span>
       ${isParent ? `<span class="kids">${chn.length} 子单${t.阶段 ? ' · ' + esc(t.阶段) : ''}</span>` : ''}
-      <span class="mid">${!isParent ? fnPill(t.职能) + stPill(t.state) : ''}</span>
+      <span class="mid">${isParent ? '' : fnPill(t.职能)}${stPill(t.state)}${isParent && t.state === '待验收' ? `<span class="pill signq" title="${esc(t.验收方式 === '保留' ? '保留 · 只你能签' : '委托 · 核查可代签，仍在你队列')}">✍ 等你签字</span>` : ''}</span>
       <div class="prog"><span class="bar"><i style="width:${pct}%"></i></span><span class="pv">${pct}%</span></div>
       ${acceptN ? `<button class="accept-mini" onclick="event.stopPropagation();tAcceptAll('${esc(t.id)}')">✓ 验收子单×${acceptN}</button>` : ''}
       ${!isParent ? `<div class="acts"><a class="mini3" href="#/t/${t.id}" onclick="event.stopPropagation()">详情</a><a class="mini3" href="#/draft?parent=${t.id}" onclick="event.stopPropagation()">＋ 子单</a></div>` : ''}
@@ -1015,13 +1037,34 @@ const P6META = { 全局在途上限: '同时最多 N 张在途', 待验收积压
   速度窗口小时: '统计处理速度的回看窗口 N 小时', 每档处理数: '窗口内每处理 N 项决策，推荐 +1',
   间隔秒: '每 N 秒扫一轮（派发+起执行）', 执行超时分钟: 'N 分钟到点先验尸：仍在进展续命，停滞才树杀（硬顶 3N，H63）', 记账间隔分钟: '每 N 分钟自动 git 落袋（0=关）',
   额度刷新秒: '两次额度请求最小间隔 N 秒（防限流硬保证）' };
+// 模型档空值文案：不是所有档留空都等于「CLI 默认」——代裁留空是跟核查档走
+// （runner.modelOf：代裁 → 仲裁 || 代裁 || 核查 || 代核 || claude默认）。下拉与旁注必须同一口径（施工令-006）
+const MEMPTY = { 代裁: '跟核查档' };
+const mEmptyLbl = (key) => MEMPTY[key] || 'CLI 默认';
 const P6NAMES = { 滞留超时小时: '滞留超时', 速度窗口小时: '速度窗口', 每档处理数: '每档处理数',
   间隔秒: '扫池间隔', 执行超时分钟: '执行超时', 记账间隔分钟: '记账间隔', 额度刷新秒: '额度刷新间隔' };
-function poolCardHtml(name, l, cfg2) {
-  const pct = l && l.fivePct != null ? l.fivePct : null; const hot = l && l.locked;
+// 额度双池卡。口径纪律（施工令-006）：每个窗口只跟管得着它的那根杆并排——
+// 旧版把「5h X% · 周 Y% · 阈值 Z%」串成一行，读起来像周窗也归 阈值 管（周 61% > 阈值 70%？
+// 其实周窗归 周阈值 90% 管），凭空造出违规错觉。现在一窗一行，各挂各的杆。
+function poolCardHtml(name, l, cfg2, moat) {
+  const pct = l && l.fivePct != null ? l.fivePct : null;
+  const wpct = l && l.weekPct != null ? l.weekPct : null;
+  const hot = l && l.locked;
+  const th = cfg2 && cfg2.阈值 != null ? cfg2.阈值 : 70;
+  const wth = cfg2 && cfg2.周阈值 != null ? cfg2.周阈值 : 90;
+  const row = (lbl, v, gate, note, over) => `<div class="qline"><span class="ql">${lbl}</span>
+      <b class="qv mono ${over ? 'err' : ''}">${v == null ? '··' : v + '%'}</b>
+      <span class="pbar"><i class="${over ? 'hot' : ''}" style="width:${v || 0}%"></i></span>
+      <span class="qgate">${gate}<span class="qwin">（${note}）</span></span></div>`;
+  // 沟通护城河（dispatch.moatBlocked 的真实行为，读数由 /api/gates 直供）：只管 claude 池、
+  // 只看 5h 窗余量——余量 ≤ 保留线就停拉 claude 生产单，把额度留给对话。未越线不出提示。
+  const moatHtml = (moat && moat.已越 && name === moat.池)
+    ? `<div class="moat" title="lib/pm/dispatch.js · moatBlocked：claude 池 5h 余量 ≤ 沟通保留线即停拉生产单，对话与项管不受影响">
+        ${moat.窗口} 余 ${moat.余量}% · 沟通保留线 ${moat.保留线}% 已越 — claude 生产单停拉（额度留给对话）</div>` : '';
   return `<div class="pr"><h4>${name} 池</h4><span class="pstat ${hot ? 'err' : 'dim'}">${l ? (hot ? '●锁 ' + esc(l.resetAt || '') + ' 解冻' : '正常') : '查询中…'}</span></div>
-    <div class="meta">5h ${pct == null ? '··' : pct + '%'} · 周 ${l && l.weekPct != null ? l.weekPct + '%' : '··'} · 阈值 ${cfg2 ? cfg2.阈值 : '—'}%</div>
-    <div class="pbar"><i class="${hot ? 'hot' : ''}" style="width:${pct || 0}%"></i></div>`;
+    ${row('5h', pct, `阈值 ${th}%`, '管 5h 窗', pct != null && pct >= th)}
+    ${row('周', wpct, `周阈值 ${wth}%`, '管周窗', wpct != null && wpct >= wth)}
+    ${moatHtml}`;
 }
 function teamRowsHtml(agents) {
   // D38：模型档可选——下拉 = 池默认 + 监测/配置的可选项（window._models 由参数页加载）
@@ -1103,13 +1146,13 @@ async function viewParams() {
     + `<div class="paramcard card"><h4>＋ 新增兼容池</h4><p class="pmeta">任何 Anthropic 兼容厂商（Kimi/GLM/MiniMax…）：池名+端点+密钥即接入 · 密钥只存本机 config，界面与远程只显尾四位</p>
       <div class="runbtn"><button class="btn h32 accent" onclick="compatEdit('')">配置</button></div></div>`;
   // 模型档：池默认 + 裁判档（选项来自 /api/models 监测 + config 增补）
-  const mOpt = (pool, cur) => { const list = ((models[pool] && models[pool].可选) || []);
-    return `<option value="" ${!cur ? 'selected' : ''}>CLI 默认</option>` + list.map((o) => `<option value="${esc(o)}" ${cur === o ? 'selected' : ''}>${esc(o)}</option>`).join('')
+  const mOpt = (pool, cur, key) => { const list = ((models[pool] && models[pool].可选) || []);
+    return `<option value="" ${!cur ? 'selected' : ''}>${esc(mEmptyLbl(key))}</option>` + list.map((o) => `<option value="${esc(o)}" ${cur === o ? 'selected' : ''}>${esc(o)}</option>`).join('')
       + (cur && !list.includes(cur) ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''); };
   const mc = c.模型 || {};
   const modelCards = [['claude默认', 'claude', 'claude 池体力档'], ['codex默认', 'codex', 'codex 池体力档'], ['质检', 'claude', 'QA 复核档（审检三席）'], ['代核', 'claude', '核查档（原代核·两检深检，H68）'], ['代裁', 'claude', '仲裁档（原代裁，空=跟核查档）'], ['项管', 'claude', '项目管理切单/收口/裁决/答话档（现值 opus，H49 后 2026-08-04 调）']]
     .map(([k, pool, note]) => `<div class="paramcard card"><h4>${k}</h4><p class="pmeta">${note}</p>
-      <div class="runbtn"><select class="mselect mono" onchange="mSet('${k}', this.value)">${mOpt(pool, mc[k] || '')}</select></div></div>`).join('')
+      <div class="runbtn"><select class="mselect mono" onchange="mSet('${k}', this.value)">${mOpt(pool, mc[k] || '', k)}</select></div></div>`).join('')
     + `<div class="paramcard card"><h4>可选模型增补</h4><p class="pmeta">监测之外手动补（写进 config.模型.可选）</p>
       <div class="runbtn"><input id="madd-codex" class="mono" placeholder="codex" style="width:90px;height:30px;padding:0 8px;font-size:11px"/><button class="btn h32" style="height:30px;margin:0 6px" onclick="mAdd('codex')">＋</button>
       <input id="madd-claude" class="mono" placeholder="claude" style="width:90px;height:30px;padding:0 8px;font-size:11px"/><button class="btn h32" style="height:30px;margin-left:6px" onclick="mAdd('claude')">＋</button></div></div>`;
@@ -1136,11 +1179,11 @@ async function viewParams() {
   let lastPoolJson = '';
   const fillPools = async () => {
     const g = await api('/api/gates');
-    const key = JSON.stringify([g.locks.codex, g.locks.claude]);
+    const key = JSON.stringify([g.locks.codex, g.locks.claude, g.护城河]);
     if (key === lastPoolJson) return;
     lastPoolJson = key;
-    const pc = $('pool-codex'); if (pc) pc.innerHTML = poolCardHtml('codex', g.locks.codex, c.执行池 && c.执行池.codex);
-    const pl = $('pool-claude'); if (pl) pl.innerHTML = poolCardHtml('claude', g.locks.claude, c.执行池 && c.执行池.claude);
+    const pc = $('pool-codex'); if (pc) pc.innerHTML = poolCardHtml('codex', g.locks.codex, c.执行池 && c.执行池.codex, g.护城河);
+    const pl = $('pool-claude'); if (pl) pl.innerHTML = poolCardHtml('claude', g.locks.claude, c.执行池 && c.执行池.claude, g.护城河);
   };
   setTimeout(() => { fillPools().catch(() => { /* 保持占位，不清空 */ }); }, 0);
   pollLoop('pool-codex', 5000, fillPools);
@@ -1239,7 +1282,7 @@ window.mSet = async (key, v) => {
   if (!r.ok) return toast(r.error || '失败');
   if (window._p6cfg) window._p6cfg.模型 = r.模型;
   const tl = $('team-list'); if (tl && window._p6cfg) tl.innerHTML = teamRowsHtml(window._p6cfg.agents); // 池默认变了编制表跟着变
-  toast(`${key} → ${v || 'CLI 默认'}`);
+  toast(`${key} → ${v || mEmptyLbl(key)}`);
 };
 // 可选模型增补
 window.mAdd = async (pool) => {
