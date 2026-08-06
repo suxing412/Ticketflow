@@ -755,3 +755,17 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .ask-ov .ask-card { min-width:300px; max-width:420px; padding:22px 24px; box-shadow:var(--shadow-lg); }
 .ask-ov .ask-card p { font-size:13.5px; color:var(--ink); line-height:1.6; margin:0; }
 @media (prefers-reduced-motion: reduce) { .ask-ov { animation:none; } }
+
+/* 短题制兜底（H83，施工令-002）：卡片标题统一两行截断，悬停 title 显全文；详情页不套此类 */
+.clamp2 { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2;
+  overflow:hidden; text-overflow:ellipsis; white-space:normal; word-break:break-word; line-height:1.35; }
+/* 下面三条只为压过原「nowrap 单行省略」的更高特指度声明，规则本体仍在 .clamp2 */
+.inbox-row .rt.clamp2 { flex:0 0 170px; white-space:normal; }
+.bcard2 .ct.clamp2 { display:-webkit-box; white-space:normal; }
+.trow2 .tt2.clamp2 { display:-webkit-box; white-space:normal; max-width:300px; }
+
+/* 工程队状态卡（施工令-002）：只读一行卡，无状态文件时整卡不渲染 */
+.crewcard { display:flex; align-items:center; gap:12px; padding:12px 20px; margin-top:16px; }
+.crewcard .cwo { font-size:11px; color:var(--ink3); }
+.crewcard .cwn { font-size:12.5px; color:var(--ink2); max-width:420px; }
+.crewcard .spacer { flex:1; }

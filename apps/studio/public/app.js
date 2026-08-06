@@ -142,6 +142,19 @@ async function viewHub() {
       if (hit) { const m = String(hit).match(/^\[[^\]]*?([\d:]{5})[^\]]*\]\s*(.*)$/); el.textContent = (m ? m[1] + ' · ' + m[2] : hit).slice(0, 56); }
     }
   } catch { /* 无动态不补 */ } }, 0);
+  // 工程队状态卡（施工令-002）：只读外部状态文件，无文件/坏文件 → 整卡不渲染（占位 div 保持空）
+  setTimeout(async () => { try {
+    const c = (await api('/api/crew')).卡; const el = $('hub-crew');
+    if (!el || !c) return;
+    const cls = c.状态 === '完工' ? 'ok' : c.状态 === '待验收' ? 'red' : 'mut';
+    const 更新 = c.更新时间 ? new Date(c.更新时间) : null;
+    const 时 = 更新 && !isNaN(更新) ? 更新.toLocaleString('zh-CN', { hour12: false }).slice(5) : esc(c.更新时间 || '');
+    el.innerHTML = `<div class="crewcard card r14">
+      <b style="font-size:13px">工程队</b><span class="pill sm ${cls}">${esc(c.状态 || '—')}</span>
+      <span class="cwo mono">施工令 ${esc(c.施工令 || '—')}</span>
+      <span class="cwn clamp2" title="${esc(c.名称 || '')}">${esc(c.名称 || '')}</span>
+      <span class="spacer"></span><span class="subnote">${esc(时)} 更新 · 只读</span></div>`;
+  } catch { /* 无状态文件不渲染 */ } }, 0);
   setTimeout(async () => { try {
     const e2 = await api('/api/env'); const el = $('hub-env'); if (!el) return;
     el.title = e2.结论.join('\n');
@@ -161,6 +174,7 @@ async function viewHub() {
       <div class="grp pool"><span class="lbl">claude 池</span><span class="num dim" id="hub-cl">—</span></div><div class="vdiv"></div>
       <div class="grp pool"><span class="lbl">环境</span><span class="num dim" id="hub-env" title="全链路自检">—</span></div>
       <div class="spacer"></div><span class="subnote">需你处理的项目卡会亮红胶囊 · 编辑器锁在决策台</span></div>
+    <div id="hub-crew"></div>
     <div class="hubgrid">${cards}
       <a class="hubcard add card r16" href="#/proj-new"><span>＋ 注册新项目</span><span class="subnote">一份监制台管所有项目——注册即接管</span></a></div>`;
 }
@@ -218,7 +232,7 @@ async function viewOverview() {
   ];
   const inboxHtml = inbox.map((r) => `<div class="inbox-row card" onclick="location.hash='#/t/${r.id}'" tabindex="0" role="button"
       onkeydown="if(event.key==='Enter'){location.hash='#/t/${r.id}'}">
-      <span class="rid">${esc(r.id)}</span><span class="rt">${esc(r.title)}</span><span class="rnote">${esc(r.note)}</span>
+      <span class="rid">${esc(r.id)}</span><span class="rt clamp2" title="${esc(r.title)}">${esc(r.title)}</span><span class="rnote">${esc(r.note)}</span>
       ${stPill(r.k)}</div>`).join('')
     || `<p class="dim">收件箱空——没有需要你决定的${n('待投') ? `；<a href="#/board" style="color:var(--accent-ink)">待投区还有 ${n('待投')} 张可放行 →</a>` : ''}</p>`;
   // 池首投放建议已随拉取制退役（0.24.7 视图清仓）
@@ -349,7 +363,7 @@ async function viewBoard() {
     const cards = items.map((t) => `<div class="bcard2" data-tid="${esc(t.id)}" onclick="location.hash='#/t/${t.id}'">
         <span class="cid">${esc(t.id)}</span>
         <span class="cpri ${t.优先级 === 'P0' ? 'p0' : ''}">${esc(t.优先级 || '')}</span>
-        <div class="ct">${esc(t.title)}</div>${fnPill(t.职能)}</div>`).join('');
+        <div class="ct clamp2" title="${esc(t.title)}">${esc(t.title)}</div>${fnPill(t.职能)}</div>`).join('');
     return `<div class="bcol2 ${widths[s] || ''} ${hot ? 'hot' : ''}">${head}${cards}</div>`;
   }).join('');
   const fillBar = async () => {
@@ -613,7 +627,7 @@ async function viewTree() {
     const twist = isParent ? `<span class="twist2" onclick="event.stopPropagation();tToggle('${esc(t.id)}')">${collapsed ? '▸' : '▾'}</span>`
       : '<span class="twist2 none">·</span>'; // 叶子一律「·」——▸ 只留给真能开合的父行（2026-08-06 交互全测：同形箭头误导可点）
     return `<div class="trow2 ${isParent ? 'parent' : 'leaf'} ${lv ? 'lv' + Math.min(lv, 3) : ''} ${acceptN ? 'hasaccept' : ''}" onclick="location.hash='#/t/${t.id}'">
-      ${twist}<span class="tid2">${esc(t.id)}</span><span class="tt2">${esc(t.title)}</span>
+      ${twist}<span class="tid2">${esc(t.id)}</span><span class="tt2 clamp2" title="${esc(t.title)}">${esc(t.title)}</span>
       ${isParent ? `<span class="kids">${chn.length} 子单${t.阶段 ? ' · ' + esc(t.阶段) : ''}</span>` : ''}
       <span class="mid">${!isParent ? fnPill(t.职能) + stPill(t.state) : ''}</span>
       <div class="prog"><span class="bar"><i style="width:${pct}%"></i></span><span class="pv">${pct}%</span></div>
@@ -810,7 +824,7 @@ async function viewDecisions() {
         <button class="btn h36" onclick="dAct('定夺','${esc(cur.id)}',null,'给方向')">给方向</button>
         <button class="btn danger-o h36" onclick="dAct('定夺','${esc(cur.id)}',null,'打回')">打回</button></div></div>`}</div>`;
   }
-  const q1 = d.待验收.map((t) => `<div class="qitem" onclick="dTab='accept';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2">${esc(t.title)} · ${esc(t.验收方式 || '保留')}</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>';
+  const q1 = d.待验收.map((t) => `<div class="qitem" onclick="dTab='accept';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · ${esc(t.验收方式 || '保留')}</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>';
   // H64 编辑器锁（2026-08-05 制作人指正：锁属验收流程，落决策台不落首页）——数据后到原地填
   setTimeout(async () => { try {
     const run = await api('/api/runner');
@@ -827,7 +841,7 @@ async function viewDecisions() {
       <span class="backlog2">待验收积压 ${d.积压} / ${d.积压闸}</span></div>
     <div class="dgrid">${main}<div><div class="dside card r16"><h3>待验收队列</h3>${q1}</div>
       <div class="dside card r16"><h3 class="${d.待定夺.length ? 'err' : ''}">待定夺 · ${d.待定夺.length}</h3>
-        ${d.待定夺.map((t) => `<div class="qitem" onclick="dTab='escal';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2">${esc(t.title)} · QA 未过</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>'}</div></div></div>`;
+        ${d.待定夺.map((t) => `<div class="qitem" onclick="dTab='escal';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · QA 未过</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>'}</div></div></div>`;
 }
 window.dAct = async (name, id, 通过, 决定) => { const r = await post('/api/act/' + name, { id, 通过, 决定 }); toast(r.ok ? '已处理' : (r.error || '失败')); route(); };
 window.dReject = async (id) => { if (await ask('打回将归档旧单，需另开新单重走流程。确认？')) dAct('验收', id, false); };
@@ -1327,8 +1341,9 @@ window.dSave = async (release) => {
   if (!r.ok) return toast(r.error || '失败');
   const r2 = await post('/api/act/定稿', { id: payload.id });
   if (!r2.ok && !/待投/.test(r2.error || '')) return toast('已建草稿，但定稿失败：' + (r2.error || ''));
-  if (release) { const r3 = await post('/api/act/投池', { id: payload.id }); if (!r3.ok) return toast('已入待投，投池失败：' + (r3.error || '')); toast('已投池'); }
-  else toast('已存为待投');
+  const w = r2.警示 ? ' · 警示：' + r2.警示[0] : ''; // H83 短题制预检警示，不拦截只提醒
+  if (release) { const r3 = await post('/api/act/投池', { id: payload.id }); if (!r3.ok) return toast('已入待投，投池失败：' + (r3.error || '')); toast('已投池' + w); }
+  else toast('已存为待投' + w);
   location.hash = '#/board';
 };
 
@@ -1420,7 +1435,8 @@ async function viewDetail(id) {
         ${ops.map(([b, s, fn]) => `<button class="oprow2" onclick="${fn}"><b>${b}</b><span>${s}</span></button>`).join('')}
         <div class="subnote" style="margin-top:14px">预计 ${esc(fm.预计时间 || '—')} · ${esc(fm.预计token || '—')} · 状态 ${esc(d.state)}</div></div></div></div>`;
 }
-window.act2 = async (name, id) => { const r = await post('/api/act/' + name, { id }); toast(r.ok ? '完成' : (r.error || '失败')); route(); };
+// 预检警示（H83 短题制）：动作照常完成，只把提醒端到眼前
+window.act2 = async (name, id) => { const r = await post('/api/act/' + name, { id }); toast(r.ok ? (r.警示 ? '完成 · 警示：' + r.警示[0] : '完成') : (r.error || '失败')); route(); };
 window.overturnModal = (id) => showModal(`<h3>推翻重做 ${esc(id)}</h3>
   <p class="subnote" style="margin-top:6px">归档旧单 + 自动编号开返工草稿（带返工链），下游依赖自动接续。理由必填，进新单正文与流水。</p>
   <textarea id="ov-r" style="width:100%;height:90px;margin-top:12px" placeholder="为什么翻案：哪里完全不行、新的要求方向是什么"></textarea>

@@ -29,6 +29,19 @@ function saveSummary(changes) {
   return `保存：${parts.join('；')}`;
 }
 
+// 一条流水 = 一行「[时间戳] 正文」；正文含换行时（如判官结论正文被整段带进来）
+// 后续行没有时间戳，渲染成裸行泄漏到事件行下方（2026-08-06 13:14 案：开工事件下方漏出
+// 「结论：不过／质量分：1」）。折叠规则：续行并入上条、只留首行，被吞的部分以 … 示意。
+const 条首 = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]/;
+function foldLines(raw) {
+  const out = [];
+  for (const l of raw) {
+    if (条首.test(l) || !out.length) { out.push(l); continue; }
+    if (!out[out.length - 1].endsWith('…')) out[out.length - 1] += '…'; // 续行吞掉，只在首行留省略号
+  }
+  return out;
+}
+
 // 读取最新月份日志（agent 补课用）
 function readLatest(root) {
   const dir = path.join(root, 'journal');
@@ -36,8 +49,8 @@ function readLatest(root) {
   const files = fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}\.log$/.test(f)).sort();
   if (!files.length) return { month: null, lines: [] };
   const latest = files[files.length - 1];
-  const lines = fs.readFileSync(path.join(dir, latest), 'utf8').split('\n').filter(Boolean);
+  const lines = foldLines(fs.readFileSync(path.join(dir, latest), 'utf8').split('\n').filter(Boolean));
   return { month: latest.replace('.log', ''), lines };
 }
 
-module.exports = { append, saveSummary, readLatest };
+module.exports = { append, saveSummary, readLatest, foldLines };
