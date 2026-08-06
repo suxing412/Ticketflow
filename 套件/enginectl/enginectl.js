@@ -2,14 +2,17 @@
 // enginectl — 引擎通道注册表（Ticketflow 通用件）
 // 用法：node enginectl.js <通道> --project <工程目录> [--out <产物>] [--preset <导出预设>] [--script <测试脚本>]
 //      node enginectl.js 探测            ← 列出本机可用引擎
-//      unity-test [--filter 类名1,类名2] ← 只跑点名测试类的子集（冷热两路都支持）
-//      unity-test/unity-run [--no-attach] ← 强制走冷 batchmode（审检全量定案用净室）
-// attach：有活编辑器（工程根 .enginectl-attach.json）时把任务投给它执行；探测不通一律静默回落冷 batchmode。
+//      unity-test [--filter 类名1,类名2] ← 只跑点名测试类的子集
+//      unity-test/unity-run [--fresh]   ← 净室：请求活编辑器排空队列后自退，重新可见拉起再投递（重启后首跑）
+//      unity-* [--boot-timeout-min N]   ← 可见编辑器拉起后等监听器上线的上限（默认 5min，首次导入可调大）
+// 施工令-011「编辑器绝对可见化」：Unity 侧只允许存在带可见窗口的编辑器，无头 batchmode 整族退役，无例外旗标。
+//   无活监听器 → 可见拉起 Unity.exe -projectPath <工程>（不带任何无头/无图形旗标）→ 等监听器上线 → 投递。
+//   拉不起/等不到 → 人话报错，绝不回落无头。已在跑的可见编辑器永不被杀死或抢占（--fresh 也只是礼貌请求自退）。
 // 通道只认名字，换引擎不换协议（宪法·模块化）。每通道：定位→版本校验→执行→退出码语义。
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 // —— 引擎定位：env > 同目录 enginectl.config.json > 常见默认 ——
 const CFG_FILE = path.join(__dirname, 'enginectl.config.json');
@@ -33,14 +36,20 @@ function findUnreal() {
   try { const d = fs.readdirSync(base).find((x) => /^UE_/.test(x)); return d ? path.join(base, d) : null; } catch { return null; }
 }
 
-// —— 工程级互斥（TK-55/57 撞锁案）：同一 Unity 工程同时只允许一个 enginectl 会话。
+// —— 工程级互斥（TK-55/57 撞锁案）：同一工程同时只允许一个 enginectl 会话进「拉起编辑器/冷跑」临界区。
 // mkdir 原子抢锁；等待方轮询（默认上限 30min）。锁目录带 pid 文件，宿主进程死了视为孤儿锁可夺。
+// 注意（施工令-011）：Unity 侧只在「可见拉起」这一小段持锁（防两个会话同时开两个编辑器），
+// 监听器一上线立刻释放——任务本身由编辑器内监听器串行排队，不该占满整场测试把别人饿死。
 function acquireProjectLock(proj, waitMin) {
   const lockDir = path.join(proj, '.enginectl-lock');
   const pidFile = path.join(lockDir, 'pid');
   const deadline = Date.now() + (waitMin || 30) * 60000;
   for (;;) {
-    try { fs.mkdirSync(lockDir); fs.writeFileSync(pidFile, String(process.pid)); return lockDir; } catch { /* 已被占 */ }
+    try {
+      fs.mkdirSync(lockDir); fs.writeFileSync(pidFile, String(process.pid));
+      process.on('exit', () => { try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch { /* 尽力而为 */ } });
+      return lockDir;
+    } catch { /* 已被占 */ }
     try { // 孤儿锁检测：持锁 pid 已死则夺锁
       const pid = Number(fs.readFileSync(pidFile, 'utf8'));
       if (pid) { try { process.kill(pid, 0); } catch { fs.rmSync(lockDir, { recursive: true, force: true }); continue; } }
@@ -49,18 +58,27 @@ function acquireProjectLock(proj, waitMin) {
     const sab = new SharedArrayBuffer(4); Atomics.wait(new Int32Array(sab), 0, 0, 3000); // 同步睡 3s
   }
 }
+function releaseLock(lockDir) { try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch { /* 进程退出兜底 */ } }
+function unityProcessAlive() {
+  const r = spawnSync('tasklist', ['/FI', 'IMAGENAME eq Unity.exe', '/NH'], { encoding: 'utf8', windowsHide: true });
+  return /Unity\.exe/i.test(r.stdout || '');
+}
+// 工程是否已被一个活编辑器占着（UnityLockfile 是工程级的，比发现文件可靠——
+// 编辑器还在导入/编译时监听器尚未上线，发现文件可能缺失或陈旧）。
+function projectHeldByEditor(proj) {
+  return fs.existsSync(path.join(proj, 'Temp', 'UnityLockfile')) && unityProcessAlive();
+}
 // 孤儿 UnityLockfile 自愈：文件在但本机无 Unity 进程 = 上次运行被杀的尸体，安全清除。
 function clearOrphanUnityLock(proj) {
   const f = path.join(proj, 'Temp', 'UnityLockfile');
   if (!fs.existsSync(f)) return false;
-  const r = spawnSync('tasklist', ['/FI', 'IMAGENAME eq Unity.exe', '/NH'], { encoding: 'utf8', windowsHide: true });
-  if (/Unity\.exe/i.test(r.stdout || '')) return false; // 真有编辑器/批处理在跑，不动
+  if (unityProcessAlive()) return false; // 真有编辑器在跑，不动
   try { fs.unlinkSync(f); return true; } catch { return false; }
 }
 
 // ——————————————————————————————————————————————————————————
-// attach 模式（长驻编辑器 + 任务投递）——接收端见 TK-103「编辑器内驻任务监听器」
-// 纪律：探测失败一律静默回落冷 batchmode，零打扰（监听器未上线期间这是常态）。
+// attach 模式（可见长驻编辑器 + 任务投递）——接收端见 TK-103「编辑器内驻任务监听器」
+// 纪律（施工令-011）：探测不到监听器 = 去可见拉起一个编辑器，不存在无头回落路径。
 // ——————————————————————————————————————————————————————————
 const ATTACH_FILE = '.enginectl-attach.json'; // 端口发现文件（工程根）：{port, pid, projectPath}
 
@@ -72,6 +90,9 @@ const ATTACH = {
   // 请求：NDJSON 一行一条，一条连接只发一个请求。路径字段省略即用协议默认值（正是既有落盘口径）
   buildTest: (id, filters) => ({ type: 'test', id, ...(filters.length ? { filters } : {}) }),
   buildInvoke: (id, method) => ({ type: 'invoke', id, method }),
+  // restart：--fresh 的净室动作——请求监听器「排空队列后自退出」。TK-103 侧返修实装前，
+  // 协议只认 test/invoke/status，会回 final.status=error（code=unsupported_type）→ 走人话报错容错路径。
+  buildRestart: (id) => ({ type: 'restart', id }),
   isAccepted: (m) => m.event === 'accepted' || (m.event === undefined && m.queued !== undefined), // 后半截：兼容无 event 的早期草稿
   isFinal: (m) => m.event === 'final' || (m.event === undefined && typeof m.status === 'string'),
   // final.status：passed/failed（test）、ok（invoke）、error（拒绝或执行失败）
@@ -128,12 +149,8 @@ function attachSend(port, payload, probeMs, waitMin) {
   });
 }
 
-// —— --filter 子集：类名清单 → 单条正则（一条正则表全部点名类，绕开 -testFilter 分隔符方言）
-// 纯标识符按「测试类名」处理，锚到类名边界（全名形如 Ns.Sub.类名.方法名）；带元字符的原样透传当正则。
-function testFilterRegex(filters) {
-  const parts = filters.map((f) => (/^[A-Za-z_]\w*$/.test(f) ? `(^|\\.)${f}\\.` : f));
-  return parts.length === 1 ? parts[0] : `(${parts.join('|')})`;
-}
+// —— --filter 子集：类名清单原样交给监听器（协议按测试夹具类名匹配，正则转义在 TK-103 侧）。
+// 无头退役后不再需要 -testFilter 正则拼装（原 testFilterRegex 随冷路一并移除）。
 function parseFilters(v) {
   if (v === undefined) return [];
   if (v === true) return null; // --filter 后没跟值
@@ -176,14 +193,87 @@ const run = (cmd, argv, timeoutMin) => {
   return { code: r.status, stdout: (r.stdout || '').slice(-4000), stderr: (r.stderr || '').slice(-2000), timedOut: r.error && r.error.code === 'ETIMEDOUT' };
 };
 
-// —— Unity 版本纪律：工程版本必须与所选编辑器一致，否则拒开（batchmode 会静默升级工程）——
-function unityFor(project) {
+// —— Unity.exe 三级发现（施工令-011）：env 覆盖 → ProjectVersion 拼 Hub 路径 → 找不到即人话报错。
+// 版本纪律：走第二级时工程版本必须与编辑器一致（版本不匹配会静默升级工程）；
+// env 覆盖是人工指定，视为已知情，只校验文件在不在。
+function findUnityExe(project) {
+  const envExe = process.env.ENGINECTL_UNITY_EXE;
+  if (envExe) {
+    if (!fs.existsSync(envExe)) return { err: `ENGINECTL_UNITY_EXE 指向的文件不存在：${envExe}——请指向 Unity.exe 绝对路径，或清空该环境变量改走工程版本发现` };
+    return { exe: envExe, 版本: 'env 指定', 发现: 'env(ENGINECTL_UNITY_EXE)' };
+  }
   const pv = path.join(project, 'ProjectSettings', 'ProjectVersion.txt');
-  if (!fs.existsSync(pv)) return { err: '不是 Unity 工程（缺 ProjectVersion.txt）' };
+  if (!fs.existsSync(pv)) return { err: `不是 Unity 工程（缺 ${pv}）——无法推断编辑器版本；确需指定可设 ENGINECTL_UNITY_EXE` };
   const want = (fs.readFileSync(pv, 'utf8').match(/m_EditorVersion:\s*(\S+)/) || [])[1];
+  if (!want) return { err: `ProjectVersion.txt 里读不出 m_EditorVersion：${pv}` };
+  const 装有 = findUnityEditors().map((e) => e.版本);
   const hit = findUnityEditors().find((e) => e.版本 === want);
-  if (!hit) return { err: `版本纪律拒开：工程要 ${want}，本机装有 [${findUnityEditors().map((e) => e.版本).join(', ')}]——版本不匹配时 batchmode 会静默升级工程` };
-  return { exe: hit.exe, 版本: want };
+  if (!hit) return { err: `找不到工程要求的 Unity ${want}：Hub 目录（${process.env.ENGINECTL_UNITY_HUB || cfg.unityHub || 'C:/Program Files/Unity/Hub/Editor'}）装有 [${装有.join(', ') || '空'}]——请用 Unity Hub 装 ${want}，或设 ENGINECTL_UNITY_EXE 指向对应 Unity.exe；版本不匹配时开工程会静默升级，故拒开` };
+  return { exe: hit.exe, 版本: want, 发现: 'ProjectVersion.txt→UnityHub' };
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 可见拉起：spawn 一个带窗口的编辑器（detached，父进程退出后它照活），轮询等监听器写发现文件。
+// 启动参数只有 -projectPath，不带任何无头/无图形旗标；等不到只报错不回落无头（「灾难场景的答案是修显示器」）。
+async function bootVisibleEditor(proj, bootMin, lockWaitMin) {
+  const u = findUnityExe(proj);
+  if (u.err) return { err: u.err };
+  const lock = acquireProjectLock(proj, lockWaitMin);
+  if (!lock) return { err: `工程互斥锁等待超时（${lockWaitMin}min）——同工程另一 enginectl 会话正在拉起编辑器且未释放` };
+  try {
+    const again = discoverAttach(proj); // 排队等锁期间，别人可能已经把编辑器拉起来了
+    if (again) return { hit: again, launched: false, exe: u.exe, 发现: u.发现, 版本: u.版本 };
+    if (clearOrphanUnityLock(proj)) console.error('[enginectl] 孤儿 UnityLockfile 已自愈清除（无 Unity 进程存活）');
+    const t0 = Date.now();
+    // 「永不抢占」闸门：工程已被一个活编辑器占着（只是监听器还没上线——还在导入/编译，或没点启动），
+    // 绝不另开第二个编辑器（会双开撞工程占用），只等它上线。
+    if (projectHeldByEditor(proj)) {
+      console.error(`[enginectl] 工程已被一个可见编辑器打开、但监听器还没上线，等它上线（上限 ${bootMin}min；绝不另开第二个编辑器）…`);
+      const dl = Date.now() + bootMin * 60000;
+      for (;;) {
+        const h = discoverAttach(proj);
+        if (h) return { hit: h, launched: false, waitedMs: Date.now() - t0, exe: u.exe, 发现: u.发现, 版本: u.版本 };
+        if (Date.now() > dl) return { err: `工程已被一个可见 Unity 编辑器占着（Temp/UnityLockfile 在、Unity.exe 活着），但 ${bootMin}min 内它的监听器没上线（工程根没有有效的 ${ATTACH_FILE}）——enginectl 绝不另开第二个编辑器抢占工程。请到那个编辑器里打开菜单「SLG/任务监听器」点启动，或礼貌关掉它后重跑；工程首次导入/编译很慢时可加 --boot-timeout-min <分钟>` };
+        if (!projectHeldByEditor(proj)) break; // 编辑器中途关掉了 → 回到正常拉起路径
+        await sleep(3000);
+      }
+    }
+    let child;
+    try { child = spawn(u.exe, ['-projectPath', proj], { detached: true, stdio: 'ignore' }); child.unref(); } catch (e) { return { err: `可见编辑器拉起失败：${u.exe} —— ${e.message}` }; }
+    const pid = child.pid;
+    if (!pid) return { err: `可见编辑器拉起失败：${u.exe} 未返回进程号` };
+    console.error(`[enginectl] 已可见拉起 Unity ${u.版本}（pid ${pid}，来源 ${u.发现}），等监听器上线（上限 ${bootMin}min）…`);
+    const deadline = Date.now() + bootMin * 60000;
+    for (;;) {
+      await sleep(3000);
+      const h = discoverAttach(proj);
+      if (h) return { hit: h, launched: true, editorPid: pid, exe: u.exe, 发现: u.发现, 版本: u.版本, bootMs: Date.now() - t0 };
+      try { process.kill(pid, 0); } catch (e) {
+        if (e.code !== 'EPERM') return { err: `可见编辑器进程已退出（pid ${pid}）却没等到监听器——多半是工程被别的编辑器占用或启动即崩；请手动双击打开工程看报错` };
+      }
+      if (Date.now() > deadline) return { err: `可见编辑器已拉起（pid ${pid}，窗口保留未被杀）但 ${bootMin}min 内监听器没上线（工程根始终没出现 ${ATTACH_FILE}）——首次导入/编译可能更久，可加 --boot-timeout-min <分钟>；也可到该编辑器窗口菜单「SLG/任务监听器」点启动。绝不回落无头` };
+    }
+  } finally { releaseLock(lock); }
+}
+
+// --fresh 净室：礼貌请求活编辑器「排空队列后自退出」，再等它真的退出（发现文件消失）。
+// 监听器不支持 restart（TK-103 未返修）→ 人话报错，绝不强杀活编辑器。
+async function requestEditorRestart(proj, hit, probeMs, waitMin) {
+  const id = `enginectl-fresh-${process.pid}-${Date.now()}`;
+  const r = await attachSend(hit.port, ATTACH.buildRestart(id), probeMs, 5);
+  if (r.fallback) return { err: `--fresh 请求没被受理（端口 ${hit.port}：${r.why}）——活编辑器状态不明，enginectl 不强杀；请手动关闭编辑器后重跑` };
+  if (r.error) return { err: `--fresh 请求失败：${r.error}` };
+  const err = ATTACH.errOf(r.final);
+  if (err || !ATTACH.okOf(r.final)) {
+    return { err: `--fresh 不可用：活编辑器的监听器不支持 restart 动作（应答：${err || r.final.status}）——TK-103 侧返修实装前，请手动关闭编辑器窗口再重跑本命令（届时无活编辑器，enginectl 会可见拉起新编辑器，即为「重启后首跑」净室）。enginectl 绝不强杀活编辑器` };
+  }
+  const deadline = Date.now() + waitMin * 60000;
+  for (;;) {
+    if (!discoverAttach(proj)) return { ok: true };
+    if (Date.now() > deadline) return { err: `--fresh 已被受理但编辑器 ${waitMin}min 内没退出（${ATTACH_FILE} 仍在）——可能仍在排空队列；请稍后重跑或手动关闭编辑器` };
+    await sleep(3000);
+  }
 }
 
 (async () => {
@@ -193,43 +283,59 @@ function unityFor(project) {
   const proj = args.project && path.resolve(args.project);
   if (!proj || !fs.existsSync(proj)) return out({ ok: false, error: '必填 --project <工程目录>' });
 
-  // —— attach 优先（且先于工程互斥锁）：活编辑器内的任务由监听器自己串行排队，
-  // 不需要也不该去抢 batchmode 的工程锁（否则会被在跑的冷 batch 饿死 30min）。
-  if ((channel === 'unity-test' || channel === 'unity-run') && !args['no-attach']) {
-    const hit = discoverAttach(proj);
-    if (hit) {
-      const xml = path.join(proj, 'enginectl-results.xml');
-      const runLog = path.join(proj, 'enginectl-run.log');
-      const testLog = path.join(proj, 'enginectl-test.log');
-      const id = `enginectl-${process.pid}-${Date.now()}`;
-      const isTest = channel === 'unity-test';
-      const filters = isTest ? parseFilters(args.filter) : [];
-      if (filters === null) return out({ ok: false, error: '--filter 需要值：--filter 类名1,类名2' });
-      if (!isTest && !args.method) return out({ ok: false, error: '必填 --method <类.静态无参方法>' });
-      const payload = isTest ? ATTACH.buildTest(id, filters) : ATTACH.buildInvoke(id, String(args.method));
-      const waitMin = Number(args['timeout-min'] ?? (isTest ? 40 : 20));
-      const r = await attachSend(hit.port, payload, Number(args['attach-probe-ms'] || 2000), waitMin);
-      if (!r.fallback) {
-        if (r.error) return out({ ok: false, channel, mode: 'attach', port: hit.port, error: r.error });
-        const m = r.final;
-        const err = ATTACH.errOf(m);
-        if (!isTest) {
-          return out({ ok: ATTACH.okOf(m), channel, mode: 'attach', port: hit.port, status: m.status, method: String(args.method), log: ATTACH.pathOf(proj, m.logPath, runLog), durationMs: m.durationMs, ...(m.summary ? { summary: m.summary } : {}), ...(err ? { error: err } : {}) });
-        }
-        const results = ATTACH.pathOf(proj, m.resultsPath, xml);
-        const c = readCounts(results); // 数字仍以落盘 XML 为准（与冷路同口径），summary 只作旁证
-        const baseline = (filters.length === 0 && c.passed !== null) ? archiveBaseline(proj, results) : null;
-        return out({ ok: ATTACH.okOf(m) && c.failed === '0', channel, mode: 'attach', port: hit.port, status: m.status, passed: c.passed, failed: c.failed, total: c.total, ...(filters.length ? { filter: filters } : {}), results, log: ATTACH.pathOf(proj, m.logPath, testLog), durationMs: m.durationMs, ...(baseline ? { baseline } : {}), ...(err ? { error: err } : {}) });
-      }
-      // r.fallback：探测/握手没成——静默回落冷路（ENGINECTL_DEBUG=1 才打一行诊断）
-      if (process.env.ENGINECTL_DEBUG) console.error(`[enginectl] attach 回落冷路（端口 ${hit.port}：${r.why}）`);
+  if (args['no-attach']) return out({ ok: false, error: '--no-attach 已退役（施工令-011：无头 batchmode 编辑器整族退役，无例外旗标）——净室请改用 --fresh：请求活编辑器排空队列后自退，重新可见拉起再投递，「重启后首跑」即净室' });
+
+  // —— Unity 通道：只走「可见编辑器 + 任务投递」，无冷 batch 回落路径 ——
+  if (channel === 'unity-test' || channel === 'unity-run' || channel === 'unity-build') {
+    if (channel === 'unity-build') return out({ ok: false, error: '占位通道：构建脚本按项目落地后启用（需工程内 static 构建方法，经监听器 invoke 白名单走可见编辑器）' });
+    const isTest = channel === 'unity-test';
+    // 参数先校验再拉编辑器——别为一条写错的命令开一个 Unity
+    const filters = isTest ? parseFilters(args.filter) : [];
+    if (filters === null) return out({ ok: false, error: '--filter 需要值：--filter 类名1,类名2' });
+    if (!isTest && !args.method) return out({ ok: false, error: '必填 --method <类.静态无参方法>' });
+    const probeMs = Number(args['attach-probe-ms'] || 2000);
+    const bootMin = Number(args['boot-timeout-min'] ?? 5);
+    const lockWaitMin = Number(args['lock-wait-min'] || 30);
+
+    let hit = discoverAttach(proj);
+    let boot = null;
+    if (hit && args.fresh) { // 净室：礼貌请求自退 → 等它退干净 → 下面重新可见拉起
+      const fr = await requestEditorRestart(proj, hit, probeMs, bootMin);
+      if (fr.err) return out({ ok: false, channel, mode: 'visible', port: hit.port, error: fr.err });
+      hit = null;
     }
+    if (!hit) { // 无活监听器 → 可见拉起（--fresh 且本就没编辑器时，新开的编辑器天然就是「重启后首跑」）
+      boot = await bootVisibleEditor(proj, bootMin, lockWaitMin);
+      if (boot.err) return out({ ok: false, channel, mode: 'visible', error: boot.err });
+      hit = boot.hit;
+    }
+    const 编辑器 = { port: hit.port, editorPid: hit.pid, ...(boot && boot.launched ? { launched: true, bootMs: boot.bootMs, 版本: boot.版本, 发现: boot.发现 } : { launched: false }), ...(args.fresh ? { fresh: true } : {}) };
+
+    const xml = path.join(proj, 'enginectl-results.xml');
+    const runLog = path.join(proj, 'enginectl-run.log');
+    const testLog = path.join(proj, 'enginectl-test.log');
+    const id = `enginectl-${process.pid}-${Date.now()}`;
+    const payload = isTest ? ATTACH.buildTest(id, filters) : ATTACH.buildInvoke(id, String(args.method));
+    const waitMin = Number(args['timeout-min'] ?? (isTest ? 40 : 20));
+    const r = await attachSend(hit.port, payload, probeMs, waitMin);
+    if (r.fallback) { // 曾经在这里静默回落冷 batch；无头退役后只如实报错，绝不另起无头
+      return out({ ok: false, channel, mode: 'visible', ...编辑器, error: `任务投递失败（${r.why}）——活编辑器窗口保留未被杀；请看编辑器内「SLG/任务监听器」窗口状态，或关闭编辑器后重跑。绝不回落无头` });
+    }
+    if (r.error) return out({ ok: false, channel, mode: 'visible', ...编辑器, error: r.error });
+    const m = r.final;
+    const err = ATTACH.errOf(m);
+    if (!isTest) {
+      return out({ ok: ATTACH.okOf(m), channel, mode: 'visible', ...编辑器, status: m.status, method: String(args.method), log: ATTACH.pathOf(proj, m.logPath, runLog), durationMs: m.durationMs, ...(m.summary ? { summary: m.summary } : {}), ...(err ? { error: err } : {}) });
+    }
+    const results = ATTACH.pathOf(proj, m.resultsPath, xml);
+    const c = readCounts(results); // 数字以落盘 XML 为准（口径唯一，禁 tail 截尾推数），summary 只作旁证
+    const baseline = (filters.length === 0 && c.passed !== null) ? archiveBaseline(proj, results) : null;
+    return out({ ok: ATTACH.okOf(m) && c.failed === '0', channel, mode: 'visible', ...编辑器, status: m.status, passed: c.passed, failed: c.failed, total: c.total, ...(filters.length ? { filter: filters } : {}), results, log: ATTACH.pathOf(proj, m.logPath, testLog), durationMs: m.durationMs, ...(baseline ? { baseline } : {}), ...(err ? { error: err } : {}) });
   }
 
-  // 互斥 + 自愈（unity/godot 通道统一走）：抢不到锁=有同工程会话在跑，排队等待而非撞锁三振
+  // 互斥 + 自愈（godot 通道）：抢不到锁=有同工程会话在跑，排队等待而非撞锁三振
   const lock = acquireProjectLock(proj, Number(args['lock-wait-min'] || 30));
   if (!lock) return out({ ok: false, error: '工程互斥锁等待超时（' + (args['lock-wait-min'] || 30) + 'min）——同工程另一 enginectl 会话未释放' });
-  process.on('exit', () => { try { fs.rmSync(lock, { recursive: true, force: true }); } catch { /* 尽力而为 */ } });
   if (clearOrphanUnityLock(proj)) console.error('[enginectl] 孤儿 UnityLockfile 已自愈清除（无 Unity 进程存活）');
 
   if (channel === 'godot-import' || channel === 'godot-test' || channel === 'godot-export') {
@@ -255,37 +361,6 @@ function unityFor(project) {
     return out({ ok: r.code === 0 && built, channel, code: r.code, 产物: built ? dest : null, tail: r.stdout.slice(-300), ...(r.code !== 0 ? { stderr: r.stderr.slice(-400) } : {}) });
   }
 
-  if (channel === 'unity-test') {
-    const u = unityFor(proj);
-    if (u.err) return out({ ok: false, error: u.err });
-    // 工程锁检测：编辑器开着同一工程时 batchmode 必败且报错难读——先给人话
-    if (fs.existsSync(path.join(proj, 'Temp', 'UnityLockfile'))) {
-      return out({ ok: false, error: '工程被 Unity 编辑器占用（Temp/UnityLockfile 存在）——请关闭编辑器后重试；此为环境占用非代码问题' });
-    }
-    const filters = parseFilters(args.filter);
-    if (filters === null) return out({ ok: false, error: '--filter 需要值：--filter 类名1,类名2' });
-    const xml = path.join(proj, 'enginectl-results.xml');
-    const r = run(u.exe, ['-batchmode', '-nographics', '-projectPath', proj, '-runTests', '-testPlatform', String(args.platform || 'EditMode'),
-      ...(filters.length ? ['-testFilter', testFilterRegex(filters)] : []),
-      '-testResults', xml, '-logFile', path.join(proj, 'enginectl-test.log')], Number(args['timeout-min'] ?? 40));
-    const { passed, failed, total } = readCounts(xml);
-    // 全量（无 --filter）结果落盘成功 → 归档基线；子集结果不入基线（会污染回归对照线）
-    const baseline = (filters.length === 0 && passed !== null) ? archiveBaseline(proj, xml) : null;
-    return out({ ok: r.code === 0 && failed === '0', channel, mode: 'cold', code: r.code, passed, failed, total, ...(filters.length ? { filter: filters } : {}), 版本: u.版本, results: xml, ...(baseline ? { baseline } : {}) });
-  }
-
-  if (channel === 'unity-run') { // 通用 executeMethod：场景重建/烘焙等工程内 static 方法（TK-49 案增补）
-    const u = unityFor(proj);
-    if (u.err) return out({ ok: false, error: u.err });
-    if (fs.existsSync(path.join(proj, 'Temp', 'UnityLockfile'))) {
-      return out({ ok: false, error: '工程被 Unity 编辑器占用（Temp/UnityLockfile 存在）——请关闭编辑器后重试；此为环境占用非代码问题' });
-    }
-    if (!args.method) return out({ ok: false, error: '必填 --method <类.静态无参方法>' });
-    const log = path.join(proj, 'enginectl-run.log');
-    const r = run(u.exe, ['-batchmode', '-nographics', '-projectPath', proj, '-executeMethod', String(args.method), '-quit', '-logFile', log], Number(args['timeout-min'] ?? 20));
-    return out({ ok: r.code === 0, channel, mode: 'cold', code: r.code, method: String(args.method), log, ...(r.code !== 0 ? { tail: (() => { try { return fs.readFileSync(log, 'utf8').slice(-400); } catch { return r.stderr.slice(-300); } })() } : {}) });
-  }
-  if (channel === 'unity-build') return out({ ok: false, error: '占位通道：构建脚本按项目落地后启用（需工程内 static 构建方法）' });
   if (channel && channel.startsWith('unreal')) return out({ ok: false, error: '预留通道：本机未装 UE；装后按 RunUAT/BuildCookRun 补实现（见 引擎适配调研报告）' });
   return out({ ok: false, error: '未知通道。可用：探测 / godot-import / godot-test / godot-export / unity-test / unity-run' });
 })();
