@@ -42,11 +42,10 @@ function recommend(root, cfg, locks, nowMs) {
   const 当前 = inFlight.length;
   const mk = (v, avail) => ({ 推荐: v, 当前, 上限, 在岗: agents.length, 可用: avail, 精力档, 原因 });
 
-  if (paused.global) { 原因.push('暂停闸门已合：不建议新领单'); return mk(0, 0); }
+  if (paused) { 原因.push('暂停总闸已合：不建议新领单'); return mk(0, 0); }
 
   const lockedPools = new Set();
   if (locks) for (const [k, l] of Object.entries(locks)) if (l && l.locked) lockedPools.add(k);
-  for (const [k, v] of Object.entries(paused)) if (k !== 'global' && v) lockedPools.add(k);
   const avail = agents.filter((a) => !lockedPools.has(a.执行池));
   const 池注 = lockedPools.size ? `，${[...lockedPools].join('/')} 池不可用，可用 ${avail.length}/${agents.length}` : `，可用 ${avail.length}/${agents.length}`;
 

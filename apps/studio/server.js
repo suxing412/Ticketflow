@@ -187,7 +187,7 @@ app.post('/api/config/gate', (req, res) => {
   res.json({ ok: true, 闸值: cfg.闸值 });
 });
 
-// ---- 执行器（D30）：内嵌拉取循环 = 监制台版监听器。试跑默认，实弹待接入 ----
+// ---- 执行器（D30 / H81 常开单闸制）：内嵌调度循环 = 监制台版监听器。运行即实弹，无模式开关 ----
 const runner = require('./lib/runner');
 app.get('/api/runner', (req, res) => { if (!ready(res)) return; res.json(runner.status(ROOT, cfg)); });
 app.post('/api/runner/start', (req, res) => {
@@ -200,15 +200,7 @@ app.post('/api/runner/stop', (req, res) => {
   runner.stop(ROOT);
   res.json({ ok: true, ...runner.status(ROOT, cfg) });
 });
-app.post('/api/runner/mode', (req, res) => {
-  if (!ready(res)) return;
-  const { 试跑 } = req.body || {};
-  if (试跑 === false && !(cfg.执行器 && cfg.执行器.实弹解锁 === true))
-    return res.status(400).json({ error: '实弹通道已就绪但未解锁：烧额度需你授权（config.执行器.实弹解锁 = true）。' });
-  require('./lib/core/state').update(ROOT, (s) => { s.执行器 = { ...(s.执行器 || {}), 试跑: 试跑 !== false }; });
-  journal.append(ROOT, `执行模式切换 → ${试跑 === false ? '实弹（已解锁授权）' : '试跑（零额度）'}`);
-  res.json({ ok: true, ...runner.status(ROOT, cfg) });
-});
+// /api/runner/mode（试跑↔实弹）已随 H81 常开单闸制拆除：运行即实弹，停手闸是暂停总闸
 // ---- 全量配置入 UI（2026-07-11 用户指示）：以下均为白名单化分区写回 ----
 const saveCfg = () => fs.writeFileSync(path.join(ROOT, 'studio.config.json'), JSON.stringify(cfg, null, 2) + '\n', 'utf8');
 
@@ -280,16 +272,7 @@ app.post('/api/config/quota', (req, res) => {
   res.json({ ok: true, quota: cfg.quota });
 });
 
-// 实弹解锁（权力开关：UI 切换即制作人授权动作，journal 大字记录）
-app.post('/api/config/live', (req, res) => {
-  if (!ready(res)) return;
-  const 解锁 = !!(req.body || {}).解锁;
-  cfg.执行器 = cfg.执行器 || {}; cfg.执行器.实弹解锁 = 解锁;
-  if (!解锁) require('./lib/core/state').update(ROOT, (s) => { s.执行器 = { ...(s.执行器 || {}), 试跑: true }; }); // 上锁同时退回试跑
-  saveCfg();
-  journal.append(ROOT, 解锁 ? '⚠ 实弹解锁 → 开（制作人 UI 授权，agent 可烧额度）' : '实弹解锁 → 关（回试跑，零额度）');
-  res.json({ ok: true, 实弹解锁: 解锁 });
-});
+// /api/config/live（实弹解锁权力开关）已随 H81 常开单闸制拆除：执行器只要「运行」即实弹
 
 // 项目注册（加/改 同名覆盖；设默认；路径必须真实存在）
 app.post('/api/config/project', (req, res) => {
@@ -451,7 +434,7 @@ app.get('/api/env', async (req, res) => {
     总灯: reds.length ? '阻断' : yellows.length ? '降级' : '就绪',
     结论: reds.length ? reds.map((x) => x.名称 + '：' + x.note)
       : yellows.length ? yellows.map((x) => x.名称 + '：' + x.note)
-      : ['全链路就绪：试跑与实弹均可用'],
+      : ['全链路就绪：执行链可实弹开工'],
     组: { '运行时与 CLI': 运行时, '凭据与额度': 凭据额度, '项目与目录': 项目目录, '协议与配置': 协议配置 },
   };
   envCache = { at: Date.now(), data };
@@ -682,12 +665,11 @@ app.post('/api/editor-lock', (req, res) => {
   journal.append(ROOT, `编辑器锁 ${name} → ${关 ? '关（制作人要开 Unity 验收，派发挂起）' : '开（手动解锁，派发恢复）'}`);
   res.json({ ok: true, 编辑器锁: require('./lib/core/state').read(ROOT).编辑器锁 || {} });
 });
+// 暂停总闸（H81 常开单闸制）：无 scope 的单开关，默认开（跑是常态，停是例外）
 app.post('/api/gate/pause', (req, res) => {
   if (!ready(res)) return;
-  const { scope, value } = req.body || {};
-  if (!['global', 'codex', 'claude'].includes(scope)) return res.status(400).json({ error: '非法 scope' });
-  const p = gates.setPaused(ROOT, scope, value);
-  journal.append(ROOT, `暂停闸门：${scope} → ${value ? '合' : '开'}`);
+  const p = gates.setPaused(ROOT, !!(req.body || {}).value);
+  journal.append(ROOT, `暂停总闸 → ${p ? '合（全链停派发）' : '开（恢复派发）'}`);
   res.json({ ok: true, paused: p });
 });
 
@@ -1058,6 +1040,8 @@ function start() {
               journal.append(ROOT, `项管巡检异常：${anomalies.join('；')}`);
               require('./lib/inbox').post(ROOT, '常', '巡检异常', anomalies.join('；').slice(0, 200));
             }
+            // H81 零派发看门狗：有放行就绪单却连续 ≥2 个周期零派发零执行 → 信箱告警（换装漏开闸案）
+            require('./lib/pm/patrol').零派发告警(ROOT, cfg);
           } catch { /* 巡检失败不阻塞 */ }
         }, 15 * 60000).unref();
       }

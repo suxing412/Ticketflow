@@ -92,9 +92,9 @@ t('高档扣分叠加：速度档 3 − 积压近闸 − 待定夺 − 滞留 = 
   assert.equal(r.原因.length, 4);
 });
 
-t('暂停闸门 → 0', () => {
+t('暂停总闸 → 0', () => {
   const root = makeRoot();
-  gates.setPaused(root, 'global', true);
+  gates.setPaused(root, true);
   const r = recommend(root, R('高'), UNLOCKED, NOW);
   assert.equal(r.推荐, 0);
 });

@@ -260,6 +260,12 @@ a.gear { text-decoration:none; }
 .stat-strip .vdiv { width:1px; height:32px; background:var(--line); margin:0 22px; }
 .stat-strip .spacer { flex:1; }
 .stat-strip .grp.pool .num { font-size:18px; }
+/* H81 常开单闸制：合闸=例外态，启动页顶部挂常驻红条（醒目，不埋角落） */
+.gatealert { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:20px;
+  padding:14px 22px; border-radius:12px; background:var(--dangerbg);
+  border:1px solid var(--danger); color:var(--danger); font-size:13.5px; }
+.gatealert b { font-size:14.5px; font-weight:700; }
+.gatealert .subnote { color:var(--danger); opacity:.85; }
 .p1-grid { display:grid; grid-template-columns:700fr 628fr; gap:32px; margin-top:30px; align-items:start; }
 .sec-h { display:flex; align-items:baseline; gap:14px; margin:0 0 16px; }
 .inbox-row { height:68px; border-radius:12px; display:flex; align-items:center; padding:0 24px;

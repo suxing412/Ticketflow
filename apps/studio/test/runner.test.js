@@ -14,8 +14,8 @@ quota.getRateLimits = async () => null; quota.getClaudeUsage = async () => null;
 
 let passed = 0; const t = async (n, f) => { await f(); passed++; console.log('  ✓ ' + n); };
 console.log('runner 执行器测试（D30/D31/D32）');
-const UN = { durMs: 0 }; // 同步完成模拟执行
-const on = (root) => state.update(root, (s) => { s.执行器 = { 运行: true, 试跑: true }; });
+const UN = { durMs: 0 }; // 测试内部钩子：durMs 存在＝模拟执行（0＝同步完成），生产路径不传
+const on = (root) => state.update(root, (s) => { s.执行器 = { 运行: true }; });
 const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
 
 (async () => {
@@ -130,9 +130,9 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.equal(store.find(root, 'P-10').state, '待验收');
   });
 
-  await t('暂停闸门合上 → 不领单', async () => {
+  await t('暂停总闸合上 → 不领单', async () => {
     const root = makeRoot(); on(root);
-    gates.setPaused(root, 'global', true);
+    gates.setPaused(root, true);
     seed(root, '池', { id: 'P-11', 职能: '策划' });
     const r = await runner.tick(root, CFG, UN);
     assert.equal(r.领单.length, 0);
@@ -146,13 +146,15 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.equal(store.find(root, 'P-12').state, '待验收');
   });
 
-  await t('实弹未解锁（D32）：切实弹后 tick 拒绝执行，不领单', async () => {
-    const root = makeRoot();
-    state.update(root, (s) => { s.执行器 = { 运行: true, 试跑: false }; }); // 实弹但 config 未解锁
-    seed(root, '池', { id: 'P-13', 职能: '策划' });
+  await t('常开单闸制（H81）：运行即实弹，无解锁/模式开关拦路；对外状态无历史字段', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '池', { id: 'P-13', 职能: '策划', QA: '关' });
     const r = await runner.tick(root, CFG, UN);
-    assert.ok(r.拒因.some((x) => x.includes('实弹未解锁')));
-    assert.equal(store.find(root, 'P-13').state, '池');
+    assert.ok(!r.拒因.some((x) => /解锁|试跑/.test(x)), '不再有「实弹未解锁」这类拒因');
+    assert.ok(r.领单.includes('P-13'), '照常领单执行');
+    const st = runner.status(root, CFG);
+    assert.equal(st.运行, true);
+    assert.ok(!('试跑' in st) && !('实弹解锁' in st), '/api/runner 对外状态无历史开关字段');
   });
 
   await t('委托代核（D34）：委托待验收单自动核验通过 → 验收完成 + 回执追加 + 代核戳', async () => {
@@ -292,7 +294,7 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     // 默认上限 3：同样计数下默认配置还会再试
     const r4 = await runner.tick(root, CFG, UN);
     assert.ok((r4.代裁 || []).includes('P-41'), '默认上限 3 未封顶');
-    assert.equal(store.find(root, 'P-41').state, '在途', '试跑代裁给方向回在途');
+    assert.equal(store.find(root, 'P-41').state, '在途', '模拟代裁给方向回在途');
     assert.ok(!store.find(root, 'P-41').fm.代裁失败次数, '成功清计数');
   });
 

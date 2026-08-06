@@ -1,7 +1,7 @@
 // runner.js — 执行器（D30/D31/D32）：内嵌 exe 的拉取循环，监制台版"监听器"。
 // 每轮 tick 三种工作：
 //   ① 自动领单：空闲在岗 agent 从池拉单（双闸/额度锁/依赖/一人一张全在 claim 路径）
-//   ② 执行：在途单起执行（试跑=模拟零额度；实弹=真调 codex/claude 无头 CLI，需 实弹解锁）
+//   ② 执行：在途单起执行（真调 codex/claude 无头 CLI；H81 常开单闸制：运行即实弹，无解锁开关）
 //   ③ 质检执行：质检单派给空闲 QA agent 复核 → 走 D10 QA 裁定（QA 只裁不开单）
 // 失败路径（D31）：CLI 崩溃/超时/非零退出 → lifecycle.执行失败（纯本地目录改名，零网络依赖），
 // 由 Claude 会话分诊（重投/上呈/废弃）。停止=不领新单，执行中跑完（同 D26 暂停语义）。
@@ -24,7 +24,9 @@ let lastTick = null;
 
 const busyTickets = () => new Set([...running.values()].map((e) => e.id));
 function isOn(root) { return !!state.read(root).执行器?.运行; }
-function isDry(root) { return state.read(root).执行器?.试跑 !== false; }
+// 测试内部钩子（H81）：opts.durMs 存在 ⇒ 模拟执行（不拉 CLI，durMs 后/立即收线），
+// 供测试套件做同步执行。生产路径（startLoop/server）永不传 durMs，因此永远是实弹。
+function isSim(opts) { return opts && opts.durMs != null; }
 
 // ---- 项目定位（D32）：工单.项目 → config 注册表 → 仓库路径；完整注册向导属打包后首配 ----
 function projectPath(cfg, t) {
@@ -447,21 +449,19 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
 
   if (opts.failWith) { failLocal(opts.failWith); return true; } // 测试注入
 
-  if (isDry(root)) {
-    const lo = kind === '执行' ? (rc.试跑耗时秒下限 ?? 3) : (rc.质检耗时秒下限 ?? 2);
-    const hi = kind === '执行' ? (rc.试跑耗时秒上限 ?? 8) : (rc.质检耗时秒上限 ?? 5);
-    const durMs = opts.durMs ?? (lo + Math.random() * Math.max(0, hi - lo)) * 1000;
+  if (isSim(opts)) { // 测试内部钩子：模拟收线，零 CLI 调用
+    const durMs = opts.durMs;
     const sec = Math.round(durMs / 1000);
-    const receipt = `# 完工报告 ${t.id}（试跑）\n工单编号：${t.id}\n## 做了什么\n试跑模拟${kind}（零额度）\n## QA 章节\n${kind === '质检' ? '模拟复核通过' : '（试跑占位）'}\n## 实际消耗\n模拟 ${sec}s · 0 token\n## 异议\n无\n`;
+    const receipt = `# 完工报告 ${t.id}（模拟）\n工单编号：${t.id}\n## 做了什么\n模拟${kind}（测试钩子，零额度）\n## QA 章节\n${kind === '质检' ? '模拟复核通过' : '（模拟占位）'}\n## 实际消耗\n模拟 ${sec}s · 0 token\n## 异议\n无\n`;
     const fin = () => finishOk(kind === '质检' ? `模拟复核 ${sec}s`
-      : kind === '代核' ? `（试跑模拟）逐条对照验收标准：全部通过\n结论：通过`
-      : kind === '代裁' ? `（试跑模拟）失败原因明确，可修复。\n结论：给方向\n方向：按验收标准逐条补齐缺失项（试跑演示）`
+      : kind === '代核' ? `（模拟）逐条对照验收标准：全部通过\n结论：通过`
+      : kind === '代裁' ? `（模拟）失败原因明确，可修复。\n结论：给方向\n方向：按验收标准逐条补齐缺失项（模拟演示）`
       : receipt, true);
     if (durMs <= 0) fin(); else { entry.timer = setTimeout(fin, durMs); if (entry.timer.unref) entry.timer.unref(); }
     return true;
   }
 
-  // ---- 实弹（D32）：真调无头 CLI。经济后果由 实弹解锁 开关把门（server 侧已拦） ----
+  // ---- 实弹（D32）：真调无头 CLI。H81 起「运行」即实弹，唯一停手闸是暂停总闸 ----
   const proj = projectPath(cfg, t);
   if (!proj) { failLocal('项目未注册或路径不存在（config.项目）'); return true; }
   // H67 两检制：初检走便宜池（默认 deepseek-flash），只核格式与规范；深检（代核）保持 opus
@@ -545,15 +545,11 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
 // 一轮扫描。所有闸都复用既有路径（pool.claim / gates），执行器不自带门。
 async function tick(root, cfg, opts = {}) {
   if (!isOn(root)) return { skipped: true, reason: '执行器未运行' };
-  const dry = isDry(root);
-  const armed = dry || (cfg.执行器 && cfg.执行器.实弹解锁 === true);
+  const sim = isSim(opts);
   const result = { at: opts.nowIso || new Date().toISOString(), 领单: [], 执行: [], 质检: [], 拒因: [] };
   const agents = (cfg.agents || []).filter((a) => a.上线 !== false);
-  if (!armed) { result.拒因.push('实弹未解锁（config.执行器.实弹解锁），仅试跑可执行'); lastTick = result; return result; }
 
   const st = state.read(root);
-  const lockedPools = new Set();
-  for (const [k, v] of Object.entries(st.paused || {})) if (k !== 'global' && v) lockedPools.add(k);
 
   const dispatchMode = !!(cfg.执行器 && cfg.执行器.派发制); // H49 特性开关：true=派发制，false=旧拉取制（可回退）
 
@@ -574,11 +570,10 @@ async function tick(root, cfg, opts = {}) {
       const r = store.move(root, t.id, '池', '待投', (fm) => { fm.放行 = fm.放行 === true; }, opts.nowIso || new Date().toISOString());
       if (r.ok) { journal.append(root, `归位：${t.id} 池→待投（放行旗保持 ${t.fm.放行 === true ? '有' : '无'}）`); pmLedger.event(root, '迁移', { id: t.id }); }
     }
-    if (!(st.paused || {}).global) {
+    if (!st.paused) { // H81：唯一总闸，合上才停派发
       const locks = await require('./gates').allLocks(cfg).catch(() => null);
       const gatesInfo = {};
       if (locks) for (const p of ['codex', 'claude']) gatesInfo[p] = { fivePct: locks[p] && locks[p].fivePct, locked: !!(locks[p] && locks[p].locked) };
-      for (const p of lockedPools) { gatesInfo[p] = gatesInfo[p] || {}; gatesInfo[p].locked = true; }
       const runningByPool = {};
       for (const e of running.values()) if (e.kind === '执行' && e.池) runningByPool[e.池] = (runningByPool[e.池] || 0) + 1;
       const ledger = pmLedger.read(root);
@@ -612,7 +607,7 @@ async function tick(root, cfg, opts = {}) {
     // H49 接线②③：战役全落袋→收口报告；连环失败→上呈（台账去重，判断才唤醒）
     try {
       const wake = require('./pm/wake');
-      wake.checkCloseouts(root, cfg, { test: !!opts.noBrain || dry });
+      wake.checkCloseouts(root, cfg, { test: !!opts.noBrain || sim });
       wake.checkChainFailures(root);
     } catch (e) { result.拒因.push('项管巡检异常：' + String(e.message).slice(0, 60)); }
   } else {
@@ -630,7 +625,7 @@ async function tick(root, cfg, opts = {}) {
   }
 
   // ③ 质检执行：派给空闲在岗 QA agent（QA 只裁不开单，D10）
-  const qaFree = agents.filter((a) => a.职能 === 'QA' && !running.has(a.id) && !lockedPools.has(a.执行池)
+  const qaFree = agents.filter((a) => a.职能 === 'QA' && !running.has(a.id)
     && !pool.inFlight(root).some((x) => x.fm.主办 === a.id));
   for (const t of store.list(root, '质检')) {
     if (busyTickets().has(t.id)) continue;
@@ -684,8 +679,8 @@ function startLoop(root, getCfg) {
 function stopLoop() { if (loopTimer) { clearInterval(loopTimer); loopTimer = null; } }
 
 function start(root, getCfg) {
-  state.update(root, (s) => { s.执行器 = { ...(s.执行器 || {}), 运行: true, 试跑: s.执行器?.试跑 !== false }; });
-  journal.append(root, `执行器启动（${isDry(root) ? '试跑模式，零额度' : '实弹模式'}）`);
+  state.update(root, (s) => { s.执行器 = { ...(s.执行器 || {}), 运行: true }; delete s.执行器.试跑; delete s.执行器.实弹解锁; });
+  journal.append(root, '执行器启动（实弹：运行即真调 CLI，停手闸=暂停总闸）');
   startLoop(root, getCfg);
 }
 function stop(root) {
@@ -697,8 +692,7 @@ function stop(root) {
 function status(root, cfg) {
   const st = state.read(root).执行器 || {};
   return {
-    运行: !!st.运行, 试跑: st.试跑 !== false,
-    实弹解锁: !!(cfg.执行器 && cfg.执行器.实弹解锁),
+    运行: !!st.运行,
     间隔秒: (cfg.执行器 || {}).间隔秒 ?? 15,
     执行中: [...running.entries()].map(([agent, e]) => ({ agent, id: e.id, kind: e.kind, startedAt: e.startedAt, tail: e.tail || null })),
     执行失败数: store.list(root, '执行失败').length,
@@ -720,4 +714,4 @@ function killTicket(root, id) {
   return false;
 }
 
-module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, isDry, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket };
+module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket };

@@ -21,8 +21,13 @@ function pollLoop(guardId, ms, fn) {
     if ($(guardId)) setTimeout(loop, ms);
   }, ms);
 }
-// 执行器状态灯：绿呼吸=试跑运行中；红呼吸=实弹上膛（传状态非装饰）
-function dotCls(r) { return 'dot ' + (r.运行 ? ('on' + (r.试跑 ? '' : ' live')) : 'off'); }
+// 执行器状态灯：红呼吸=实弹运行中（H81：运行即实弹）；灰=已停（传状态非装饰）
+function dotCls(r) { return 'dot ' + (r.运行 ? 'on live' : 'off'); }
+// 执行器副标题：运行即实弹（H81），只补一句执行中清单
+function runMeta(r) {
+  return (r.运行 ? '实弹：运行即真调 CLI · 停手闸在单闸' : '已停：不再拉新单')
+    + (r.执行中 && r.执行中.length ? ` · 执行中 ${r.执行中.map((x) => x.id).join(' / ')}` : '');
+}
 // 文本变了才写并跳字（轮询下防无谓闪动）
 function setNum(el, text, cls) {
   if (!el) return;
@@ -122,7 +127,8 @@ async function viewHub() {
   setTimeout(async () => { try {
     const [run, g] = await Promise.all([api('/api/runner'), api('/api/gates')]);
     const el = $('hub-run');
-    if (el) el.innerHTML = `<i class="${dotCls(run)}"></i><span style="font-size:14px;font-weight:500">${run.运行 ? (run.试跑 ? '试跑运行中' : '实弹运行中') : '已停'}</span>`;
+    if (el) el.innerHTML = `<i class="${dotCls(run)}"></i><span style="font-size:14px;font-weight:500">${run.运行 ? '实弹运行中' : '已停'}</span>`;
+    paintGate(g.paused); // H81 单闸：胶囊 + 停/开按钮 + 合闸时的常驻醒目提示
     // H64 编辑器锁已迁决策台（2026-08-05 制作人指正：锁属验收流程，不落首页）
     setNum($('hub-cx'), g.locks.codex.fivePct != null ? g.locks.codex.fivePct + '%' : '—', 'num ' + (g.locks.codex.locked ? 'err' : 'okc'));
     setNum($('hub-cl'), g.locks.claude.fivePct != null ? g.locks.claude.fivePct + '%' : '—', 'num ' + (g.locks.claude.locked ? 'err' : 'dim'));
@@ -147,8 +153,10 @@ async function viewHub() {
       <div class="tleft"><img class="logo" src="favicon.ico" alt="监制台"/><div>
         <h1>监制台</h1><p class="tagline">项目启动页——选项目进驾驶舱；执行器与额度是全局共享资源</p></div></div>
       <div class="tright"><a class="gear" href="#/params" title="全局参数与额度">⚙</a></div></div>
+    <div id="gate-banner"></div>
     <div class="stat-strip card r14" style="margin-top:26px">
       <div class="grp"><span class="lbl">执行器</span><span class="num" id="hub-run" style="font-size:14px">—</span></div><div class="vdiv"></div>
+      <div class="grp"><span class="lbl">单闸</span><span class="num" id="hub-gate" style="font-size:14px">—</span></div><div class="vdiv"></div>
       <div class="grp pool"><span class="lbl">codex 池</span><span class="num dim" id="hub-cx">—</span></div><div class="vdiv"></div>
       <div class="grp pool"><span class="lbl">claude 池</span><span class="num dim" id="hub-cl">—</span></div><div class="vdiv"></div>
       <div class="grp pool"><span class="lbl">环境</span><span class="num dim" id="hub-env" title="全链路自检">—</span></div>
@@ -236,8 +244,7 @@ async function viewOverview() {
     const g = await api('/api/gates');
     // 「推荐在途」已随精力档/拉取制退役（0.23.11 制度、0.24.7 视图清仓）——派发制的并发上限在项管台账
     const pauseEl = $('ov-pause');
-    if (pauseEl) { const p = g.paused || {}; const on = p.global || p.codex || p.claude;
-      pauseEl.innerHTML = on ? `<span class="pill sm warn" style="font-weight:700">合闸${p.global ? '·全局' : ''}</span>` : '<span class="okc">开</span>'; }
+    if (pauseEl) pauseEl.innerHTML = g.paused ? '<span class="pill sm red" style="font-weight:700">已合闸 · 不派单</span>' : '<span class="okc">开</span>';
     setNum($('ov-cx'), g.locks.codex.fivePct != null ? g.locks.codex.fivePct + '%' : '—', 'num ' + (g.locks.codex.locked ? 'err' : 'okc'));
     setNum($('ov-cl'), g.locks.claude.fivePct != null ? g.locks.claude.fivePct + '%' : '—', 'num ' + (g.locks.claude.locked ? 'err' : 'dim'));
     const key = JSON.stringify([g.locks.codex, g.locks.claude]);
@@ -289,19 +296,31 @@ let gateCache = null;
 function gatebarHtml(g) {
   const mini = (l) => { const p = l && l.fivePct != null ? l.fivePct : 0; const hot = l && l.locked;
     return `<span class="minibar"><i class="${hot ? 'hot' : ''}" style="width:${p}%"></i></span> <b class="mono" style="font-size:12px;${hot ? 'color:var(--danger)' : ''}">${l && l.fivePct != null ? l.fivePct + '%' : '··%'}</b>`; };
-  const paused = g && g.paused.global;
+  const paused = !!(g && g.paused);
   const lockNote = g && (g.locks.codex.locked || g.locks.claude.locked)
     ? `<span class="err" style="font-size:11px;font-weight:500">●锁${esc((g.locks.codex.locked ? g.locks.codex : g.locks.claude).resetAt || '')} 解冻</span>` : '';
   return `<div class="gatebar2 card">
     <div class="gsec"><span class="glbl">派发闸</span><span class="gv"><span class="dot" style="${paused ? 'background:var(--danger)' : ''}"></span>
       <b style="font-size:13px">${g ? (paused ? '已合闸 · 不派新单' : '开闸派发中') : '查询中'}</b>
-      <button class="btn h32" style="height:28px" onclick="togglePause(${g ? !g.paused.global : true})" ${g ? '' : 'disabled'}>${paused ? '开闸' : '合闸'}</button></span></div>
+      <button class="btn h32" style="height:28px" onclick="togglePause(${!paused})" ${g ? '' : 'disabled'}>${paused ? '开' : '停'}</button></span></div>
     <div class="vdiv"></div>
     <div class="gsec"><span class="glbl">额度锁</span><span class="gv"><span class="mono" style="font-size:11px;color:var(--ink2)">codex</span> ${mini(g && g.locks.codex)}
       <span class="mono" style="font-size:11px;color:var(--ink2);margin-left:10px">claude</span> ${mini(g && g.locks.claude)} ${lockNote}</span></div>
     <div class="backlog" style="margin-left:24px"><span class="glbl">待验收积压</span><br/><b id="backlogN">— / —</b></div></div>`; // 推荐在途已随拉取制退役（0.24.7 视图清仓）
 }
-window.togglePause = async (v) => { await post('/api/gate/pause', { scope: 'global', value: v }); gateCache = null; route(); };
+// H81 常开单闸制：唯一总闸，一个停/开按钮
+window.togglePause = async (v) => { await post('/api/gate/pause', { value: v }); gateCache = null; route(); };
+// hub 闸位：状态胶囊 + 停/开按钮；合闸时顶部挂常驻红条（醒目，不埋角落）
+function paintGate(paused) {
+  const el = $('hub-gate');
+  if (el) el.innerHTML = `<span class="pill sm ${paused ? 'red' : 'ok'}" style="font-weight:700">${paused ? '已合闸' : '开闸中'}</span>`
+    + `<button class="btn h32" style="height:26px;margin-left:8px" onclick="togglePause(${!paused})">${paused ? '开' : '停'}</button>`;
+  const b = $('gate-banner');
+  if (b) b.innerHTML = paused ? `<div class="gatealert" role="alert"><i class="dot err breathe-err"></i>
+      <b>全链路已合闸 · 放行单一律不派发</b>
+      <span class="subnote">跑是常态、停是例外（H81）——不是有意停工就立刻开闸</span>
+      <button class="btn h32 primary" style="margin-left:auto" onclick="togglePause(false)">开闸</button></div>` : '';
+}
 // D43 批量投池：当前项目语境的待投整批释放（人闸=这一次确认）
 window.releaseAll = async () => {
   const { board } = await loadBoard();
@@ -996,12 +1015,8 @@ async function viewParams() {
   // 执行器：派发调度循环的仪表与开关（H49）
   const rcfg = c.执行器 || {};
   const runCards = `<div class="paramcard card" id="run-card"><h4><i class="${dotCls(run)}" id="run-dot"></i>执行器 <span id="run-state">${run.运行 ? '运行中' : '已停'}</span></h4>
-      <p class="pmeta" id="run-meta">${run.试跑 ? '试跑模式：模拟执行 · 零额度' : '实弹模式'}${run.执行中 && run.执行中.length ? ` · 执行中 ${run.执行中.map((x) => x.id).join(' / ')}` : ''}</p>
+      <p class="pmeta" id="run-meta">${runMeta(run)}</p>
       <div class="runbtn"><button class="btn h32 ${run.运行 ? '' : 'primary'}" id="run-toggle" onclick="runToggle()">${run.运行 ? '停止' : '启动'}</button></div></div>
-    <div class="paramcard card"><h4>执行模式</h4><p class="pmeta">试跑=零额度走全流程；实弹须先解锁</p>
-      <div class="egtoggle"><button class="egbtn ${run.试跑 ? 'on' : ''}" data-rm="试跑" onclick="runMode(true)">试跑</button><button class="egbtn ${run.试跑 ? '' : 'on'}" data-rm="实弹" onclick="runMode(false)">实弹</button></div></div>
-    <div class="paramcard card"><h4>实弹解锁</h4><p class="pmeta">权力开关：解锁=授权 agent 烧额度；上锁自动退回试跑</p>
-      <div class="egtoggle"><button class="egbtn ${run.实弹解锁 ? '' : 'on'}" data-lv="锁定" onclick="liveSet(false)">锁定</button><button class="egbtn ${run.实弹解锁 ? 'on' : ''}" data-lv="解锁" onclick="liveSet(true)">解锁</button></div></div>
     ${[['间隔秒', run.间隔秒, 5], ['执行超时分钟', rcfg.执行超时分钟 ?? 30, 5], ['记账间隔分钟', rcfg.记账间隔分钟 ?? 10, 5]].map(([k, v, st]) => `<div class="paramcard card" data-runkey="${k}"><h4>${P6NAMES[k]}</h4><p class="pmeta">${esc(P6META[k].replace('N', v))}</p>
       <div class="stepper"><button onclick="rrStep('${k}',-${st})">−</button><span class="val">${v}</span><button onclick="rrStep('${k}',${st})">＋</button></div></div>`).join('')}
     <div class="paramcard card" data-qk><h4>${P6NAMES.额度刷新秒}</h4><p class="pmeta">${esc(P6META.额度刷新秒.replace('N', (c.quota && c.quota.claudeMinIntervalSeconds) || 300))}</p>
@@ -1074,7 +1089,7 @@ async function viewParams() {
         const dot = $('run-dot'); if (dot) dot.className = dotCls(r);
         const st = $('run-state'); if (st) st.textContent = r.运行 ? '运行中' : '已停';
         const bt = $('run-toggle'); if (bt) { bt.textContent = r.运行 ? '停止' : '启动'; bt.className = 'btn h32' + (r.运行 ? '' : ' primary'); }
-        const meta = $('run-meta'); if (meta) meta.textContent = (r.试跑 ? '试跑模式：模拟执行 · 零额度' : '实弹模式') + (r.执行中 && r.执行中.length ? ` · 执行中 ${r.执行中.map((x) => x.id).join(' / ')}` : '');
+        const meta = $('run-meta'); if (meta) meta.textContent = runMeta(r);
       } catch { /* 下轮再试 */ }
       pollRun();
     }, 5000);
@@ -1117,16 +1132,10 @@ window.runToggle = async () => {
   const dot = $('run-dot'); if (dot) dot.className = dotCls(r);
   const st = $('run-state'); if (st) st.textContent = r.运行 ? '运行中' : '已停';
   const bt = $('run-toggle'); if (bt) { bt.textContent = r.运行 ? '停止' : '启动'; bt.className = 'btn h32' + (r.运行 ? '' : ' primary'); }
-  const meta = $('run-meta'); if (meta) meta.textContent = (r.试跑 ? '试跑模式：模拟执行 · 零额度' : '实弹模式') + (r.执行中 && r.执行中.length ? ` · 执行中 ${r.执行中.map((x) => x.id).join(' / ')}` : '');
-  toast(r.运行 ? '执行器已启动（试跑）' : '执行器已停（执行中的单跑完为止）');
+  const meta = $('run-meta'); if (meta) meta.textContent = runMeta(r);
+  toast(r.运行 ? '执行器已启动（实弹）' : '执行器已停（执行中的单跑完为止）');
 };
-// 执行模式切换：实弹会被服务端拒绝（通道未接入），高亮保持试跑
-window.runMode = async (dry) => {
-  const r = await post('/api/runner/mode', { 试跑: dry });
-  if (!r.ok) return toast(r.error || '失败');
-  document.querySelectorAll('.egbtn[data-rm]').forEach((b) => b.classList.toggle('on', (b.dataset.rm === '试跑') === !!r.试跑));
-  toast('执行模式 → ' + (r.试跑 ? '试跑' : '实弹'));
-};
+// 执行模式开关（试跑/实弹）与实弹解锁已随 H81 常开单闸制拆除：运行即实弹
 // 执行器数值参数步进（间隔/超时/记账，通用）
 window.rrStep = async (k, delta) => {
   const card = document.querySelector(`.paramcard[data-runkey="${k}"]`); if (!card) return;
@@ -1175,14 +1184,6 @@ window.mAdd = async (pool) => {
   if (window._models && window._models[pool]) window._models[pool].可选 = r.可选[pool];
   inp.value = '';
   toast(`${pool} 可选模型 +1（重进本页下拉生效）`);
-};
-// 实弹解锁开关（权力开关：解锁要求二次确认）
-window.liveSet = async (v) => {
-  if (v && !await ask('解锁实弹 = 授权 agent 真调 CLI 烧额度。确认解锁？')) return;
-  const r = await post('/api/config/live', { 解锁: v });
-  if (!r.ok) return toast(r.error || '失败');
-  document.querySelectorAll('.egbtn[data-lv]').forEach((b) => b.classList.toggle('on', (b.dataset.lv === '解锁') === !!r.实弹解锁));
-  toast(r.实弹解锁 ? '⚠ 实弹已解锁（执行模式仍需在上方切实弹）' : '已上锁并退回试跑');
 };
 // 项目注册 / 设默认
 window.projAdd = async () => {

@@ -1,16 +1,15 @@
-// gates.js — 两道闸（D26）：暂停闸门（手动，全局/按池）+ 额度锁（自动，双池独立）。
-// 拉取模型下二者拦"领单"：canPull(池) 决定该池 agent 能否从池里领单。
+// gates.js — 两道闸（D26 / H81）：暂停总闸（手动，唯一布尔总闸）+ 额度锁（自动，双池独立）。
+// 二者拦"领单/派发"：canPull(池) 决定该池 agent 能否从池里领单。
+// H81 常开单闸制：跑是常态、停是例外——三档（全局/codex/claude）收成一个总闸，默认开。
 const state = require('./core/state');
 const quota = require('./quota');
 
-function isPaused(root, pool) {
-  const s = state.read(root);
-  return !!(s.paused.global || (pool && s.paused[pool]));
+function isPaused(root) {
+  return !!state.read(root).paused;
 }
 
-// scope: 'global' | 'codex' | 'claude'
-function setPaused(root, scope, val) {
-  return state.update(root, (s) => { s.paused[scope] = !!val; return s.paused; });
+function setPaused(root, val) {
+  return state.update(root, (s) => { s.paused = !!val; return s.paused; });
 }
 
 // 单池额度锁判定。rl=codex rateLimits，cu=claude usage。
@@ -42,10 +41,7 @@ async function allLocks(cfg) {
 
 // 领单前置：该池能否拉单（暂停闸门 + 额度锁）。
 async function canPull(root, cfg, pool) {
-  if (isPaused(root, pool)) {
-    const s = state.read(root);
-    return { allowed: false, reason: '暂停闸门：' + (s.paused.global ? '全局暂停' : `${pool} 池暂停`) };
-  }
+  if (isPaused(root)) return { allowed: false, reason: '暂停总闸：已合闸（全局暂停）' };
   const locks = await allLocks(cfg);
   const l = locks[pool];
   if (l && l.locked) return { allowed: false, reason: l.reason, resetAt: l.resetAt };
