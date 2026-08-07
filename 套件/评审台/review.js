@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// review.js — 异厂评审台（施工令-013 · H88 配套）
+// review.js — 异厂评审台（施工令-013 · H88 配套；施工令-019 红队立场卷制 · H91 配套）
 // 用法：node review.js --file <方案md绝对路径> [--out <意见合集md路径>]
 //      [--config <studio.config.json 路径>]  ← 默认读生产 config，实测/演练可指临时副本
 //      [--timeout-min N]                     ← 单厂超时（默认 5min），超时该厂记缺席，不拖垮全场
@@ -11,6 +11,12 @@
 //      过程输出全在 stderr，stdout 只吐最终答案，见 runner.js「活尾巴取样」实测定谳）；
 //   ② config.执行池 里每个带 兼容 段的条目（现 deepseek）—— Anthropic 兼容 /v1/messages 直调。
 //   将来 config 新增兼容池条目即自动入席，本文件一字不改。
+//
+// 红队立场卷制（施工令-019）：评审团按席序轮换领卷——可行性红队 / 不变量红队 / 成本红队；
+//   单厂在席时独领全部三卷，两厂时甲领一三乙领二，三厂及以上一席一卷、超出继续轮发。
+//   行「击杀制」：每卷必须尝试构造具体失败场景（输入/状态/时序），构造不出要明写
+//   「未能构造击杀」——该声明本身即通过证据；泛泛意见不算完卷。
+//   输出向后兼容：表格仍以「章节 | 意见 | 严重度」开头，卷别与击杀标追加为第 4/5 列。
 //
 // 密钥纪律（施工令-013 红线）：key 只在进程内用于组请求头，任何 stdout / 合集 md / 错误栈
 //   都过 scrub() 净化——已知密钥逐一抹除 + sk-*/Bearer/x-api-key 形状兜底。异常路径也归口 out()。
@@ -95,32 +101,84 @@ function seats(cfg) {
 }
 
 // ——————————————————————————————————————————————————————————
-// 统一评审提示词：逐章抬杠，输出「章节×意见×严重度」结构化清单
-// 各家独立评审、互不可见（进程/请求彼此隔离，不串上下文）
+// 立场卷（施工令-019 · H91 配套）：评审不再是「一人一份泛意见」，而是三支红队分立场开火。
+// 各家独立评审、互不可见（进程/请求彼此隔离，不串上下文）——立场分工只由本台派发，厂商之间不知道彼此领了什么。
 // ——————————————————————————————————————————————————————————
-function buildPrompt(file, text) {
-  return [
-    '你是资深技术评审员，现在对一份技术方案做独立评审。你的职责是抬杠——找问题，不是夸奖。',
+const 立场卷 = [
+  {
+    名: '可行性红队',
+    要旨: '找实现不了的点——方案里被当作「照做即可」的步骤，实际受限于接口能力／权限／平台／依赖版本／数据不可得，根本做不出来。',
+    抓手: '所需接口是否真存在且吐得出那几个字段；跨平台差异（Windows 路径与分隔符、编码、进程与信号模型）；权限与凭据从哪来；第三方限速、配额与鉴权；并发与超时下的真实行为而非文档承诺。',
+  },
+  {
+    名: '不变量红队',
+    要旨: '找清单漏掉的承重约束——文档默认成立却没写死的前提、边界、时序与并发假设，一旦被破坏整套逻辑当场塌方。',
+    抓手: '状态机的残缺态与非法转移；跨进程／跨会话的读写竞争；失败中断留下的半成品；幂等与重放；空集、单元素与超大集；编码／换行／大小写；回滚与迁移路径。',
+  },
+  {
+    名: '成本红队',
+    要旨: '找烧穿工期与额度的暗礁——看着一行代码、实则拖出长尾的活。',
+    抓手: '隐藏返工面（改一处牵动多处）；测试与取证的真实耗时；token／调用量随规模的增长曲线；需要人工介入的频次；维护期负担与不可逆的技术锁定。',
+  },
+];
+
+// —— 派卷：按序轮换发牌。两条硬性质：①每张卷都有主 ②每席都有卷。
+//    单厂在席 → 独厂领全部三卷（施工令-019 明定）；两厂 → 甲领一三、乙领二；
+//    三厂及以上 → 一席一卷，超出三席继续按序轮着发（新厂入席零改动）。
+function 派卷(n) {
+  const 派 = Array.from({ length: Math.max(0, n) }, () => []);
+  if (!派.length) return 派;
+  const 张数 = Math.max(立场卷.length, n);              // 至少把三卷发完，席多则每席保底一卷
+  for (let j = 0; j < 张数; j++) 派[j % n].push(立场卷[j % 立场卷.length]);
+  return 派;
+}
+const 卷名 = (卷组) => (卷组 || []).map((s) => s.名).join('、');
+
+// ——————————————————————————————————————————————————————————
+// 评审提示词：按席位领到的立场卷组稿，行「击杀制」——每卷必须尝试构造具体失败场景。
+// 输出格式向后兼容：仍是「章节 | 意见 | 严重度」开头的表格，卷别与击杀标追加在后两列。
+// ——————————————————————————————————————————————————————————
+function buildPrompt(file, text, 卷组) {
+  const 卷 = (卷组 && 卷组.length) ? 卷组 : 立场卷;
+  const 下限 = 3 * 卷.length;
+  const L = [
+    '你是资深技术评审员，现在以**红队**身份、按指派的立场卷对一份技术方案做独立评审。',
+    '你的职责是击杀——构造能让这份方案当场失败的具体场景，不是夸奖，也不是泛泛提醒。',
     '',
     '【纪律】只读评审：不要修改任何文件、不要执行任何命令、不要访问网络，直接把评审结论写在回答里。',
     '',
-    '【评审重点】逐章过一遍，重点盯四类：',
-    '1. 缺失的不变量——文档默认成立但没写死的前提、边界、并发/时序假设；',
-    '2. 路径划分的坑——绝对/相对路径、跨平台分隔符、工作目录、编码、命名冲突；',
-    '3. 验证法漏洞——所谓「验收/自测」证明不了它声称的事，或能被平凡实现骗过；',
-    '4. 实现风险——错误处理、超时、资源泄漏、回滚、兼容与迁移。',
-    '',
-    '【输出格式】先输出一个 markdown 表格，表头必须一字不差是：',
-    '| 章节 | 意见 | 严重度 |',
-    '严重度取值只能是 高 / 中 / 低。一行一条意见，「章节」写文档里的小节标题或行号区间，',
-    '「意见」一句话说清问题与后果（必要时带一句最小修法）。至少 8 条，宁可尖锐不要凑数。',
-    '表格之后可附不超过 5 行的总体判断。不要复述文档原文。',
-    '',
-    `【被评审方案】文件：${file}`,
-    '```markdown',
-    text,
-    '```',
-  ].join('\n');
+    `【你领到的立场卷】共 ${卷.length} 卷，只按这些立场开火，别人的立场不用替他管：`,
+  ];
+  卷.forEach((s, i) => {
+    L.push(`■ 第${i + 1}卷 · ${s.名}`);
+    L.push(`  要旨：${s.要旨}`);
+    L.push(`  抓手：${s.抓手}`);
+  });
+  L.push('');
+  L.push('【击杀制】每一卷都必须至少尝试构造一个**具体失败场景**——把 输入 / 状态 / 时序 里至少一项写成具体取值，');
+  L.push('说清它怎么触发、失败长什么样、后果多大。判定只有两种：');
+  L.push('- 构造出来了 → 该条「击杀」列标 击杀；');
+  L.push(`- 确实构造不出来 → 必须在完卷声明里原样写「第k卷 <卷名>：未能构造击杀」。**这句话本身就是该卷的通过证据**，如实写不扣分；`);
+  L.push('  但只给泛泛意见而不写这句，视为该卷未完卷。');
+  L.push('- 泛泛意见（「建议加强错误处理」「注意兼容性」这类没有具体触发条件的话）不算完卷，更不许标 击杀。');
+  L.push('');
+  L.push('【输出格式】先输出一个 markdown 表格，表头必须一字不差是：');
+  L.push('| 章节 | 意见 | 严重度 | 卷别 | 击杀 |');
+  L.push('- 「章节」写文档里的小节标题或行号区间；');
+  L.push('- 「意见」一句话说清 触发条件 → 失败后果（必要时带一句最小修法）；');
+  L.push('- 「严重度」只能取 高 / 中 / 低；');
+  L.push(`- 「卷别」只能取你领到的卷名之一：${卷名(卷)}；`);
+  L.push('- 「击杀」只能取 击杀 / 未杀。');
+  L.push(`一行一条，每卷至少 3 条，合计不少于 ${下限} 条，宁可尖锐不要凑数。`);
+  L.push('表格之后逐卷写一行完卷声明，格式二选一：');
+  L.push('「第k卷 <卷名>：击杀 N 条」或「第k卷 <卷名>：未能构造击杀」。');
+  L.push('最后可附不超过 5 行的总体判断。不要复述文档原文。');
+  L.push('');
+  L.push(`【被评审方案】文件：${file}`);
+  L.push('```markdown');
+  L.push(text);
+  L.push('```');
+  return L.join('\n');
 }
 
 // ——————————————————————————————————————————————————————————
@@ -141,6 +199,23 @@ function countOpinions(text) {
   }
   if (rows) return rows;
   return lines.filter((l) => /^\s*(?:\d+[.)、]|[-*+])\s+\S/.test(l)).length;
+}
+
+// ——————————————————————————————————————————————————————————
+// 击杀计数（施工令-019）：只认表格数据行里独立成格的 击杀 / 未杀 标，
+// 不拿正文里的「未能构造击杀」当命中（那是完卷声明，不是条目）。
+// ——————————————————————————————————————————————————————————
+function countKills(text) {
+  const r = { 击杀: 0, 未杀: 0, 未能构造击杀: /未能构造击杀/.test(String(text || '')) };
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const l = raw.trim();
+    if (!/^\|.*\|$/.test(l) || /^[|\s:-]+$/.test(l)) continue;
+    const cells = l.slice(1, -1).split('|').map((c) => c.trim());
+    if (/^章节$/.test(cells[0]) || (/严重度/.test(l) && /章节/.test(l))) continue;   // 表头自身带「击杀」字样，别把表头算成一条
+    if (cells.some((c) => /^击杀$/.test(c))) r.击杀++;
+    else if (cells.some((c) => /^未杀$/.test(c))) r.未杀++;
+  }
+  return r;
 }
 
 // ——————————————————————————————————————————————————————————
@@ -248,21 +323,27 @@ function renderReport(file, results, meta) {
   L.push(`- 方案：\`${file}\``);
   L.push(`- 评审时间：${meta.at}`);
   L.push(`- 评审团（自动发现）：${results.map((r) => `${r.name}${r.err ? '（缺席）' : ''}`).join('、')}`);
-  L.push(`- 在席 ${results.filter((r) => !r.err).length} / ${results.length}，意见合计 ${meta.total} 条`);
+  L.push(`- 在席 ${results.filter((r) => !r.err).length} / ${results.length}，意见合计 ${meta.total} 条，击杀 ${meta.击杀} 条 / 未杀 ${meta.未杀} 条`);
+  L.push(`- 立场卷派发（红队制，施工令-019）：${results.map((r) => `${r.name}=${r.卷 || '（无）'}`).join('；')}`);
+  if (meta.漏卷 && meta.漏卷.length) L.push(`- **缺席致落空的立场卷：${meta.漏卷.join('、')}**（该立场本轮无人开火，采信时须自行补位）`);
   L.push(`- 单厂超时闸：${meta.闸}`);
   L.push('');
-  L.push('> 各家独立评审、互不可见；以下为各家原文，未做删改（仅做密钥净化与控制符清洗）。');
+  L.push('> 各家独立评审、互不可见，各自只领到本席的立场卷（谁领了什么互相不知）；');
+  L.push('> 击杀制：每卷须构造具体失败场景，构造不出须明写「未能构造击杀」——该声明即通过证据。');
+  L.push('> 以下为各家原文，未做删改（仅做密钥净化与控制符清洗）。');
   L.push('');
   for (const r of results) {
     L.push(`## ${r.name}`);
     L.push('');
+    L.push(`- 立场卷：${r.卷 || '（无）'}`);
     if (r.err) {
-      L.push(`- 状态：**缺席**（原因：${scrub(r.err)}）`);
+      L.push(`- 状态：**缺席**（原因：${scrub(r.err)}）—— 上列立场卷本轮落空`);
       L.push(`- 耗时：${(r.ms / 1000).toFixed(1)}s`);
       L.push('');
       continue;
     }
     L.push(`- 状态：在席 · 模型 \`${r.model || '（默认）'}\` · 耗时 ${(r.ms / 1000).toFixed(1)}s · 意见 ${r.count} 条${r.usage ? ` · tokens 入${r.usage.入}/出${r.usage.出}` : ''}`);
+    L.push(`- 战果：击杀 ${r.kill.击杀} 条 / 未杀 ${r.kill.未杀} 条${r.kill.未能构造击杀 ? ' · 含「未能构造击杀」声明' : ''}`);
     L.push('');
     L.push(scrub(r.text));
     L.push('');
@@ -295,33 +376,47 @@ function renderReport(file, results, meta) {
     if (!team.length) return out({ ok: false, error: `--only 点名的席位都不在名册里：${want.join(',')}（名册：${seats(cfg).map((s) => s.name).join(',')}）` });
   }
   const 名册 = team.map((s) => s.name);
-  if (args.dry) return out({ ok: true, 评审团: 名册, 意见数: 0, out: null, dry: true, 席位: team.map((s) => ({ 名: s.name, 类型: s.kind, 模型: s.model || '（默认）' })) });
+  // ③′ 立场卷派发（施工令-019）：按在册席序轮换，单厂在席即独领三卷
+  const 派 = 派卷(team.length);
+  team.forEach((s, i) => { s.卷组 = 派[i] || []; });
+  if (args.dry) {
+    return out({
+      ok: true, 评审团: 名册, 意见数: 0, out: null, dry: true,
+      立场卷: Object.fromEntries(team.map((s) => [s.name, s.卷组.map((x) => x.名)])),
+      席位: team.map((s) => ({ 名: s.name, 类型: s.kind, 模型: s.model || '（默认）', 领卷: 卷名(s.卷组) })),
+    });
+  }
 
   // ④ 开评（并行，各家独立互不可见；单厂超时/失败只记缺席）
   const t = Number(args['timeout-min']);
   const timeoutMin = (Number.isFinite(t) && t > 0) ? t : 5;          // 非法/缺省一律回默认 5min
   const timeoutMs = Math.max(1000, timeoutMin * 60000);              // 下限 1s（演练可给亚分钟值）
-  const prompt = buildPrompt(abs, text);
-  say(`方案 ${path.basename(abs)}（${text.length} 字）→ 评审团 [${名册.join(', ')}]，单厂闸 ${时长(timeoutMs)}，开评…`);
+  say(`方案 ${path.basename(abs)}（${text.length} 字）→ 评审团 [${名册.join(', ')}]，单厂闸 ${时长(timeoutMs)}，立场卷 ${team.map((s) => `${s.name}=${卷名(s.卷组)}`).join('；')}，开评…`);
   const results = await Promise.all(team.map(async (s) => {
+    const prompt = buildPrompt(abs, text, s.卷组);                      // 一席一份提示词：各领各的立场卷
     const r = s.kind === 'cli' ? await askCodex(s, prompt, timeoutMs, cfg) : await askCompat(s, prompt, timeoutMs);
-    const one = { name: s.name, ms: r.ms || 0, model: r.model || s.model, usage: r.usage || null };
-    if (r.err) { say(`${s.name} 缺席：${r.err}`); return { ...one, err: r.err }; }
+    const one = { name: s.name, ms: r.ms || 0, model: r.model || s.model, usage: r.usage || null, 卷: 卷名(s.卷组) };
+    if (r.err) { say(`${s.name} 缺席：${r.err}（立场卷「${one.卷}」落空）`); return { ...one, err: r.err }; }
     const count = countOpinions(r.text);
-    say(`${s.name} 交卷：${count} 条意见 / ${(one.ms / 1000).toFixed(1)}s`);
-    return { ...one, text: r.text, count };
+    const kill = countKills(r.text);
+    say(`${s.name} 交卷：${count} 条意见（击杀 ${kill.击杀} / 未杀 ${kill.未杀}）/ ${(one.ms / 1000).toFixed(1)}s`);
+    return { ...one, text: r.text, count, kill };
   }));
 
   // ⑤ 落盘 + 一行 JSON 摘要
   const seated = results.filter((r) => !r.err);
   const total = seated.reduce((n, r) => n + r.count, 0);
+  const 击杀 = seated.reduce((n, r) => n + r.kill.击杀, 0);
+  const 未杀 = seated.reduce((n, r) => n + r.kill.未杀, 0);
+  const 在席卷 = new Set(seated.flatMap((r) => (r.卷 ? r.卷.split('、') : [])));
+  const 漏卷 = 立场卷.map((s) => s.名).filter((n) => !在席卷.has(n));   // 缺席带走的立场，如实标出
   const at = new Date().toISOString();
   const defaultOut = path.join(path.dirname(abs), `${path.basename(abs, path.extname(abs))}-评审意见.md`);
   const outPath = path.resolve(String(args.out && args.out !== true ? args.out : defaultOut));
   let wrote = null;
   try {
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    fs.writeFileSync(outPath, renderReport(abs, results, { at, total, 闸: 时长(timeoutMs) }), 'utf8');
+    fs.writeFileSync(outPath, renderReport(abs, results, { at, total, 击杀, 未杀, 漏卷, 闸: 时长(timeoutMs) }), 'utf8');
     wrote = outPath;
   } catch (e) { say(`合集落盘失败：${e.message}`); }
 
@@ -329,6 +424,10 @@ function renderReport(file, results, meta) {
     ok: seated.length > 0,                                  // 全场空手才 ok:false
     评审团: 名册,
     意见数: total,
+    击杀数: 击杀,
+    未杀数: 未杀,
+    立场卷: Object.fromEntries(results.map((r) => [r.name, r.卷])),
+    ...(漏卷.length ? { 落空立场卷: 漏卷 } : {}),
     out: wrote,
     在席: seated.map((r) => r.name),
     缺席: results.filter((r) => r.err).map((r) => ({ 厂: r.name, 原因: scrub(r.err) })),
