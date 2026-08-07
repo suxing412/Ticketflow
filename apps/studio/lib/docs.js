@@ -1,15 +1,20 @@
-// docs.js — 知识总库·文档分区聚合（施工令-015）：策划案 / 技术方案两个只读分区。
+// docs.js — 知识总库·文档分区聚合（施工令-015 起）：策划案 / 调研方案 / 技术方案三个只读分区。
 // 视图聚合制：文件零迁移，仍住在项目仓 Docs/SLG/** 下；这里只做「列目录 + 读正文」，
 // 不写不删。缺目录不是错误——返回空清单并标 存在:false，前端照常渲空态。
 const fs = require('fs');
 const path = require('path');
 const matter = require('gray-matter');
 
-// 分区 → 根目录清单（相对项目仓）。标签用于同区内区分来源（H89：调研也是策划产出，同区展示）。
+// 分区 → 根目录清单（相对项目仓）。标签用于同区内区分来源。
+// 施工令-020（H92 配套）：调研从策划案里分家自立一区——策划案只剩设计文档根，
+// 调研方案收「调研方案 + 竞品分析」两根；物理文件不迁移，只是展示位分家。
 const ZONES = {
   策划案: [
     { 根: 'Docs/SLG/策划文档', 标签: '设计' },
-    { 根: 'Docs/SLG/竞品分析', 标签: '调研' },
+  ],
+  调研方案: [
+    { 根: 'Docs/SLG/调研方案', 标签: '调研' },
+    { 根: 'Docs/SLG/竞品分析', 标签: '竞品' },
   ],
   技术方案: [
     { 根: 'Docs/SLG/技术方案', 标签: '方案' },
@@ -17,6 +22,17 @@ const ZONES = {
 };
 
 const zones = () => Object.keys(ZONES);
+
+// 定案分层（施工令-020）：策划案专属三组。数据层定组、前端只管画，口径单一处。
+// 决策记录/ 子目录单列一组（它记的是「怎么定的」，不是设计正文）；
+// 其余按 frontmatter 状态: 判——只有明写定案词才算定案，没标状态的一律草案（默认从严）。
+const GROUPS = ['定案', '草案', '决策记录'];
+const 定案词 = ['定案', '已定案', '正式'];
+function groupOf(doc) {
+  const sub = String((doc && doc.子目录) || '');
+  if (sub === '决策记录' || sub.startsWith('决策记录/')) return '决策记录';
+  return 定案词.includes(String((doc && doc.状态) || '').trim()) ? '定案' : '草案';
+}
 
 function walk(dir, out, base, depth) {
   if (depth > 6) return out; // 防软链/异常深树
@@ -32,8 +48,9 @@ function walk(dir, out, base, depth) {
 }
 
 // 单篇元信息：标题取 frontmatter.标题/名称 → 首个 # 一级标题 → 文件名。
+// 状态取 frontmatter.状态（施工令-020 定案分层的判据），没写就是空串 → 归草案。
 function meta(abs) {
-  let 标题 = path.basename(abs, '.md'), 字数 = 0;
+  let 标题 = path.basename(abs, '.md'), 字数 = 0, 状态 = '';
   try {
     const raw = fs.readFileSync(abs, 'utf8');
     const g = matter(raw);
@@ -42,10 +59,11 @@ function meta(abs) {
     const fmT = (g.data || {}).标题 || (g.data || {}).名称;
     if (fmT) 标题 = String(fmT);
     else { const h = body.match(/^\s*#\s+(.+)$/m); if (h) 标题 = h[1].trim(); }
+    if ((g.data || {}).状态 != null) 状态 = String((g.data || {}).状态);
   } catch { /* 读不动的文件只留文件名 */ }
   let 更新时间 = null;
   try { 更新时间 = fs.statSync(abs).mtime.toISOString().slice(0, 10); } catch { /* 无 stat */ }
-  return { 标题, 字数, 更新时间 };
+  return { 标题, 字数, 更新时间, 状态 };
 }
 
 // 分区清单：根逐个扫（缺目录容错），文档 rel 一律相对项目仓、正斜杠。
@@ -60,13 +78,15 @@ function list(projPath, zone) {
     let n = 0;
     if (存在) {
       for (const f of walk(base, [], base, 0)) {
-        文档.push({
+        const doc = {
           rel: path.relative(projPath, f.abs).split(path.sep).join('/'),
           文件名: path.basename(f.abs),
           子目录: f.sub || '',
           标签: def.标签, 根: def.根,
           ...meta(f.abs),
-        });
+        };
+        if (zone === '策划案') doc.组 = groupOf(doc); // 定案分层只给策划案定组，别区不带这个字段
+        文档.push(doc);
         n++;
       }
     }
@@ -107,4 +127,4 @@ function read(projPath, zone, rel) {
   };
 }
 
-module.exports = { ZONES, zones, list, read, resolve };
+module.exports = { ZONES, GROUPS, zones, groupOf, list, read, resolve };

@@ -49,7 +49,7 @@ function scan(projPath) {
     entries.push({
       名称, 分类: fm.分类 || path.dirname(f.rel).split(path.sep)[0] || '未分类',
       状态: fm.状态 || '正式', 锚号: fm.锚号 || null, 来源工单: fm.来源工单 || null,
-      // 源文档（施工令-015）：词条从哪篇策划案/技术方案提炼而来——溯源链。
+      // 源文档（施工令-015）：词条从哪篇策划案/调研方案/技术方案提炼而来——溯源链。
       // 可写成单值或多值；一律归一为数组，前端逐条给链接。
       源文档: srcDocs(fm),
       更新时间: fm.更新时间 || null, rel: f.rel, links,

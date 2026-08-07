@@ -11,7 +11,7 @@ const FNHEX = { 策划: 'var(--fn-plan)', 程序: 'var(--fn-code)', 美术: 'var
 const FNCLS = { 策划: 'fn-plan', 程序: 'fn-code', 美术: 'fn-art', QA: 'fn-qa', 装配: 'fn-asm' };
 const STCLS = { 在途: 'st-doing', 质检: 'st-review', 待验收: 'st-accept', 完成: 'st-done', 待定夺: 'st-escal', 执行失败: 'st-escal', 草稿: 'mut', 已归档: 'mut', 待投: '', 池: '' };
 const STPCT = { 草稿: 0, 待投: 0, 池: 0, 在途: 60, 质检: 85, 待定夺: 70, 执行失败: 60, 待验收: 90, 完成: 100, 已归档: 0 };
-// 施工令-015：wiki 升格唯一知识入口（四分区），风格库导航退役——美术标杆并入 Wiki 页签
+// 施工令-015：wiki 升格唯一知识入口（施工令-020 起五分区），风格库导航退役——美术标杆并入 Wiki 页签
 const NAV = [['总览', ''], ['想法', 'ideas'], ['工单', 'board'], ['流程', 'flow'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['Wiki', 'wiki'], ['项管', 'relay'], ['报表', 'report']]; // 参数入口只走 ⚙
 function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1900); }
 // 数值跳字确认（步进器改完后调用）：重触发 animation
@@ -1778,8 +1778,18 @@ window.doGiveDir = async (id, btn) => {
 
 /* ===== 路由 ===== */
 /* ===== P16 Wiki（0.20，H52 第三类实体）：设计事实源——分类树 + 词条双链 + 信息栏 + 待审人闸 + 关系图 ===== */
-// 施工令-015：wiki = 唯一知识入口，四分区页签（设计事实/策划案/技术方案/美术标杆）
-const WK_TABS = [['设计事实', '🧩'], ['策划案', '📘'], ['技术方案', '🛠'], ['美术标杆', '🎨']];
+// 施工令-015：wiki = 唯一知识入口。施工令-020（H92 配套）：四分区扩为五分区——调研从策划案分家自立一区。
+// 第三项是页签描述：写清「谁的产出、给谁看」，鼠标悬停出提示，进分区主页也印在标题下。
+const WK_TABS = [
+  ['设计事实', '🧩', '全库事实源·词条化的唯一口径，落地即词条'],
+  ['策划案', '📘', '策划产出·设计正文，按定案/草案分层'],
+  ['调研方案', '🔬', '策划产出·给制作人与总监看'],
+  ['技术方案', '🛠', '技术策划产出·程序与装配的施工图'],
+  ['美术标杆', '🎨', '美术参考·风格标杆图库'],
+];
+const WK_TAB_DESC = Object.fromEntries(WK_TABS.map(([n, , d]) => [n, d || '']));
+// 文档型分区（走 /api/docs 视图聚合）——设计事实与美术标杆各有各的数据源，不在此列
+const WK_DOC_TABS = ['策划案', '调研方案', '技术方案'];
 const wkState = { entry: '', mode: 'read', q: '', cat: '', tab: '设计事实', doc: '', dq: '', cdEdit: false, cdNew: '' };
 window.wkTab = (n) => { if (wkState.tab === n) return; wkState.tab = n; wkState.doc = ''; wkState.dq = ''; cdReset(); route(); };
 // 换文档就退出编辑态：别把 A 篇的草稿框带到 B 篇上
@@ -1823,29 +1833,29 @@ function wkMd(src, byName) {
   flushP(); flushL(); flushT();
   return out.join('\n');
 }
-// 四分区页签壳：页签常驻，分区内容各自渲染（页签栏复用决策台 .dtabs）
+// 五分区页签壳：页签常驻，分区内容各自渲染（页签栏复用决策台 .dtabs）
 async function viewWiki() {
   const proj = curProj() || projDefault();
   if (!WK_TABS.some(([n]) => n === wkState.tab)) wkState.tab = '设计事实';
-  const bar = `<div class="dtabs" style="margin-top:22px">${WK_TABS.map(([n, i]) =>
-    `<div class="tab ${wkState.tab === n ? 'active' : ''}" onclick="wkTab('${n}')">${i} ${esc(n)}</div>`).join('')}
+  const bar = `<div class="dtabs" style="margin-top:22px">${WK_TABS.map(([n, i, d]) =>
+    `<div class="tab ${wkState.tab === n ? 'active' : ''}" title="${esc(d || '')}" onclick="wkTab('${n}')">${i} ${esc(n)}</div>`).join('')}
     <span class="backlog2">${esc(proj)} · 知识总库</span></div>`;
   let body;
   try {
-    if (wkState.tab === '策划案' || wkState.tab === '技术方案') body = await wkDocZone(proj, wkState.tab);
+    if (WK_DOC_TABS.includes(wkState.tab)) body = await wkDocZone(proj, wkState.tab);
     else if (wkState.tab === '美术标杆') body = await wkArtRef();
     else body = await wkFacts(proj);
   } catch (e) { body = `<div class="emptycard" style="margin-top:20px"><h5>分区加载失败</h5><p>${esc(e.message || String(e))}</p></div>`; }
   return bar + body;
 }
 
-/* --- 文档分区（策划案 / 技术方案）：视图聚合制，只读；缺目录容错 --- */
-// 溯源索引：两分区全量文档缓存一份，供词条 源文档 字段解析成可点链接
+/* --- 文档分区（策划案 / 调研方案 / 技术方案）：视图聚合制，只读；缺目录容错 --- */
+// 溯源索引：全部文档型分区各扫一遍缓存一份，供词条 源文档 字段解析成可点链接
 let _docIdx = null, _docIdxProj = '';
 async function docIndex(proj) {
   if (_docIdx && _docIdxProj === proj) return _docIdx;
   const out = [];
-  for (const z of ['策划案', '技术方案']) {
+  for (const z of WK_DOC_TABS) {
     const d = await api('/api/docs?项目=' + encodeURIComponent(proj) + '&区=' + encodeURIComponent(z)).catch(() => null);
     if (d && d.文档) out.push(...d.文档.map((x) => ({ ...x, 区: z })));
   }
@@ -1955,9 +1965,9 @@ async function wkDocZone(proj, zone) {
   if (wkState.doc && !all.some((x) => x.rel === wkState.doc)) wkState.doc = ''; // 换分区/文件已删 → 回分区主页
   const q = wkState.dq.trim();
   const hit = (x) => !q || x.标题.includes(q) || x.文件名.includes(q) || x.子目录.includes(q);
-  const TAGI = { 设计: '📐', 调研: '🔍', 方案: '🛠' };
-  // 左栏：按根分组（策划案两根 = 设计/调研），根内再按子目录分层
-  const tree = (d.根 || []).map((r) => {
+  const TAGI = { 设计: '📐', 调研: '🔍', 竞品: '⚖', 方案: '🛠' };
+  // 左栏：默认按根分组（如调研方案两根 = 调研/竞品），根内再按子目录分层
+  const treeByRoot = () => (d.根 || []).map((r) => {
     const mine = all.filter((x) => x.根 === r.根);
     const shown = mine.filter(hit);
     if (q && !shown.length) return '';
@@ -1969,6 +1979,20 @@ async function wkDocZone(proj, zone) {
       + shown.filter((x) => x.子目录 === s).map((x) =>
         `<p class="wk-it ${x.rel === wkState.doc ? 'cur' : ''}" style="${s ? 'margin-left:26px' : ''}" title="${esc(x.rel)}${cdIs(x.rel) ? ' · 协同文档（可编辑）' : ''}" onclick="wkDocPick('${qesc(x.rel)}')">${cdIs(x.rel) ? '✍ ' : ''}${esc(x.标题)}</p>`).join('')).join('');
   }).join('');
+  // 策划案专属：定案分层（施工令-020）——组由后端 docs.js 定（doc.组），前端只按组画。
+  // 定案/草案（无状态标注默认归此）/决策记录 三组常驻，空组也留头显示 0，让「还没有定案」一眼可见。
+  const GRP = [['定案', '📗', '已拍板，可作为下游依据'], ['草案', '📝', '在写或未标状态——不得当依据用'], ['决策记录', '🗳', '怎么定的：访谈/评审/裁决留痕']];
+  const treeByGroup = () => GRP.map(([g, ico, tip]) => {
+    const shown = all.filter((x) => (x.组 || '草案') === g).filter(hit);
+    if (q && !shown.length) return '';
+    const head = `<p class="wk-cat" title="${esc(tip)}">${ico} ${esc(g)} <span class="dim">· ${shown.length}</span></p>`;
+    if (!shown.length) return head + '<p class="wk-it dim" style="cursor:default">（空）</p>';
+    return head + shown.map((x) => {
+      const 位 = g === '决策记录' ? '' : x.子目录;
+      return `<p class="wk-it ${x.rel === wkState.doc ? 'cur' : ''}" title="${esc(x.rel)}${x.状态 ? ' · 状态：' + esc(x.状态) : ''}${cdIs(x.rel) ? ' · 协同文档（可编辑）' : ''}" onclick="wkDocPick('${qesc(x.rel)}')">${cdIs(x.rel) ? '✍ ' : ''}${esc(x.标题)}${位 ? ` <span class="dim">· ${esc(位)}</span>` : ''}</p>`;
+    }).join('');
+  }).join('');
+  const tree = zone === '策划案' ? treeByGroup() : treeByRoot();
   // 右栏：选中即读；未选则分区主页（根概览 + 最近更新）
   let article, info = '';
   const cur = all.find((x) => x.rel === wkState.doc);
@@ -1990,6 +2014,7 @@ async function wkDocZone(proj, zone) {
       <table class="rp-t" style="margin-top:8px;font-size:12.5px">
         <tr><td class="dim">分区</td><td style="text-align:right">${esc(zone)}</td></tr>
         <tr><td class="dim">类别</td><td style="text-align:right">${esc(cur.标签)}</td></tr>
+        ${cur.组 ? `<tr><td class="dim">分层</td><td style="text-align:right" class="${cur.组 === '定案' ? 'okc' : cur.组 === '草案' ? 'warnc' : ''}">${esc(cur.组)}${cur.状态 ? `<span class="dim"> · 状态 ${esc(cur.状态)}</span>` : cur.组 === '草案' ? '<span class="dim"> · 未标状态</span>' : ''}</td></tr>` : ''}
         ${cur.子目录 ? `<tr><td class="dim">子目录</td><td style="text-align:right">${esc(cur.子目录)}</td></tr>` : ''}
         <tr><td class="dim">字数</td><td style="text-align:right">${cur.字数}</td></tr>
         ${cur.更新时间 ? `<tr><td class="dim">更新</td><td style="text-align:right">${esc(cur.更新时间)}</td></tr>` : ''}
@@ -1998,10 +2023,16 @@ async function wkDocZone(proj, zone) {
       <p class="subnote" style="margin:8px 0 0">只读展示——改稿回项目仓改文件，刷新即变</p></div>`;
   } else {
     const recent = [...all].filter((x) => x.更新时间).sort((a, b) => String(b.更新时间).localeCompare(String(a.更新时间))).slice(0, 8);
-    const cards = (d.根 || []).map((r) => `<div class="card r14" style="padding:14px 16px">
+    // 策划案主页看分层账（定案几篇/草案几篇），其余分区看来源目录账
+    const cards = zone === '策划案'
+      ? GRP.map(([g, ico, tip]) => `<div class="card r14" style="padding:14px 16px" title="${esc(tip)}">
+        <b style="font-size:14px">${ico} ${esc(g)}</b><span class="dim" style="margin-left:8px">${all.filter((x) => (x.组 || '草案') === g).length} 篇</span>
+        <p class="subnote" style="margin:8px 0 0">${esc(tip)}</p></div>`).join('')
+      : (d.根 || []).map((r) => `<div class="card r14" style="padding:14px 16px">
         <b style="font-size:14px">${TAGI[r.标签] || '📄'} ${esc(r.标签)}</b><span class="dim" style="margin-left:8px">${r.存在 ? `${r.数量} 篇` : '目录未建'}</span>
         <p class="subnote mono" style="margin:8px 0 0;word-break:break-all">${esc(r.根)}</p></div>`).join('');
     article = `<h2 style="margin:0 0 4px">${esc(proj)} ${esc(zone)}</h2>
+      ${WK_TAB_DESC[zone] ? `<p class="dim" style="margin:0 0 6px;font-size:13px">${esc(WK_TAB_DESC[zone])}</p>` : ''}
       <p class="dim" style="margin:0 0 16px;font-size:13px">${all.length} 篇 · ${(d.根 || []).length} 个来源目录 · 只读聚合（文件仍在项目仓，零迁移）</p>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:18px">${cards}</div>
       ${all.length ? `<p class="dim" style="font-size:12px;margin:0 0 6px;border-top:0.5px solid var(--line);padding-top:10px">最近更新</p>`
@@ -2065,13 +2096,13 @@ async function wkFacts(proj) {
   } else if (wkState.entry && byName[wkState.entry]) {
     const e = await api('/api/wiki/entry?项目=' + encodeURIComponent(proj) + '&名称=' + encodeURIComponent(wkState.entry)).catch(() => null);
     if (e) {
-      // 溯源链（施工令-015）：frontmatter.源文档 → 策划案/技术方案分区里的那一篇，可点直达
+      // 溯源链（施工令-015）：frontmatter.源文档 → 策划案/调研方案/技术方案分区里的那一篇，可点直达
       const srcs = e.源文档 || [];
       const idx = srcs.length ? await docIndex(proj) : [];
       const srcHtml = srcs.length ? `<p class="wk-src">📎 源文档 ${srcs.map((s) => {
         const m = docMatch(idx, s);
         return m ? `<a class="wk-l" title="${esc(m.区)} · ${esc(m.rel)}" onclick="wkOpenDoc('${qesc(m.区)}','${qesc(m.rel)}')">${esc(m.标题)}</a>`
-          : `<span class="dim" title="未在策划案/技术方案分区找到这篇">${esc(s)}</span>`;
+          : `<span class="dim" title="未在策划案/调研方案/技术方案分区找到这篇">${esc(s)}</span>`;
       }).join(' · ')}</p>` : '';
       article = `<p class="dim" style="font-size:12px;margin:0">${esc(e.分类)} › 词条</p>
         <h2 style="margin:2px 0 6px">${esc(e.名称)}</h2>
@@ -2104,7 +2135,7 @@ async function wkFacts(proj) {
       <div>${info}</div>
     </div>`;
 }
-// 开词条一律回「设计事实」页签——策划案/技术方案正文里的 [[双链]] 点了要能跳过来（施工令-015）
+// 开词条一律回「设计事实」页签——文档分区正文里的 [[双链]] 点了要能跳过来（施工令-015）
 window.wkOpen = (name) => { wkState.tab = '设计事实'; wkState.entry = name; wkState.mode = 'read'; route(); };
 window.wkApprove = async (f) => { const r = await post('/api/wiki/approve', { 文件: f, 项目: curProj() || projDefault() }); toast(r.ok ? `已入册「${r.名称}」` : (r.error || '失败')); route(); };
 window.wkReject = async (f) => { if (!await ask('退回将删除该待审稿（agent 提案不入史）。确认？')) return; const r = await post('/api/wiki/reject', { 文件: f, 项目: curProj() || projDefault() }); toast(r.ok ? '已退回' : (r.error || '失败')); route(); };

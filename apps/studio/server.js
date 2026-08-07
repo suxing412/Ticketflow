@@ -152,7 +152,7 @@ app.post('/api/wiki/reject', (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 
-// ---- 知识总库·文档分区（施工令-015）：策划案 / 技术方案聚合，只读。
+// ---- 知识总库·文档分区（施工令-015；施工令-020 起三区）：策划案 / 调研方案 / 技术方案聚合，只读。
 // 路径来源 = 项目注册推仓路径（同 /api/ticket 的 引擎作业 取法）；缺目录不报错，返空清单。
 const docs = require('./lib/docs');
 app.get('/api/docs', (req, res) => {
