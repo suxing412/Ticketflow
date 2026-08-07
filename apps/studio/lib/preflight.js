@@ -2,6 +2,17 @@
 // 每条规则背后一个真实事故；新案入档时同步加规则。
 // 0.24.9（施工令-002）从 server.js 抽出成模块：错误（拦截）与警示（不拦截）分列，两者皆可单测。
 const store = require('./core/store');
+const roster = require('./roster');
+
+// 职能校验的数据源（H88，2026-08-07）：编制表是活的，新增职能（技术策划）不该再回来改这行硬清单。
+// 唯一读口是 roster（去岗位化后 cfg.编制 每职能一行），预检与派发共用同一张表。
+// 回落：编制表读不出来（配置缺失 / 未过迁移的内存态 cfg）时用基础六职能——
+// fail-open 到旧行为，绝不因为读不到配置就把所有单一律拦死。
+const 基础职能 = ['策划', '技术策划', '程序', '美术', 'QA', '装配'];
+function 职能表(cfg2) {
+  const rows = roster.read(cfg2 || {}).map((r) => r.职能).filter(Boolean);
+  return rows.length ? rows : 基础职能;
+}
 
 // 短题制（H83，2026-08-06 制作人裁决）：标题短到不点详情也能认单。
 // 只警示不拦截——老单与在途单不受影响，是提醒不是闸。
@@ -25,8 +36,8 @@ function warnings(t) {
 function preflight(root, t, cfg2) {
   if (!t || ['战役', '专项'].includes(t.fm.父单类型)) return []; // 专项父单不预检（不执行）
   const errs = [];
-  const 职能表 = ['策划', '程序', '美术', 'QA', '装配'];
-  if (!职能表.includes(String(t.fm.职能 || ''))) errs.push(`职能「${t.fm.职能}」不在编制表（${职能表.join('/')}）——TK-82 案`);
+  const 编制 = 职能表(cfg2);
+  if (!编制.includes(String(t.fm.职能 || ''))) errs.push(`职能「${t.fm.职能}」不在编制表（${编制.join('/')}）——TK-82 案`);
   if (!/^P[0-3]$/.test(String(t.fm.优先级 || ''))) errs.push(`优先级「${t.fm.优先级}」非 P0-P3——TK-82 案`);
   if (!['开', '关'].includes(String(t.fm.QA || '').trim())) errs.push(`QA「${t.fm.QA}」非 开/关（非标串会被闸门误判）——TK-84 案`);
   if (!['委托', '保留'].includes(String(t.fm.验收方式 || '').trim())) errs.push(`验收方式「${t.fm.验收方式}」非 委托/保留（非标串两检不接手，单会滞留待验收）——TK-88/83 案`);
@@ -50,4 +61,4 @@ function preflight(root, t, cfg2) {
   return errs;
 }
 
-module.exports = { preflight, warnings, titleWarnings, 标题上限 };
+module.exports = { preflight, warnings, titleWarnings, 标题上限, 职能表, 基础职能 };

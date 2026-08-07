@@ -2,7 +2,7 @@
 // 短题制铁律：标题超长/含枚举符只警示，绝不进 errs——老单与在途单不能被新纪律锁死。
 const assert = require('node:assert');
 const store = require('../lib/core/store');
-const { preflight, warnings, titleWarnings } = require('../lib/preflight');
+const { preflight, warnings, titleWarnings, 职能表, 基础职能 } = require('../lib/preflight');
 const { makeRoot, seed } = require('./helper');
 
 let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
@@ -59,6 +59,45 @@ t('H62 拦截项未被改动：非标字段照旧拦截', () => {
   seed(root, '草稿', { id: 'W-5', title: '短题', 职能: '产品', 优先级: 'P9', QA: '是', 验收方式: '自动', body: '## 范围\n无验收章' });
   const errs = preflight(root, store.find(root, 'W-5'), CFG);
   assert.ok(errs.length >= 5, '职能/优先级/QA/验收方式/缺验收标准 全部命中，实得 ' + errs.length + ' 条');
+});
+
+// ---- H88：职能校验改读 roster 活编制表（施工令-014 第 4 条）----
+// 病灶：职能表曾是 preflight.js 里一行写死的五者，新增职能必须回来改代码才放得过。
+const 编制CFG = (职能列) => ({ 执行器: { 执行超时分钟: 30 }, 编制: 职能列.map((职能) => ({ 职能, 池序: [{ 池: 'claude', 档: '' }] })) });
+const 新职能单 = (root, id) => {
+  seed(root, '草稿', { id, title: '方案单接线', 职能: '技术策划', 优先级: 'P1', QA: '开', 验收方式: '委托', body: 正文 });
+  return store.find(root, id);
+};
+
+t('编制表含新职能（技术策划）→ 预检放行，零改代码', () => {
+  const root = makeRoot();
+  const tk = 新职能单(root, 'W-6');
+  const cfg = 编制CFG(['策划', '技术策划', '程序', '美术', 'QA', '装配']);
+  assert.deepEqual(preflight(root, tk, cfg), [], '编制表里有就该过，实得：' + preflight(root, tk, cfg).join('｜'));
+});
+
+t('编制表不含该职能 → 照旧拦截（闸没被拆）', () => {
+  const root = makeRoot();
+  const tk = 新职能单(root, 'W-7');
+  const errs = preflight(root, tk, 编制CFG(['策划', '程序', '美术', 'QA', '装配']));
+  assert.equal(errs.length, 1, '只该命中职能一条，实得：' + errs.join('｜'));
+  assert.ok(/不在编制表/.test(errs[0]) && /TK-82 案/.test(errs[0]), '报错文案保留可定位串：' + errs[0]);
+  assert.ok(/技术策划/.test(errs[0]), '报错点名被拦的职能：' + errs[0]);
+});
+
+t('编制表读不出（cfg 无编制）→ 回落基础六职能，不 fail-close 拦死全场', () => {
+  const root = makeRoot();
+  const tk = 新职能单(root, 'W-8');
+  assert.deepEqual(preflight(root, tk, { 执行器: { 执行超时分钟: 30 } }), [], '无编制字段时不该拦');
+  assert.deepEqual(职能表(null), 基础职能, '空 cfg 回落基础表');
+  assert.deepEqual(职能表({ 编制: [] }), 基础职能, '空编制表也回落，不是「零职能全拦」');
+});
+
+t('编制表是唯一数据源：旧 agents 岗位册也认（roster 推导口径一致）', () => {
+  const root = makeRoot();
+  const tk = 新职能单(root, 'W-9');
+  const 旧盘 = { 执行器: { 执行超时分钟: 30 }, agents: [{ id: '技术策划-A', 职能: '技术策划', 执行池: 'claude' }] };
+  assert.deepEqual(preflight(root, tk, 旧盘), [], '旧字段 cfg 经 roster.read 推导后照样放行');
 });
 
 console.log('全部通过：' + passed + ' 项');
