@@ -152,6 +152,27 @@ app.post('/api/wiki/reject', (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 
+// ---- 知识总库·文档分区（施工令-015）：策划案 / 技术方案聚合，只读。
+// 路径来源 = 项目注册推仓路径（同 /api/ticket 的 引擎作业 取法）；缺目录不报错，返空清单。
+const docs = require('./lib/docs');
+app.get('/api/docs', (req, res) => {
+  if (!ready(res)) return;
+  const p = wikiProj(req);
+  if (!p) return res.status(400).json({ error: '项目未注册或路径不存在' });
+  const zone = String(req.query.区 || '');
+  const r = docs.list(p, zone);
+  if (!r) return res.status(400).json({ error: '未知分区：' + zone + '（可选 ' + docs.zones().join('/') + '）' });
+  res.json(r);
+});
+app.get('/api/docs/file', (req, res) => {
+  if (!ready(res)) return;
+  const p = wikiProj(req);
+  if (!p) return res.status(400).json({ error: '项目未注册或路径不存在' });
+  const r = docs.read(p, String(req.query.区 || ''), String(req.query.rel || ''));
+  if (!r) return res.status(404).json({ error: '文档不存在或不在本分区范围内' });
+  res.json(r);
+});
+
 app.get('/api/pipelines', (req, res) => {
   if (!ready(res)) return;
   const ps = pipelines.list(ROOT).map((p) => ({ id: p.id, ...p.fm }));

@@ -26,6 +26,15 @@ function walk(dir, out, base) {
 
 const LINK_RE = /\[\[([^\]|#]+?)(?:\|[^\]]*)?\]\]/g;
 
+// 源文档字段归一（施工令-015）：frontmatter 可写 `源文档: a.md`、逗号/顿号分隔的一行、
+// 或 YAML 数组。统一吐字符串数组（相对项目仓的路径），无则空数组。
+function srcDocs(fm) {
+  const v = fm.源文档;
+  if (v == null || v === '') return [];
+  const arr = Array.isArray(v) ? v : String(v).split(/[,，、；;]/);
+  return [...new Set(arr.map((x) => String(x).trim().replace(/\\/g, '/')).filter(Boolean))];
+}
+
 // 全量索引：条目 + 双链图 + 反向链接。条目名 = frontmatter.名称 || 文件名。
 function scan(projPath) {
   ensure(projPath);
@@ -40,6 +49,9 @@ function scan(projPath) {
     entries.push({
       名称, 分类: fm.分类 || path.dirname(f.rel).split(path.sep)[0] || '未分类',
       状态: fm.状态 || '正式', 锚号: fm.锚号 || null, 来源工单: fm.来源工单 || null,
+      // 源文档（施工令-015）：词条从哪篇策划案/技术方案提炼而来——溯源链。
+      // 可写成单值或多值；一律归一为数组，前端逐条给链接。
+      源文档: srcDocs(fm),
       更新时间: fm.更新时间 || null, rel: f.rel, links,
       字数: body.replace(/\s/g, '').length,
     });

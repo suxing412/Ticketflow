@@ -810,6 +810,8 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .wk-body li { margin-bottom:4px; }
 .wk-h { margin:16px 0 8px; }
 .wk-back { border-top:0.5px solid var(--line); margin-top:16px; padding-top:10px; }
+/* 词条溯源链（施工令-015）：源文档 → 策划案/技术方案分区那一篇 */
+.wk-src { margin:0; font-size:12.5px; color:var(--ink3); display:flex; flex-wrap:wrap; gap:6px; align-items:baseline; }
 .wk-pend { display:flex; gap:10px; align-items:center; padding:10px 14px; margin-bottom:8px; background:var(--gatebg); border:1px solid var(--gateln); border-radius:12px; }
 @media (max-width: 680px) { .wk-grid { grid-template-columns: 1fr; } .wk-tree { border-right:none; } }
 

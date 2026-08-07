@@ -54,4 +54,18 @@ t('待审入册与退回（人闸）', () => {
   assert.ok(wiki.reject(root, '坏稿.md').ok);
 });
 
+t('源文档溯源字段归一（施工令-015）：单值/分隔串/数组都吐数组，缺省吐空数组', () => {
+  const root = mk();
+  write(root, '地图/甲.md', { 名称: '甲', 分类: '地图', 源文档: 'Docs/SLG/策划文档/系统模块/地图系统.md' }, '正文');
+  write(root, '地图/乙.md', { 名称: '乙', 分类: '地图', 源文档: '甲.md，乙.md、甲.md' }, '正文');
+  write(root, '地图/丙.md', { 名称: '丙', 分类: '地图', 源文档: ['一.md', '二.md'] }, '正文');
+  write(root, '地图/丁.md', { 名称: '丁', 分类: '地图' }, '正文');
+  const { byName } = wiki.scan(root);
+  assert.deepEqual(byName['甲'].源文档, ['Docs/SLG/策划文档/系统模块/地图系统.md']);
+  assert.deepEqual(byName['乙'].源文档, ['甲.md', '乙.md'], '分隔串拆开且去重');
+  assert.deepEqual(byName['丙'].源文档, ['一.md', '二.md']);
+  assert.deepEqual(byName['丁'].源文档, [], '无字段 = 空数组，前端不渲溯源行');
+  assert.deepEqual(wiki.readEntry(root, '甲').源文档, ['Docs/SLG/策划文档/系统模块/地图系统.md'], '词条详情同样透传');
+});
+
 console.log('全部通过：' + n + ' 项');
