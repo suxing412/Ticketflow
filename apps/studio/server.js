@@ -173,6 +173,33 @@ app.get('/api/docs/file', (req, res) => {
   res.json(r);
 });
 
+// ---- 协同策划文档（施工令-017）：*.codoc.md 块级读写，保存即项目仓 git 页史。
+// UI 是唯一写者，作者一律钉死 制作人——总监/策划走文件与 API 直改，不经这条路。
+const codoc = require('./lib/codoc');
+const codocArg = (req, k, alias) => String((req.query && (req.query[k] ?? req.query[alias]))
+  ?? (req.body && (req.body[k] ?? req.body[alias])) ?? '');
+app.get('/api/codoc', (req, res) => {
+  if (!ready(res)) return;
+  const p = wikiProj(req);
+  if (!p) return res.status(400).json({ error: '项目未注册或路径不存在' });
+  const r = codoc.read(p, codocArg(req, '区', 'zone'), codocArg(req, 'rel', 'file'));
+  if (!r) return res.status(404).json({ error: '协同文档不存在，或不是本分区内的 .codoc.md' });
+  res.json(r);
+});
+app.post('/api/codoc', (req, res) => {
+  if (!ready(res)) return;
+  const p = wikiProj(req);
+  if (!p) return res.status(400).json({ error: '项目未注册或路径不存在' });
+  const b = req.body || {};
+  const rel = codocArg(req, 'rel', 'file');
+  const r = codoc.edit(p, codocArg(req, '区', 'zone'), rel,
+    { 动作: b.动作, id: b.id, 文本: b.文本, 锚: b.锚, 位: b.位, 方向: b.方向 }, '制作人');
+  if (r.ok && !r.无变更) {
+    journal.append(ROOT, `协同文档 ${require('path').basename(rel)} ${b.动作}块 ${r.id || ''}（制作人 · ${r.提交 ? 'git ' + r.提交 : r.警示 || '无页史'}）`);
+  }
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
 app.get('/api/pipelines', (req, res) => {
   if (!ready(res)) return;
   const ps = pipelines.list(ROOT).map((p) => ({ id: p.id, ...p.fm }));

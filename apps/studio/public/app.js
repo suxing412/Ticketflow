@@ -1780,8 +1780,10 @@ window.doGiveDir = async (id, btn) => {
 /* ===== P16 Wiki（0.20，H52 第三类实体）：设计事实源——分类树 + 词条双链 + 信息栏 + 待审人闸 + 关系图 ===== */
 // 施工令-015：wiki = 唯一知识入口，四分区页签（设计事实/策划案/技术方案/美术标杆）
 const WK_TABS = [['设计事实', '🧩'], ['策划案', '📘'], ['技术方案', '🛠'], ['美术标杆', '🎨']];
-const wkState = { entry: '', mode: 'read', q: '', cat: '', tab: '设计事实', doc: '', dq: '' };
-window.wkTab = (n) => { if (wkState.tab === n) return; wkState.tab = n; wkState.doc = ''; wkState.dq = ''; route(); };
+const wkState = { entry: '', mode: 'read', q: '', cat: '', tab: '设计事实', doc: '', dq: '', cdEdit: false, cdNew: '' };
+window.wkTab = (n) => { if (wkState.tab === n) return; wkState.tab = n; wkState.doc = ''; wkState.dq = ''; cdReset(); route(); };
+// 换文档就退出编辑态：别把 A 篇的草稿框带到 B 篇上
+const cdReset = () => { wkState.cdEdit = false; wkState.cdNew = ''; };
 // 极简 markdown 渲染（词条正文专用）：标题/加粗/行内码/列表/段落/[[双链]]。不引库，XSS 经 esc 全量转义。
 function wkMd(src, byName) {
   src = String(src || '').replace(/<!--[\s\S]*?-->/g, ''); // HTML 注释不渲染（2026-08-06 UI 评审：入库回填注释块曾显形为正文）
@@ -1791,20 +1793,34 @@ function wkMd(src, byName) {
     return `<a class="wk-l ${exists ? '' : 'ghost'}" onclick="wkOpen('${n}')" title="${exists ? '' : '条目未建——点击可从此名开稿'}">${esc(alias || name.trim())}</a>`;
   });
   const inline = (s) => link(esc(s)).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
-  const out = []; let list = null, para = [];
+  const out = []; let list = null, para = [], tbl = null;
   const flushP = () => { if (para.length) { out.push(`<p>${inline(para.join(' '))}</p>`); para = []; } };
   const flushL = () => { if (list) { out.push(`<ul>${list.map((x) => `<li>${inline(x)}</li>`).join('')}</ul>`); list = null; } };
+  // 表格（施工令-017）：连续的 | 行攒成一张真表——首行当表头，|---| 分隔行丢弃。
+  // 旧版把每行原样吐成 mono 段落，13 行的系统框架表就是 13 条竖线流水；攒成表才读得下去。
+  const cells = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+  const isSep = (cs) => cs.length > 0 && cs.every((c) => /^:?-{2,}:?$/.test(c));
+  const flushT = () => {
+    if (!tbl) return;
+    const rows = tbl.filter((cs) => !isSep(cs));
+    if (rows.length) {
+      const [head, ...body] = rows;
+      out.push(`<div class="wk-tw"><table class="wk-t"><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead>`
+        + `<tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+    }
+    tbl = null;
+  };
   for (const raw of String(src).split(/\r?\n/)) {
     const line = raw.trimEnd();
     const h = line.match(/^(#{1,4})\s+(.*)$/);
-    if (h) { flushP(); flushL(); out.push(`<h${h[1].length + 2} class="wk-h">${inline(h[2])}</h${h[1].length + 2}>`); continue; }
+    if (h) { flushP(); flushL(); flushT(); out.push(`<h${h[1].length + 2} class="wk-h">${inline(h[2])}</h${h[1].length + 2}>`); continue; }
     const li = line.match(/^\s*[-*]\s+(.*)$/);
-    if (li) { flushP(); (list = list || []).push(li[1]); continue; }
-    if (line.match(/^\s*\|.*\|\s*$/)) { flushP(); flushL(); out.push(`<p class="mono" style="font-size:12px">${inline(line)}</p>`); continue; }
-    if (!line.trim()) { flushP(); flushL(); continue; }
-    flushL(); para.push(line);
+    if (li) { flushP(); flushT(); (list = list || []).push(li[1]); continue; }
+    if (line.match(/^\s*\|.*\|\s*$/)) { flushP(); flushL(); (tbl = tbl || []).push(cells(line)); continue; }
+    if (!line.trim()) { flushP(); flushL(); flushT(); continue; }
+    flushL(); flushT(); para.push(line);
   }
-  flushP(); flushL();
+  flushP(); flushL(); flushT();
   return out.join('\n');
 }
 // 四分区页签壳：页签常驻，分区内容各自渲染（页签栏复用决策台 .dtabs）
@@ -1844,8 +1860,93 @@ function docMatch(idx, s) {
     || idx.find((d) => d.文件名.toLowerCase() === k || d.文件名.toLowerCase() === k + '.md')
     || idx.find((d) => String(d.标题 || '').toLowerCase() === k) || null;
 }
-window.wkOpenDoc = (zone, rel) => { wkState.tab = zone; wkState.doc = rel; wkState.dq = ''; route(); };
-window.wkDocPick = (rel) => { wkState.doc = rel; route(); };
+window.wkOpenDoc = (zone, rel) => { wkState.tab = zone; wkState.doc = rel; wkState.dq = ''; cdReset(); route(); };
+window.wkDocPick = (rel) => { if (rel !== wkState.doc) cdReset(); wkState.doc = rel; route(); };
+
+/* --- 协同策划文档 codoc（施工令-017）：块级就地编辑 + 作者可视 --- */
+// UI 是唯一写者，作者一律 制作人（总监/策划改文件或走 API）——所以前端不给作者选择器。
+const CD_AUTHORS = ['制作人', '总监', '策划', '未知'];
+const cdIs = (rel) => /\.codoc\.md$/i.test(String(rel || ''));
+const cdWhen = (s) => { const d = s && new Date(s); return d && !isNaN(d) ? d.toISOString().slice(0, 16).replace('T', ' ') : '未记时'; };
+window.wkCdEdit = () => { wkState.cdEdit = !wkState.cdEdit; wkState.cdNew = ''; route(); };
+window.wkCdNew = (锚) => { wkState.cdNew = 锚 || '尾'; route(); };
+window.wkCdCancel = () => { wkState.cdNew = ''; route(); };
+async function cdPost(body) {
+  const r = await post('/api/codoc', { 项目: curProj() || projDefault(), 区: wkState.tab, rel: wkState.doc, ...body });
+  if (!r.ok) { toast(r.error || '保存失败'); return null; }
+  // git 是页史不是保存本身：失败只降级成警示，内容已经落盘
+  toast(r.警示 ? '已存盘，但' + r.警示 : r.无变更 ? '内容未变，未落新页史' : r.提交 ? '已保存 · git ' + r.提交 : '已保存');
+  return r;
+}
+window.wkCdSave = async (id) => {
+  const ta = document.getElementById('cd-ta-' + id);
+  if (!ta) return;
+  if (await cdPost({ 动作: '改', id, 文本: ta.value })) route();
+};
+window.wkCdAdd = async () => {
+  const ta = document.getElementById('cd-ta-new');
+  if (!ta) return;
+  const 锚 = wkState.cdNew === '尾' ? '' : wkState.cdNew;
+  if (await cdPost({ 动作: '增', 锚, 位: '后', 文本: ta.value })) { wkState.cdNew = ''; route(); }
+};
+window.wkCdDel = async (id) => {
+  if (!await ask('删掉这一块？删除同样落 git 页史，事后可从项目仓 git 找回。')) return;
+  if (await cdPost({ 动作: '删', id })) route();
+};
+window.wkCdMove = async (id, 方向) => { if (await cdPost({ 动作: '移', id, 方向 })) route(); };
+
+// 渲染一篇 codoc：返回 { article, info }。只读态与编辑态共用同一套色带，差别只在多不多一层 textarea。
+async function wkCodoc(proj, zone, cur) {
+  const f = await api('/api/codoc?项目=' + encodeURIComponent(proj) + '&区=' + encodeURIComponent(zone)
+    + '&rel=' + encodeURIComponent(cur.rel)).catch(() => null);
+  if (!f || f.error) {
+    return { article: `<div class="emptycard"><h5>读不到这篇协同文档</h5><p>${esc((f && f.error) || '未知错误')}</p></div>`, info: '' };
+  }
+  const w = await api('/api/wiki?项目=' + encodeURIComponent(proj)).catch(() => ({ 条目: [] }));
+  const byName = Object.fromEntries((w.条目 || []).map((e) => [e.名称, e]));
+  const ed = !!wkState.cdEdit;
+  const 块 = f.块 || [];
+  const 计 = Object.fromEntries(CD_AUTHORS.map((a) => [a, 块.filter((b) => b.作者 === a).length]));
+  const 图例 = `<div class="cd-lg"><b style="color:var(--ink)">作者</b>${CD_AUTHORS
+    .filter((a) => a !== '未知' || 计['未知']).map((a) => `<span data-a="${a}"><i></i>${a}${计[a] ? ' · ' + 计[a] : ''}</span>`).join('')}
+    <span style="margin-left:auto">${ed ? '编辑态 · 你的改动一律记作「制作人」' : '只读态 · 点「编辑」开写'}</span></div>`;
+  const 草稿 = (锚) => (wkState.cdNew === 锚 ? `<div class="cd-blk ed" data-a="制作人">
+      <textarea class="cd-ta" id="cd-ta-new" placeholder="新一块的 markdown 正文…"></textarea>
+      <div class="cd-ops"><button class="btn h32" onclick="wkCdAdd()">保存新块</button>
+        <button class="btn h32" onclick="wkCdCancel()">取消</button><span class="cd-sig">将记作 制作人</span></div></div>` : '');
+  const 加钮 = (锚) => (ed && wkState.cdNew !== 锚 ? `<button class="btn h32 cd-add" onclick="wkCdNew('${qesc(锚)}')">＋ 加一块</button>` : '');
+  const 体 = 块.map((b) => {
+    const 签 = `${b.作者} · ${cdWhen(b.时)}`;
+    const 芯 = ed
+      ? `<textarea class="cd-ta" id="cd-ta-${esc(b.id)}">${esc(b.文本)}</textarea>
+         <div class="cd-ops"><button class="btn h32" onclick="wkCdSave('${qesc(b.id)}')">保存</button>
+           <button class="btn h32" onclick="wkCdMove('${qesc(b.id)}','上')" title="上移">↑</button>
+           <button class="btn h32" onclick="wkCdMove('${qesc(b.id)}','下')" title="下移">↓</button>
+           <button class="btn h32" onclick="wkCdDel('${qesc(b.id)}')" title="删块">删</button>
+           <span class="cd-sig">${esc(签)}</span></div>`
+      : `<div class="wk-body">${wkMd(b.文本, byName)}</div>`;
+    return `<div class="cd-blk${ed ? ' ed' : ''}" data-a="${esc(b.作者)}" data-id="${esc(b.id)}" title="${esc(签)}">${芯}</div>`
+      + 草稿(b.id) + 加钮(b.id);
+  }).join('');
+  const article = `<p class="dim" style="font-size:12px;margin:0">${esc(zone)} › ${esc(cur.标签)}${cur.子目录 ? ' › ' + esc(cur.子目录) : ''} › 协同文档</p>
+    <div style="display:flex;align-items:center;gap:10px;margin:2px 0 12px">
+      <h2 style="margin:0">${esc(f.标题)}</h2>
+      <button class="btn h32" style="margin-left:auto" onclick="wkCdEdit()">${ed ? '完成编辑' : '编辑'}</button>
+    </div>${图例}
+    ${块.length ? 体 : `<div class="emptycard"><h5>这篇还没有内容块</h5><p>${ed ? '点下面「＋ 加一块」开写。' : '点右上「编辑」再加块。'}</p></div>`}
+    ${wkState.cdNew === '尾' ? 草稿('尾') : ''}${ed ? 加钮('尾') : ''}`;
+  const info = `<div class="card r14" style="padding:14px"><b style="font-size:13px">信息栏</b>
+    <table class="rp-t" style="margin-top:8px;font-size:12.5px">
+      <tr><td class="dim">分区</td><td style="text-align:right">${esc(zone)}</td></tr>
+      <tr><td class="dim">形态</td><td style="text-align:right">协同文档</td></tr>
+      <tr><td class="dim">块数</td><td style="text-align:right">${块.length}</td></tr>
+      <tr><td class="dim">字数</td><td style="text-align:right">${f.字数}</td></tr>
+      ${f.更新时间 ? `<tr><td class="dim">更新</td><td style="text-align:right">${esc(f.更新时间)}</td></tr>` : ''}
+    </table>
+    <p class="subnote mono" style="margin:10px 0 0;word-break:break-all">${esc(f.rel)}</p>
+    <p class="subnote" style="margin:8px 0 0">保存即项目仓 git 提交（一次一笔，只含这个文件）——改错了从 git 找回</p></div>`;
+  return { article, info };
+}
 
 async function wkDocZone(proj, zone) {
   const d = await api('/api/docs?项目=' + encodeURIComponent(proj) + '&区=' + encodeURIComponent(zone)).catch((e) => ({ error: String(e) }));
@@ -1866,12 +1967,15 @@ async function wkDocZone(proj, zone) {
     const subs = [...new Set(shown.map((x) => x.子目录))].sort();
     return head + subs.map((s) => (s ? `<p class="wk-it dim" style="margin-left:8px;cursor:default">${esc(s)}/</p>` : '')
       + shown.filter((x) => x.子目录 === s).map((x) =>
-        `<p class="wk-it ${x.rel === wkState.doc ? 'cur' : ''}" style="${s ? 'margin-left:26px' : ''}" title="${esc(x.rel)}" onclick="wkDocPick('${qesc(x.rel)}')">${esc(x.标题)}</p>`).join('')).join('');
+        `<p class="wk-it ${x.rel === wkState.doc ? 'cur' : ''}" style="${s ? 'margin-left:26px' : ''}" title="${esc(x.rel)}${cdIs(x.rel) ? ' · 协同文档（可编辑）' : ''}" onclick="wkDocPick('${qesc(x.rel)}')">${cdIs(x.rel) ? '✍ ' : ''}${esc(x.标题)}</p>`).join('')).join('');
   }).join('');
   // 右栏：选中即读；未选则分区主页（根概览 + 最近更新）
   let article, info = '';
   const cur = all.find((x) => x.rel === wkState.doc);
-  if (cur) {
+  if (cur && cdIs(cur.rel)) {
+    const r = await wkCodoc(proj, zone, cur); // 协同文档走块级渲染（可编辑），其余仍只读
+    article = r.article; info = r.info;
+  } else if (cur) {
     const f = await api('/api/docs/file?项目=' + encodeURIComponent(proj) + '&区=' + encodeURIComponent(zone)
       + '&rel=' + encodeURIComponent(cur.rel)).catch(() => null);
     if (!f || f.error) article = `<div class="emptycard"><h5>读不到这篇</h5><p>${esc((f && f.error) || '未知错误')}</p></div>`;

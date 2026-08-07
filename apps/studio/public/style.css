@@ -809,11 +809,54 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .wk-body ul { margin:0 0 12px 18px; padding:0; }
 .wk-body li { margin-bottom:4px; }
 .wk-h { margin:16px 0 8px; }
+/* 正文表格（施工令-017）：窄屏自己横滚，绝不撑破三栏 */
+.wk-tw { overflow-x:auto; margin:0 0 12px; }
+.wk-t { width:100%; border-collapse:collapse; font-size:12.5px; line-height:1.6; }
+.wk-t th { text-align:left; font-weight:600; color:var(--ink); border-bottom:1.5px solid var(--line); padding:6px 9px; white-space:nowrap; }
+.wk-t td { border-bottom:0.5px solid var(--line); padding:6px 9px; vertical-align:top; color:var(--ink2); }
+.wk-t td:first-child { color:var(--ink); white-space:nowrap; }
+.wk-t tr:last-child td { border-bottom:none; }
 .wk-back { border-top:0.5px solid var(--line); margin-top:16px; padding-top:10px; }
 /* 词条溯源链（施工令-015）：源文档 → 策划案/技术方案分区那一篇 */
 .wk-src { margin:0; font-size:12.5px; color:var(--ink3); display:flex; flex-wrap:wrap; gap:6px; align-items:baseline; }
 .wk-pend { display:flex; gap:10px; align-items:center; padding:10px 14px; margin-bottom:8px; background:var(--gatebg); border:1px solid var(--gateln); border-radius:12px; }
 @media (max-width: 680px) { .wk-grid { grid-template-columns: 1fr; } .wk-tree { border-right:none; } }
+
+/* ===== 协同策划文档 codoc（施工令-017）：块级编辑 + 作者色带 =====
+   作者三档各占一色，只读态与编辑态同色——扫一眼就知道这段是谁写的。
+   金 bronze=制作人 / 墨 ink=总监 / 青 teal=策划 / 灰=未知（老稿没戳） */
+.cd-blk { position:relative; padding:2px 0 2px 14px; margin:0 0 4px; border-left:3px solid var(--cd-c, var(--ink3)); border-radius:2px; }
+.cd-blk:hover { background:var(--sect); }
+.cd-blk[data-a="制作人"] { --cd-c:#A16207; }
+.cd-blk[data-a="总监"]   { --cd-c:#4B5563; }
+.cd-blk[data-a="策划"]   { --cd-c:#0E7490; }
+.cd-blk[data-a="未知"]   { --cd-c:var(--line); }
+html[data-theme="glass"] .cd-blk[data-a="制作人"] { --cd-c:#E8B45A; }
+html[data-theme="glass"] .cd-blk[data-a="总监"]   { --cd-c:#9BA6B5; }
+html[data-theme="glass"] .cd-blk[data-a="策划"]   { --cd-c:#4CC3E0; }
+.cd-blk .wk-body p:last-child, .cd-blk .wk-body ul:last-child { margin-bottom:0; }
+/* 块工具条：只读态不占位，编辑态常显 */
+.cd-ops { display:flex; gap:6px; align-items:center; margin:4px 0 10px; opacity:0; transition:opacity .12s var(--ease-out); }
+.cd-blk:hover .cd-ops, .cd-blk:focus-within .cd-ops, .cd-blk.ed .cd-ops { opacity:1; }
+.cd-blk.ed { padding-top:8px; padding-bottom:2px; }
+.cd-sig { font-size:11.5px; color:var(--ink3); margin-left:auto; letter-spacing:.02em; }
+.cd-ta { width:100%; min-height:96px; font:13px/1.7 var(--mono); color:var(--ink); background:var(--inbg);
+  border:1px solid var(--line); border-radius:10px; padding:10px 12px; resize:vertical; box-shadow:inset 0 1px 2px var(--groove-soft); }
+.cd-ta:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-glow); }
+/* 图例 */
+.cd-lg { display:flex; flex-wrap:wrap; gap:12px; align-items:center; font-size:12px; color:var(--ink2);
+  padding:8px 12px; margin:0 0 14px; background:var(--sect); border:1px solid var(--line); border-radius:10px; }
+.cd-lg i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; background:var(--cd-c); }
+.cd-lg span[data-a] { --cd-c:var(--ink3); }
+.cd-lg span[data-a="制作人"] { --cd-c:#A16207; }
+.cd-lg span[data-a="总监"]   { --cd-c:#4B5563; }
+.cd-lg span[data-a="策划"]   { --cd-c:#0E7490; }
+.cd-lg span[data-a="未知"]   { --cd-c:var(--line); }
+html[data-theme="glass"] .cd-lg span[data-a="制作人"] { --cd-c:#E8B45A; }
+html[data-theme="glass"] .cd-lg span[data-a="总监"]   { --cd-c:#9BA6B5; }
+html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
+.cd-add { width:100%; margin:2px 0 12px; border-style:dashed; color:var(--ink3); }
+.cd-add:hover { color:var(--accent-ink); border-color:var(--accent); }
 
 /* 项管信道问答重做（0.23.2）：提问=右侧短气泡，回复=左对齐全宽文档块（含 markdown） */
 .rl-doc { align-self:stretch; width:100%; }

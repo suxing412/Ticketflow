@@ -76,23 +76,30 @@ function list(projPath, zone) {
   return { 区: zone, 根, 文档 };
 }
 
-// 读单篇：rel 必须落在本分区某个根之内且是 .md——越界（../ 逃逸、非 md）一律拒。
-function read(projPath, zone, rel) {
+// 路径推导：rel 必须落在本分区某个根之内且是 .md——越界（../ 逃逸、跨分区、非 md）一律 null。
+// 只算路径不碰磁盘，read 与 codoc（施工令-017）共用这一处，越界口径永远一致。
+function resolve(projPath, zone, rel) {
   const defs = ZONES[zone];
   if (!defs || !projPath) return null;
   const r = String(rel || '');
   if (!r || !r.toLowerCase().endsWith('.md')) return null;
   const abs = path.resolve(projPath, r);
-  const inside = defs.some((def) => {
-    const base = path.resolve(projPath, ...def.根.split('/'));
+  const def = defs.find((d) => {
+    const base = path.resolve(projPath, ...d.根.split('/'));
     return abs === base || abs.toLowerCase().startsWith(base.toLowerCase() + path.sep);
   });
-  if (!inside) return null;
+  if (!def) return null;
+  return { abs, def, rel: path.relative(path.resolve(projPath), abs).split(path.sep).join('/') };
+}
+
+// 读单篇：路径经 resolve 把关，读不动/不是文件一律 null。
+function read(projPath, zone, rel) {
+  const hit = resolve(projPath, zone, rel);
+  if (!hit) return null;
+  const { abs, def } = hit;
   let raw;
   try { if (!fs.statSync(abs).isFile()) return null; raw = fs.readFileSync(abs, 'utf8'); } catch { return null; }
   const g = matter(raw);
-  const def = defs.find((d) => path.resolve(projPath, ...d.根.split('/')) === abs
-    || abs.toLowerCase().startsWith(path.resolve(projPath, ...d.根.split('/')).toLowerCase() + path.sep));
   return {
     区: zone, rel: abs.split(path.sep).join('/').slice(path.resolve(projPath).split(path.sep).join('/').length + 1),
     文件名: path.basename(abs), 标签: def ? def.标签 : null, 根: def ? def.根 : null,
@@ -100,4 +107,4 @@ function read(projPath, zone, rel) {
   };
 }
 
-module.exports = { ZONES, zones, list, read };
+module.exports = { ZONES, zones, list, read, resolve };
