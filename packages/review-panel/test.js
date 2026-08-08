@@ -80,6 +80,72 @@ ok('--only 点名全落空：退出码 1 + 回报名册', r.code === 1 && !!r.j 
 r = 跑(['--dry', '--file', 方案, '--config', 配(兼容('deepseek'))]);
 ok('dry 全量输出不含明文 key', !r.so.includes(假KEY) && !r.se.includes(假KEY), '输出泄密');
 
+/* ═══ T6 凭据三态（施工令-030；案源 H94 补巡：deepseek 全场缺席）═══
+   施工令-029 把 key 迁进 DPAPI 托管后 config 兼容段是空串，评审台只认明文 → 静静漏席。
+   这里用**假托管模块**（REVIEW_CREDS_MODULE 注入）替真 DPAPI：零真调、零 PowerShell、
+   非 Windows 也跑得动。夹具 key 全是明摆着的假串。 */
+章('T6 凭据三态：托管优先 / config 兜底 / 双缺失');
+const 托管KEY = 'sk-fakehosted-0001';
+// 假托管模块：只对 deepseek 有记录，且刻意**不给 base**——用来验字段粒度兜底（029 的 401 陷阱）
+const 假托管 = path.join(巢, 'fake-creds.js');
+fs.writeFileSync(假托管, `
+module.exports = {
+  has: (root, 池) => 池 === 'deepseek' && !process.env.FAKE_CREDS_EMPTY,
+  getKey: (root, 池) => (池 === 'deepseek' && !process.env.FAKE_CREDS_EMPTY) ? ${JSON.stringify(托管KEY)} : null,
+  meta: (root, 池) => (池 === 'deepseek' ? { 类型: 'key', base: null, 模型: 'ds-hosted' } : null),
+};
+`, 'utf8');
+const 跑注入 = (argv, env) => {
+  const r = spawnSync(process.execPath, [台].concat(argv), {
+    encoding: 'utf8', windowsHide: true, timeout: 30000,
+    env: Object.assign({}, process.env, { REVIEW_CREDS_MODULE: 假托管 }, env || {}),
+  });
+  let j = null;
+  try { j = JSON.parse(String(r.stdout).trim().split('\n').filter(Boolean).pop()); } catch { /* 调用方判空 */ }
+  return { code: r.status, j, so: String(r.stdout || ''), se: String(r.stderr || '') };
+};
+const 席 = (j, 名) => (j && j.席位 || []).find((x) => x.名 === 名);
+
+// ① 托管命中：config 明文已清空（029 后的现网形态）仍应在席
+r = 跑注入(['--dry', '--file', 方案, '--config', 配(兼容('deepseek', { key: '' }))]);
+ok('托管命中：config 明文为空仍入席（H94 失席案的回归闸）',
+  !!r.j && JSON.stringify(r.j.评审团) === '["codex","deepseek"]', r.so.trim());
+ok('托管命中：凭据来源如实报「托管」', !!席(r.j, 'deepseek') && 席(r.j, 'deepseek').凭据 === '托管',
+  JSON.stringify(r.j && r.j.席位));
+ok('字段粒度兜底：托管没给 base 时回落 config 的 base（否则 key 会被发去官方端点）',
+  !!r.j && r.j.ok === true, r.so.trim());
+ok('托管命中：模型取托管值', !!席(r.j, 'deepseek') && 席(r.j, 'deepseek').模型 === 'ds-hosted',
+  JSON.stringify(r.j && r.j.席位));
+
+// ② config 兜底：托管里没有这个池（kimi）→ 回落 config 明文
+r = 跑注入(['--dry', '--file', 方案, '--config', 配(兼容('kimi'))]);
+ok('config 兜底：托管无此池时用 config 明文入席',
+  !!r.j && JSON.stringify(r.j.评审团) === '["codex","kimi"]', r.so.trim());
+ok('config 兜底：凭据来源如实报「config」', !!席(r.j, 'kimi') && 席(r.j, 'kimi').凭据 === 'config',
+  JSON.stringify(r.j && r.j.席位));
+
+// ③ 双缺失：托管空 + config 明文空 → 不入席（不猜、不报错，维持原语义）
+r = 跑注入(['--dry', '--file', 方案, '--config', 配(兼容('deepseek', { key: '' }))], { FAKE_CREDS_EMPTY: '1' });
+ok('双缺失：托管与 config 都没有 → 该席静默缺席、其余照常开评',
+  r.code === 0 && !!r.j && JSON.stringify(r.j.评审团) === '["codex"]', r.so.trim());
+
+// ④ 环境变量兜底（协作者/CI：没有 studio、没有 DPAPI 的机器）
+r = 跑注入(['--dry', '--file', 方案, '--config', 配(兼容('deepseek', { key: '' }))],
+  { FAKE_CREDS_EMPTY: '1', REVIEW_KEY_DEEPSEEK: 'sk-fakeenv-0002' });
+ok('环境变量兜底：REVIEW_KEY_<池名> 能让无托管无明文的机器照样入席',
+  !!r.j && JSON.stringify(r.j.评审团) === '["codex","deepseek"]', r.so.trim());
+ok('环境变量兜底：凭据来源如实报「环境变量」', !!席(r.j, 'deepseek') && 席(r.j, 'deepseek').凭据 === '环境变量',
+  JSON.stringify(r.j && r.j.席位));
+
+// ⑤ 公共包纪律：creds 模块指向一个不存在/坏掉的路径时，必须优雅回落而不是崩
+r = 跑注入(['--dry', '--file', 方案, '--config', 配(兼容('deepseek'))], { REVIEW_CREDS_MODULE: path.join(巢, '根本没有这个模块.js') });
+ok('协作者环境：托管模块不在场 → 静默回落 config，不硬崩',
+  r.code === 0 && !!r.j && JSON.stringify(r.j.评审团) === '["codex","deepseek"]' && 席(r.j, 'deepseek').凭据 === 'config', r.so.trim());
+
+// ⑥ 托管来的 key 同样进净化表
+r = 跑注入(['--dry', '--file', 方案, '--config', 配(兼容('deepseek', { key: '' }))]);
+ok('托管 key 也不出现在任何输出里', !r.so.includes(托管KEY) && !r.se.includes(托管KEY), '输出泄密');
+
 try { fs.rmSync(巢, { recursive: true, force: true }); } catch { /* 临时目录留着无害 */ }
 process.stdout.write(`\n════ 合计 ${过 + 挂.length} 例：过 ${过}，挂 ${挂.length} ════\n`);
 for (const m of 挂) process.stdout.write(`  ✗ ${m}\n`);

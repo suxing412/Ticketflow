@@ -861,7 +861,7 @@ async function viewDecisions() {
   if (p) { await loadCfg(); d.待验收 = d.待验收.filter((t) => projOf(t) === p); d.待定夺 = d.待定夺.filter((t) => projOf(t) === p); }
   const cur = dTab === 'accept' ? (d.待验收[0] || null) : (d.待定夺[0] || null);
   let main = `<div class="dmain card r16"><p class="dim">没有待你处理的签字项——一切安好。</p>
-    <p class="subnote" style="margin-top:8px">要开新活：<a href="#/ideas" style="color:var(--accent-ink)">想法池拍板</a> · 要放行：<a href="#/board" style="color:var(--accent-ink)">工单池待投区</a> · 要验收 Unity：先关上面的编辑器锁</p></div>`;
+    <p class="subnote" style="margin-top:8px">要开新活：<a class="glink" href="#/ideas">想法池拍板</a> · 要放行：<a class="glink" href="#/board">工单池待投区</a> · 要验收 Unity：先关上面的编辑器锁</p></div>`;
   if (cur) {
     const tk = await api('/api/ticket?id=' + encodeURIComponent(cur.id));
     const preview = tk.回执 ? tk.回执.raw : tk.body || '';
@@ -1025,7 +1025,7 @@ async function viewReport() {
         ${gtable('按项目', d.按项目)}</div>
     </div>
     <div class="rp-card card r14" style="margin-top:20px"><h4>工单明细${p ? `<span class="subnote" style="margin-left:10px">项目 ${esc(p)}</span>` : ''}</h4>
-      <table class="rp-t"><tr><th>编号</th><th>职能</th><th>阶段</th><th>预计</th><th>实际</th><th>偏差</th><th>自修</th><th>agent 自报消耗</th></tr>${detail || '<tr><td colspan="8" class="dim">无数据</td></tr>'}</table>
+      <div class="rp-scroll"><table class="rp-t"><tr><th>编号</th><th>职能</th><th>阶段</th><th>预计</th><th>实际</th><th>偏差</th><th>自修</th><th>agent 自报消耗</th></tr>${detail || '<tr><td colspan="8" class="dim">无数据</td></tr>'}</table></div>
       <p class="subnote" style="margin-top:10px">实际=交付-领单的墙钟时长 · token 为 agent 回执自报（参考值）· 点行进详情</p></div>`;
 }
 

@@ -11,6 +11,8 @@
 //      过程输出全在 stderr，stdout 只吐最终答案，见 runner.js「活尾巴取样」实测定谳）；
 //   ② config.执行池 里每个带 兼容 段的条目（现 deepseek）—— Anthropic 兼容 /v1/messages 直调。
 //   将来 config 新增兼容池条目即自动入席，本文件一字不改。
+//   密钥取值三级（施工令-030）：DPAPI 托管（<config 同目录>/凭据.json）→ config 兼容段明文
+//   → 环境变量 REVIEW_KEY_<池名大写>。studio 不在场 / DPAPI 不可用一律静默回落，不硬崩。
 //
 // 红队立场卷制（施工令-019）：评审团按席序轮换领卷——可行性红队 / 不变量红队 / 成本红队；
 //   单厂在席时独领全部三卷，两厂时甲领一三乙领二，三厂及以上一席一卷、超出继续轮发。
@@ -84,18 +86,85 @@ const clean = (s) => String(s || '').replace(CSI, '').replace(ESCSEQ, '').replac
 const 时长 = (ms) => (ms >= 60000 ? (ms / 60000).toFixed(ms % 60000 ? 1 : 0) + 'min' : Math.round(ms / 1000) + 's');
 
 // ——————————————————————————————————————————————————————————
+// 凭据托管读取（施工令-030；案源 H94 补巡：deepseek 全场缺席）
+// ——————————————————————————————————————————————————————————
+// 施工令-029 把 deepseek 的 key 迁进了 DPAPI 托管（<工作区>/凭据.json），config 兼容段的
+// key 从此是空串。评审台当时没跟上，于是 seats() 的「没配全不入席」把 deepseek 静静滤掉了——
+// 不报错、不告警，只是名册里少一个人。这种失明比崩溃更贵：红队环节全场缺席都没人发现。
+//
+// 本包是**公共包**，不能假设 apps/studio 在场（协作者只拿 packages/ 的机器是常态），故三条纪律：
+//   ① creds 模块用「找得到就用、找不到就算了」的方式加载，任何 require 异常都不许冒泡；
+//   ② 托管库与 config **同工作区**：root = dirname(cfgPath)。--config 指临时副本时托管口也跟着走，
+//      演练绝不会摸到生产托管库；
+//   ③ 三级取值：托管 → config 明文 → 环境变量 REVIEW_KEY_<池名>。前两级都没有时环境变量兜底，
+//      让没有 studio、没有 DPAPI 的 CI/协作者机器照样能开评。
+const CREDS_候选 = [
+  ['..', '..', 'apps', 'studio', 'lib', 'creds.js'],   // 仓内并排布局：packages/review-panel → 仓库根
+  ['..', 'apps', 'studio', 'lib', 'creds.js'],
+];
+let _creds; // undefined=还没找过，null=找过但没有
+function 托管模块() {
+  if (_creds !== undefined) return _creds;
+  _creds = null;
+  // 注入口 REVIEW_CREDS_MODULE 是**覆盖**不是追加：设了就只认它。
+  // 追加语义会让"模拟托管不在场"变成不可能（内置候选还在，照样找得到真 creds），
+  // 于是「协作者环境」那条路径永远测不到——本机自测当场抓到（改前那一发 deepseek 仍在席）。
+  const 候选 = process.env.REVIEW_CREDS_MODULE
+    ? [path.resolve(process.env.REVIEW_CREDS_MODULE)]
+    : CREDS_候选.map((seg) => path.resolve(__dirname, ...seg));
+  for (const p of 候选) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const m = require(p);
+      if (m && typeof m.getKey === 'function' && typeof m.has === 'function') { _creds = m; break; }
+    } catch { /* 加载不了就当没有——评审台的价值是"能开评"，不是"必须有托管" */ }
+  }
+  return _creds;
+}
+const 环境变量名 = (池) => 'REVIEW_KEY_' + String(池).toUpperCase().replace(/[^A-Z0-9]/g, '_');
+
+// 单个兼容池条目的凭据解析：托管 → config → 环境变量，**字段粒度**兜底。
+// 字段粒度那一条是 029 的教训：托管里只有 key 时 base 必须回落 config，
+// 否则第三方 key 会被发到官方端点去（必 401，且密钥递给了错误的收件人）。
+function 解析凭据(name, c, root) {
+  let key = ''; let 来源 = '';
+  let base = c && c.base ? String(c.base) : '';
+  let model = (c && (c.模型 || c.model)) || '';
+  const creds = root ? 托管模块() : null;
+  if (creds && root) {
+    try {
+      if (creds.has(root, name)) {
+        const k = creds.getKey(root, name);
+        if (k) {
+          const m = (typeof creds.meta === 'function' && creds.meta(root, name)) || {};
+          key = String(k); 来源 = '托管';
+          if (m.base) base = String(m.base);
+          if (m.模型) model = m.模型;
+        }
+      }
+    } catch { /* DPAPI 挂了 / 非 Windows / PowerShell 不在 → 往下回落，不硬崩 */ }
+  }
+  if (!key && c && c.key) { key = String(c.key); 来源 = 'config'; }
+  if (!key) { const e = process.env[环境变量名(name)]; if (e && e.trim()) { key = e.trim(); 来源 = '环境变量'; } }
+  return { key, base, model, 来源 };
+}
+
+// ——————————————————————————————————————————————————————————
 // 评审团发现：codex 一席 + 每个兼容池条目一席
 // ——————————————————————————————————————————————————————————
-function seats(cfg) {
+function seats(cfg, cfgPath) {
   const list = [];
   const 模型 = cfg.模型 || {};
   list.push({ name: 'codex', kind: 'cli', model: 模型.codex默认 || '' });
+  const root = cfgPath ? path.dirname(path.resolve(cfgPath)) : null;
   const 池 = cfg.执行池 || {};
   for (const [name, p] of Object.entries(池)) {
     const c = p && p.兼容;
-    if (!c || !c.base || !c.key) continue;                 // 没配全的条目不入席（不猜、不报错）
-    remember(c.key);                                       // 一入册就登记进净化表
-    list.push({ name, kind: 'compat', base: String(c.base), key: String(c.key), model: c.模型 || c.model || '' });
+    if (!c) continue;                                      // 压根不是兼容池，跳过
+    const { key, base, model, 来源 } = 解析凭据(name, c, root);
+    if (!key || !base) continue;                           // 没配全的条目不入席（不猜、不报错）
+    remember(key);                                         // 一入册就登记进净化表
+    list.push({ name, kind: 'compat', base, key, model, 凭据来源: 来源 });
   }
   return list;
 }
@@ -369,11 +438,11 @@ function renderReport(file, results, meta) {
   remember((cfg.网络 && cfg.网络.远程 && cfg.网络.远程.令牌) || ''); // 顺手把远程令牌也纳入净化表
 
   // ③ 评审团名册
-  let team = seats(cfg);
+  let team = seats(cfg, cfgPath);
   if (args.only && args.only !== true) {
     const want = String(args.only).split(',').map((s) => s.trim()).filter(Boolean);
     team = team.filter((s) => want.includes(s.name));
-    if (!team.length) return out({ ok: false, error: `--only 点名的席位都不在名册里：${want.join(',')}（名册：${seats(cfg).map((s) => s.name).join(',')}）` });
+    if (!team.length) return out({ ok: false, error: `--only 点名的席位都不在名册里：${want.join(',')}（名册：${seats(cfg, cfgPath).map((s) => s.name).join(',')}）` });
   }
   const 名册 = team.map((s) => s.name);
   // ③′ 立场卷派发（施工令-019）：按在册席序轮换，单厂在席即独领三卷
@@ -383,7 +452,9 @@ function renderReport(file, results, meta) {
     return out({
       ok: true, 评审团: 名册, 意见数: 0, out: null, dry: true,
       立场卷: Object.fromEntries(team.map((s) => [s.name, s.卷组.map((x) => x.名)])),
-      席位: team.map((s) => ({ 名: s.name, 类型: s.kind, 模型: s.model || '（默认）', 领卷: 卷名(s.卷组) })),
+      // 凭据来源摆进 dry 名册（施工令-030）："deepseek 在席"与"deepseek 从哪取的 key"是两件事，
+      // 只报前者的话，托管挂了悄悄回落 config 明文也看不出来。key 本身不出现。
+      席位: team.map((s) => ({ 名: s.name, 类型: s.kind, 模型: s.model || '（默认）', 领卷: 卷名(s.卷组), 凭据: s.凭据来源 || '—' })),
     });
   }
 
