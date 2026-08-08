@@ -13,11 +13,13 @@
 //   node watchtower.js --install [--task-name 瞭望塔] [--no-vbs]   注册登录自启计划任务
 //   node watchtower.js --uninstall [--task-name 瞭望塔]            反注册
 //
-// 四路信源：
+// 五路信源：
 //   ① 流水 —— tail 部署区 journal/<当月>.log（月切自动跟随，新月从头读）
 //   ② 信箱 —— tail 部署区 呼叫/inbox.jsonl
 //   ③ 时钟 —— 规则表 时钟[] 里的定点（默认 09:03 晨报 / 23:26 晚报 / 00:00 切夜班）
 //   ④ 心跳 —— 每 5 分钟探 /api/board，连续两次非 200 → 「监制台失联」，恢复后报「监制台恢复」
+//   ⑤ 远端 —— 每 5 分钟对仓清单 git fetch --all --prune（只动 refs，不碰工作区、不 pull/merge），
+//              比对上轮快照报 新提交 / 新分支 / 删分支；触及 docs/ 下 交接·回执·信道 类 md 的另标「信道文书」
 //
 // 两个输出（落部署区 瞭望塔/ 子目录，本进程只写这里，AI-GameStudio 其余一律只读）：
 //   瞭望塔流水.log —— 统一事件流，一行一事件带信源标（总监会话唯一 tail 对象）
@@ -38,6 +40,7 @@ const { spawn, spawnSync } = require('child_process');
 const 默认部署区 = 'D:/GitHub/AI-GameStudio/监制台';
 const 默认心跳地址 = 'http://127.0.0.1:4270/api/board';
 const 默认任务名 = '瞭望塔';
+const 默认远端仓 = 'D:/GitHub/Ticketflow';
 const REDACT = '***已抹除***';
 const 余量上限 = 1 << 20;                       // 单条未完行超 1MB 视为脏数据，丢弃不撑爆内存
 
@@ -77,10 +80,16 @@ const 单行 = (s) => scrub(String(s === undefined || s === null ? '' : s)).repl
 // ——————————————————————————————————————————————————————————
 // 默认规则表（部署时 规则.json 可整体覆盖；首匹配优先，无匹配落兜底）
 // ——————————————————————————————————————————————————————————
+const 默认远端 = { 启用: true, 间隔毫秒: 300000, 超时毫秒: 60000, 仓清单: [默认远端仓] };
 const 默认规则表 = {
   轮询毫秒: 1000,
   心跳: { 地址: 默认心跳地址, 间隔毫秒: 300000, 超时毫秒: 5000, 连续失败阈值: 2 },
+  远端: 默认远端,
   规则: [
+    // 远端三条摆最前：信源=远端，与其余信源互不干扰；「信道文书」必须先于「新提交」命中
+    { 名: '远端信道文书', 信源: '远端', 正则: '信道文书', 级别: '急', 动作: ['记流水', '记未读', '弹通知'] },
+    { 名: '远端分支变动', 信源: '远端', 正则: '新分支|删分支', 级别: '常', 动作: ['记流水', '记未读'] },
+    { 名: '远端新提交', 信源: '远端', 正则: '新提交', 级别: '常', 动作: ['记流水', '记未读'] },
     { 名: '急件', 信源: '信箱', 正则: '级别=急', 级别: '急', 动作: ['记流水', '记未读', '弹通知'] },
     { 名: '三振上呈', 信源: '*', 正则: '三振|上呈|待裁|代核不过', 级别: '急', 动作: ['记流水', '记未读', '弹通知'] },
     { 名: '监制台失联', 信源: '心跳', 正则: '失联', 级别: '急', 动作: ['记流水', '记未读', '弹通知'] },
@@ -203,6 +212,114 @@ function 心跳判定(状态, 通) {
   状态.连续失败 = (状态.连续失败 || 0) + 1;
   if (状态.连续失败 >= (状态.阈值 || 2) && !状态.已报失联) { 状态.已报失联 = true; return '监制台失联'; }
   return null;
+}
+
+// ——————————————————————————————————————————————————————————
+// 信源⑤远端：只 fetch 侦察，绝不 pull/merge/push；git fetch 只写 .git/refs，工作区零改动。
+// 下面几个是纯函数（可单测），真正起 git 进程的部分在 守望() 里。
+// ——————————————————————————————————————————————————————————
+const 远端短名 = (ref) => String(ref || '').replace(/^refs\/remotes\//, '');
+const 短sha = (s) => String(s || '').slice(0, 7);
+
+// `git for-each-ref --format=%(objectname) %(refname) refs/remotes` 的输出 → { ref: sha }
+// origin/HEAD 是符号引用（跟着默认分支飘），不算分支，滤掉免得误报「新分支/删分支」。
+function 解析远端refs(文本) {
+  const 出 = {};
+  for (const 行 of String(文本 || '').split(/\r?\n/)) {
+    const m = /^([0-9a-f]{7,40})\s+(refs\/remotes\/\S+)$/i.exec(行.trim());
+    if (!m) continue;
+    if (/\/HEAD$/.test(m[2])) continue;
+    出[m[2]] = m[1];
+  }
+  return 出;
+}
+
+// 「信道文书」= docs/ 下、路径里带 交接 / 回执 / 信道 的 md（子目录名或文件名带都算）
+function 是信道文书(路径) {
+  const s = String(路径 || '').replace(/\\/g, '/');
+  if (!/\.md$/i.test(s)) return false;
+  const m = /(?:^|\/)docs\/(.+)$/i.exec(s);
+  if (!m) return false;
+  return /交接|回执|信道/.test(m[1]);
+}
+
+// 上轮快照 vs 本轮快照 → 三类差异（键排序输出，事件顺序稳定可测）
+function 比对远端(旧, 新) {
+  const a = (旧 && typeof 旧 === 'object') ? 旧 : {};
+  const b = (新 && typeof 新 === 'object') ? 新 : {};
+  const 新提交 = []; const 新分支 = []; const 删分支 = [];
+  for (const k of Object.keys(b).sort()) {
+    if (!Object.prototype.hasOwnProperty.call(a, k)) 新分支.push({ ref: k, 新: b[k] });
+    else if (a[k] !== b[k]) 新提交.push({ ref: k, 旧: a[k], 新: b[k] });
+  }
+  for (const k of Object.keys(a).sort()) {
+    if (!Object.prototype.hasOwnProperty.call(b, k)) 删分支.push({ ref: k, 旧: a[k] });
+  }
+  return { 新提交, 新分支, 删分支 };
+}
+
+// 差异 + 每个 ref 触及的文件表 → 事件（一 ref 一事件；带信道文书的整条升格标「信道文书」，
+// 不再另发一条新提交——同一件事发两遍等于刷屏）
+function 远端事件(仓名, 差异, 文件表) {
+  const 表 = 文件表 || {};
+  const 文书 = (ref) => (Array.isArray(表[ref]) ? 表[ref] : []).filter(是信道文书);
+  const 出 = [];
+  for (const it of (差异.新分支 || [])) {
+    const d = 文书(it.ref);
+    出.push({
+      种类: d.length ? '信道文书' : '新分支',
+      ref: it.ref,
+      文本: d.length
+        ? `信道文书 ${仓名} ${远端短名(it.ref)}（新分支 ${短sha(it.新)}）触及 ${d.join('、')}`
+        : `新分支 ${仓名} ${远端短名(it.ref)}（${短sha(it.新)}）`,
+    });
+  }
+  for (const it of (差异.新提交 || [])) {
+    const d = 文书(it.ref);
+    出.push({
+      种类: d.length ? '信道文书' : '新提交',
+      ref: it.ref,
+      文本: d.length
+        ? `信道文书 ${仓名} ${远端短名(it.ref)} ${短sha(it.旧)}..${短sha(it.新)} 触及 ${d.join('、')}`
+        : `新提交 ${仓名} ${远端短名(it.ref)} ${短sha(it.旧)}..${短sha(it.新)}`,
+    });
+  }
+  for (const it of (差异.删分支 || [])) {
+    出.push({ 种类: '删分支', ref: it.ref, 文本: `删分支 ${仓名} ${远端短名(it.ref)}（原 ${短sha(it.旧)}）` });
+  }
+  return 出;
+}
+
+// 目录是不是个能 fetch 的 git 仓（工作仓看 .git，bare 仓看 HEAD + refs）
+function 是git仓(p) {
+  try {
+    if (!p || !fs.existsSync(p) || !fs.statSync(p).isDirectory()) return false;
+    if (fs.existsSync(path.join(p, '.git'))) return true;
+    return fs.existsSync(path.join(p, 'HEAD')) && fs.existsSync(path.join(p, 'refs'));
+  } catch { return false; }
+}
+
+// 跑一条 git 子命令（异步、带超时）。两处坑各钉一颗钉：
+//   core.quotepath=false —— 默认 git 会把非 ASCII 路径转义成 "docs/\344\272\244..."，
+//     信道文书全是中文名，不关这个开关一个都认不出来（实测定谳：施工令-023 首轮 5 例挂在这）；
+//   GIT_TERMINAL_PROMPT=0 —— 认证失败直接退，不然网络一断就卡在凭据交互上，守护整条腿被拖住。
+function 跑git(仓, 参数, 超时毫秒, 完成) {
+  let 收 = false; let child = null;
+  const 收线 = (码, 出) => { if (收) return; 收 = true; clearTimeout(闸); 完成(码, 出); };
+  const 闸 = setTimeout(() => { try { child && child.kill(); } catch { /* 已死 */ } 收线(-1, `git 超时 ${超时毫秒}ms`); },
+    Math.max(1000, Number(超时毫秒) || 60000));
+  try {
+    child = spawn('git', ['-c', 'core.quotepath=false', '-C', 仓].concat(参数), {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: Object.assign({}, process.env, { GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo', GCM_INTERACTIVE: 'never' }),
+    });
+  } catch (e) { return 收线(-1, 'git 起不来：' + (e && e.message)); }
+  let so = ''; let se = '';
+  child.stdout.setEncoding('utf8'); child.stdout.on('data', (d) => { so += d; });
+  child.stderr.setEncoding('utf8'); child.stderr.on('data', (d) => { se += d; });
+  child.on('error', (e) => 收线(-1, 'git 异常：' + (e && e.message)));
+  child.on('close', (码) => 收线(码, 码 === 0 ? so : (se || so)));
 }
 
 // ——————————————————————————————————————————————————————————
@@ -529,6 +646,7 @@ function 组装环境(参数) {
     账本: path.join(出口, '未读账本.jsonl'),
     水位: path.join(出口, '账本水位.json'),
     游标: path.join(出口, '游标.json'),
+    远端游标: path.join(出口, '远端游标.json'),
     pid: path.join(出口, 'watchtower.pid'),
     通知回落: path.join(出口, '通知回落.log'),
     警告,
@@ -543,9 +661,14 @@ function 载规则(环境) {
   } else 警告.push(`规则表不存在，用内置默认：${环境.规则路径}`);
   const 基 = 表 || 默认规则表;
   const 心跳基 = Object.assign({}, 默认规则表.心跳, 基['心跳'] || {}, 环境.配置['心跳'] || {});
+  const 远端基 = Object.assign({}, 默认远端, 基['远端'] || {}, 环境.配置['远端'] || {});
+  const 单仓 = 远端基['仓清单'];
+  远端基['仓清单'] = (typeof 单仓 === 'string' ? [单仓] : (Array.isArray(单仓) ? 单仓 : []))
+    .map((s) => String(s || '').trim()).filter(Boolean);
   return {
     轮询毫秒: Math.max(200, Number(环境.配置['轮询毫秒'] || 基['轮询毫秒'] || 1000)),
     心跳: 心跳基,
+    远端: 远端基,
     规则: Array.isArray(基['规则']) ? 基['规则'] : 默认规则表.规则,
     时钟: Array.isArray(基['时钟']) ? 基['时钟'] : 默认规则表.时钟,
     警告,
@@ -586,6 +709,7 @@ function 守望(环境, 参数) {
     try { const cur = 读pid(环境.pid); if (cur && Number(cur.pid) === process.pid) fs.unlinkSync(环境.pid); } catch { /* 无妨 */ }
     // 若在游标变量初始化前就走到收摊（启动早期异常），这里会撞 TDZ——退出路径上不许再炸
     try { 存游标(); } catch { /* 游标没存上，下次冷启从文件尾续，不致命 */ }
+    try { 存远端游标(); } catch { /* 同上 */ }
     if (因) 报(`收摊（${因}）`);
   };
   process.on('exit', () => 收摊(''));
@@ -609,6 +733,17 @@ function 守望(环境, 参数) {
         存于: 时刻串(现在()),
       }, null, 2));
       游标脏 = false;
+    } catch { /* 下轮再存 */ }
+  }
+
+  // —— 远端游标（每仓一份 refs 快照；重启不重报）——
+  const 远端游标 = (() => { const j = 载JSON(环境.远端游标); return (j && typeof j['仓'] === 'object' && j['仓']) ? j['仓'] : {}; })();
+  let 远端游标脏 = false;
+  function 存远端游标() {
+    if (!远端游标脏) return;
+    try {
+      写文件原子(环境.远端游标, JSON.stringify({ 仓: 远端游标, 存于: 时刻串(现在()) }, null, 2));
+      远端游标脏 = false;
     } catch { /* 下轮再存 */ }
   }
 
@@ -682,6 +817,91 @@ function 守望(环境, 参数) {
     req.on('error', (e) => 判(false, (e && e.code) || (e && e.message) || '连接失败'));
   }
 
+  // —— 信源⑤远端 ——
+  let 远端下次 = 0;                                        // 0 = 开机即侦察一次
+  let 远端在途 = false;
+  const 远端不通态 = new Map();                            // 仓 → 是否已报「暂歇」，只在状态翻转时留一行痕
+
+  // 网络断/仓不在 = 跳过本轮，不当事件报（施工令-023 第 1 条「静默容错」）。
+  // 但状态翻转各留一行守望级流水，方便事后查「什么时候断的、什么时候续上的」。
+  function 远端暂歇(仓, 因) {
+    if (远端不通态.get(仓)) return;
+    远端不通态.set(仓, true);
+    记流水('守望', '常', '远端暂歇', `${path.basename(仓)} fetch 不通，跳过本轮（${单行(因).slice(0, 200)}）`);
+  }
+  function 远端复通(仓) {
+    if (!远端不通态.get(仓)) return;
+    远端不通态.set(仓, false);
+    记流水('守望', '常', '远端复通', `${path.basename(仓)} fetch 已恢复，续侦察`);
+  }
+
+  // 取某个 ref 本轮新提交触及的文件：已知旧点走两点 diff；全新分支只看分支顶端那次提交
+  function 取触及文件(仓, 超时, 项, 是新分支, 完成) {
+    const 参数 = 是新分支
+      ? ['show', '--name-only', '--pretty=format:', 项.新]
+      : ['diff', '--name-only', 项.旧, 项.新];
+    跑git(仓, 参数, 超时, (码, 出) => {
+      if (码 !== 0) return 完成([]);                        // 旧点被 gc 掉等情况：文件表算空，事件照发
+      完成(String(出 || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean));
+    });
+  }
+
+  function 扫一仓(仓, 超时, 完成) {
+    if (!是git仓(仓)) { 远端暂歇(仓, '不是 git 仓或目录不存在'); return 完成(); }
+    // 只 fetch，不 pull/merge——工作区一个字节不动
+    跑git(仓, ['fetch', '--all', '--prune', '--quiet'], 超时, (码, 出) => {
+      if (码 !== 0) { 远端暂歇(仓, 出); return 完成(); }
+      远端复通(仓);
+      跑git(仓, ['for-each-ref', '--format=%(objectname) %(refname)', 'refs/remotes'], 超时, (码2, 出2) => {
+        if (码2 !== 0) { 远端暂歇(仓, 出2); return 完成(); }
+        const 新refs = 解析远端refs(出2);
+        const 旧格 = 远端游标[仓];
+        const 旧refs = (旧格 && typeof 旧格.refs === 'object') ? 旧格.refs : null;
+        const 落账 = () => {
+          远端游标[仓] = { refs: 新refs, 更新于: 时刻串(现在()) };
+          远端游标脏 = true;
+          存远端游标();
+        };
+        if (!旧refs) {                                     // 首见此仓：只立基线，不把满仓分支当「新分支」报一遍
+          落账();
+          记流水('守望', '常', '远端建基线', `${path.basename(仓)}：首轮快照 ${Object.keys(新refs).length} 个远端分支`);
+          return 完成();
+        }
+        const 差 = 比对远端(旧refs, 新refs);
+        const 待查 = (差.新分支 || []).map((it) => ({ 项: it, 新: true }))
+          .concat((差.新提交 || []).map((it) => ({ 项: it, 新: false })));
+        const 文件表 = {};
+        const 下一个 = (i) => {
+          if (i >= 待查.length) {
+            const 事件们 = 远端事件(path.basename(仓), 差, 文件表);
+            for (const ev of 事件们) 派发('远端', 匹配规则(规则表.规则, '远端', ev.文本, 规则警告), ev.文本, '');
+            落账();                                         // 事件先落地再推游标，中途崩了下轮还会重算
+            return 完成();
+          }
+          const it = 待查[i];
+          取触及文件(仓, 超时, it.项, it.新, (files) => { 文件表[it.项.ref] = files; 下一个(i + 1); });
+        };
+        下一个(0);
+      });
+    });
+  }
+
+  function 巡远端() {
+    if (远端在途) return;
+    const 配 = 规则表.远端 || 默认远端;
+    const 仓们 = Array.isArray(配['仓清单']) ? 配['仓清单'] : [];
+    if (!仓们.length) return;
+    const 超时 = Number(配['超时毫秒']) || 60000;
+    远端在途 = true;
+    const 走 = (i) => {
+      if (i >= 仓们.length) { 远端在途 = false; return; }
+      let 走过 = false;
+      try { 扫一仓(path.resolve(仓们[i]), 超时, () => { if (走过) return; 走过 = true; 走(i + 1); }); }
+      catch (e) { 报('远端侦察异常：' + (e && e.message)); if (!走过) { 走过 = true; 走(i + 1); } }
+    };
+    走(0);                                                 // 逐仓串行，别一口气拉起十个 git 进程
+  }
+
   // —— 一轮 ——
   function 一轮() {
     // 规则表热更（改了立刻生效，不用重启守护）
@@ -733,16 +953,36 @@ function 守望(环境, 参数) {
       探心跳();
     }
 
+    // 信源⑤远端
+    const 远端配 = 规则表.远端 || 默认远端;
+    if (远端配['启用'] !== false && Date.now() >= 远端下次) {
+      远端下次 = Date.now() + (Number(远端配['间隔毫秒']) || 300000);
+      巡远端();
+    }
+
     // 坏正则警告去重后入流水
     while (规则警告.length) 记流水('守望', '常', '规则告警', 规则警告.shift());
     存游标();
+    存远端游标();
   }
 
-  记流水('守望', '常', '瞭望塔上岗', `pid ${process.pid} · 部署区 ${环境.根} · 规则表 ${环境.规则路径} · 配置 ${环境.配置来源} · 轮询 ${规则表.轮询毫秒}ms`);
+  const 远端播报 = (规则表.远端 && 规则表.远端['启用'] !== false && (规则表.远端['仓清单'] || []).length)
+    ? `${(规则表.远端['仓清单'] || []).length} 仓 / ${Number(规则表.远端['间隔毫秒']) || 300000}ms`
+    : '停用';
+  记流水('守望', '常', '瞭望塔上岗', `pid ${process.pid} · 部署区 ${环境.根} · 规则表 ${环境.规则路径} · 配置 ${环境.配置来源} · 轮询 ${规则表.轮询毫秒}ms · 远端 ${远端播报}`);
   for (const w of 环境.警告.concat(规则表.警告)) 记流水('守望', '常', '启动告警', w);
 
-  // --once：跑一轮就走（实测用；留 1.5s 让心跳/通知的异步回调收线）
-  if (参数.once) { 一轮(); setTimeout(() => { 收摊('--once'); process.exit(0); }, 1500); return; }
+  // --once：跑一轮就走（实测用；留 1.5s 让心跳/通知的异步回调收线；远端 fetch 在途则多等，上限 30s）
+  if (参数.once) {
+    一轮();
+    const 起 = Date.now();
+    const 等收 = () => {
+      if (远端在途 && Date.now() - 起 < 30000) return void setTimeout(等收, 200);
+      setTimeout(() => { 收摊('--once'); process.exit(0); }, 1500);
+    };
+    等收();
+    return;
+  }
   一轮();
   setInterval(() => { try { 一轮(); } catch (e) { 报('轮询异常：' + (e && e.message)); } }, 规则表.轮询毫秒);
 }
@@ -809,6 +1049,17 @@ function main(argv) {
       未读: 未读筛(读账本(环境.账本), 读水位(环境.水位)).length,
       水位: 读水位(环境.水位) || '(未清过账)',
       游标: 载JSON(环境.游标) || null,
+      远端: (() => {
+        const 配 = 载规则(环境).远端;
+        const j = 载JSON(环境.远端游标);
+        const 仓 = (j && j['仓']) || {};
+        return {
+          启用: 配['启用'] !== false,
+          间隔毫秒: Number(配['间隔毫秒']) || 300000,
+          仓清单: 配['仓清单'],
+          快照: Object.keys(仓).map((k) => ({ 仓: k, 分支数: Object.keys((仓[k] && 仓[k].refs) || {}).length, 更新于: (仓[k] && 仓[k]['更新于']) || '' })),
+        };
+      })(),
     });
   }
 
@@ -820,8 +1071,9 @@ if (require.main === module) main(process.argv.slice(2));
 
 module.exports = {
   解析参数, 取值, scrub, 单行, 当月日志名, 日期串, 时刻串,
-  匹配规则, 兜底规则, 默认规则表, 规范流水, 规范信箱,
+  匹配规则, 兜底规则, 默认规则表, 默认远端, 规范流水, 规范信箱,
   新尾随, 尾随读, 心跳判定, 时钟到点,
+  远端短名, 短sha, 解析远端refs, 是信道文书, 比对远端, 远端事件, 是git仓, 跑git,
   读账本, 追加账本, 未读筛, 读水位, 写水位, 写文件原子,
   组装环境, 载规则, 任务XML, 通知脚本, 进程还活着,
 };
