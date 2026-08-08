@@ -33,6 +33,16 @@ function isSim(opts) { return opts && opts.durMs != null; }
 // 顺序：托管库（<root>/凭据.json，DPAPI 密文）> config 内联 兼容 段（旧路径，保兼容）。
 // 订阅池永远返回 null——它们的凭据归 CLI 自己管，app 一个字节都不存（路 B 的核心红利）。
 function 凭据Of(root, cfg, poolName) {
+  // codex 实测定谳（2026-08-08，施工令-021 收尾验证）：codex CLI **完全无视**
+  // ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN——注入垃圾令牌 + 非法 base 后
+  // `codex exec` 仍退出 0 正常作答，走的是它自己的 ~/.codex 登录态。
+  // 若这里为 codex 池返回凭据，runner 会照常注入、codex 照常忽略，后果是双重错误且完全静默：
+  //   ① 用户以为在按量池上跑，实际在烧订阅；
+  //   ② 预算闸因 codex 非 stream-json 取不到 usage，永远不累计、永不触发。
+  // 故 codex 池一律不托管，并由 startWork 显式失败——宁可响亮地拒派，不要静默地跑错池。
+  // 注：池名 'codex-key' 不走这条——resolveCli 只把**恰好叫 codex** 的池路由到 codex CLI，
+  // 别的名字一律走 claude CLI（命名陷阱，改 resolveCli 前先读这段）。
+  if (poolName === 'codex') return null;
   try {
     const creds = require('./creds');
     if (creds.has(root, poolName)) {
@@ -520,6 +530,17 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   const 档 = roster.modelFor(cfg, t.fm.职能, poolName); // H85 补章：档挂在 职能×池 上，不再按人头查
   const model = kind === '初检' ? (两检cfg.模型 || 'deepseek-v4-flash') : pickModel(cfg, kind, 档, poolName, t.fm.职能);
   const compat = (kind === '执行' || kind === '初检') ? 凭据Of(root, cfg, poolName) : null;
+  // 响亮拒派（2026-08-08 实测）：给 codex 池配了托管 key / 内联兼容段，说明制作人**以为**
+  // 它会按量跑。codex 会忽略注入照跑订阅——静默跑错池比拒派危险得多，这里直接失败。
+  if (poolName === 'codex' && (kind === '执行' || kind === '初检')) {
+    const 有托管 = (() => { try { return require('./creds').has(root, 'codex'); } catch { return false; } })();
+    const 有内联 = !!((cfg.执行池 || {}).codex || {}).兼容;
+    if (有托管 || 有内联) {
+      failLocal('codex 池配了 key 但 codex CLI 无视 ANTHROPIC_* 环境变量（2026-08-08 实测）——'
+        + '照跑会静默落在订阅登录态上且预算闸失效。请改用 claude 家族的按量池，或撤掉 codex 的托管凭据');
+      return true;
+    }
+  }
   const { cmd, args, stream } = resolveCli((kind === '执行' || kind === '初检') ? poolName : 'claude', compat ? (kind === '初检' ? model : (compat.模型 || model)) : model, (cfg.执行器 || {}).放行工具); // 质检/代核/代裁走 claude
   const receiptPath = path.join(root, '回执', `${t.id}.md`);
   const prompt = kind === '质检' ? buildQaPrompt(root, t, proj, receiptPath)
