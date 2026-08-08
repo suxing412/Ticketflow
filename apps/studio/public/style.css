@@ -15,7 +15,9 @@
      --accenttint 是在做条的实心底（原代码里写的 --accentbg 从未定义过，一直静默回落成透明）。 */
   --now:#9E5412; --nowtint:rgba(158,84,18,.07); --accenttint:rgba(79,70,229,.10);
   --mono:"Roboto Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
-  --fn-plan:#4F46E5; --fn-code:#0D7A5F; --fn-art:#A16207; --fn-qa:#4B5563; --fn-asm:#0E7490;
+  /* 技术策划（施工令-028 范围 5 / 027 报备件）：李子紫——与策划的靛蓝同族异色（是策划的技术分支），
+     避开程序绿与装配青。对暖纸 #FAFAF8 实测 6.13:1，与策划 6.02 同档。 */
+  --fn-plan:#4F46E5; --fn-tplan:#9333A8; --fn-code:#0D7A5F; --fn-art:#A16207; --fn-qa:#4B5563; --fn-asm:#0E7490;
   --pool-claude:#6B5BC7; --pool-codex:#2E7D5B;
   --on-accent:#fff; --st-review-bg:#4B5563; --st-done-bg:#EAE9E4;
   --mask:rgba(26,29,33,.28); --mask-strong:rgba(58,60,64,.5);
@@ -45,7 +47,7 @@ html[data-theme="glass"] {
   --now:#FF9D4D; --nowtint:rgba(255,157,77,.08); --accenttint:rgba(110,99,255,.12); /* 夜间取设计稿定稿值 */
   --sect:rgba(255,255,255,.04); --chip:rgba(255,255,255,.09); --we:rgba(255,255,255,.06);
   --inbg:rgba(255,255,255,.05); --gatebg:rgba(232,180,90,.12); --gateln:rgba(232,180,90,.35); --gatetx:#E8B45A;
-  --fn-plan:#8F84FF; --fn-code:#2FD6A0; --fn-art:#E8B45A; --fn-qa:#9BA6B5; --fn-asm:#4CC3E0;
+  --fn-plan:#8F84FF; --fn-tplan:#D08BE8; --fn-code:#2FD6A0; --fn-art:#E8B45A; --fn-qa:#9BA6B5; --fn-asm:#4CC3E0; /* 技术策划夜值对 #0B0D10 实测 7.91:1 */
   --pool-claude:#9D8FFF; --pool-codex:#3ED6A8;
   --on-accent:#fff; --st-review-bg:#8A93A5; --st-done-bg:rgba(255,255,255,.08);
   --mask:rgba(0,0,0,.5); --mask-strong:rgba(0,0,0,.65);
@@ -141,7 +143,7 @@ input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outlin
   border-radius:999px; font-size:11.5px; font-weight:500; background:var(--chip); color:var(--ink); white-space:nowrap; }
 .pill.sm { height:24px; font-size:11px; padding:0 10px; }
 .pill.fn { background:var(--sect); }
-.pill.fn-plan { color:var(--fn-plan);} .pill.fn-code { color:var(--fn-code);}
+.pill.fn-plan { color:var(--fn-plan);} .pill.fn-tplan { color:var(--fn-tplan);} .pill.fn-code { color:var(--fn-code);}
 .pill.fn-art { color:var(--fn-art);} .pill.fn-qa { color:var(--fn-qa);} .pill.fn-asm { color:var(--fn-asm);}
 .pill.st-doing { background:var(--ink); color:var(--paper); }
 .pill.st-review { background:var(--st-review-bg); color:var(--paper); }
@@ -187,11 +189,10 @@ input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outlin
 .paramcard .stepper button { transition:border-color 150ms var(--ease-out), color 150ms var(--ease-out), transform 100ms var(--ease-out); }
 .paramcard .stepper button:active { transform:scale(.9); }
 /* 可点卡片：悬停轻抬 2px + 浅影——"这块能进去"的物理暗示 */
-.bcard2, .inbox-row, .trow2 { transition:transform 150ms var(--ease-out), border-color 150ms var(--ease-out),
+.bcard2, .inbox-row { transition:transform 150ms var(--ease-out), border-color 150ms var(--ease-out),
   box-shadow 150ms var(--ease-out), background 150ms var(--ease-out); }
 .bcard2:hover, .inbox-row:hover { transform:translateY(-2px); box-shadow:var(--shadow-md); }
 .bcard2:active, .inbox-row:active { transform:translateY(0); box-shadow:none; }
-.trow2:hover { background:var(--we); }
 
 /* ===== 状态层 ===== */
 /* 视图切换：仅路由变化时 180ms 淡入上移一次（脉冲刷新不闪） */
@@ -239,7 +240,7 @@ input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outlin
 @media (prefers-reduced-motion: reduce) {
   .vin, .gsr, .modal2, .bump, #run-dot.on, #run-dot.on.live, .ghosting, .tlseg, .dot.breathe-warn, .dot.breathe-err { animation:none; }
   .bcard2:hover, .inbox-row:hover, .hubcard:hover, .gear:active, .backbtn:active, .paramcard .stepper button:active { transform:none; }
-  .snav a, .btn, .gear, .backbtn, .paramcard .egbtn, .paramcard .stepper button, .bcard2, .inbox-row, .trow2, .hubcard, .searchbox input { transition-duration:.01s; }
+  .snav a, .btn, .gear, .backbtn, .paramcard .egbtn, .paramcard .stepper button, .bcard2, .inbox-row, .hubcard, .searchbox input { transition-duration:.01s; }
 }
 
 /* ===== P0 项目启动页（D42 多项目视界）===== */
@@ -491,50 +492,32 @@ a.gear { text-decoration:none; }
 @keyframes lvpulse { 50% { opacity:.4; } }
 @media (prefers-reduced-motion: reduce) { .lv-seg i { animation:none !important; } }
 
-/* ===== P10 树形 ===== */
-.ttools { display:flex; gap:12px; align-items:center; margin-top:24px; }
-/* 工具条下拉：药丸化，向胶囊导航看齐；弹出层用份内令牌入夜（原生弹层不吃 html 级 color-scheme 的兜底） */
-.ttools select { height:32px; border-radius:999px; padding:0 14px; font-size:12px; font-weight:500;
-  background:var(--chip); border:1px solid transparent; cursor:pointer; }
-.ttools select:hover { border-color:var(--ink3); }
+/* ===== P10 树形 · 已退役（施工令-028）=====
+   .ttools / .tree2 / .trow2 族 / .twist2 / .tid2 / .tt2 / .kids / .mid / .prog / .acts /
+   .mini3 / .accept-mini / .tree-note 全部随视图删除。下面三条 select 规则**不是树形的**——
+   它们是全站原生下拉的暗色兜底（起草页职能/产出物/规模、模型选择器等 10 处仍在用），
+   当年只是碰巧写在这一段里，退役时留下。 */
 select { color-scheme:light; }
 html[data-theme="glass"] select { color-scheme:dark; }
 select option, select optgroup { background:var(--paper); color:var(--ink); }
-.ttools .cnt { margin-left:auto; font-family:var(--mono); font-size:12px; color:var(--ink3); font-weight:500; }
-.tree2 { margin-top:20px; }
-/* 施工令-012 / 巡礼 P2-4：行内原先固定像素混排（.mid left:520px、.prog right:150px、
-   .accept-mini right:20px）与流式的 .twist2+.tid2+.tt2+.kids 无任何互斥保证——860px（Electron
-   minWidth）实测 21 行全中、.mid×.prog 重叠 94px，不透明胶囊直接盖住进度条。
-   改流式：左段（折叠钮/单号/标题/子单数）可压缩，右段（胶囊/进度/操作）靠 .mid 的 margin-left:auto
-   顶到右缘，标题 flex-basis:0 优先让位——窄窗只截标题，永不重叠。改列宽也不用再同步三处常量。 */
-.trow2 { display:flex; align-items:center; gap:10px; border-radius:12px; margin-bottom:10px; padding:0 20px; }
-.trow2.parent { background:var(--sect); height:60px; }
-.trow2.leaf { background:var(--card); border:1px solid var(--line); height:56px; }
-.trow2.lv1 { margin-left:48px; }
-.trow2.lv2 { margin-left:96px; } /* D43 三层：总单→阶段父单→碎单 */
-.trow2.lv3 { margin-left:144px; }
-.trow2 .twist2 { width:24px; color:var(--ink3); cursor:pointer; user-select:none; font-size:13px; flex-shrink:0; }
-.trow2 .twist2.none { color:var(--line); cursor:default; }
-.trow2 .tid2 { font-family:var(--mono); font-size:11.5px; color:var(--ink3); width:64px; flex-shrink:0; }
-.trow2 .tt2 { font-size:14px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  flex:1 1 0; min-width:0; max-width:300px; }
-.trow2.parent .tt2 { font-size:15px; font-weight:700; }
-.trow2 .kids { font-family:var(--mono); font-size:11px; color:var(--ink3); flex:none; white-space:nowrap; }
-.trow2 .mid { margin-left:auto; display:flex; align-items:center; gap:8px; flex:none; }
-.trow2 .prog { display:flex; align-items:center; gap:12px; flex:none; }
-.trow2 .prog .bar { width:90px; height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
-.trow2.leaf .prog .bar { background:var(--sect); }
-.trow2 .prog .bar i { display:block; height:100%; background:var(--ok); }
-.trow2 .prog .pv { font-family:var(--mono); font-size:11px; color:var(--ink2); font-weight:500; width:36px; }
-/* 悬停操作区留在流内（opacity 切换而非 display）：位置常驻＝右缘不抖，也不再需要给它手工预留 150px */
-.trow2 .acts { display:flex; gap:8px; flex:none; opacity:0; transition:opacity .12s; }
-.trow2:hover .acts { opacity:1; }
-.mini3 { display:inline-flex; align-items:center; height:26px; padding:0 10px;
-  border-radius:13px; font-size:11px; font-weight:500; background:var(--card); border:1px solid var(--line); color:var(--ink2); }
-.mini3:hover { border-color:var(--ink3); color:var(--ink); }
-.accept-mini { display:inline-flex; flex:none; white-space:nowrap; align-items:center; height:26px; padding:0 10px;
-  border-radius:13px; font-size:11px; font-weight:500; background:var(--okbg); border:1px solid var(--okln); color:var(--ok); }
-.tree-note { font-size:11px; color:var(--ink3); margin-top:14px; }
+
+/* ===== 子单表格（施工令-028：树形的「子单层级一览」迁入父单详情页）=====
+   体例跟随详情页现有 .p8main 卡：整行可点、悬停有底、窄窗横向滚动而不是撑破页面。 */
+.kidtbl-wrap { margin-top:10px; overflow-x:auto; }
+.kidtbl { width:100%; border-collapse:collapse; font-size:12.5px; }
+.kidtbl th { text-align:left; font-size:11px; font-weight:500; color:var(--ink3); padding:0 10px 6px 0; white-space:nowrap; border-bottom:1px solid var(--sect); }
+.kidtbl td { padding:8px 10px 8px 0; border-bottom:1px solid var(--sect); vertical-align:middle; }
+.kidtbl tbody tr { cursor:pointer; }
+.kidtbl tbody tr:hover td { background:var(--sect); }
+.kidtbl tbody tr:last-child td { border-bottom:none; }
+.kidtbl .kid-id { font-size:11.5px; color:var(--ink3); white-space:nowrap; }
+.kidtbl .kid-t { font-weight:500; max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.kidtbl .kid-pool { font-size:11px; color:var(--ink3); white-space:nowrap; }
+.kidtbl .kid-p { white-space:nowrap; }
+.kidtbl .kid-p .bar { display:inline-block; width:72px; height:6px; background:var(--sect); border-radius:3px; overflow:hidden; vertical-align:middle; }
+.kidtbl .kid-p .bar i { display:block; height:100%; background:var(--ok); }
+.kidtbl .kid-p .pv { font-family:var(--mono); font-size:11px; color:var(--ink2); font-weight:500; margin-left:8px; }
+@media (max-width:860px) { .kidtbl .kid-t { max-width:150px; } .kidtbl .kid-p .bar { width:44px; } }
 
 /* ===== P3 在途 · 在跑卡（施工令-004 设计稿定稿）=====
    制作人 14:57 裁决：不点详情就要看见执行进度与百分比。百分比是这张卡的主角，
@@ -862,7 +845,6 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
   .prow { flex-wrap:wrap; row-gap:6px; }
   .rl-wrap { min-height:calc(100vh - 150px); margin-top:12px; }
   .rl-msg { max-width:94%; }
-  .ttools { overflow-x:auto; -webkit-overflow-scrolling:touch; }
   .p6grid, .p5grid, .dgrid, .artgrid { grid-template-columns:1fr !important; display:block; }
 }
 
@@ -985,7 +967,6 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 /* 下面三条只为压过原「nowrap 单行省略」的更高特指度声明，规则本体仍在 .clamp2 */
 .inbox-row .rt.clamp2 { flex:0 0 170px; white-space:normal; }
 .bcard2 .ct.clamp2 { display:-webkit-box; white-space:normal; }
-.trow2 .tt2.clamp2 { display:-webkit-box; white-space:normal; max-width:300px; }
 
 /* 工程队状态卡（施工令-002）：只读一行卡，无状态文件时整卡不渲染 */
 .crewcard { display:flex; align-items:center; gap:12px; padding:12px 20px; margin-top:16px; }
@@ -995,18 +976,18 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 
 /* ===== 挂起（施工令-021 · 制作人裁决权）：全站置灰 + ❄ 徽标 =====
    语义：挂起是「制作人按下了冻结」，不是坏了也不是没人管——所以用降饱和的冷调，
-   不用告警红。四处渲染（工单池卡 / 树形行 / 在途时间轴段 / 流程视图）共用这一组类，
+   不用告警红。三处渲染（工单池卡 / 在途时间轴段 / 流程视图）共用这一组类，
    任何新视图只要挂上 .susp 就自动同款，不必各画各的。
    施工令-022 起流程视图不再有 .fl-node：挂起单在新流程页只出现在沉淀抽屉的 ❄ 类里（.fgsi.susp），
    现在/接下来两段一律跳过——「全链路跳过」在视图层的兑现。 */
 .susp { filter:grayscale(.85); opacity:.55; }
 .susp:hover { opacity:.8; }
-.bcard2.susp, .trow2.susp { border-style:dashed; }
+.bcard2.susp { border-style:dashed; }
 .tlseg.susp { opacity:.35; filter:grayscale(1); }
 .pill.susp-p { background:var(--chip); color:var(--ink3); font-weight:600; letter-spacing:.02em; }
 /* 徽标本身不跟着置灰——它是「为什么灰」的答案，灰掉就白标了 */
 .susp .snowb, .snowb { filter:none; opacity:1; }
-.bcard2 .snowb, .trow2 .snowb { font-size:11px; margin-right:4px; }
+.bcard2 .snowb { font-size:11px; margin-right:4px; }
 
 /* 详情页「已挂起」横幅：顶在最上层，解挂按钮就在横幅里——制作人不必去操作栏里翻 */
 .suspbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 18px;
