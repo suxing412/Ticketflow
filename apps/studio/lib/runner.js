@@ -603,6 +603,9 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   child.on('close', (code) => {
     clearTimeout(killer);
     if (!running.has(agentId)) return; // 已被超时处理
+    // 预算记账（施工令-021）：只对 stream-json 会话有效（claude 家族）；codex 是纯文本流取不到 usage——
+    // 它是订阅池，预算闸本就不针对它。记账失败绝不挡交单。
+    try { const bd = require('./budget'); const u = bd.usageOf(out); if (u.输入 || u.输出) bd.记(root, { 池: cliPool, 单: t.id, ...u }); } catch { /* 尽力 */ }
     settleClose(kind, code, stream ? extractClaudeText(out) : out, errout, t.id, finishOk, failLocal);
   });
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 事件兜底 */ }
@@ -641,6 +644,9 @@ async function tick(root, cfg, opts = {}) {
       const locks = await require('./gates').allLocks(cfg).catch(() => null);
       const gatesInfo = {};
       if (locks) for (const p of ['codex', 'claude']) gatesInfo[p] = { fivePct: locks[p] && locks[p].fivePct, locked: !!(locks[p] && locks[p].locked) };
+      // 预算闸（施工令-021）：按量计费池没有订阅那种用量窗口，额度锁对它恒不生效。
+      // 并进 gatesInfo 而不是改 poolFrozen 签名——池序降级/编制快照/UI 三处自动跟着走。
+      const gatesInfo2 = require('./budget').并入(gatesInfo, require('./budget').冻结池(cfg, root));
       const runningByPool = {};
       for (const e of running.values()) if (e.kind === '执行' && e.池) runningByPool[e.池] = (runningByPool[e.池] || 0) + 1;
       const ledger = pmLedger.read(root);
@@ -655,7 +661,7 @@ async function tick(root, cfg, opts = {}) {
         if (pj && busyProjects.has(pj.name)) { result.拒因.push(`${r2.id} 挂起：项目 ${pj.name} 编辑器锁关（制作人验收中）`); return false; }
         return true;
       });
-      const picks = dispatch.pickNext(cfg, ready, runningByPool, gatesInfo, ledger.并发上限);
+      const picks = dispatch.pickNext(cfg, ready, runningByPool, gatesInfo2, ledger.并发上限);
       for (const p of picks) {
         const t0 = store.find(root, p.id);
         if (!t0 || t0.state !== '待投') continue;
