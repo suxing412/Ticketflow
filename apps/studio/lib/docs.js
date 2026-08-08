@@ -8,7 +8,7 @@ const matter = require('gray-matter');
 // 分区 → 根目录清单（相对项目仓）。标签用于同区内区分来源。
 // 施工令-020（H92 配套）：调研从策划案里分家自立一区——策划案只剩设计文档根，
 // 调研方案收「调研方案 + 竞品分析」两根；物理文件不迁移，只是展示位分家。
-const ZONES = {
+const DEFAULT_ZONES = {
   策划案: [
     { 根: 'Docs/SLG/策划文档', 标签: '设计' },
   ],
@@ -20,6 +20,27 @@ const ZONES = {
     { 根: 'Docs/SLG/技术方案', 标签: '方案' },
   ],
 };
+
+// 生效分区表。**就地改这个对象**（不重新赋值）——module.exports 导出的是它的引用，
+// 换对象会让已 require 的调用方拿着旧表。
+const ZONES = {};
+
+// 分区根可配（config.文档分区）：默认值是游戏项目布局（Docs/SLG/**），换项目不必改代码。
+// 段形与默认值同构：{ 分区名: [{根, 标签}] }，根相对项目仓、正斜杠；也收裸字符串根。
+// 只认前端三区之名（策划案/调研方案/技术方案），没配到的分区保留默认——
+// 配错一个分区不该把另外两个也弄没。
+function setZones(custom) {
+  for (const k of Object.keys(ZONES)) delete ZONES[k];
+  const src = (custom && typeof custom === 'object' && !Array.isArray(custom)) ? custom : {};
+  for (const name of Object.keys(DEFAULT_ZONES)) {
+    const v = src[name];
+    const defs = (Array.isArray(v) ? v : [])
+      .map((d) => (typeof d === 'string' ? { 根: d, 标签: '' } : { 根: String((d || {}).根 || ''), 标签: String((d || {}).标签 || '') }))
+      .filter((d) => d.根 && !d.根.includes('..')); // 越界根直接丢弃：resolve 的护栏之外再加一道
+    ZONES[name] = defs.length ? defs : DEFAULT_ZONES[name];
+  }
+}
+setZones(null); // 起手即默认表
 
 const zones = () => Object.keys(ZONES);
 
@@ -127,4 +148,4 @@ function read(projPath, zone, rel) {
   };
 }
 
-module.exports = { ZONES, GROUPS, zones, groupOf, list, read, resolve };
+module.exports = { ZONES, DEFAULT_ZONES, setZones, GROUPS, zones, groupOf, list, read, resolve };

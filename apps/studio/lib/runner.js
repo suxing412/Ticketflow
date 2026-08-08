@@ -29,6 +29,25 @@ function isOn(root) { return !!state.read(root).执行器?.运行; }
 // 供测试套件做同步执行。生产路径（startLoop/server）永不传 durMs，因此永远是实弹。
 function isSim(opts) { return opts && opts.durMs != null; }
 
+// ---- 池凭据解析（2026-08-08 凭据托管，路 B）----
+// 顺序：托管库（<root>/凭据.json，DPAPI 密文）> config 内联 兼容 段（旧路径，保兼容）。
+// 订阅池永远返回 null——它们的凭据归 CLI 自己管，app 一个字节都不存（路 B 的核心红利）。
+function 凭据Of(root, cfg, poolName) {
+  try {
+    const creds = require('./creds');
+    if (creds.has(root, poolName)) {
+      const k = creds.getKey(root, poolName);
+      if (k) {
+        const m = creds.meta(root, poolName) || {};
+        return { key: k, base: m.base || null, 模型: m.模型 || null, 来源: '托管' };
+      }
+    }
+  } catch { /* 托管库不可用（DPAPI 挂了等）→ 回落内联，不阻塞派发 */ }
+  const c = cfg.执行池 && cfg.执行池[poolName] && cfg.执行池[poolName].兼容;
+  if (c && c.key) return { key: c.key, base: c.base || null, 模型: c.模型 || null, 来源: '内联' };
+  return null;
+}
+
 // ---- 项目定位（D32）：工单.项目 → config 注册表 → 仓库路径；完整注册向导属打包后首配 ----
 function projectPath(cfg, t) {
   const reg = (cfg.项目 && cfg.项目.注册) || {};
@@ -500,7 +519,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   const poolName = kind === '初检' ? (两检cfg.池 || 'deepseek') : (t.fm.执行池 || 'claude');
   const 档 = roster.modelFor(cfg, t.fm.职能, poolName); // H85 补章：档挂在 职能×池 上，不再按人头查
   const model = kind === '初检' ? (两检cfg.模型 || 'deepseek-v4-flash') : pickModel(cfg, kind, 档, poolName, t.fm.职能);
-  const compat = (kind === '执行' || kind === '初检') && cfg.执行池 && cfg.执行池[poolName] && cfg.执行池[poolName].兼容;
+  const compat = (kind === '执行' || kind === '初检') ? 凭据Of(root, cfg, poolName) : null;
   const { cmd, args, stream } = resolveCli((kind === '执行' || kind === '初检') ? poolName : 'claude', compat ? (kind === '初检' ? model : (compat.模型 || model)) : model, (cfg.执行器 || {}).放行工具); // 质检/代核/代裁走 claude
   const receiptPath = path.join(root, '回执', `${t.id}.md`);
   const prompt = kind === '质检' ? buildQaPrompt(root, t, proj, receiptPath)
@@ -512,12 +531,17 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   try {
     const env = proxyEnv(cfg);
     if (compat) {
-      env.ANTHROPIC_BASE_URL = compat.base; env.ANTHROPIC_AUTH_TOKEN = compat.key; delete env.ANTHROPIC_API_KEY;
+      // base 可缺省（2026-08-08 凭据托管）：原生厂商的 *-key 池就用官方默认端点，
+      // 只有第三方兼容端点（deepseek 之类）才需要改 BASE_URL。
+      if (compat.base) env.ANTHROPIC_BASE_URL = compat.base;
+      env.ANTHROPIC_AUTH_TOKEN = compat.key; delete env.ANTHROPIC_API_KEY;
       // 双认证冲突（实测挂起 50s+）：订阅 OAuth 登录态与 env 令牌并存时 CLI 静默等待——
-      // 兼容池用独立配置目录隔离登录态；国内端点剥代理直连。
+      // 带 key 的池一律用独立配置目录隔离登录态。
       env.CLAUDE_CONFIG_DIR = path.join(root, '兼容池配置', poolName);
       try { fs.mkdirSync(env.CLAUDE_CONFIG_DIR, { recursive: true }); } catch { /* 已存在 */ }
-      delete env.HTTPS_PROXY; delete env.HTTP_PROXY; delete env.https_proxy; delete env.http_proxy;
+      // 剥代理只对第三方端点（国内直连更快更稳）；官方端点该走代理还得走代理，
+      // 一刀切剥掉会让需要代理的机器上 *-key 池必死（2026-08-08 死代理案的反向教训）。
+      if (compat.base) { delete env.HTTPS_PROXY; delete env.HTTP_PROXY; delete env.https_proxy; delete env.http_proxy; }
     }
     child = spawn(cmd, args, { cwd: proj.path, env, windowsHide: true, shell: cmd.endsWith('.cmd'), stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (e) { failLocal('CLI 启动失败：' + e.message); return true; }
@@ -639,6 +663,7 @@ async function tick(root, cfg, opts = {}) {
         const mv = store.move(root, p.id, '待投', '在途', (fm) => {
           fm.主办 = 主办; fm.执行池 = p.池; fm.领单时间 = opts.nowIso || new Date().toISOString();
           if (p.改挂) fm.临时改池 = `${p.改挂.原池}→${p.池}（${p.改挂.因}）`; // H85 死局自愈留痕：工单上看得见它为什么不在本职池跑
+          if (p.降级) fm.计费降级 = `${p.降级.原池}(订阅)→${p.池}(按量)`; // 工单自己也要写明这单是花钱跑的
         }, opts.nowIso || new Date().toISOString());
         if (!mv.ok) continue;
         journal.append(root, `派发 ${p.id}（待投→在途 · ${主办} · ${p.池} · H49 派发制）`);
@@ -646,6 +671,15 @@ async function tick(root, cfg, opts = {}) {
         if (p.改挂) { // H85：临时改池是自动动作，必须同时进 journal 与项管台账，事后可追
           journal.append(root, `临时改池：${p.id} ${p.改挂.原池} → ${p.池}（${p.改挂.因}）`);
           pmLedger.event(root, '临时改池', { id: p.id, 原池: p.改挂.原池, 新池: p.池, 因: p.改挂.因 });
+        }
+        // 跨计费降级（2026-08-08「套餐用完降级到 key」配套）：这是**开始花钱**的时刻。
+        // 池序内切换本来是静默的（那对 claude→codex 没问题，都是订阅），但订阅→按量必须响：
+        // 不响的话用户看到的是「一切正常在跑」，实际账单在涨。四处同时留痕，一处都不能省。
+        if (p.降级) {
+          const 摘 = `${p.降级.原池}(订阅) → ${p.池}(按量)`;
+          journal.append(root, `跨计费降级：${p.id} ${摘}——${p.降级.因}`);
+          pmLedger.event(root, '跨计费降级', { id: p.id, ...p.降级 });
+          inbox.post(root, '急', '跨计费降级', `${p.id} ${摘}：从此单起按量计费产生费用`, { 单号: p.id });
         }
         require('./pm/wake').onChildDispatched(root, t0.fm.父单); // H53：首子单派发 → 战役父单进在途
         result.领单.push(p.id);
@@ -798,4 +832,4 @@ function killTicket(root, id) {
   return false;
 }
 
-module.exports = { tick, startWork, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi };
+module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi };

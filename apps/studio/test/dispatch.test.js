@@ -131,4 +131,64 @@ t('池冻结判据 poolFrozen：额度锁与护城河都算冻结，并发满不
   assert.equal(D.poolFrozen(cfg, { codex: { fivePct: 99 } }, 'codex'), false);   // codex 无护城河、无锁
 });
 
+// ---- 计费标记与跨计费降级（2026-08-08 制作人裁决「套餐优先、用完降级到 key」）----
+// 红线：订阅→按量是**开始花钱**的时刻，必须留得下痕；同计费的池切换不许打扰。
+const 计费cfg = {
+  执行池: {
+    claude: { 职能: ['程序'], 计费: '订阅' },
+    'claude-key': { 职能: [], 计费: '按量' },
+    codex: { 职能: [], 计费: '订阅' },
+    deepseek: { 职能: [], 兼容: { base: 'https://x.example.com', key: 'sk-xx' } },
+  },
+  编制: [{ 职能: '程序', 池序: [{ 池: 'claude' }, { 池: 'claude-key' }] }],
+};
+const R_程序 = [{ id: 'T-1', 职能: '程序', 优先级: 'P1', 创建时间: '2026-08-08' }];
+
+t('计费Of：显式字段优先，没写就按有没有 兼容 段推断（兼容端点=按量）', () => {
+  assert.equal(D.计费Of(计费cfg, 'claude'), '订阅');
+  assert.equal(D.计费Of(计费cfg, 'claude-key'), '按量');
+  assert.equal(D.计费Of(计费cfg, 'deepseek'), '按量', '有兼容段就是按量，不必显式写');
+  assert.equal(D.计费Of(计费cfg, '没这个池'), '订阅', '未知池按订阅算，不臆造费用');
+});
+
+t('降级Of：只有 订阅→按量 出标记；同计费、反方向、同池都不出', () => {
+  assert.ok(D.降级Of(计费cfg, 'claude', 'claude-key'));
+  assert.equal(D.降级Of(计费cfg, 'claude', 'codex'), null, '订阅→订阅换谁都不花钱，不许打扰');
+  assert.equal(D.降级Of(计费cfg, 'claude-key', 'claude'), null, '按量→订阅是省钱方向');
+  assert.equal(D.降级Of(计费cfg, 'claude', 'claude'), null);
+});
+
+t('套餐用完自动降级到 key 池：池序顺位落到 claude-key，并带降级标记', () => {
+  const gi = { claude: { locked: true }, 'claude-key': { locked: false } };
+  const picks = D.pickNext(计费cfg, R_程序, {}, gi, { claude: 1, 'claude-key': 1 });
+  assert.equal(picks.length, 1);
+  assert.equal(picks[0].池, 'claude-key', '这就是「套餐用完再用 key」——零新机制，池序本来就是它');
+  assert.ok(picks[0].降级, '跨计费切换必须带标记，否则 runner 无从留痕');
+  assert.equal(picks[0].降级.原计费, '订阅');
+  assert.equal(picks[0].降级.新计费, '按量');
+  assert.ok(!picks[0].改挂, '池序内顺位不是借调，别混淆两种标记');
+});
+
+t('护城河触线同样触发降级（生产不停，改为按量继续——但必须看得见）', () => {
+  const gi = { claude: { fivePct: 85 }, 'claude-key': {} }; // 余 15 ≤ 保留线 20
+  const picks = D.pickNext({ ...计费cfg, 额度: { 沟通保留: 20 } }, R_程序, {}, gi, { claude: 1, 'claude-key': 1 });
+  assert.equal(picks[0].池, 'claude-key');
+  assert.ok(picks[0].降级, '护城河从"刹车"变"换挡"，不留痕就是账单惊喜');
+});
+
+t('套餐可用时不降级、不留痕（别把正常派发也报成花钱）', () => {
+  const picks = D.pickNext(计费cfg, R_程序, {}, { claude: {}, 'claude-key': {} }, { claude: 1 });
+  assert.equal(picks[0].池, 'claude');
+  assert.ok(!picks[0].降级);
+});
+
+t('借调路径也判降级：池序全冻时借到按量池，同样出标记', () => {
+  const cfg2 = { ...计费cfg, 编制: [{ 职能: '程序', 池序: [{ 池: 'claude' }] }] };
+  const gi = { claude: { locked: true }, codex: { locked: true }, 'claude-key': {}, deepseek: {} };
+  const picks = D.pickNext(cfg2, R_程序, {}, gi, { 'claude-key': 1, deepseek: 1 });
+  assert.equal(picks.length, 1);
+  assert.ok(picks[0].改挂, '借调要出改挂');
+  assert.ok(picks[0].降级, '借调到按量池同样是开始花钱');
+});
+
 console.log(`全部通过：${passed} 项`);

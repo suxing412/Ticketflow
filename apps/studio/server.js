@@ -15,7 +15,9 @@ const quota = require('./lib/quota');
 const journal = require('./lib/journal');
 const dialogscan = require('./lib/dialogscan'); // 原生对话框哑弹扫描（施工令-012），/api/env 自检用
 
-const ROOT = config.resolveRoot();
+// ROOT 可变（2026-08-08 首次运行向导）：没有 studio.config.json 时不再是死局——
+// 向导建完工作区后**就地重挂**，不用重启进程。模块作用域的 let，所有闭包读到的都是新值。
+let ROOT = config.resolveRoot();
 let cfg = null; let initError = null;
 if (!ROOT) initError = '未找到监制台仓库（缺 studio.config.json）。';
 else { try { cfg = config.load(ROOT); store.ensureDirs(ROOT); } catch (e) { initError = '读配置失败：' + e.message; } }
@@ -53,7 +55,104 @@ app.use((req, res, next) => {
     if ((!h || !LOCAL.has(h)) && !tokenOk(req)) return res.status(403).json({ error: '拒绝：跨源写请求' }); }
   next();
 });
-const ready = (res) => { if (initError) { res.status(500).json({ error: initError }); return false; } return true; };
+const ready = (res) => { if (initError) { res.status(500).json({ error: initError, 需要向导: !ROOT }); return false; } return true; };
+
+// ---- 首次运行向导（2026-08-08）：缺 studio.config.json 不再是死局 ----
+// 旧样：resolveRoot 返回 null → initError → main.js showErrorBox + quit。
+// 而**加项目的 UI 就在那个进不去的 app 里**，于是新用户只能先手写 JSON。
+// 这两个端点**不过 ready() 闸**——它们正是用来把 app 从未就绪状态里捞出来的。
+const setup = require('./lib/setup');
+app.get('/api/setup/state', (req, res) => {
+  res.json({
+    需要向导: !ROOT || !!initError,
+    当前工作区: ROOT || null,
+    错误: initError || null,
+    候选目录: setup.候选目录(),
+  });
+});
+app.post('/api/setup', (req, res) => {
+  if (!isLocalReq(req)) return res.status(403).json({ error: '建工作区只能在本机操作' });
+  const r = setup.建工作区((req.body || {}).目录);
+  if (!r.ok) return res.status(400).json(r);
+  try {
+    ROOT = r.root;                       // 就地重挂：省掉一次重启
+    cfg = config.load(ROOT);
+    store.ensureDirs(ROOT);
+    docs.setZones(cfg.文档分区);
+    initError = null;
+    journal.append(ROOT, `首次运行向导：工作区就位于 ${ROOT}（${r.新建 ? '新建配置' : '沿用已有配置'}）`);
+    try { runner.start(ROOT, () => cfg); } catch { /* 执行器起不来不挡向导，参数页还能手动开 */ }
+  } catch (e) {
+    initError = '向导建完但加载失败：' + e.message;
+    return res.status(500).json({ ok: false, error: initError });
+  }
+  res.json({ ...r, 就绪: true });
+});
+
+// ---- 凭据托管（2026-08-08 路 B：订阅态归 CLI，key 归 app）----
+const creds = require('./lib/creds');
+// 官方登录命令：可见拉起，不做无头（登录本来就是交互动作，藏进无头进程是自找麻烦——
+// 同施工令-011「编辑器绝对可见化」的道理）。命令可在 config.执行器.登录命令 里覆盖。
+const 登录命令 = (厂商) => {
+  const 覆盖 = ((cfg || {}).执行器 || {}).登录命令 || {};
+  if (覆盖[厂商]) return String(覆盖[厂商]);
+  if (厂商 === 'codex') return 'codex login';
+  return `"${runner.resolveCli('claude').cmd}" auth login`;
+};
+app.get('/api/creds', (req, res) => {
+  if (!ready(res)) return;
+  const os2 = require('os');
+  // 订阅态：claude 读凭据文件、codex 问 app-server——app 不存它们的任何东西
+  let claude订阅 = { 已登录: false, note: '未登录（点登录按钮）' };
+  try {
+    const c = JSON.parse(fs.readFileSync(path.join(os2.homedir(), '.claude', '.credentials.json'), 'utf8')).claudeAiOauth;
+    if (c && c.accessToken) {
+      claude订阅 = c.expiresAt > Date.now()
+        ? { 已登录: true, note: 'token 有效至 ' + new Date(c.expiresAt).toTimeString().slice(0, 5) }
+        : { 已登录: !!c.refreshToken, note: c.refreshToken ? 'token 过期，将自动续期' : 'token 过期且无 refresh，需重登' };
+    }
+  } catch { /* 无凭据文件 = 未登录 */ }
+  res.json({
+    订阅: { claude: claude订阅, codex: { note: 'codex 登录态见环境探针（app-server 探测）' } },
+    托管: creds.list(ROOT),
+    可加密: creds.可加密(),
+    登录命令: { claude: 登录命令('claude'), codex: 登录命令('codex') },
+  });
+});
+app.post('/api/auth/login', (req, res) => {
+  if (!ready(res)) return;
+  if (!isLocalReq(req)) return res.status(403).json({ error: '登录只能在本机操作' });
+  const 厂商 = String((req.body || {}).厂商 || '').trim();
+  if (!['claude', 'codex'].includes(厂商)) return res.status(400).json({ error: '厂商只能是 claude / codex' });
+  const 命令 = 登录命令(厂商);
+  try {
+    // start 开一个可见控制台跑官方登录命令：浏览器授权由第一方完成，
+    // app 只负责拉起与事后验收（路 B 的全部内容）。
+    require('child_process').spawn('cmd', ['/c', 'start', '监制台登录', 'cmd', '/k', 命令],
+      { detached: true, windowsHide: false }).unref();
+  } catch (e) {
+    return res.status(500).json({ error: '拉起登录终端失败：' + e.message, 命令 });
+  }
+  journal.append(ROOT, `拉起 ${厂商} 官方登录（路 B：授权全程第一方，app 只验收）`);
+  res.json({ ok: true, 命令, 提示: '在弹出的终端里完成登录，回来点「重新检测」' });
+});
+app.post('/api/creds', (req, res) => {
+  if (!ready(res)) return;
+  if (!isLocalReq(req)) return res.status(403).json({ error: '密钥管理只能在本机操作' });
+  const { 池, key, base, 模型 } = req.body || {};
+  const r = creds.setKey(ROOT, 池, { key, base, 模型 });
+  if (!r.ok) return res.status(400).json(r);
+  journal.append(ROOT, `凭据托管：${r.池} 已存 key（${r.指纹}，DPAPI 密文落盘，明文不入配置）`);
+  res.json(r);
+});
+app.post('/api/creds/remove', (req, res) => {
+  if (!ready(res)) return;
+  if (!isLocalReq(req)) return res.status(403).json({ error: '密钥管理只能在本机操作' });
+  const r = creds.remove(ROOT, String((req.body || {}).池 || ''));
+  if (!r.ok) return res.status(400).json(r);
+  journal.append(ROOT, `凭据托管：${(req.body || {}).池} 的 key 已删除`);
+  res.json(r);
+});
 const mdHtml = (s) => sanitizeHtml(marked.parse(s || ''), { allowedTags: sanitizeHtml.defaults.allowedTags.concat(['h1', 'h2']) });
 
 // ---- 工单池：全状态板（P2/P9甘特/P10树形 共用数据源）----
@@ -155,6 +254,7 @@ app.post('/api/wiki/reject', (req, res) => {
 // ---- 知识总库·文档分区（施工令-015；施工令-020 起三区）：策划案 / 调研方案 / 技术方案聚合，只读。
 // 路径来源 = 项目注册推仓路径（同 /api/ticket 的 引擎作业 取法）；缺目录不报错，返空清单。
 const docs = require('./lib/docs');
+if (cfg) docs.setZones(cfg.文档分区); // 分区根可配（默认=游戏项目布局），换项目改配置不改代码
 app.get('/api/docs', (req, res) => {
   if (!ready(res)) return;
   const p = wikiProj(req);
@@ -436,14 +536,23 @@ app.get('/api/env', async (req, res) => {
 
   // 组1 运行时与 CLI（探针标准=实弹标准：claude 走执行器同款绝对路径解析）
   const claudeCmd = runner.resolveCli('claude').cmd;
-  const [codexP, claudeP] = await Promise.all([probe('codex', ['--version']), probe(claudeCmd, ['--version'])]);
-  const proxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || null;
+  const proxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || '';
+  // 活性验证（2026-08-08 死代理案）：旧样只报「解析到了什么代理」，不验它连不连得上——
+  // 那台机器上 7890 根本没进程在听，这一项却是绿的，而每张执行单都死在 ConnectionRefused。
+  // 现按「探针标准=实弹标准」真发一次请求：实弹经代理访问 API，探针就经同一个代理访问同一个 API。
+  // 判据翻译在 lib/netprobe（纯函数可单测），本处只做装配。
+  const netprobe = require('./lib/netprobe');
+  const [codexP, claudeP, 连通] = await Promise.all([
+    probe('codex', ['--version']),
+    probe(claudeCmd, ['--version']),
+    netprobe.探(proxy),
+  ]);
+  const pv = netprobe.verdict({ proxy, 来源: proxy ? (process.env.__STUDIO_PROXY_SRC || '环境变量') : '', ...连通 });
   const 运行时 = [
     item('node', '绿', process.version),
     item('codex CLI', codexP.ok ? '绿' : '黄', codexP.note + (codexP.ok ? '' : '（codex 池实弹不可用）')),
     item('claude CLI', claudeP.ok ? '绿' : '黄', claudeP.note + (claudeP.ok ? (claudeCmd !== 'claude' ? '（~/.local/bin，免 PATH）' : '') : '（claude 池实弹不可用）')),
-    // 探针标准=运行时标准：启动已按 环境→注册表→config默认 注入，这里报有效值+来源
-    item('代理', proxy ? '绿' : '黄', proxy ? proxy + '（' + (process.env.__STUDIO_PROXY_SRC || '环境变量') + '）' : '未解析到（环境/注册表/config 均空）'),
+    item('API 连通', pv.级别, pv.note),
   ];
 
   // 组2 凭据与额度链路（2026-07-11 限流风波的直接教训）
@@ -1067,7 +1176,9 @@ app.get('/api/pulse', (req, res) => {
 app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModified: false, setHeaders: (res) => res.setHeader('Cache-Control', 'no-store') }));
 // 风格库静态服务（美术库缩略图直读；express.static 自带路径穿越防护）
 if (!initError) app.use('/stylelib-files', express.static(path.join(ROOT, '风格库')));
-const port = (cfg && cfg.server && cfg.server.port) || 4270;
+// STUDIO_PORT 覆盖（2026-08-08）：配置未就绪时也得有个能听的端口，
+// 且开第二实例做验证时不该去抢正在服役那个的 4270。
+const port = Number(process.env.STUDIO_PORT) || (cfg && cfg.server && cfg.server.port) || 4270;
 // 滞留检查：启动跑一次 + 每 30 分钟一次（R3：只诊断告警，不自动撤回）
 function 巡检() { if (initError) return; try { life.滞留检查(ROOT, cfg); } catch (e) { console.error('滞留检查失败：' + e.message); } }
 // 代理自愈（0.8.1）：exe 的网络能力不再取决于"谁怎么启动它"。

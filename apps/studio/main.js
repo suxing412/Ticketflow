@@ -8,11 +8,10 @@ let win = null;
 
 async function createWindow() {
   const { port, initError } = await start();
-  if (initError) {
-    dialog.showErrorBox('监制台 未找到仓库', initError);
-    app.quit();
-    return;
-  }
+  // 未就绪不再是死局（2026-08-08 首次运行向导）：旧样在这里 showErrorBox + quit，
+  // 可**加项目/建工作区的 UI 就在这个被关掉的窗口里**，新用户于是只能先手写 JSON。
+  // 现在照常开窗，前端读 /api/setup/state 落向导页，建完就地重挂、无需重启。
+  if (initError) console.log('未就绪，将进入首次运行向导：' + initError);
   win = new BrowserWindow({
     width: 1280,
     height: 840,

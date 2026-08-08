@@ -78,16 +78,42 @@ function rosterPools(cfg, 职能) {
 //   ③一个可用池都没有 → 返回 null，本轮滞留，交给零派发告警看门狗
 // 边界：池章直通（工单 frontmatter 已盖 执行池，如工程单钉死 deepseek）不参与自愈——那是刻意的成本选择；
 //       零编制职能只走职能默认池，冻了就滞留，不臆造借调（没有用工事实可依）。
+// 计费性质（2026-08-08 制作人裁决「套餐优先、用完降级到 key」的配套）：
+// 显式 计费 字段优先；没写就按有没有 兼容 段推断（兼容端点一律按量计费）。
+// 这个字段存在的唯一理由是**让跨计费的切换留得下痕**——见下面的 降级。
+function 计费Of(cfg, 池) {
+  const p = (cfg.执行池 || {})[池] || {};
+  if (p.计费 === '按量' || p.计费 === '订阅') return p.计费;
+  return p.兼容 ? '按量' : '订阅';
+}
+
+// 跨计费降级判定：订阅 → 按量 是**成本性质的改变**，不是普通的池切换。
+// 旧样「池序内切换不算改挂」在 claude→codex 之间是对的（都是订阅，换谁都不花钱），
+// 但 claude→claude-key 意味着从这一刻起每一单都在真金白银地烧，静默是不可接受的：
+// 用户看到的是「一切正常在跑」，实际是账单在涨。所以这里单独出一个 降级 标记，
+// 由 runner 落 journal + 台账 + 信箱急件（改挂只在借调时出，两者互不替代）。
+function 降级Of(cfg, 原池, 新池) {
+  if (!原池 || !新池 || 原池 === 新池) return null;
+  const a = 计费Of(cfg, 原池); const b = 计费Of(cfg, 新池);
+  if (a === b) return null;
+  if (!(a === '订阅' && b === '按量')) return null; // 按量→订阅是省钱方向，不必打扰
+  return { 原池, 新池, 原计费: a, 新计费: b, 因: `${原池} 套餐额度用尽/受限，降级到按量计费池 ${新池}——从此单起产生费用` };
+}
+
 function routePool(cfg, r, gatesInfo) {
   if (r.执行池) return { 池: r.执行池 };
   const 池序 = rosterPools(cfg, r.职能);
   const base = 池序[0] || pool.poolFor(cfg, r.职能) || 'claude';
   if (!池序.length) return poolFrozen(cfg, gatesInfo, base) ? null : { 池: base };
   const 可用 = 池序.find((p) => !poolFrozen(cfg, gatesInfo, p));
-  if (可用) return { 池: 可用 }; // ①
+  if (可用) { // ①
+    const 降级 = 降级Of(cfg, 池序[0], 可用);
+    return { 池: 可用, ...(降级 ? { 降级 } : {}) };
+  }
   const 借调 = Object.keys(cfg.执行池 || {}).find((p) => !poolFrozen(cfg, gatesInfo, p));
   if (!借调) return null; // ③
-  return { 池: 借调, 改挂: { 原池: base, 因: `${base} 池冻结 · ${r.职能}编制池序全冻，临时借调` } }; // ②
+  const 降级 = 降级Of(cfg, base, 借调);
+  return { 池: 借调, 改挂: { 原池: base, 因: `${base} 池冻结 · ${r.职能}编制池序全冻，临时借调` }, ...(降级 ? { 降级 } : {}) }; // ②
 }
 
 // 挑单：给定在跑计数与闸态，返回本轮可拉起的清单（不执行，纯决策——可测）
@@ -101,10 +127,10 @@ function pickNext(cfg, ready, runningByPool, gatesInfo, caps) {
     const cap = Math.min(Number((caps || {})[poolName]) || 1, HARD_CAP[poolName] || 1);
     if ((cnt[poolName] || 0) >= cap) continue;
     if (poolFrozen(cfg, gatesInfo, poolName)) continue; // 保险丝：自愈选出来的池也得过一遍闸
-    picks.push({ id: r.id, 池: poolName, ...(route.改挂 ? { 改挂: route.改挂 } : {}) });
+    picks.push({ id: r.id, 池: poolName, ...(route.改挂 ? { 改挂: route.改挂 } : {}), ...(route.降级 ? { 降级: route.降级 } : {}) });
     cnt[poolName] = (cnt[poolName] || 0) + 1;
   }
   return picks;
 }
 
-module.exports = { depsDone, readySet, sortReady, moatBlocked, poolFrozen, rosterPools, routePool, pickNext, HARD_CAP };
+module.exports = { depsDone, readySet, sortReady, moatBlocked, poolFrozen, rosterPools, routePool, pickNext, 计费Of, 降级Of, HARD_CAP };

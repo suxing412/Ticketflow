@@ -1226,11 +1226,13 @@ async function viewParams() {
   }, 0);
   // 全链路自检进页自动跑（服务端 60s 缓存，便宜）；按钮=强制复检
   setTimeout(() => { if ($('env-card')) window.envProbe(null); }, 0);
+  setTimeout(() => { if ($('creds-card')) window.credsLoad(); }, 0);
   return `<div class="p6grid"><div>
       <div class="sec-h"><h3 class="h17">执行器</h3><span class="subnote">派发调度循环 · 开 exe 即开工厂</span></div>${runCards}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">参数闸值</h3><span class="subnote">监制台可调</span></div>${params}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">模型档</h3><span class="subnote">贵裁判 · 贱体力（D38）</span></div>${modelCards}${compatCards}</div>
     <div><div class="sec-h"><h3 class="h17">环境探针</h3><span class="subnote">实弹前置检查</span></div>${envCard}
+      <div class="sec-h" style="margin-top:26px"><h3 class="h17">凭据</h3><span class="subnote">订阅归 CLI · key 归 app（DPAPI 密文）</span></div><div id="creds-card" class="card"><p class="dim">读取中…</p></div>
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">项目注册</h3><span class="subnote">执行 agent 的目标仓库（D32）</span></div>${projCard}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">执行池阈值</h3><span class="subnote">额度锁的杆（D26）</span></div>${poolCards}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">额度双池</h3></div>
@@ -2371,6 +2373,10 @@ async function route() {
   const app = $('app');
   let m;
   try {
+    // 首次运行向导（2026-08-08）：没有工作区就先把 app 从死局里捞出来，别的都往后排。
+    // 必须在 loadCfg 之前——/api/config 在未就绪时是 500，先它一步问 /api/setup/state。
+    const su = await api('/api/setup/state').catch(() => null);
+    if (su && su.需要向导) { app.innerHTML = viewSetup(su); return; }
     await loadCfg();
     // D42 项目语境守卫：多项目时，被删项目的残留选择作废；未选项目 → 落启动页；单项目自动进语境
     if (projMulti() && curProj() && !projNames().includes(curProj())) setProj('');
@@ -2495,4 +2501,93 @@ window.compatEdit = async (name) => {
     toast(r.ok ? `兼容池 ${池名} 已保存` : (r.error || '失败'));
     if (r.ok) { _cfg = null; route(); }
   } catch (e) { toast((e && e.message) ? String(e.message).slice(0, 120) : '兼容池保存失败'); } // 兜底：异常不再沉进 promise rejection
+};
+
+/* ===== 凭据托管（2026-08-08，路 B：订阅归 CLI、key 归 app）=====
+   订阅态一个字节都不存——按钮只负责「可见拉起官方登录命令 + 事后验收」，
+   授权流程全程第一方，厂商改登录页与我们无关。key 才由 app 保管（DPAPI 密文）。 */
+window.credsLoad = async () => {
+  const el = $('creds-card'); if (!el) return;
+  let d; try { d = await api('/api/creds'); } catch { el.innerHTML = '<p class="dim">凭据读取失败</p>'; return; }
+  if (d.error) { el.innerHTML = `<p class="dim">${esc(d.error)}</p>`; return; }
+  const 灯 = (ok) => `<span class="dot ${ok ? 'on' : 'off'}"></span>`;
+  const 订阅行 = (厂商, s) => `<p class="rowline">${灯(s.已登录)}<b>${厂商}</b> <span class="dim">${esc(s.note || '')}</span>
+    <button class="btn xs" onclick="credsLogin('${厂商}')">${s.已登录 ? '重新登录' : '登录'}</button></p>`;
+  const 托管行 = (r) => `<p class="rowline"><span class="pill sm">${esc(r.池)}</span>
+    <code>${esc(r.指纹)}</code>${r.base ? ` <span class="dim">${esc(r.base)}</span>` : ''}${r.模型 ? ` <span class="dim">· ${esc(r.模型)}</span>` : ''}
+    <button class="btn xs" onclick="credsDel('${qesc(r.池)}')">删除</button></p>`;
+  el.innerHTML = `
+    <p class="subnote">订阅（凭据归 CLI，app 不保存）</p>
+    ${订阅行('claude', d.订阅.claude)}
+    <p class="rowline">${灯(false)}<b>codex</b> <span class="dim">${esc(d.订阅.codex.note)}</span>
+      <button class="btn xs" onclick="credsLogin('codex')">登录</button></p>
+    <p class="subnote" style="margin-top:14px">API key（app 保管 · DPAPI 密文 · 不入 studio.config.json）</p>
+    ${d.托管.length ? d.托管.map(托管行).join('') : '<p class="dim">尚未托管任何 key</p>'}
+    <p style="margin-top:10px">
+      <button class="btn xs" onclick="credsAdd()">＋ 添加 key</button>
+      <button class="btn xs" onclick="credsLoad()">重新检测</button>
+      ${d.可加密 ? '' : '<span class="dim" style="color:var(--bad)">DPAPI 不可用，无法保存 key</span>'}
+    </p>`;
+};
+window.credsLogin = async (厂商) => {
+  const r = await post('/api/auth/login', { 厂商 });
+  toast(r.ok ? '已弹出登录终端，完成后回来点「重新检测」' : (r.error || '失败'));
+};
+window.credsDel = async (池) => {
+  if (!await ask(`删除 ${池} 的托管 key？`)) return;
+  const r = await post('/api/creds/remove', { 池 });
+  toast(r.ok ? '已删除' : (r.error || '失败'));
+  if (r.ok) window.credsLoad();
+};
+window.credsAdd = async () => {
+  const 池 = await askInput('池名（如 deepseek / claude-key）', '', { note: '与 studio.config.json 的 执行池 键名一致' });
+  if (池 === null || !池.trim()) return;
+  const key = await askInput(`${池.trim()} 的 API key`, '', { password: true, note: '只在本机以 DPAPI 密文落盘，明文不入配置文件；输入框按密码处理' });
+  if (key === null || !key.trim()) return;
+  const base = await askInput('兼容端点 base（官方端点留空）', '', { note: '第三方兼容端点填 https://…；原生厂商留空' });
+  if (base === null) return;
+  const 模型 = await askInput('模型名（留空=CLI 默认）', '');
+  if (模型 === null) return;
+  const body = { 池: 池.trim(), key: key.trim() };
+  if (base.trim()) body.base = base.trim();
+  if (模型.trim()) body.模型 = 模型.trim();
+  const r = await post('/api/creds', body);
+  toast(r.ok ? `已托管 ${r.池}（${r.指纹}）` : (r.error || '失败'));
+  if (r.ok) window.credsLoad();
+};
+
+/* ===== 首次运行向导（2026-08-08）=====
+   旧样：没有 studio.config.json → main.js showErrorBox + quit，而加项目的 UI 就在
+   那个被关掉的窗口里，于是新用户只能先手写 JSON。现在照常开窗，落这一页。 */
+function viewSetup(su) {
+  const 候选 = (su.候选目录 || []).map((p) =>
+    `<p class="rowline"><code>${esc(p)}</code><button class="btn xs" onclick="doSetup('${qesc(p)}')">用这里</button></p>`).join('');
+  return `<div class="wrap" style="max-width:720px;margin:60px auto">
+    <h1 class="h17" style="font-size:22px">先建一个工作区</h1>
+    <p class="dim">监制台把工单、回执、流水、岗位协议都放在一个「工作区」目录里。
+      它<b>不是</b>你的项目仓库——项目仓库稍后单独注册，agent 才往那里写代码。</p>
+    ${su.错误 ? `<p class="dim" style="margin-top:8px">当前状态：${esc(su.错误)}</p>` : ''}
+    <div class="card" style="margin-top:18px">
+      <p class="subnote">选一个位置（已存在的配置不会被覆盖）</p>
+      ${候选}
+      <p class="rowline" style="margin-top:12px">
+        <button class="btn" onclick="doSetupAsk()">自己填一个路径…</button>
+      </p>
+    </div>
+    <p class="dim" style="margin-top:14px">建好后会自动落：十态目录 + 回执/流水 + 六份岗位协议 + 风格库骨架，
+      然后直接进参数页注册你的项目仓库。</p>
+  </div>`;
+}
+window.doSetupAsk = async () => {
+  const p = await askInput('工作区目录（绝对路径）', '', { note: '例：D:\AI工作室' });
+  if (p === null || !p.trim()) return;
+  window.doSetup(p.trim());
+};
+window.doSetup = async (目录) => {
+  const r = await post('/api/setup', { 目录 });
+  if (!r.ok) return toast(r.error || '建工作区失败');
+  toast(`工作区就位：${r.root}`);
+  _cfg = null;
+  location.hash = '#/params';   // 直接落参数页——下一步就是注册项目仓库
+  route();
 };
