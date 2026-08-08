@@ -1,6 +1,6 @@
 {
   "name": "studio-console",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "private": true,
   "description": "监制台：AI 工作室制作人驾驶舱。工单 .md 是唯一事实源，目录即状态机。",
   "main": "main.js",
@@ -17,8 +17,8 @@
     "sanitize-html": "^2.13.0"
   },
   "devDependencies": {
-    "electron": "^43.3.0",
-    "electron-builder": "^26.15.3"
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
   },
   "build": {
     "appId": "local.studio.console",
