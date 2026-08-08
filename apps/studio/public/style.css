@@ -913,3 +913,25 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 .crewcard .cwo { font-size:11px; color:var(--ink3); }
 .crewcard .cwn { font-size:12.5px; color:var(--ink2); max-width:420px; }
 .crewcard .spacer { flex:1; }
+
+/* ===== 挂起（施工令-021 · 制作人裁决权）：全站置灰 + ❄ 徽标 =====
+   语义：挂起是「制作人按下了冻结」，不是坏了也不是没人管——所以用降饱和的冷调，
+   不用告警红。四处渲染（工单池卡 / 树形行 / 流程节点 / 在途时间轴段）共用这一组类，
+   任何新视图只要挂上 .susp 就自动同款，不必各画各的。 */
+.susp { filter:grayscale(.85); opacity:.55; }
+.susp:hover { opacity:.8; }
+.bcard2.susp, .trow2.susp, .fl-node.susp { border-style:dashed; }
+.tlseg.susp { opacity:.35; filter:grayscale(1); }
+.pill.susp-p { background:var(--chip); color:var(--ink3); font-weight:600; letter-spacing:.02em; }
+/* 徽标本身不跟着置灰——它是「为什么灰」的答案，灰掉就白标了 */
+.susp .snowb, .snowb { filter:none; opacity:1; }
+.bcard2 .snowb, .trow2 .snowb, .fl-node .snowb { font-size:11px; margin-right:4px; }
+
+/* 详情页「已挂起」横幅：顶在最上层，解挂按钮就在横幅里——制作人不必去操作栏里翻 */
+.suspbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 18px;
+  margin-bottom:14px; border-radius:14px; background:var(--chip); border:1px dashed var(--ink3); color:var(--ink2); }
+.suspbar b { font-size:13px; color:var(--ink); }
+.suspbar .sbwho { font-size:12px; color:var(--ink3); }
+.suspbar .sbwhy { font-size:12px; color:var(--ink2); flex-basis:100%; line-height:1.5; }
+.suspbar .sp { flex:1; }
+@media (prefers-reduced-motion: reduce) { .susp:hover { opacity:.55; } }

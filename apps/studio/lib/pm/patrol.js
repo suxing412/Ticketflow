@@ -64,6 +64,7 @@ function 打点停滞(root, cfg, opts = {}) {
   const 告警 = [];
   for (const e of 在跑) {
     if (!e || e.kind !== '执行' || !e.id) continue;
+    if (挂起中(root, e.id)) continue; // 施工令-021：冻结单不盯（连记忆都不留，解挂后从零重新计时）
     活着.add(e.id);
     const 尾 = e.tail || '';
     const 点 = progress.解析打点(尾);
@@ -107,6 +108,7 @@ function 零输出(root, cfg, opts = {}) {
   const 告警 = [];
   for (const e of 在跑) {
     if (!e || e.kind !== '执行' || !e.id) continue;
+    if (挂起中(root, e.id)) continue; // 施工令-021：冻结单不盯
     const 起 = Date.parse(e.startedAt || '');
     if (!Number.isFinite(起)) continue;                 // 无拉起时间戳：不臆测历时，本条不适用
     const key = `${e.id}@${e.startedAt}`;
@@ -130,6 +132,14 @@ function 零输出(root, cfg, opts = {}) {
 function 执行中表(root) {
   try { return [...require('../runner').running.values()].filter((e) => e.kind === '执行'); }
   catch { return []; } // 取不到在跑表：本条静默跳过（软契约不因探测失败而误报）
+}
+
+// 挂起单一律不进任何看门狗的视野（施工令-021）。零派发狗走 dispatch.readySet 已天然过滤；
+// 打点停滞狗与零输出狗看的是在跑表——挂起时会话本该已被掐（server 侧 killTicket），
+// 这道判断是防残留会话：制作人明明按下了冻结，还收到该单「卡住了」的告警是自相矛盾的噪声。
+function 挂起中(root, id) {
+  try { const t = require('../core/store').find(root, id); return !!(t && t.fm.挂起); }
+  catch { return false; } // 读不到就当没挂：宁可多报一次，不可漏报（沿用本模块一贯口径）
 }
 
 function 重置(root) {

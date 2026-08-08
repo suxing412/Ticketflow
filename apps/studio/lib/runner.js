@@ -625,6 +625,7 @@ async function tick(root, cfg, opts = {}) {
     if (!t.fm.主办 || busyTickets().has(t.id)) continue;
     if (['战役','专项'].includes(t.fm.父单类型) || ['战役','专项'].includes(t.fm.主办)) continue; // H53：父单在途=战役开打的状态章，是组织容器，永不起执行（0.19.1 事故：TK-41 被当断线单续跑）
     if (t.fm.待复核) { result.拒因.push(`${t.id} 待复核未解除，不起执行`); continue; }
+    if (t.fm.挂起) { result.拒因.push(`${t.id} 已挂起（制作人原位冻结），不起执行`); continue; } // 施工令-021①：断点续跑这条路是挂起单最容易漏堵的一条
     if (!dispatchMode && !agents.some((a) => a.id === t.fm.主办)) continue; // 拉取制：退役待归者不起新执行；派发制：一次性主办直接续跑
     if (await startWork(root, cfg, t, t.fm.主办, '执行', opts)) result.执行.push(t.id);
   }
@@ -714,6 +715,7 @@ async function tick(root, cfg, opts = {}) {
   if (roster.has(cfg, 'QA') && !running.has('QA')) {
     for (const t of store.list(root, '质检')) {
       if (busyTickets().has(t.id)) continue;
+      if (t.fm.挂起) continue; // 施工令-021③：挂起单不开质检会话
       if (await startWork(root, cfg, t, 'QA', '质检', opts)) { result.质检.push(t.id); break; }
     }
   }
@@ -751,18 +753,20 @@ async function tick(root, cfg, opts = {}) {
   const 两检开 = 两检.开 !== false && (cfg.执行池 || {})[两检.池 || 'deepseek'];
   if (两检开) {
     await 开审检('初检', '两检初检', '初检', () => store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !['战役', '专项'].includes(x.fm.父单类型) && !x.fm.初检 && !x.fm.代核
+      && !x.fm.挂起 // 施工令-021④a
       && (Number(x.fm.初检失败次数) || 0) < 判官上限 && !busyTickets().has(x.id)));
   }
 
   // ④b 核查（D34 / H67 深检）：初检过（或两检关）的委托单，opus 核内容质量（配额内逐张）
   await 开审检('代核', '核查', '代核', () => store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !x.fm.代核
+    && !x.fm.挂起 // 施工令-021④b
     && (!两检开 || (x.fm.初检 && x.fm.初检.结论 === '过'))
     && (Number(x.fm.代核失败次数) || 0) < 判官上限 && !busyTickets().has(x.id)));
 
   // ⑤ 仲裁（D43③）：待定夺且未裁过的单，裁判档裁「给方向/上呈」（配额内逐张）；
   // 打回级判断永远留给用户；执行器.代裁=false 可整体关闭
   if ((cfg.执行器 || {}).代裁 !== false) {
-    await 开审检('代裁', '仲裁', '代裁', () => store.list(root, '待定夺').find((x) => !x.fm.代裁
+    await 开审检('代裁', '仲裁', '代裁', () => store.list(root, '待定夺').find((x) => !x.fm.代裁 && !x.fm.挂起 // 施工令-021⑤
       && (Number(x.fm.代裁失败次数) || 0) < 判官上限 && !busyTickets().has(x.id)));
   }
 

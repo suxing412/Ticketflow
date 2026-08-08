@@ -166,4 +166,112 @@ t('隐藏归档：仅已归档可藏，可逆；非归档拒', () => {
   assert.equal(store.find(root, 'TK-1').fm.隐藏, undefined);
 });
 
+/* ===== 挂起 / 解挂（施工令-021 · 制作人裁决权补全）===== */
+
+t('挂起：原位冻结——单不挪窝，只盖 frontmatter 印；终态拒挂；重复挂拒', () => {
+  const root = makeRoot();
+  seed(root, '在途', { id: 'P-h1', 主办: '策划-A' });
+  seed(root, '完成', { id: 'P-h2' });
+  seed(root, '已归档', { id: 'P-h3' });
+  const r = life.挂起(root, 'P-h1', '制作人', '整个方向不对');
+  assert.ok(r.ok);
+  assert.equal(st(root, 'P-h1'), '在途', '挂起绝不改状态目录——原位是这道闸的全部意义');
+  const s = store.find(root, 'P-h1').fm.挂起;
+  assert.equal(s.操作者, '制作人'); assert.equal(s.理由, '整个方向不对'); assert.equal(s.挂起时状态, '在途');
+  assert.ok(s.时间, '时间戳必落');
+  assert.ok(!life.挂起(root, 'P-h1').ok, '重复挂拒');
+  assert.ok(!life.挂起(root, 'P-h2').ok, '完成单拒挂');
+  assert.ok(!life.挂起(root, 'P-h3').ok, '已归档单拒挂');
+  assert.ok(!life.挂起(root, '不存在的单').ok);
+});
+
+t('解挂：原状态原位复活 + 留下冻了多久的账；未挂起单拒解', () => {
+  const root = makeRoot();
+  seed(root, '待定夺', { id: 'P-h4' });
+  assert.ok(!life.解挂(root, 'P-h4').ok, '没挂过不能解');
+  life.挂起(root, 'P-h4', '制作人');
+  const 挂时 = store.find(root, 'P-h4').fm.挂起.时间;
+  assert.ok(life.解挂(root, 'P-h4', '制作人').ok);
+  const fm = store.find(root, 'P-h4').fm;
+  assert.equal(store.find(root, 'P-h4').state, '待定夺', '原位复活');
+  assert.equal(fm.挂起, undefined, '印必须真的擦掉，否则筛选处永远跳过它');
+  assert.equal(fm.解挂记录.挂起于, 挂时);
+});
+
+t('挂起单不可交产出（防残留会话把冻结单顶出原位）', () => {
+  const root = makeRoot();
+  seed(root, '在途', { id: 'P-h5', 主办: '策划-A', QA: '开' });
+  life.挂起(root, 'P-h5', '制作人');
+  const r = life.交产出(root, 'P-h5', '# 回执');
+  assert.ok(!r.ok); assert.ok(String(r.error).includes('挂起'));
+  assert.equal(st(root, 'P-h5'), '在途');
+  life.解挂(root, 'P-h5');
+  assert.ok(life.交产出(root, 'P-h5', '# 回执').ok, '解挂后照常交');
+  assert.equal(st(root, 'P-h5'), '质检');
+});
+
+t('滞留检查跳过挂起单：制作人按停的单不该再报「卡住了」', () => {
+  const root = makeRoot();
+  const 久 = new Date(Date.now() - 9 * 3600000).toISOString();
+  seed(root, '在途', { id: 'P-h6', 主办: '策划-A', 领单时间: 久 });
+  seed(root, '在途', { id: 'P-h7', 主办: '程序-A', 领单时间: 久 });
+  life.挂起(root, 'P-h6', '制作人');
+  const { 告警 } = life.滞留检查(root, CFG);
+  assert.deepEqual(告警.map((x) => x.id), ['P-h7'], '只报没挂起的那张');
+  assert.equal(store.find(root, 'P-h6').fm.滞留告警, undefined);
+});
+
+t('全树挂起：父单 + 全部子孙（跨两层）；终态子单与已挂子单跳过并如实回报', () => {
+  const root = makeRoot();
+  seed(root, '在途', { id: 'P-p', 父单类型: '专项' });
+  seed(root, '待投', { id: 'P-c1', 父单: 'P-p' });
+  seed(root, '池', { id: 'P-c2', 父单: 'P-p' });
+  seed(root, '在途', { id: 'P-g1', 父单: 'P-c1', 主办: '策划-A' }); // 孙层：必须一起冻
+  seed(root, '完成', { id: 'P-c3', 父单: 'P-p' });                  // 终态：跳过
+  seed(root, '质检', { id: 'P-c4', 父单: 'P-p' });
+  life.挂起(root, 'P-c4', '制作人', '这张我单独停的');              // 已挂：跳过
+  const r = life.挂起树(root, 'P-p', '制作人', '专项整个不对');
+  assert.ok(r.ok);
+  assert.deepEqual(r.挂起.sort(), ['P-c1', 'P-c2', 'P-g1', 'P-p'].sort());
+  assert.deepEqual(r.跳过.map((x) => x.id).sort(), ['P-c3', 'P-c4']);
+  assert.equal(store.find(root, 'P-g1').fm.挂起.连带自, 'P-p', '连带来源要留痕，解挂树按此认领');
+  assert.equal(store.find(root, 'P-p').fm.挂起.连带自, undefined, '头单不是被连带的');
+  for (const id of ['P-p', 'P-c1', 'P-c2', 'P-g1']) assert.ok(store.find(root, id).fm.挂起, id + ' 应已挂');
+  assert.equal(store.find(root, 'P-c3').fm.挂起, undefined, '完成单不动');
+});
+
+t('全树解挂：只放被本单连带的；制作人单独挂的子单保持挂起', () => {
+  const root = makeRoot();
+  seed(root, '在途', { id: 'Q-p', 父单类型: '专项' });
+  seed(root, '待投', { id: 'Q-c1', 父单: 'Q-p' });
+  seed(root, '待投', { id: 'Q-c2', 父单: 'Q-p' });
+  life.挂起(root, 'Q-c2', '制作人', '这张是我自己停的');
+  life.挂起树(root, 'Q-p', '制作人');
+  const r = life.解挂树(root, 'Q-p', '制作人');
+  assert.ok(r.ok);
+  assert.deepEqual(r.解挂.sort(), ['Q-c1', 'Q-p']);
+  assert.deepEqual(r.跳过.map((x) => x.id), ['Q-c2']);
+  assert.ok(store.find(root, 'Q-c2').fm.挂起, '独立挂起的不代解——那是另一道闸');
+  assert.equal(store.find(root, 'Q-c1').fm.挂起, undefined);
+});
+
+t('子孙盘点带环路防护：手改出的父子环不把机器转死', () => {
+  const root = makeRoot();
+  seed(root, '在途', { id: 'R-a', 父单: 'R-b' });
+  seed(root, '在途', { id: 'R-b', 父单: 'R-a' });
+  const kids = life.子孙(root, 'R-a');
+  assert.deepEqual(kids.map((x) => x.id), ['R-b'], '环上的另一头只收一次，不无限递归');
+});
+
+t('挂起兼容旧单：无挂起字段=未挂，废弃/收回等既有动作不受影响', () => {
+  const root = makeRoot();
+  seed(root, '在途', { id: 'S-1', 主办: '策划-A' }); // 老单：frontmatter 里压根没有挂起这一栏
+  assert.equal(store.find(root, 'S-1').fm.挂起, undefined);
+  assert.ok(life.收回(root, 'S-1').ok);
+  seed(root, '池', { id: 'S-2' });
+  life.挂起(root, 'S-2', '制作人');
+  assert.ok(life.废弃(root, 'S-2').ok, '挂起单仍可被直接废弃——制作人改主意不必先解挂');
+  assert.equal(st(root, 'S-2'), '已归档');
+});
+
 console.log(`全部通过：${passed} 项`);

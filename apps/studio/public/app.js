@@ -51,6 +51,15 @@ function fmtElapsed(ms) {
 }
 const fnPill = (fn) => fn ? `<span class="pill sm fn ${FNCLS[fn] || ''}">${esc(fn)}</span>` : '';
 const stPill = (st) => `<span class="pill ${STCLS[st] || ''}">${esc(st)}</span>`;
+/* ===== 挂起可视三件套（施工令-021）=====
+   四处渲染（工单池卡 / 树形行 / 流程节点 / 在途时间轴段）共用同一组：置灰靠 .susp 类，
+   ❄ 徽标靠 snowB()，鼠标悬停的解释靠 suspTip()。新视图挂上同样三件即自动同款——
+   各视图各画一套是「同一个事实在五个地方长得不一样」的开端。
+   取值一律 t.挂起（/api/board 与 /api/decisions 已随行透出），缺字段=未挂（老单零迁移）。 */
+const suspOf = (t) => (t && t.挂起) || null;
+const suspCls = (t) => (suspOf(t) ? ' susp' : '');
+const suspTip = (t) => { const s = suspOf(t); return s ? `已挂起 · ${s.操作者 || '制作人'} · ${String(s.时间 || '').slice(0, 16).replace('T', ' ')}${s.理由 ? '\n' + s.理由 : ''}${s.连带自 ? '\n（随父单 ' + s.连带自 + ' 全树挂起）' : ''}` : ''; };
+const snowB = (t) => (suspOf(t) ? `<span class="snowb" title="${esc(suspTip(t))}">❄</span>` : '');
 
 /* ===== 多项目视界（v0.12 = D42）=====
    启动页选项目 → 进入该项目的驾驶舱，全部视图按项目过滤。
@@ -387,8 +396,8 @@ async function viewBoard() {
         : s === '已归档' && (window._hiddenCnt || window._showHidden)
           ? `<h4>${s}<span class="cnt">${items.length}</span><button class="newdraft" title="隐藏归档：制作人湮灭的废案，默认不渲染" onclick="window._showHidden=!window._showHidden;route()">${window._showHidden ? '藏起' : `显隐藏 ${window._hiddenCnt}`}</button></h4>`
           : `<h4>${s}<span class="cnt">${items.length}</span></h4>`;
-    const cards = items.map((t) => `<div class="bcard2" data-tid="${esc(t.id)}" onclick="location.hash='#/t/${t.id}'">
-        <span class="cid">${esc(t.id)}</span>
+    const cards = items.map((t) => `<div class="bcard2${suspCls(t)}" data-tid="${esc(t.id)}" onclick="location.hash='#/t/${t.id}'"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}>
+        <span class="cid">${snowB(t)}${esc(t.id)}</span>
         <span class="cpri ${t.优先级 === 'P0' ? 'p0' : ''}">${esc(t.优先级 || '')}</span>
         <div class="ct clamp2" title="${esc(t.title)}">${esc(t.title)}</div>${fnPill(t.职能)}</div>`).join('');
     return `<div class="bcol2 ${widths[s] || ''} ${hot ? 'hot' : ''}">${head}${cards}</div>`;
@@ -601,10 +610,10 @@ async function viewFlow() {
     return `<div class="fl-lane" style="top:${L.top}px"></div>
       <div class="fl-lab" style="top:${L.top}px">${esc(title)}${allDone ? '<span class="lst" style="opacity:.6">已完成</span>' : `<span class="lst ${lag ? 'lag' : lead ? 'lead' : ''}">${esc(ls)}${lag ? ' 滞后' : lead ? ' 超前' : ''}</span>`}${signs.length ? `<span class="lst sign" title="${esc(signTip)}">✍ 等制作人签字${signs.length > 1 ? ' ×' + signs.length : ''}</span>` : ''}</div>`;
   }).join('');
-  const nodeHtml = ns.map((n) => `<div class="fl-node ${flCls(n)}${crit.has(n.id) ? ' crit' : ''}" id="fl-${esc(n.id)}"
-      style="left:${n.x}px;top:${n.y}px;--fn:${FNHEX[n.t.职能] || 'var(--ink3)'}" data-nid="${esc(n.id)}"
+  const nodeHtml = ns.map((n) => `<div class="fl-node ${flCls(n)}${crit.has(n.id) ? ' crit' : ''}${suspCls(n.t)}" id="fl-${esc(n.id)}"
+      style="left:${n.x}px;top:${n.y}px;--fn:${FNHEX[n.t.职能] || 'var(--ink3)'}" data-nid="${esc(n.id)}"${suspOf(n.t) ? ` title="${esc(suspTip(n.t))}"` : ''}
       onclick="location.hash='#/t/${encodeURIComponent(n.id)}'" onmouseenter="flChain('${esc(n.id)}')" onmouseleave="flChain(null)">
-      <span class="nid">${esc(n.id)}</span><span class="nst">${n.cyc ? '⚠环' : esc(n.t.state)}</span>
+      <span class="nid">${snowB(n.t)}${esc(n.id)}</span><span class="nst">${n.cyc ? '⚠环' : esc(n.t.state)}</span>
       <div class="nt">${esc(n.t.title)}</div><span class="nh">${n.h}h</span></div>`).join('');
   window._flData = { ns: ns.map((n) => ({ id: n.id, deps: n.deps })), done: ns.filter((n) => DONE.has(n.t.state)).map((n) => n.id) };
   // 现在/接下来摘要条（2026-08-06 制作人用例：「主要看现在在做什么、后面还有什么」——答案端上面，不用进图里找）
@@ -675,8 +684,8 @@ async function viewTree() {
     const collapsed = tState.collapsed.has(t.id);
     const twist = isParent ? `<span class="twist2" onclick="event.stopPropagation();tToggle('${esc(t.id)}')">${collapsed ? '▸' : '▾'}</span>`
       : '<span class="twist2 none">·</span>'; // 叶子一律「·」——▸ 只留给真能开合的父行（2026-08-06 交互全测：同形箭头误导可点）
-    return `<div class="trow2 ${isParent ? 'parent' : 'leaf'} ${lv ? 'lv' + Math.min(lv, 3) : ''} ${acceptN ? 'hasaccept' : ''}" onclick="location.hash='#/t/${t.id}'">
-      ${twist}<span class="tid2">${esc(t.id)}</span><span class="tt2 clamp2" title="${esc(t.title)}">${esc(t.title)}</span>
+    return `<div class="trow2 ${isParent ? 'parent' : 'leaf'} ${lv ? 'lv' + Math.min(lv, 3) : ''} ${acceptN ? 'hasaccept' : ''}${suspCls(t)}" onclick="location.hash='#/t/${t.id}'"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}>
+      ${twist}<span class="tid2">${snowB(t)}${esc(t.id)}</span><span class="tt2 clamp2" title="${esc(t.title)}">${esc(t.title)}</span>
       ${isParent ? `<span class="kids">${chn.length} 子单${t.阶段 ? ' · ' + esc(t.阶段) : ''}</span>` : ''}
       <span class="mid">${isParent ? '' : fnPill(t.职能)}${stPill(t.state)}${isParent && t.state === '待验收' ? `<span class="pill signq" title="${esc(t.验收方式 === '保留' ? '保留 · 只你能签' : '委托 · 核查可代签，仍在你队列')}">✍ 等你签字</span>` : ''}</span>
       <div class="prog"><span class="bar"><i style="width:${pct}%"></i></span><span class="pv">${pct}%</span></div>
@@ -784,7 +793,8 @@ function timelineHtml(agents, all, opts) {
     const x = (g.s - t0) / 3600000 * pxh; const w = Math.max(6, (g.e - g.s) / 3600000 * pxh);
     const c = FNHEX[g.t.职能] || 'var(--ink3)';
     const label = byFn && w >= 44 ? `<i class="tlseglb">${esc(g.t.id.replace(/^TK-/, ''))}</i>` : '';
-    return `<span class="tlseg ${g.inflight ? 'on' : ''}" style="--i:${si++};left:${x}px;width:${w}px;background:${c}${byFn ? `;top:${3 + (g.lv || 0) * 30}px` : ''}" title="${esc(g.t.id)} ${esc(g.t.title)}（${g.inflight ? '进行中' : '已交付'}）" onclick="location.hash='#/t/${esc(g.t.id)}'">${label}</span>`;
+    // 在途 ❄（施工令-021）：冻结段既不是「进行中」也不是「已交付」，标题里如实说第三种
+    return `<span class="tlseg ${g.inflight ? 'on' : ''}${suspCls(g.t)}" style="--i:${si++};left:${x}px;width:${w}px;background:${c}${byFn ? `;top:${3 + (g.lv || 0) * 30}px` : ''}" title="${esc(g.t.id)} ${esc(g.t.title)}（${suspOf(g.t) ? '已挂起' : g.inflight ? '进行中' : '已交付'}）${suspOf(g.t) ? '\n' + esc(suspTip(g.t)) : ''}" onclick="location.hash='#/t/${esc(g.t.id)}'">${suspOf(g.t) ? '<i class="tlseglb snowb">❄</i>' : label}</span>`;
   }).join('')}</div>`).join('');
   const colH = ids.reduce((a, id) => a + rowH(id), 0);
   setTimeout(() => { const el = $('tlscroll'); if (el) el.scrollLeft = el.scrollWidth; }, 0);
@@ -915,6 +925,12 @@ async function viewAgents() {
 
 /* ===== P4 决策台 ===== */
 let dTab = 'accept';
+/* 决策台裁决权按钮（施工令-021）：签字位上除了「通过 / 打回」，制作人还得有「先停下」和「不要了」。
+   案源正是这两个在决策台压根没有——总监的土法是往文件里手写搁置令，机器读不到。
+   专项/父单一视同仁：有子单就给全树选项，不因为它是容器就少一排按钮。 */
+const dJudgeBtns = (cur, 有子) => `
+  <button class="btn h36" onclick="suspAsk('${esc(cur.id)}',${cur.挂起 ? 'false' : 'true'},${有子 ? 'true' : 'false'})" title="${cur.挂起 ? '原位复活，重新进入调度' : '原位冻结：单不挪窝，全链路跳过'}">${cur.挂起 ? '❄ 解挂' : '❄ 挂起'}</button>
+  <button class="btn danger-o h36" onclick="askAct2('废弃','${esc(cur.id)}','废弃并归档 ${esc(cur.id)}？此单进已归档不可逆，返工需另开新单。')" title="终态判决：进已归档不可逆">废弃</button>`;
 async function viewDecisions() {
   const d = await api('/api/decisions');
   // D42：决策台按当前项目过滤（积压计数是全局闸，保持全局读数）
@@ -931,21 +947,29 @@ async function viewDecisions() {
     const std = (tk.body || '').split(/^## /m).find((s) => s.startsWith('验收标准')) || '';
     const stdLines = std.split('\n').slice(1).filter((l) => l.trim()).slice(0, 6).map((l) => `<div class="doc-line">${esc(l)}</div>`).join('') || '<div class="doc-line dim">（工单未写验收标准）</div>';
     const isKeep = cur.验收方式 === '保留';
-    main = `<div class="dmain card r16"><h2>${esc(cur.id)} · ${esc(cur.title)}</h2>
-      <div class="chipsrow">${fnPill(cur.职能)}<span class="pill mut">${esc(cur.验收方式 || '保留')}${isKeep ? ' · 只你能签' : ''}</span>${cur.自修次数 ? `<span class="pill red">QA 未过 · 自修 ${cur.自修次数}</span>` : ''}</div>
+    // 挂起横幅进决策台（施工令-021）：签字位上摆一张冻结单而不说明，制作人只会点下去撞一鼻子灰
+    const 有子 = ((tk.链 && tk.链.父子 && tk.链.父子.子) || []).length;
+    const suspBar = cur.挂起 ? `<div class="suspbar" style="margin:12px 0 0">
+        <span class="snowb" style="font-size:16px">❄</span><b>已挂起 · 原位冻结</b>
+        <span class="sbwho">${esc(cur.挂起.操作者 || '制作人')} · ${esc(String(cur.挂起.时间 || '').slice(0, 16).replace('T', ' '))}</span>
+        <span class="sp"></span>
+        <button class="btn accent h32" onclick="suspAsk('${esc(cur.id)}',false,${有子 ? 'true' : 'false'})">解挂</button>
+        ${cur.挂起.理由 ? `<span class="sbwhy">理由：${esc(cur.挂起.理由)}</span>` : ''}</div>` : '';
+    main = `<div class="dmain card r16"><h2>${snowB(cur)}${esc(cur.id)} · ${esc(cur.title)}</h2>
+      <div class="chipsrow">${fnPill(cur.职能)}<span class="pill mut">${esc(cur.验收方式 || '保留')}${isKeep ? ' · 只你能签' : ''}</span>${cur.自修次数 ? `<span class="pill red">QA 未过 · 自修 ${cur.自修次数}</span>` : ''}${cur.挂起 ? `<span class="pill susp-p" title="${esc(suspTip(cur))}">❄ 已挂起</span>` : ''}</div>${suspBar}
       <div class="dpanes"><div class="dpane"><div class="ph">${tk.回执 ? '产出预览 · 回执' : '工单正文'}</div>${pvLines || '<div class="doc-line dim">（空）</div>'}</div>
       <div class="dpane"><div class="ph">${dTab === 'accept' ? '验收标准（委托核查范围）' : '四件套'}</div>${dTab === 'accept' ? stdLines
         : `<div class="doc-line">结论：QA 未通过（自修 ${cur.自修次数 || 0} 轮）</div><div class="doc-line">问题/原因/解法：见回执异议与 QA 章节</div>`}
         ${isKeep && dTab === 'accept' ? '<div class="taste">待你品味：产出对不对味，只有你能签。</div>' : ''}</div></div>
       ${dTab === 'accept' ? `<div class="dsign"><span>${isKeep ? '保留单 · 品味终审' : '委托单 · 可核项由核查代签'}</span>
         <div class="btns"><button class="btn primary h36" onclick="dAct('验收','${esc(cur.id)}',true)">通过入库</button>
-        <button class="btn h36" onclick="dReject('${esc(cur.id)}')">打回</button></div></div>`
+        <button class="btn h36" onclick="dReject('${esc(cur.id)}')">打回</button>${dJudgeBtns(cur, 有子)}</div></div>`
       : `<div class="dsign"><span>QA 修不好 · 呈你我裁决</span><div class="btns">
         <button class="btn h36" onclick="dAct('定夺','${esc(cur.id)}',null,'接受')">接受</button>
         <button class="btn h36" onclick="dAct('定夺','${esc(cur.id)}',null,'给方向')">给方向</button>
-        <button class="btn danger-o h36" onclick="dAct('定夺','${esc(cur.id)}',null,'打回')">打回</button></div></div>`}</div>`;
+        <button class="btn danger-o h36" onclick="dAct('定夺','${esc(cur.id)}',null,'打回')">打回</button>${dJudgeBtns(cur, 有子)}</div></div>`}</div>`;
   }
-  const q1 = d.待验收.map((t) => `<div class="qitem" onclick="dTab='accept';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · ${esc(t.验收方式 || '保留')}</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>';
+  const q1 = d.待验收.map((t) => `<div class="qitem${suspCls(t)}" onclick="dTab='accept';route()"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}><span class="qi mono">${snowB(t)}${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · ${esc(t.验收方式 || '保留')}</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>';
   // H64 编辑器锁（2026-08-05 制作人指正：锁属验收流程，落决策台不落首页）——数据后到原地填
   setTimeout(async () => { try {
     const run = await api('/api/runner');
@@ -962,7 +986,7 @@ async function viewDecisions() {
       <span class="backlog2">待验收积压 ${d.积压} / ${d.积压闸}</span></div>
     <div class="dgrid">${main}<div><div class="dside card r16"><h3>待验收队列</h3>${q1}</div>
       <div class="dside card r16"><h3 class="${d.待定夺.length ? 'err' : ''}">待定夺 · ${d.待定夺.length}</h3>
-        ${d.待定夺.map((t) => `<div class="qitem" onclick="dTab='escal';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · QA 未过</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>'}</div></div></div>`;
+        ${d.待定夺.map((t) => `<div class="qitem${suspCls(t)}" onclick="dTab='escal';route()"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}><span class="qi mono">${snowB(t)}${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · QA 未过</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>'}</div></div></div>`;
 }
 window.dAct = async (name, id, 通过, 决定) => { const r = await post('/api/act/' + name, { id, 通过, 决定 }); toast(r.ok ? '已处理' : (r.error || '失败')); route(); };
 window.dReject = async (id) => { if (await ask('打回将归档旧单，需另开新单重走流程。确认？')) dAct('验收', id, false); };
@@ -1612,7 +1636,28 @@ async function viewDetail(id) {
         <div class="rsec"><div class="rl">回执原文</div><div class="rv mono" style="white-space:pre-line">${esc(tail || '（回执为空文件）')}</div></div>`;
     }
   }
+  // ---- 已挂起横幅（施工令-021）：顶在最上层，挂起人/时间/理由/解挂按钮一屏交代完 ----
+  // 放在 engHtml/liveHtml 之前——制作人打开一张冻结单，第一眼要看到的是「它被你按停了」，
+  // 而不是一条还在走表的进度条。
+  let suspHtml = '';
+  if (fm.挂起) {
+    const s = fm.挂起;
+    const 子挂 = (c.父子.子 || []).length; // 有子单的父单：解挂时问一句要不要连子单一起放
+    suspHtml = `<div class="suspbar" id="suspbar">
+      <span class="snowb" style="font-size:16px">❄</span><b>已挂起 · 原位冻结</b>
+      <span class="sbwho">${esc(s.操作者 || '制作人')} · ${esc(String(s.时间 || '').slice(0, 16).replace('T', ' '))}${s.挂起时状态 ? ' · 挂起于「' + esc(s.挂起时状态) + '」' : ''}${s.连带自 ? ' · 随父单 ' + esc(s.连带自) + ' 全树挂起' : ''}</span>
+      <span class="sp"></span>
+      <button class="btn accent h32" onclick="suspAsk('${esc(id)}',false,${子挂 ? 'true' : 'false'})">解挂 · 原位复活</button>
+      <span class="sbwhy">派发 / 领单 / 质检 / 初检 / 核查 / 仲裁 / 巡检告警全部跳过本单；解挂后回到「${esc(d.state)}」原位继续被调度。${s.理由 ? '<br>理由：' + esc(s.理由) : ''}</span></div>`;
+  }
   const ops = [];
+  // 挂起/解挂（施工令-021）：非终态皆可挂，**专项/父单同样渲染**——案源正是父单详情页无按钮可用。
+  // 位置放在操作栏最前：这是「先停下」的闸，它比任何往前推的动作都优先。
+  if (!['完成', '已归档'].includes(d.state)) {
+    const 有子 = (c.父子.子 || []).length;
+    if (fm.挂起) ops.push(['解挂', `原位复活回「${esc(d.state)}」，重新可被调度${有子 ? '（可连带子单）' : ''}`, `suspAsk('${id}',false,${有子 ? 'true' : 'false'})`]);
+    else ops.push(['挂起', `原位冻结：单不挪窝，全链路跳过${有子 ? `（可连带 ${有子} 张子单全树挂起）` : ''}`, `suspAsk('${id}',true,${有子 ? 'true' : 'false'})`]);
+  }
   if (['池', '待投'].includes(d.state)) ops.push(['撤回', '回草稿（仅在池 / 待投）', `act2('撤回','${id}')`]);
   if (d.state === '在途') ops.push(['收回', '从执行方取回在途单', `act2('收回','${id}')`]);
   if (fm.待复核) ops.push(['解除复核', `上游 ${esc(fm.待复核.锚号 || '')} 已核对新版`, `act2('解除复核','${id}')`]); // D36
@@ -1637,10 +1682,11 @@ async function viewDetail(id) {
   }
   if (['完成', '已归档'].includes(d.state)) ops.push(['推翻重做', '翻案：归档旧单+自动开返工草稿（须写理由）', `overturnModal('${id}')`]);
   if (d.state === '已归档') ops.push([fm.隐藏 ? '取消隐藏' : '隐藏归档', fm.隐藏 ? '重新出现在归档列表' : '从一切默认视图湮灭（纸面仍可考）', `toggleHide('${id}',${fm.隐藏 ? 'false' : 'true'})`]);
-  return `${engHtml}${liveHtml}<div class="p8grid"><div>
+  return `${suspHtml}${engHtml}${liveHtml}<div class="p8grid"><div>
       <div class="p8main card r16"><h2>${esc(id)} · ${esc(fm.title)}</h2>
         <div class="chipsrow">${fnPill(fm.职能)}<span class="pill mut">${esc(fm.产出物类型 || '')}</span>
           <span class="pill ${fm.验收方式 === '委托' ? 'mut' : 'ok'}">${esc(fm.验收方式 || '保留')}</span><span class="pill mut">${esc(fm.规模 || '')}</span>
+          ${fm.挂起 ? `<span class="pill susp-p" title="${esc(suspTip({ 挂起: fm.挂起 }))}">❄ 已挂起</span>` : ''}
           ${fm.待复核 ? `<span class="pill red" title="${esc(fm.待复核.说明 || '')}">待复核 · ${esc(fm.待复核.锚号 || '')}</span>` : ''}
           ${fm.代核 ? `<span class="pill ${fm.代核.结论 === '通过' ? 'ok' : 'red'}">核查${esc(fm.代核.结论)}</span>` : ''}</div>
         <div class="chain"><div class="clbl">追溯链</div>
@@ -1775,6 +1821,38 @@ window.doGiveDir = async (id, btn) => {
   if (!r.ok) { btn.disabled = false; return toast(r.error || '失败'); }
   btn.closest('.mwrap').remove();
   toast('已给方向 → 回在途重做');
+  route();
+};
+
+/* ===== 挂起 / 解挂弹窗（施工令-021 · 制作人裁决权）=====
+   带确认是硬要求：挂起会让一张单从全链路里消失，无声按下去和无声跑起来一样危险。
+   父单（有子单的单）额外给「仅父单 / 全树」两选——只冻父单而子单照跑，是把专项冻了个寂寞。 */
+window.suspAsk = (id, 挂, 有子) => {
+  const 动 = 挂 ? '挂起' : '解挂';
+  const 树注 = 挂
+    ? '全树挂起 = 连带本单全部子孙一起冻结（终态子单与已单独挂起的子单跳过）。'
+    : '全树解挂 = 连带「随本单全树挂起」的子孙一起放行；单独挂过的子单保持挂起，不代你改主意。';
+  showModal(`<h3>${动} ${esc(id)}</h3>
+    <p class="subnote" style="margin-top:6px">${挂
+    ? '挂起 = <b>原位冻结</b>：单一步不挪，仍在当前状态目录里，但派发 / 领单 / 质检 / 初检 / 核查 / 仲裁 / 巡检告警全部跳过它，在途会话会被掐掉。这不是废弃——随时可解挂原位复活。'
+    : '解挂 = <b>原位复活</b>：回到它挂起时所在的状态继续被正常调度。'}</p>
+    ${挂 ? `<textarea id="susp-r" style="width:100%;height:80px;margin-top:12px" placeholder="为什么冻它（选填，进 frontmatter 与流水，事后回答得出「当时为什么停」）"></textarea>` : ''}
+    ${有子 ? `<label class="subnote" style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+      <input type="checkbox" id="susp-tree" checked> 全树${动}（连带子单）</label>
+      <p class="subnote" style="margin-top:6px">${树注}</p>` : ''}
+    <div class="p7foot" style="margin-top:14px"><button class="btn h32" onclick="this.closest('.mwrap').remove()">取消</button>
+    <button class="btn accent h32" onclick="doSusp('${esc(id)}',${挂},this)">确认${动}</button></div>`);
+};
+window.doSusp = async (id, 挂, btn) => {
+  const box = $('susp-tree');
+  const body = { id, 操作者: '制作人', 全树: !!(box && box.checked) };
+  if (挂) { const r0 = $('susp-r'); if (r0 && r0.value.trim()) body.理由 = r0.value.trim(); }
+  btn.disabled = true;
+  const r = await post('/api/act/' + (挂 ? '挂起' : '解挂'), body);
+  if (!r.ok) { btn.disabled = false; return toast(r.error || '失败'); }
+  btn.closest('.mwrap').remove();
+  const n = ((挂 ? r.挂起 : r.解挂) || []).length;
+  toast(挂 ? `已挂起${n > 1 ? ` · 连带 ${n - 1} 张子单` : ''}` : `已解挂${n > 1 ? ` · 连带 ${n - 1} 张子单` : ''}`);
   route();
 };
 

@@ -84,6 +84,7 @@ async function claim(root, cfg, agentId, now) {
   for (const t of listPool(root, cfg, 职能)) {
     if (!depsSatisfied(root, t)) continue;
     if (t.fm.待复核) continue; // D36：上游改版未核对的单不派活
+    if (t.fm.挂起) continue;   // 施工令-021：挂起单不给领（拉取制这条路同样得堵，否则派发制堵了它还能从池里被捞走）
     const r = store.move(root, t.id, '池', '在途', (fm) => {
       fm.主办 = agentId; fm.执行池 = poolName; fm.领单时间 = nowIso;
     }, nowIso);

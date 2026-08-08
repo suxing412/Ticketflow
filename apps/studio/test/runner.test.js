@@ -496,5 +496,115 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.equal(patrol.零输出(root, CFG, { 执行中: [死] }).告警.length, 1, '真零输出照报');
   });
 
+  /* ===== 挂起单全环节跳过（施工令-021）=====
+     一个环节一条：漏堵任何一条，制作人按下的冻结就是假的。 */
+
+  await t('挂起①：在途单不起执行（断点续跑这条路最容易漏堵）', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '在途', { id: 'H-01', 职能: '策划', 主办: '策划-A' });
+    life.挂起(root, 'H-01', '制作人', '方向不对');
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok(!(r.执行 || []).includes('H-01'), '不许起执行');
+    assert.ok((r.拒因 || []).some((x) => x.includes('H-01') && x.includes('挂起')), '拒因要说人话');
+    assert.equal(store.find(root, 'H-01').state, '在途', '原位不动');
+    // 解挂即复活：同一把 tick，什么都不改，单就该被捡起来
+    life.解挂(root, 'H-01', '制作人');
+    const r2 = await runner.tick(root, CFG, UN);
+    assert.ok((r2.执行 || []).includes('H-01'), '解挂后原位复活可被正常调度');
+  });
+
+  await t('挂起②：领单（拉取制 claim）跳过池里的挂起单', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '池', { id: 'H-02', 职能: '策划' });
+    life.挂起(root, 'H-02', '制作人');
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok(!(r.领单 || []).includes('H-02'));
+    assert.equal(store.find(root, 'H-02').state, '池', '没被谁捞走');
+    life.解挂(root, 'H-02');
+    assert.ok(((await runner.tick(root, CFG, UN)).领单 || []).includes('H-02'), '解挂后可领');
+  });
+
+  await t('挂起②′：派发制就绪队列不含挂起单（零派发计数亦据此不误报）', async () => {
+    const root = makeRoot(); on(root);
+    const cfg = { ...CFG, 执行器: { 派发制: true } };
+    seed(root, '待投', { id: 'H-03', 职能: '策划', 放行: true });
+    seed(root, '待投', { id: 'H-04', 职能: '程序', 放行: true });
+    life.挂起(root, 'H-03', '制作人');
+    const ready = require('../lib/pm/dispatch').readySet(root, new Set());
+    assert.deepEqual(ready.map((x) => x.id), ['H-04'], '就绪盘点直接过滤');
+    const r = await runner.tick(root, cfg, { ...UN, noBrain: true });
+    assert.ok(!(r.领单 || []).includes('H-03'), '不派发');
+    assert.equal(store.find(root, 'H-03').state, '待投');
+  });
+
+  await t('挂起③：质检不开会话', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '质检', { id: 'H-05', 职能: '策划' });
+    life.挂起(root, 'H-05', '制作人');
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok(!(r.质检 || []).includes('H-05'));
+    assert.equal(store.find(root, 'H-05').state, '质检');
+  });
+
+  await t('挂起④a/④b：初检与核查都跳过（对照组同轮照常被核）', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    for (const id of ['H-06', 'H-07']) fs.writeFileSync(path.join(root, '回执', `${id}.md`), `# 完工报告 ${id}\n`, 'utf8');
+    seed(root, '待验收', { id: 'H-06', 职能: '程序', 验收方式: '委托' });
+    seed(root, '待验收', { id: 'H-07', 职能: '程序', 验收方式: '委托' });
+    life.挂起(root, 'H-06', '制作人');
+    const r = await runner.tick(root, CFG, UN); // 默认两检关（CFG 无 deepseek 池）→ 直接走 ④b 代核
+    assert.ok(!(r.代核 || []).includes('H-06'), '挂起单不核');
+    assert.ok((r.代核 || []).includes('H-07'), '对照组照核——证明是挂起在拦，不是环节整个没跑');
+    assert.equal(store.find(root, 'H-06').state, '待验收', '原位不动');
+    // 初检：开两检后同样跳过
+    const root2 = makeRoot(); on(root2);
+    const cfg2 = { ...CFG, 执行池: { ...CFG.执行池, deepseek: { 职能: [], 阈值: 70 } }, 执行器: { 两检: { 开: true, 池: 'deepseek' } } };
+    seed(root2, '待验收', { id: 'H-08', 职能: '程序', 验收方式: '委托' });
+    life.挂起(root2, 'H-08', '制作人');
+    const r2 = await runner.tick(root2, cfg2, UN);
+    assert.ok(!(r2.初检 || []).length, '初检不挑挂起单');
+    assert.ok(!store.find(root2, 'H-08').fm.初检, '不盖初检章');
+  });
+
+  await t('挂起⑤：仲裁不裁（对照组同轮照常被裁）', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '待定夺', { id: 'H-09', 职能: '程序', 主办: '程序-A' });
+    seed(root, '待定夺', { id: 'H-10', 职能: '程序', 主办: '程序-A' });
+    life.挂起(root, 'H-09', '制作人');
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok(!(r.代裁 || []).includes('H-09'), '挂起单不裁');
+    assert.ok((r.代裁 || []).includes('H-10'), '对照组照裁');
+    assert.equal(store.find(root, 'H-09').state, '待定夺');
+    assert.ok(!store.find(root, 'H-09').fm.代裁, '不盖代裁章');
+  });
+
+  await t('挂起 · 巡检告警：零派发/打点停滞/零输出三只狗全不叫', async () => {
+    const patrol = require('../lib/pm/patrol');
+    const root = makeRoot(); patrol.重置(root);
+    // 零派发狗：唯一的就绪单被挂起 → 队列空 → 连续零不累计（否则冻结本身会被当成故障刷屏）
+    seed(root, '待投', { id: 'H-11', 职能: '策划', 放行: true });
+    life.挂起(root, 'H-11', '制作人');
+    for (let i = 0; i < 4; i++) {
+      const z = patrol.零派发告警(root, CFG, { 执行中: 0, 派发累计: 0 });
+      assert.deepEqual(z.就绪, [], '挂起单不进就绪');
+      assert.equal(z.连续零, 0, '零派发计数不因冻结单而累计');
+      assert.equal(z.告警, null);
+    }
+    // 打点停滞狗 + 零输出狗：残留会话也不该让制作人收到「它卡住了」
+    seed(root, '在途', { id: 'H-12', 职能: '策划', 主办: '策划-A' });
+    life.挂起(root, 'H-12', '制作人');
+    const 久 = Date.now() - 45 * 60000;
+    const 停 = { id: 'H-12', kind: '执行', 池: 'claude', startedAt: new Date(久).toISOString(), tail: '[进度 1/3 起步]', 收字节: 10 };
+    patrol.打点停滞(root, CFG, { 执行中: [停], now: 久 });
+    assert.equal(patrol.打点停滞(root, CFG, { 执行中: [停], now: Date.now() }).告警.length, 0, '冻结单不报打点停滞');
+    const 哑 = { id: 'H-12', kind: '执行', 池: 'codex', startedAt: new Date(久).toISOString(), tail: '', 收字节: 0 };
+    assert.equal(patrol.零输出(root, CFG, { 执行中: [哑] }).告警.length, 0, '冻结单不报零输出');
+    // 对照组：换一张没挂起的单，两只狗照叫——证明是挂起在拦，不是狗被打死了
+    seed(root, '在途', { id: 'H-13', 职能: '策划', 主办: '策划-A' });
+    const 哑2 = { ...哑, id: 'H-13' };
+    assert.equal(patrol.零输出(root, CFG, { 执行中: [哑2] }).告警.length, 1, '未挂起的真零输出照报');
+  });
+
   console.log(`全部通过：${passed} 项`);
 })().catch((e) => { console.error('  ✗ ' + e.message); process.exit(1); });

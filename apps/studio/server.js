@@ -171,6 +171,7 @@ app.get('/api/board', (req, res) => {
     父单: t.fm.父单 || null, 依赖: t.fm.依赖 || null, 管线: t.fm.管线 || null, // H51 管线章
     父单类型: t.fm.父单类型 || null,
     领单时间: t.fm.领单时间 || null, 交付时间: t.fm.交付时间 || null, 滞留告警: !!t.fm.滞留告警,
+    挂起: t.fm.挂起 || null, // 施工令-021：工单池卡/树形行/流程节点/在途四处的 ❄ 置灰都读这一个字段
   }));
   res.json({ states: store.STATES, board: out, 隐藏数 });
 });
@@ -861,8 +862,10 @@ app.post('/api/open', (req, res) => {
 // ---- 决策台（P4）：待验收 + 待定夺 ----
 app.get('/api/decisions', (req, res) => {
   if (!ready(res)) return;
-  const accept = store.list(ROOT, '待验收').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 验收方式: t.fm.验收方式, QA: t.fm.QA, 项目: t.fm.项目 }));
-  const escal = store.list(ROOT, '待定夺').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 自修次数: t.fm.自修次数 || 0, 项目: t.fm.项目 }));
+  // 挂起字段随行（施工令-021）：决策台要据此置灰并给出解挂按钮——不带这一栏，制作人在签字位上
+  // 看到的就是一张「看着能签、点下去被拦」的单。
+  const accept = store.list(ROOT, '待验收').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 验收方式: t.fm.验收方式, QA: t.fm.QA, 项目: t.fm.项目, 挂起: t.fm.挂起 || null, 父单类型: t.fm.父单类型 || null }));
+  const escal = store.list(ROOT, '待定夺').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 自修次数: t.fm.自修次数 || 0, 项目: t.fm.项目, 挂起: t.fm.挂起 || null, 父单类型: t.fm.父单类型 || null }));
   res.json({ 待验收: accept, 待定夺: escal, 积压闸: (cfg.闸值 || {}).待验收积压闸, 积压: accept.length });
 });
 
@@ -939,6 +942,17 @@ const ACTIONS = {
   返修: (b) => life.返修(ROOT, b.id, b.说明), // H65：同活同号——执行失败/待验收回草稿改写，计数保留
   推翻: (b) => life.推翻(ROOT, b.id, b.理由), // 制作人翻案：完成/已归档 → 自动编号返工草稿
   隐藏: (b) => life.隐藏(ROOT, b.id, b.值), // 隐藏归档：默认视图湮灭，纸面可考
+  // 施工令-021 制作人裁决权：挂起=原位冻结（单不挪窝，全链路跳过），解挂=原位复活。
+  // 掐会话与废弃/收回同款——在途单被冻结时进程还在跑，等于没冻。
+  挂起: (b) => {
+    // 先掐后冻：反过来的话，冻结与掐会话之间那一小段里会话可能刚好收线，
+    // 交产出虽被 life 层的挂起守卫挡住，却会白白走一趟失败路径（回执已落盘、状态没动）。
+    runner.killTicket(ROOT, b.id);
+    if (!b.全树) return life.挂起(ROOT, b.id, b.操作者, b.理由);
+    for (const c of life.子孙(ROOT, b.id)) runner.killTicket(ROOT, c.id);
+    return life.挂起树(ROOT, b.id, b.操作者, b.理由);
+  },
+  解挂: (b) => (b.全树 ? life.解挂树(ROOT, b.id, b.操作者) : life.解挂(ROOT, b.id, b.操作者)),
   放行: (b) => { // H49 派发制：待投单标放行（依赖就绪即被派发引擎拉起）
     const t = store.find(ROOT, b.id);
     if (!t) return { ok: false, error: '不存在' };
