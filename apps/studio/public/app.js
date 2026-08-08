@@ -434,234 +434,224 @@ async function viewBoard() {
     <div class="hsync" id="hsync"><div id="hsync-w" style="height:1px"></div></div>`;
 }
 
-/* ===== P12 流程（D43）：横轴=阶段 · 阶段内拓扑子列 · 泳道=系统（根祖先）· 红=关键路径 =====
-   兼任投池前排版台：草稿/待投也显示。父单（组织容器）不出节点，只当泳道。 */
+/* ===== P12 流程（施工令-022 重构）：现在线 · 管线甘特 =====
+   魂：一条「现在线」把每条管线横切成 沉淀｜现在｜接下来 三段——制作人 3 秒回答
+   「在做什么、接下来什么、卡在哪」。行=管线（/api/pipelines 注册）+「散单」特殊行（无管线归属的活动单）。
+   D43 的阶段横轴 / 泳道甘特 / 关键路径 / 显示历史机制整体退役；施工令-006 的签字位常驻语义并入本结构。
+   进度口径不另立一套：吃服务端随 /api/agents 下发的 进度 字段（lib/progress.js 算好，与 /api/runner 同源），
+   15s 活体刷新复用在途页那条 pollLoop。挂起（施工令-021）不进现在/接下来两段，直接落沉淀抽屉的 ❄ 类。 */
+const FG_DOING = new Set(['在途', '质检']);       // 现在区：实心条 + 实时百分比
+const FG_STUCK = new Set(['待定夺', '执行失败']); // 现在区：卡住的也算「现在」（三问之一就是「卡在哪」）
+const FG_QUEUE = new Set(['待投', '池', '草稿']); // 接下来区：按依赖拓扑排
+const FG_DONE = new Set(['完成', '已归档']);
+const FG_SIGN = new Set(['待验收', '待定夺']);    // 等制作人落笔的两态（006 签字位）
+// 沉淀四分类（制作人追加重点）：完成 / ❄挂起 / 废弃 / 推翻——计数分开列，点哪类只展哪类
+const FG_CATS = [['done', '完成'], ['susp', '❄挂起'], ['drop', '废弃'], ['over', '推翻']];
+// 分类判据：挂起优先（原位冻结，状态还停在原处，不是终态）；已归档按 归档原因 分流。
+// 归档原因缺失的老单归「废弃」——已归档且没有成功记录，按丢弃计比冒充完成诚实。
+const fgCat = (t) => {
+  if (suspOf(t)) return 'susp';
+  if (t.state === '完成') return 'done';
+  if (t.state !== '已归档') return null;
+  const why = String(t.归档原因 || '');
+  if (why.includes('推翻') || why.includes('返工')) return 'over';
+  return 'drop';
+};
+let fgOpen = {}; // 沉淀抽屉展开态：laneKey -> 类别 key。空 = 全折——**默认全折叠，页面上只活人说话**
 async function viewFlow() {
-  const [{ all }, stg, pls] = await Promise.all([loadBoard(), api('/api/stages?项目=' + encodeURIComponent(curProj())).catch(() => ({ 阶段: [], 标准: {} })), api('/api/pipelines').catch(() => ({ 管线: [] }))]);
-  const STG = (stg.阶段 && stg.阶段.length) ? stg.阶段 : [{ 代号: 'L0', 名称: '原型' }, { 代号: 'L1', 名称: '正式化' }, { 代号: 'L2', 名称: '打磨' }];
+  const [{ all }, pls, agRaw] = await Promise.all([
+    loadBoard(),
+    api('/api/pipelines').catch(() => ({ 管线: [] })),
+    api('/api/agents').catch(() => ({ 在跑: [] })),
+  ]);
+  const ag = agentsScoped(agRaw, all); // 与在途页同一道项目闸，百分比才对得上号
   const byId = Object.fromEntries(all.map((t) => [t.id, t]));
   const pById = Object.fromEntries((pls.管线 || []).map((p) => [p.id, p]));
   const hasKids = new Set(all.filter((t) => t.父单 && byId[t.父单]).map((t) => t.父单));
-  const depsOf = (t) => t.依赖 ? (Array.isArray(t.依赖) ? t.依赖 : String(t.依赖).split(/[，,\s]+/)).filter((d) => byId[d]) : [];
-  const rootOf = (t) => { let c = t, g = 0; while (c.父单 && byId[c.父单] && g++ < 10) c = byId[c.父单]; return c; };
-  // H51 管线章解析：显式字段优先，否则沿父链上溯（子单继承专项父单的线）
+  // 组织容器（专项/战役父单）不占普通条位——只在它自己等签字时以里程碑旗出场
+  const isBox = (t) => hasKids.has(t.id) || ['战役', '专项'].includes(t.父单类型) || ['战役', '专项'].includes(t.主办);
+  const depsOf = (t) => (t.依赖 ? (Array.isArray(t.依赖) ? t.依赖.map(String) : String(t.依赖).split(/[，,、\s]+/)) : []).filter((d) => byId[d]);
+  // H51 管线章：显式字段优先，否则沿父链上溯（子单继承专项父单的线）
   const pipeOf = (t) => { let c = t, g = 0; while (c && g++ < 10) { if (c.管线 && pById[c.管线]) return c.管线; c = c.父单 ? byId[c.父单] : null; } return null; };
-  const DONE = new Set(['完成', '已归档']);
-  // 节点=非容器单；无阶段章的旧单归第一阶段
-  // 泳道两级分组（0.23.4，用户裁定「管线下按父单分组」）：管线 → 专项子泳道；散单归「散单」道
-  let nsAll = all.filter((t) => !hasKids.has(t.id)).map((t) => {
-    const pid = pipeOf(t);
-    const spec = rootOf(t);
-    const laneKey = pid
-      ? `${pid}::${spec.id !== t.id ? spec.id : '_misc'}`
-      : (spec.id === t.id ? '::未归属' : `::${spec.id}`);
-    const laneTitle = pid
-      ? (spec.id !== t.id ? `${spec.id} ${String(spec.title || '').replace(/^专项：|^战役：/, '').slice(0, 24)}` : '散单')
-      : (spec.id === t.id ? '未归属' : (spec.title || spec.id));
-    return {
-      t, id: t.id, deps: depsOf(t), stg: STG.some((s) => s.代号 === t.阶段) ? t.阶段 : STG[0].代号,
-      h: parseFloat(t.预计时间) || 1, pid, lane: laneKey, laneTitle,
-    };
+  const 进度By = Object.fromEntries((ag.在跑 || []).map((r) => [r.id, r]));
+
+  // ---- 依赖深度（拓扑序）：先占位再回填，天然断环，不会因为一条环边把整页算死 ----
+  const 深 = {};
+  const deep = (id, g) => {
+    if (深[id] != null) return 深[id];
+    深[id] = 0;
+    const t = byId[id];
+    if (!t || g > 30) return 0;
+    const ds = depsOf(t);
+    深[id] = ds.length ? Math.max(0, ...ds.map((d) => deep(d, g + 1) + 1)) : 0;
+    return 深[id];
+  };
+  all.forEach((t) => deep(t.id, 0));
+  // 死结：依赖挂在一张被冻结/已归档的单上——这就是「卡在哪」的答案，红字直说
+  const 死结 = (t) => depsOf(t).filter((d) => suspOf(byId[d]) || byId[d].state === '已归档');
+
+  // ---- 分行：注册管线 + 散单特殊行 ----
+  const MISC = '_misc';
+  const lanes = {};
+  const lane = (k) => (lanes[k] = lanes[k] || { key: k, items: [] });
+  for (const t of all) lane(pipeOf(t) || MISC).items.push(t);
+  for (const p of (pls.管线 || [])) if (p.状态 !== '封存') lane(p.id); // 注册即有行：新开的线空着也要占位（不然看不见"该派活了"）
+  const laneKeys = Object.keys(lanes).sort((a, b) => {
+    if ((a === MISC) !== (b === MISC)) return a === MISC ? 1 : -1; // 散单垫底
+    const na = Number(String(a).slice(2)), nb = Number(String(b).slice(2));
+    return (Number.isNaN(na) || Number.isNaN(nb)) ? String(a).localeCompare(String(b)) : na - nb;
   });
-  // 历史折叠进布局（不再 display:none 留空白）：全完成的子泳道整体不排，头行计数提示
-  const foldHist = (() => { try { return (localStorage.getItem('fl_fold') || 'on') !== 'off'; } catch { return true; } })();
-  // 签字位常驻（施工令-006）：折叠判据 = 组内**全部**为 完成/已归档，且要连容器单一起数。
-  // 旧判据只数叶子节点，而专项/阶段父单不出节点——「子单全完成、专项父单还挂在待验收」
-  // 的组于是被整道折进历史，制作人的签字队列凭空消失（2026-08-06 实拍病灶）。
-  const SIGN = new Set(['待验收', '待定夺']); // 等制作人落笔的两态
-  // 容器单归到它当家的那条道：根专项归自己那道，中间层父单归其根专项那道（与叶子的 laneKey 同构）
-  const laneKeyOfBox = (t) => { const pid = pipeOf(t); const spec = rootOf(t); return pid ? `${pid}::${spec.id}` : `::${spec.id}`; };
-  const laneBoxes = {};
-  for (const t of all) if (hasKids.has(t.id)) { const k = laneKeyOfBox(t); (laneBoxes[k] = laneBoxes[k] || []).push(t); }
-  const laneDone = {};
-  for (const n of nsAll) { (laneDone[n.lane] = laneDone[n.lane] || []).push(DONE.has(n.t.state)); }
-  const laneSign = {}; // 泳道 → 等签字的单（叶子 + 容器一起收）
-  const pushSign = (k, t) => { if (SIGN.has(t.state)) (laneSign[k] = laneSign[k] || []).push(t); };
-  for (const n of nsAll) pushSign(n.lane, n.t);
-  for (const k in laneBoxes) for (const t of laneBoxes[k]) pushSign(k, t);
-  const laneAllDone = (k) => (laneDone[k] || []).every(Boolean) && (laneBoxes[k] || []).every((t) => DONE.has(t.state));
-  const foldedLanes = new Set(Object.keys(laneDone).filter(laneAllDone));
-  const foldedByPipe = {};
-  if (foldHist) for (const k of foldedLanes) { const pid = k.split('::')[0]; foldedByPipe[pid] = (foldedByPipe[pid] || 0) + 1; }
-  const ns = foldHist ? nsAll.filter((n) => !foldedLanes.has(n.lane)) : nsAll;
-  if (!ns.length) {
-    const fN = foldHist ? foldedLanes.size : 0;
-    // 死胡同修复：文案让点「显示历史」，按钮本体就得在卡里——空态时主工具条整条不渲染，
-    // 光有文案没有钮 = 指路指到墙上（2026-08-06 实拍病灶）。
-    return `<div class="emptycard" style="margin-top:30px"><h5>流程空${fN ? `（${fN} 组已完成的历史被折叠）` : ''}</h5>
-      <p>起草工单（选阶段、填依赖/父单）后，这里按 管线×专项 铺出项目流动。${fN ? '待验收/待定夺的组不会被折——签字位常驻。' : ''}</p>
-      ${fN ? `<div class="emptyact"><button class="btn h32 on" id="fl-fold-btn" onclick="flFold(this)">显示历史（${fN} 组）</button></div>` : ''}</div>`;
+  if (!laneKeys.length) {
+    return `<div class="emptycard" style="margin-top:30px"><h5>还没有管线，也没有工单</h5>
+      <p>先在 <a href="#/params" style="color:var(--accent-ink)">⚙ 参数</a> 开一条管线（H51 人闸），或直接 <a href="#/draft" style="color:var(--accent-ink)">起草工单</a>——
+      有单之后这里按「沉淀｜现在｜接下来」三段铺出每条管线的现在线。</p></div>`;
   }
-  const nById = Object.fromEntries(ns.map((n) => [n.id, n]));
-  ns.forEach((n) => { n.deps = n.deps.filter((d) => nById[d]); });
-  const SIDX = Object.fromEntries(STG.map((s, i) => [s.代号, i]));
-  // 环检测
-  ns.forEach((n) => { n.cyc = false; });
-  { const st2 = {};
-    const visit = (id, stack) => {
-      if (st2[id] === 2) return false;
-      if (stack.has(id)) return true;
-      stack.add(id); let inC = false;
-      for (const d of nById[id].deps) if (visit(d, stack)) inC = true;
-      stack.delete(id); st2[id] = 2;
-      if (inC) nById[id].cyc = true;
-      return inC;
-    };
-    ns.forEach((n) => visit(n.id, new Set())); }
-  // 阶段内拓扑子深度（全阶段统一：同阶段依赖只向右，跨泳道不倒退）
-  ns.forEach((n) => { n.sub = 0; });
-  { let chg = true, g = 0;
-    while (chg && g++ < 120) { chg = false;
-      for (const n of ns) { if (n.cyc) continue;
-        const w = Math.max(0, ...n.deps.map((d) => nById[d]).filter((u) => u.stg === n.stg && !u.cyc).map((u) => u.sub + 1));
-        if (w !== n.sub) { n.sub = w; chg = true; } } } }
-  // 关键路径：未完成 · 预计时间加权
-  const memo = {};
-  const longest = (id) => {
-    if (memo[id]) return memo[id];
-    const n = nById[id];
-    if (!n || DONE.has(n.t.state) || n.cyc) return memo[id] = { len: 0, path: [] };
-    let best = { len: 0, path: [] };
-    for (const d of n.deps) { const r = longest(d); if (r.len > best.len) best = r; }
-    return memo[id] = { len: best.len + n.h, path: [...best.path, id] };
+
+  // ---- 单条渲染：四型（doing 实心带百分比 / sign 绿框 / stuck 红 / queue 虚框）----
+  const go = (id) => `location.hash='#/t/${encodeURIComponent(id)}'`;
+  const idShort = (dep, self) => {
+    const a = String(dep).match(/^(.+)-(\d+)$/), b = String(self).match(/^(.+)-(\d+)$/);
+    return (a && b && a[1] === b[1]) ? a[2] : dep;
   };
-  let cp = { len: 0, path: [] };
-  ns.forEach((n) => { const r = longest(n.id); if (r.len > cp.len) cp = r; });
-  const crit = new Set(cp.path);
-  const flCls = (n) => {
-    if (n.cyc) return 'cyc';
-    if (DONE.has(n.t.state)) return 'done';
-    if (n.t.state === '在途') return 'doing';
-    if (n.t.state === '质检') return 'review';
-    if (n.t.state === '待验收') return 'accept';
-    if (n.t.state === '执行失败') return 'failed';
-    if (n.t.state === '草稿' || n.t.state === '待投') return 'pre';
-    return n.deps.some((d) => !DONE.has(nById[d].t.state)) ? 'blocked' : 'ready';
-  };
-  // 主阶段 / 泳道阶段
-  const actCnt = {};
-  ns.forEach((n) => { if (!DONE.has(n.t.state)) actCnt[n.stg] = (actCnt[n.stg] || 0) + 1; });
-  const mainStage = (Object.entries(actCnt).sort((a, b) => b[1] - a[1])[0] || [STG[0].代号])[0];
-  // 布局
-  const NW = 146, NHh = 54, VG = 12, HGap = 22, X0 = 110, CELLPAD = 26;
-  const subMax = STG.map((s) => Math.max(0, ...ns.filter((n) => n.stg === s.代号).map((n) => n.sub)) + 1);
-  const stageX = []; let xa = X0;
-  STG.forEach((s, i) => { stageX[i] = xa; xa += CELLPAD + subMax[i] * (NW + HGap); });
-  // 泳道排序：按管线聚簇（有活单的专项在前，散单垫底，无线组殿后）；组首插管线头行
-  const laneAct = {};
-  for (const n of ns) if (!DONE.has(n.t.state)) laneAct[n.lane] = (laneAct[n.lane] || 0) + 1;
-  const laneNames = [...new Set(ns.map((n) => n.lane))].sort((a, b) => {
-    const [pa, sa] = a.split('::'), [pb, sb] = b.split('::');
-    if (pa !== pb) return (pa === '') - (pb === '') || String(pa).localeCompare(String(pb));
-    if ((sa === '_misc') !== (sb === '_misc')) return (sa === '_misc') - (sb === '_misc');
-    return (laneAct[b] || 0) - (laneAct[a] || 0) || String(sb).localeCompare(String(sa));
+  // 首屏与 15s 轮询必须同一个口径函数，否则会出现「刚进页面写 质检中，15 秒后自己改口 无执行会话」
+  // 这种同一事实两种说法的抖动（2026-08-08 实机抓到：首屏 阶段名 优先级压过了无会话判据）。
+  const 活体 = (r, fallbackState) => ({
+    百分比: (r && r.进度 && r.进度.百分比 != null) ? r.进度.百分比 : (STPCT[fallbackState] ?? null),
+    // 无会话优先：单还挂在在途/质检但没有执行会话 = 卡住，这时报阶段名等于替它掩护
+    阶段名: (r && r.有会话 === false) ? '无执行会话' : ((r && r.进度 && r.进度.阶段名) || fallbackState),
+    无会话: !!(r && r.有会话 === false),
   });
-  let yy = 30; const lanes = {}; const pipeHeads = []; let lastPipe = null;
-  for (const ln of laneNames) {
-    const pid = ln.split('::')[0];
-    if (pid && pid !== lastPipe) { // 管线头行（区块标题，占 34px）
-      pipeHeads.push({ top: yy, pid, 名称: (pById[pid] || {}).名称 || pid, folded: foldedByPipe[pid] || 0 });
-      yy += 34; lastPipe = pid;
-    }
-    const mine = ns.filter((n) => n.lane === ln);
-    const stacks = {}; let depth = 0;
-    for (const n of mine) { const k = n.stg + '/' + n.sub; stacks[k] = stacks[k] || 0; n.row = stacks[k]++; depth = Math.max(depth, stacks[k]); }
-    lanes[ln] = { top: yy, mine }; yy += 42 + depth * (NHh + VG);
-  }
-  ns.forEach((n) => { n.x = stageX[SIDX[n.stg]] + n.sub * (NW + HGap); n.y = lanes[n.lane].top + 36 + n.row * (NHh + VG); });
-  const laneStage = (mine) => {
-    const act = mine.filter((n) => !DONE.has(n.t.state));
-    if (act.length) return act.reduce((m, n) => SIDX[n.stg] < SIDX[m] ? n.stg : m, act[0].stg);
-    return mine.reduce((m, n) => SIDX[n.stg] > SIDX[m] ? n.stg : m, mine[0].stg);
+  const pctOfLive = (t) => 活体(进度By[t.id], t.state);
+  const bar = (t, cls, right, extra) => `<div class="fgbar ${cls}" onclick="${go(t.id)}" tabindex="0" role="button"
+      onkeydown="if(event.key==='Enter'){${go(t.id)}}" title="${esc(t.id + ' · ' + (t.title || '') + (t.职能 ? ' · ' + t.职能 : ''))}">
+      <span class="id">${esc(t.id)}</span><span class="t">${esc(t.title || '')}</span>${extra || ''}${right}</div>`;
+  const doingBar = (t) => {
+    const p = pctOfLive(t);
+    return bar(t, 'doing' + (p.无会话 ? ' nosess' : ''),
+      `<span class="pp" id="fgp-${esc(t.id)}" title="${esc(p.阶段名)}">${p.百分比 == null ? '—' : p.百分比}<small>%</small></span><span class="st" id="fgs-${esc(t.id)}">${esc(p.阶段名)}</span>`);
   };
-  // 边：扇形锚点
-  const inE = {}, outE = {};
-  ns.forEach((n) => n.deps.forEach((d) => { (inE[n.id] = inE[n.id] || []).push(d); (outE[d] = outE[d] || []).push(n.id); }));
-  for (const k in inE) inE[k].sort((a, b) => nById[a].y - nById[b].y);
-  for (const k in outE) outE[k].sort((a, b) => nById[a].y - nById[b].y);
-  const aY = (n, list, o) => n.y + NHh * ((list.indexOf(o) + 1) / (list.length + 1));
-  // 连线保持贝塞尔（用户裁定：横穿无妨，曲线更好看）；已满足依赖退淡影
-  let paths = '';
-  ns.forEach((n) => n.deps.forEach((d) => {
-    const u = nById[d];
-    const x1 = u.x + NW, y1 = aY(u, outE[u.id], n.id), x2 = n.x, y2 = aY(n, inE[n.id], u.id);
-    const dseg = x2 > x1
-      ? `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`
-      : `M ${x1} ${y1} C ${x1 + 30} ${Math.max(u.y, n.y) + NHh + 16}, ${x2 - 30} ${Math.max(u.y, n.y) + NHh + 16}, ${x2} ${y2}`;
-    const faded = DONE.has(u.t.state) && !(crit.has(n.id) && crit.has(u.id));
-    paths += `<path class="fl-e${u.stg !== n.stg ? ' up' : ''}${crit.has(n.id) && crit.has(u.id) ? ' crit' : ''}${faded ? ' faded' : ''}" data-f="${esc(u.id)}" data-t="${esc(n.id)}" d="${dseg}"/>`;
-  }));
-  const heads = STG.map((s, i) => `<div class="fl-head" style="left:${stageX[i]}px;width:${subMax[i] * (NW + HGap)}px" title="阶段验收标准（${esc(s.代号)} ${esc(s.名称)}）&#10;${esc(Object.entries(stg.标准[s.代号] || {}).map(([f, v]) => f + '：' + v).join('\n'))}">
-      <b>${esc(s.代号)} ${esc(s.名称)}</b><span class="sn">${s.代号 === mainStage ? '项目主阶段 · ' : ''}悬停看验收标准 ⓘ</span></div>`
-    + (i ? `<div class="fl-col" style="left:${stageX[i] - CELLPAD / 2}px"></div>` : '')).join('');
-  const pipeHeadHtml = pipeHeads.map((h) => `<div class="fl-pipehead" style="top:${h.top}px">
-      <span class="lst" style="background:var(--accentbg);color:var(--accent-ink);border-color:transparent">管线</span>
-      <b>${esc(h.名称)}</b>${(pById[h.pid] || {}).状态 === '封存' ? '<span class="lst lag">已封存</span>' : ''}
-      ${h.folded ? `<span class="dim" style="font-size:11px">· ${h.folded} 个已完成专项已折叠</span>` : ''}</div>`).join('');
-  const laneHtml = laneNames.map((ln) => {
-    const L = lanes[ln]; const ls = laneStage(L.mine); const misc = ln === '::未归属';
-    const title = (L.mine[0] || {}).laneTitle || ln.split('::')[1] || ln;
-    const lag = !misc && SIDX[ls] < SIDX[mainStage] && L.mine.some((n) => !DONE.has(n.t.state));
-    const lead = !misc && SIDX[ls] > SIDX[mainStage];
-    // 签字标记：叶子 + 容器单一起数（专项父单挂待验收也算这道在等你落笔）
-    const signs = laneSign[ln] || [];
-    const signTip = signs.map((t) => `${t.id} ${t.state}${t.验收方式 === '保留' ? '（保留 · 只你能签）' : ''}`).join('\n');
-    const allDone = laneAllDone(ln);
-    return `<div class="fl-lane" style="top:${L.top}px"></div>
-      <div class="fl-lab" style="top:${L.top}px">${esc(title)}${allDone ? '<span class="lst" style="opacity:.6">已完成</span>' : `<span class="lst ${lag ? 'lag' : lead ? 'lead' : ''}">${esc(ls)}${lag ? ' 滞后' : lead ? ' 超前' : ''}</span>`}${signs.length ? `<span class="lst sign" title="${esc(signTip)}">✍ 等制作人签字${signs.length > 1 ? ' ×' + signs.length : ''}</span>` : ''}</div>`;
+  const signBar = (t) => {
+    const 保留 = t.验收方式 === '保留';
+    const 里程碑 = isBox(t); // 专项/战役终审 = 里程碑旗
+    return bar(t, 'sign', `<span class="st">✍ ${t.state === '待定夺' ? '待你拍板' : (保留 ? '你（保留）' : '你')}</span>${里程碑 ? '<span class="mile">⚑ 里程碑</span>' : ''}`);
+  };
+  const stuckBar = (t) => bar(t, 'stuck', `<span class="st">${esc(t.state)}${t.自修次数 ? ' ×' + t.自修次数 : ''}</span>`);
+  const queueBar = (t) => {
+    const ds = depsOf(t);
+    const 断 = 死结(t);
+    const 就绪 = !断.length && ds.every((d) => FG_DONE.has(byId[d].state)) && t.state !== '草稿';
+    const depTag = ds.length ? `<span class="deps" title="${esc('依赖：' + ds.join('、'))}">←${ds.map((d) => esc(idShort(d, t.id))).join('·')}</span>` : '';
+    const st = 断.length ? `依赖冻结 ←${esc(idShort(断[0], t.id))}` : (就绪 ? '就绪' : t.state);
+    const cls = 'queue' + (断.length ? ' blocked' : (就绪 ? ' ready' : ''));
+    return bar(t, cls, `<span class="st">${esc(st)}</span>`, depTag);
+  };
+
+  // ---- 逐行装配 ----
+  const sed = {}; // 沉淀数据（抽屉懒渲染用），只带展示要的几个字段
+  let 总在做 = 0, 总签字 = 0, 总接下来 = 0, 闲置数 = 0;
+  const laneHtml = laneKeys.map((k) => {
+    const L = lanes[k];
+    const P = pById[k];
+    const 名称 = k === MISC ? '散单' : `${k} ${(P && P.名称) || ''}`.trim();
+    const 活 = L.items.filter((t) => !suspOf(t) && !FG_DONE.has(t.state));
+    const 可见 = (t) => !isBox(t) || FG_SIGN.has(t.state);
+    const now = 活.filter((t) => 可见(t) && (FG_DOING.has(t.state) || FG_STUCK.has(t.state)));
+    const nextSign = 活.filter((t) => 可见(t) && t.state === '待验收')
+      .sort((a, b) => (b.验收方式 === '保留') - (a.验收方式 === '保留') || String(a.id).localeCompare(String(b.id)));
+    const nextQ = 活.filter((t) => 可见(t) && FG_QUEUE.has(t.state))
+      .sort((a, b) => (深[a.id] - 深[b.id]) || String(a.id).localeCompare(String(b.id)));
+    总在做 += now.filter((t) => FG_DOING.has(t.state)).length;
+    总签字 += nextSign.length + now.filter((t) => t.state === '待定夺').length;
+    总接下来 += nextQ.length;
+    // 沉淀四类
+    const cats = { done: [], susp: [], drop: [], over: [] };
+    for (const t of L.items) { const c = fgCat(t); if (c) cats[c].push(t); }
+    for (const c in cats) cats[c].sort((a, b) => String(b.更新时间 || '').localeCompare(String(a.更新时间 || '')));
+    sed[k] = {}; for (const c in cats) sed[k][c] = cats[c].map((t) => ({ id: t.id, title: t.title, state: t.state, why: String(t.归档原因 || ''), susp: suspTip(t) }));
+    const 沉淀数 = Object.values(cats).reduce((a, x) => a + x.length, 0);
+    // 管线头：落袋读数（容器单不计——它是组织单位，不是活）
+    const 叶 = L.items.filter((t) => !isBox(t));
+    const 落袋 = 叶.filter((t) => t.state === '完成').length;
+    const 专项数 = L.items.filter((t) => isBox(t)).length;
+    // 闲置直书：现在区空 → 取本管线最近一次事件时间差
+    const 最近 = L.items.reduce((m, t) => {
+      const cs = [t.更新时间, t.交付时间, t.领单时间].map((x) => Date.parse(x || '')).filter((x) => !Number.isNaN(x));
+      return cs.length ? Math.max(m, ...cs) : m;
+    }, 0);
+    const 闲置天 = 最近 ? Math.floor((Date.now() - 最近) / 86400000) : null;
+    if (!now.length) 闲置数++;
+    const nowInner = now.length
+      ? now.map((t) => (FG_DOING.has(t.state) ? doingBar(t) : t.state === '待定夺' ? signBar(t) : stuckBar(t))).join('')
+      : `<div class="fgidle">— 本管线现在无在做（${最近 ? `闲置 ${闲置天} 天` : '暂无活动记录'}）—</div>`;
+    const foldInner = 沉淀数
+      ? `<div class="fgfold"><span class="fgfk">▸ 沉淀</span>${FG_CATS.filter(([c]) => cats[c].length)
+        .map(([c, n]) => `<button class="fgcat ${c}" data-fglane="${esc(k)}" data-fgcat="${c}" onclick="fgDrawer('${qesc(k)}','${c}')" title="点开只看这一类">${esc(n)} <b>${cats[c].length}</b></button>`)
+        .join('<i class="fgdot">·</i>')}</div>`
+      : '';
+    const nextInner = (nextSign.map(signBar).join('') + nextQ.map(queueBar).join(''))
+      || '<div class="fgidle q">— 接下来没有排队的单 —</div>';
+    return `<div class="fglane">
+      <div class="fgrow">
+        <div class="fghead">
+          <b>${esc(名称)}</b>${P && P.状态 === '封存' ? '<span class="lst lag">已封存</span>' : ''}
+          <div class="sub">${k === MISC ? '无管线归属的活动单' : `${专项数 ? 专项数 + ' 个专项 · ' : ''}阶段 ${esc((P && P.阶段) || '—')}`}</div>
+          <div class="pct">■ 落袋 ${落袋}/${叶.length}</div>
+        </div>
+        <div class="fgzone now">${nowInner}${foldInner}</div>
+        <div class="fgzone next">${nextInner}</div>
+      </div>
+      <div class="fgdrawer" id="fgd-${esc(k)}"></div></div>`;
   }).join('');
-  const nodeHtml = ns.map((n) => `<div class="fl-node ${flCls(n)}${crit.has(n.id) ? ' crit' : ''}${suspCls(n.t)}" id="fl-${esc(n.id)}"
-      style="left:${n.x}px;top:${n.y}px;--fn:${FNHEX[n.t.职能] || 'var(--ink3)'}" data-nid="${esc(n.id)}"${suspOf(n.t) ? ` title="${esc(suspTip(n.t))}"` : ''}
-      onclick="location.hash='#/t/${encodeURIComponent(n.id)}'" onmouseenter="flChain('${esc(n.id)}')" onmouseleave="flChain(null)">
-      <span class="nid">${snowB(n.t)}${esc(n.id)}</span><span class="nst">${n.cyc ? '⚠环' : esc(n.t.state)}</span>
-      <div class="nt">${esc(n.t.title)}</div><span class="nh">${n.h}h</span></div>`).join('');
-  window._flData = { ns: ns.map((n) => ({ id: n.id, deps: n.deps })), done: ns.filter((n) => DONE.has(n.t.state)).map((n) => n.id) };
-  // 现在/接下来摘要条（2026-08-06 制作人用例：「主要看现在在做什么、后面还有什么」——答案端上面，不用进图里找）
-  // 节点是包装对象（真单在 .t）——2026-08-06 02:49 制作人实拍抓包：曾拿包装层查 state 双误报「无」
-  const doing = nsAll.filter((n) => ['在途', '质检'].includes(n.t.state));
-  const ready2 = nsAll.filter((n) => n.t.state === '待投' && n.deps.every((d) => DONE.has((byId[d] || {}).state)));
-  const blocked2 = nsAll.filter((n) => n.t.state === '待投' && !n.deps.every((d) => DONE.has((byId[d] || {}).state)));
-  const chipRow = (arr, cap) => arr.slice(0, 6).map((n) => `<a class="pill sm mono" href="#/t/${esc(n.id)}" title="${esc(n.t.title)}">${esc(n.id)}</a>`).join(' ') + (arr.length > 6 ? `<span class="dim"> +${arr.length - 6}</span>` : '') || `<span class="dim">${cap}</span>`;
-  const nowNext = `<div class="card r14" style="padding:12px 18px;margin-bottom:12px;display:flex;gap:26px;flex-wrap:wrap;align-items:baseline">
-      <span><b style="font-size:12.5px">现在在做</b> ${chipRow(doing, '无')}</span>
-      <span><b style="font-size:12.5px">下一步（就绪）</b> ${chipRow(ready2, '无')}</span>
-      <span class="dim" style="font-size:12px">还压着 ${blocked2.length} 张等前置</span></div>`;
-  return nowNext + `<div class="fl-bar">
-      <span class="subnote">横轴=阶段 · 泳道=系统 · 红=关键路径（预计时间加权）· 虚线=升阶链 · 点卡进详情</span>
+  window._fgSed = sed;
+  fgOpen = {}; // 每次进视图回到全折（制作人追加：默认全折叠）
+
+  // ---- 15s 活体：只换百分比与阶段名，不整页重画；在跑名册变了才 route（同在途页口径）----
+  const sig = (d) => (d.在跑 || []).map((r) => r.id + ':' + r.state).sort().join(',');
+  const sig0 = sig(ag);
+  pollLoop('fg-board', 15000, async () => {
+    const nd = agentsScoped(await api('/api/agents'), all);
+    if (sig(nd) !== sig0) { route(); return; } // 派发/收工 = 条位要换，整页重排
+    for (const r of (nd.在跑 || [])) {
+      const v = 活体(r, r.state);
+      const pe = $('fgp-' + r.id); if (pe) { pe.innerHTML = `${v.百分比 == null ? '—' : v.百分比}<small>%</small>`; pe.title = v.阶段名; }
+      const se = $('fgs-' + r.id); if (se) se.textContent = v.阶段名;
+      // 会话起来了就把「卡住」形态撤掉（同在途页 noagent 的处理）——只改类，不重画条
+      const be = pe && pe.closest('.fgbar'); if (be) be.classList.toggle('nosess', v.无会话);
+    }
+  });
+
+  const top = `<div class="fgtop">
+      <span class="subnote">一条现在线切三段：沉淀（折叠）｜<b class="nowh">现在</b>｜接下来（依赖序）· 行=管线 · 点任何条进详情</span>
       <span class="sp"></span>
-      ${cp.len ? `<span class="fl-cp">关键路径 ${Math.round(cp.len * 10) / 10}h · ${cp.path.length} 单</span>` : ''}
-      <button class="btn h32 ${foldHist ? 'on' : ''}" id="fl-fold-btn" onclick="flFold(this)">${foldHist ? `显示历史${foldedLanes.size ? `（${foldedLanes.size} 组）` : ''}` : '折叠已完成'}</button></div>
-    <div class="fl-wrap"><div class="fl-stage" style="width:${xa + 20}px;height:${yy + 16}px">
-      <svg class="fl-svg" width="${xa + 20}" height="${yy + 16}">${paths}</svg>
-      ${heads}${pipeHeadHtml}${laneHtml}${nodeHtml}</div></div>`;
+      <span class="fgsum">在做 <b>${总在做}</b> · 等你签字 <b class="s">${总签字}</b> · 排队 <b>${总接下来}</b>${闲置数 ? ` · 闲置管线 <b>${闲置数}</b>` : ''}</span></div>`;
+  const legend = `<div class="fglegend">
+      <span><i class="lg-doing"></i>实心=在做（百分比接执行进度卡口径）</span>
+      <span><i class="lg-queue"></i>虚框=排队（依赖序，←标依赖）</span>
+      <span><i class="lg-sign"></i>绿框=等你签字/拍板</span>
+      <span><i class="lg-stuck"></i>红=卡住（待定夺/执行失败）</span>
+      <span class="nowh">◉ 橙区=现在（管线闲置直书「闲置 N 天」）</span>
+      <span>⚑=里程碑 · ❄=挂起 · 沉淀默认全折</span></div>`;
+  return top + `<div class="fgboard" id="fg-board">
+      <div class="fgcols"><div>管线</div><div class="nowh">◉ 现在在做</div><div>→ 接下来（依赖序）</div></div>
+      ${laneHtml}</div>` + legend;
 }
-window.flChain = (id) => {
-  const d = window._flData; if (!d) return;
-  let rel = null;
-  if (id) {
-    const upM = {}, dnM = {};
-    d.ns.forEach((n) => n.deps.forEach((x) => { (upM[n.id] = upM[n.id] || []).push(x); (dnM[x] = dnM[x] || []).push(n.id); }));
-    rel = new Set([id]);
-    const walk = (m, i) => (m[i] || []).forEach((x) => { if (!rel.has(x)) { rel.add(x); walk(m, x); } });
-    walk(upM, id); walk(dnM, id);
-  }
-  // 高亮类名 onchain：不准叫 chain——详情页追溯链的通用 .chain{margin-top:18px} 会把绝对定位卡片顶下沉 18px（0.17.3 连环误诊的真凶）
-  d.ns.forEach((n) => { const el = $('fl-' + n.id); if (!el) return;
-    el.classList.toggle('dimmed', !!rel && !rel.has(n.id));
-    el.classList.toggle('onchain', !!rel && rel.has(n.id) && n.id !== id); });
-  document.querySelectorAll('path.fl-e').forEach((p) => {
-    const on = rel && rel.has(p.dataset.f) && rel.has(p.dataset.t);
-    p.classList.toggle('dimmed', !!rel && !on);
-    p.classList.toggle('onchain', !!on && !p.classList.contains('crit')); });
+// 沉淀抽屉：点某一类只展开该类（置灰列表，点条进详情）；再点同一类收起。
+// 不走 route() 重画——整页重取四个接口只为展一个抽屉太贵，且会把 15s 活体轮询打断重挂。
+window.fgDrawer = (key, cat) => {
+  const box = $('fgd-' + key); if (!box) return;
+  const cur = fgOpen[key] === cat ? null : cat;
+  fgOpen[key] = cur;
+  document.querySelectorAll(`.fgcat[data-fglane="${CSS.escape(key)}"]`).forEach((el) => el.classList.toggle('on', el.dataset.fgcat === cur));
+  if (!cur) { box.innerHTML = ''; box.className = 'fgdrawer'; return; }
+  const list = ((window._fgSed || {})[key] || {})[cur] || [];
+  const 名 = (FG_CATS.find(([c]) => c === cur) || [, cur])[1];
+  const rows = list.slice(0, 60).map((t) => `<a class="fgsi ${cur}" href="#/t/${encodeURIComponent(t.id)}" title="${esc(t.susp || (t.why ? '归档原因：' + t.why : t.state))}">
+      <span class="id">${cur === 'susp' ? '❄' : ''}${esc(t.id)}</span><span class="t">${esc(t.title || '')}</span>
+      <span class="why">${esc(cur === 'susp' ? '挂起 · 原位冻结' : (t.why || t.state))}</span></a>`).join('')
+    + (list.length > 60 ? `<span class="dim" style="font-size:11px;padding:4px 10px">…还有 ${list.length - 60} 单</span>` : '');
+  box.className = 'fgdrawer open ' + cur;
+  box.innerHTML = `<div class="fgdh">${esc(名)} · ${list.length} 单${cur === 'susp' ? '（挂起=原位冻结，全链路跳过；解挂在详情页/决策台）' : ''}</div><div class="fgdl">${rows}</div>`;
 };
-window.flFold = (btn) => {
-  // 0.23.4：折叠进布局——切偏好后整页重排，完成组整泳道退出排版（旧 display:none 留空白已废）
-  const fold = !btn.classList.contains('on');
-  try { localStorage.setItem('fl_fold', fold ? 'on' : 'off'); } catch { /* 无痕模式不阻塞 */ }
-  route();
-};
-// 默认折叠历史（用户裁定：三代同堂淹没活单）——偏好跨会话保持，显式点开才看历史
-window.flAutoFold = () => { /* 0.23.4：折叠进布局，此钩子退役 */ };
 
 /* ===== P10 树形 ===== */
 let tState = { collapsed: new Set(JSON.parse(localStorage.getItem('studio.tree.collapsed') || '[]')), fn: '', st: 'active', expandAll: false };
@@ -2496,7 +2486,6 @@ async function route() {
       document.querySelectorAll('.bcard2[data-tid]').forEach((el) => { flipOld[el.dataset.tid] = el.getBoundingClientRect(); });
     }
     app.innerHTML = shell(key, inner);
-    if (key === 'flow') flAutoFold(); // 默认折叠历史（偏好跨会话）
     if (Object.keys(flipOld).length) {
       requestAnimationFrame(() => {
         document.querySelectorAll('.bcard2[data-tid]').forEach((el) => {

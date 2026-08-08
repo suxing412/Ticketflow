@@ -1,0 +1,97 @@
+<meta charset="utf-8">
+<title>流程视图重构设计稿 · 管线甘特</title>
+<style>
+:root{--bg:#0B0D10;--card:rgba(255,255,255,.05);--ink:#F2F4F8;--ink2:#B9C1CD;--ink3:#76808F;
+--line:rgba(255,255,255,.10);--ok:#2FD6A0;--accent:#6E63FF;--accent-ink:#9D93FF;--now:#FF9D4D;
+--nowtint:rgba(255,157,77,.08);--danger:#FF5D57;--chip:rgba(255,255,255,.09);
+--mono:"Roboto Mono",ui-monospace,Consolas,monospace}
+body{margin:0;padding:36px 24px;background:var(--bg);color:var(--ink);
+font-family:"PingFang SC","Microsoft YaHei",sans-serif;font-size:13px;line-height:1.6}
+h1{font-size:17px;margin:0 0 4px}
+.note{color:var(--ink3);font-size:12px;margin:0 0 20px}
+.board{position:relative;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden}
+.cols{display:grid;grid-template-columns:200px 1fr 1.1fr;border-bottom:1px solid var(--line);
+color:var(--ink3);font-size:11px;letter-spacing:.06em}
+.cols div{padding:8px 14px}
+.cols .nowh{color:var(--now);font-weight:700}
+.lane{border-bottom:1px solid var(--line)}
+.lane:last-child{border-bottom:none}
+.lrow{display:grid;grid-template-columns:200px 1fr 1.1fr;align-items:stretch}
+.lhead{padding:12px 14px;border-right:1px solid var(--line)}
+.lhead b{font-size:13.5px}
+.lhead .sub{color:var(--ink3);font-size:11px;margin-top:2px}
+.lhead .pct{font-family:var(--mono);color:var(--ok);font-size:12px;margin-top:6px}
+.zone{padding:10px 12px;position:relative}
+.zone.now{background:var(--nowtint);border-left:2px solid var(--now);border-right:1px dashed var(--line)}
+.bar{display:flex;align-items:center;gap:8px;margin:4px 0;padding:5px 10px;border-radius:7px;
+background:var(--chip);border:1px solid var(--line);cursor:pointer}
+.bar:hover{border-color:var(--accent)}
+.bar .id{font-family:var(--mono);font-size:11px;color:var(--accent-ink);white-space:nowrap}
+.bar .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.bar .st{font-size:10px;padding:0 7px;border-radius:99px;white-space:nowrap}
+.bar.doing{border-color:var(--accent);background:rgba(110,99,255,.12)}
+.bar.doing .st{color:var(--accent-ink);border:1px solid var(--accent-ink)}
+.bar.doing .pp{font-family:var(--mono);color:var(--ink);font-size:12px;font-weight:600}
+.bar.queue{background:transparent;border-style:dashed}
+.bar.queue .st{color:var(--ink3);border:1px solid var(--line)}
+.bar.blocked .st{color:var(--danger);border:1px solid var(--danger)}
+.bar.sign{border-color:var(--ok)}
+.bar.sign .st{color:var(--ok);border:1px solid var(--ok);font-weight:700}
+.deps{font-family:var(--mono);font-size:10px;color:var(--ink3);white-space:nowrap}
+.donefold{color:var(--ink3);font-size:11px;padding:6px 12px;cursor:pointer}
+.donefold:hover{color:var(--ink2)}
+.mile{display:inline-block;margin-left:8px;font-size:10px;color:var(--now)}
+.legend{display:flex;gap:18px;color:var(--ink3);font-size:11px;margin-top:14px;flex-wrap:wrap}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+</style>
+
+<h1>流程视图 · 管线甘特（设计稿）</h1>
+<p class="note">魂：一条「现在线」把每条管线切成 沉淀｜<b style="color:var(--now)">现在</b>｜接下来 三段——你 3 秒回答「在做什么、接下来什么、卡在哪」。行=管线，点任何条进详情。</p>
+
+<div class="board">
+<div class="cols"><div>管线</div><div class="nowh">◉ 现在在做</div><div>→ 接下来（依赖序）</div></div>
+
+<div class="lane"><div class="lrow">
+  <div class="lhead"><b>P-1 地图</b><div class="sub">栅格直采重构 · TK-108 方案</div><div class="pct">■ 1/6 阶段</div></div>
+  <div class="zone now">
+    <div class="bar doing"><span class="id">TK-109</span><span class="t">栅格常量与骨架落地</span><span class="pp">37%</span><span class="st">执行中</span></div>
+    <div class="donefold">▸ 已沉淀 14 单（S1 链 · 打磨链 · 方案双修）</div>
+  </div>
+  <div class="zone">
+    <div class="bar queue"><span class="id">TK-110</span><span class="t">岸线离散化</span><span class="deps">←109</span><span class="st">待投</span></div>
+    <div class="bar queue"><span class="id">TK-111</span><span class="t">边缘吸附</span><span class="deps">←110</span><span class="st">草稿</span></div>
+    <div class="bar queue"><span class="id">TK-112</span><span class="t">分块直采</span><span class="deps">←111</span><span class="st">草稿</span></div>
+    <div class="bar sign"><span class="id">终审</span><span class="t">制作人 Play 验收</span><span class="deps">←全链</span><span class="st">✍ 你</span><span class="mile">⚑ 里程碑</span></div>
+  </div>
+</div></div>
+
+<div class="lane"><div class="lrow">
+  <div class="lhead"><b>P-3 时间</b><div class="sub">调研毕 · 待实现方案</div><div class="pct">■ 调研 4/4</div></div>
+  <div class="zone now"><div class="donefold" style="padding:14px 2px;color:var(--ink3)">— 本管线现在无在做（闲置 2 天）—</div></div>
+  <div class="zone">
+    <div class="bar sign"><span class="id">TK-S3</span><span class="t">调研专项收口签字</span><span class="st">✍ 你</span></div>
+    <div class="bar queue"><span class="id">方案</span><span class="t">时辰制实现方案（技术策划）</span><span class="deps">←S3签</span><span class="st">未开</span></div>
+  </div>
+</div></div>
+
+<div class="lane"><div class="lrow">
+  <div class="lhead"><b>骨架 · 框架讨论</b><div class="sub">核心循环已定调</div><div class="pct">■ 3 取舍待拍</div></div>
+  <div class="zone now">
+    <div class="bar doing sign"><span class="id">协同</span><span class="t">总体策划 · 三取舍（一世一局/舞台/时间粒度）</span><span class="st">✍ 你+总监</span></div>
+  </div>
+  <div class="zone">
+    <div class="bar queue"><span class="t">身份体系调研（瞿同祖章节）</span><span class="deps">←取舍</span><span class="st">未开</span></div>
+    <div class="bar queue"><span class="t">九系统管线铺设</span><span class="deps">←框架</span><span class="st">未开</span></div>
+  </div>
+</div></div>
+</div>
+
+<div class="legend">
+  <span><i style="background:rgba(110,99,255,.5)"></i>实心=在做（带百分比，接进度卡口径）</span>
+  <span><i style="border:1px dashed #555"></i>虚框=排队（按依赖序，←标依赖）</span>
+  <span><i style="background:var(--ok)"></i>绿框=等你签字/拍板</span>
+  <span style="color:var(--now)">◉ 橙区=现在（管线闲置会直说「闲置 N 天」）</span>
+  <span>⚑=里程碑 · 点条进详情 · 已沉淀默认折叠</span>
+</div>
+
+<p class="note" style="margin-top:16px">功能清单：①现在线三分段（沉淀折叠/在做高亮带进度/接下来依赖序）②管线闲置直说（不再空白）③你的签字位绿框常驻醒目④里程碑旗⑤点击直达详情⑥管线头显示阶段进度。日间暖纸主题同构。</p>

@@ -7,6 +7,13 @@
   --dangerbg:#FBEAE9; --accent:#4F46E5; --sect:#F0EFEA; --chip:#E3E2DD; --we:#F5F4F0;
   --inbg:#FCFCFB; --gatebg:#FDF3E3; --gateln:#E8CFA0; --gatetx:#7A5A1E;
   --accent-ink:#4F46E5; /* 靛蓝当"文字"用的档：日间同 accent，夜间提亮保 ≥4.5:1 */
+  /* 「现在」橙（施工令-022 流程视图现在线）：全站唯一表示"此刻正在发生"的色，不与职能色/状态色重号。
+     日间取暖纸面上的琥珀橙，--nowtint 是它 7% 的底纹，只做橙区背景。
+     色值定在 #9E5412 而非设计稿那档亮橙：橙字全是 10–11px 小字，AA 要 4.5:1，而在日间纸上
+     实测 #B5651D=4.19、#A85A15 对列头底/橙区底=4.41/4.44 都差一口气；这档三处实测 5.39/4.89/4.89 全过。
+     夜间直接用设计稿定稿的 #FF9D4D（对 #0B0D10 实测 9.43:1）。
+     --accenttint 是在做条的实心底（原代码里写的 --accentbg 从未定义过，一直静默回落成透明）。 */
+  --now:#9E5412; --nowtint:rgba(158,84,18,.07); --accenttint:rgba(79,70,229,.10);
   --mono:"Roboto Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
   --fn-plan:#4F46E5; --fn-code:#0D7A5F; --fn-art:#A16207; --fn-qa:#4B5563; --fn-asm:#0E7490;
   --pool-claude:#6B5BC7; --pool-codex:#2E7D5B;
@@ -35,6 +42,7 @@ html[data-theme="glass"] {
   --paper:#0B0D10; --card:rgba(255,255,255,.05); --ink:#F2F4F8; --ink2:#B9C1CD; --ink3:#76808F;
   --line:rgba(255,255,255,.10); --ok:#2FD6A0; --okbg:rgba(47,214,160,.12); --okln:rgba(47,214,160,.32);
   --danger:#FF5D57; --dangerbg:rgba(255,93,87,.13); --accent:#6E63FF; --accent-ink:#9D93FF;
+  --now:#FF9D4D; --nowtint:rgba(255,157,77,.08); --accenttint:rgba(110,99,255,.12); /* 夜间取设计稿定稿值 */
   --sect:rgba(255,255,255,.04); --chip:rgba(255,255,255,.09); --we:rgba(255,255,255,.06);
   --inbg:rgba(255,255,255,.05); --gatebg:rgba(232,180,90,.12); --gateln:rgba(232,180,90,.35); --gatetx:#E8B45A;
   --fn-plan:#8F84FF; --fn-code:#2FD6A0; --fn-art:#E8B45A; --fn-qa:#9BA6B5; --fn-asm:#4CC3E0;
@@ -355,61 +363,114 @@ a.gear { text-decoration:none; }
 .tlseg.on { outline:1.5px solid var(--ink); }
 .tlnow { position:absolute; top:0; width:0; border-left:1.5px dashed var(--danger); pointer-events:none; }
 
-/* ===== P12 流程（D43）：阶段横轴 · 拓扑子列 · 泳道=系统 ===== */
-.fl-bar { display:flex; align-items:center; gap:14px; margin-top:22px; }
-.fl-bar .sp { flex:1; }
-.fl-cp { font-size:12px; background:var(--dangerbg); color:var(--danger); border-radius:999px; padding:5px 14px; font-weight:500; }
-.fl-wrap { overflow-x:auto; margin-top:12px; padding-bottom:8px; }
-.fl-stage { position:relative; }
-.fl-svg { position:absolute; inset:0; pointer-events:none; }
-.fl-col { position:absolute; top:0; bottom:0; border-left:1px dashed var(--line); }
-.fl-head { position:absolute; top:0; text-align:center; cursor:help; }
-.fl-head b { font-size:13px; }
-.fl-head .sn { display:block; font-size:10.5px; color:var(--ink3); font-weight:400; }
-.fl-lane { position:absolute; left:0; right:0; border-top:1px solid var(--line); }
-.fl-lab { position:absolute; left:0; font-size:11px; font-weight:700; color:var(--ink2); background:var(--sect);
-  padding:3px 10px; border-radius:8px; transform:translateY(8px); display:flex; gap:8px; align-items:center; z-index:3; }
-.fl-lab .lst { font-family:var(--mono); font-size:10px; font-weight:500; padding:1px 7px; border-radius:999px; background:var(--chip); color:var(--ink2); }
-.fl-lab .lst.lag { background:var(--gatebg); color:var(--gatetx); border:1px solid var(--gateln); }
-.fl-lab .lst.lead { background:var(--okbg); color:var(--ok); }
-/* 签字位标记（施工令-006）：制作人的落笔队列——实心 ok 底，文字取 --paper 保两主题对比度 */
-.fl-lab .lst.sign { background:var(--ok); color:var(--paper); font-weight:700; border:none; cursor:help; }
-.fl-node { position:absolute; width:146px; height:54px; background:var(--card); border:1px solid var(--line); border-radius:10px;
-  padding:7px 10px 6px 16px; cursor:pointer; box-shadow:var(--shadow-sm); z-index:2;
-  transition:box-shadow 150ms var(--ease-out), transform 150ms var(--ease-out), opacity 200ms var(--ease-out); }
-/* 职能书脊：内浮胶囊条（缩进卡内、上下留距、自带圆角）——贴边直角条会顶在卡片 10px 圆角上，悬停描边一亮就露馅 */
-.fl-node::before { content:''; position:absolute; left:5px; top:7px; bottom:7px; width:4px; border-radius:2px; background:var(--fn, var(--ink3)); }
-.fl-node .nid { font-family:var(--mono); font-size:10px; color:var(--ink3); line-height:1.3; }
-/* 标题右缘给工时角标留安全区（padding-right），省略号在撞上角标前截断；行高收紧防纵向溢出 */
-.fl-node .nt { font-size:11.5px; font-weight:500; line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; padding-right:26px; }
-.fl-node .nst { position:absolute; top:6px; right:8px; font-size:10px; padding:1px 7px; border-radius:999px; background:var(--chip); color:var(--ink2); }
-.fl-node .nh { position:absolute; bottom:5px; right:9px; font-family:var(--mono); font-size:10px; color:var(--ink3); }
-.fl-node:hover { box-shadow:var(--shadow-md); border-color:var(--ink3); z-index:5; } /* 不上浮：卡动线不动=连线对不上（用户裁定） */
-.fl-node.done { opacity:.35; }
-.fl-node.doing { border-color:var(--accent); }
-.fl-node.doing .nst { background:var(--ink); color:var(--paper); }
-.fl-node.review .nst { background:var(--st-review-bg); color:var(--paper); }
-.fl-node.accept .nst { background:var(--okbg); color:var(--ok); }
-.fl-node.pre .nst { background:var(--sect); color:var(--ink3); } /* 草稿/待投：排版台阶段 */
-.fl-node.pre { border-style:dashed; }
-.fl-node.blocked { background:var(--sect); opacity:.75; }
-.fl-node.blocked .nst { background:var(--chip); color:var(--ink3); }
-.fl-node.ready { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-glow), var(--shadow-sm); }
-.fl-node.ready .nst { background:var(--accent); color:var(--on-accent); }
-.fl-node.failed { border-color:var(--danger); }
-.fl-node.failed .nst { background:var(--dangerbg); color:var(--danger); }
-.fl-node.cyc { border-color:var(--gateln); background:var(--gatebg); }
-.fl-node.crit { border-color:var(--danger); }
-.fl-node.crit::before { background:var(--danger); }
-.fl-node.dimmed { opacity:.15; }
-.fl-node.onchain { box-shadow:0 0 0 3px var(--mask), var(--shadow-md); z-index:6; }
-path.fl-e { fill:none; stroke:var(--ink3); stroke-width:1.25; opacity:.45; }
-path.fl-e.up { stroke-dasharray:5 4; }
-path.fl-e.faded { opacity:.14; } /* 已满足的依赖：历史退场，别跟活边抢眼 */
-path.fl-e.crit { stroke:var(--danger); stroke-width:2; stroke-dasharray:none; opacity:.9; }
-path.fl-e.onchain { stroke:var(--ink2); stroke-width:2; opacity:1; }
-path.fl-e.dimmed { opacity:.08; }
-@media (prefers-reduced-motion: reduce) { .fl-node { transition-duration:.01s; } .fl-node:hover { transform:none; } }
+/* ===== P12 流程（施工令-022）：现在线 · 管线甘特 =====
+   D43 的绝对定位阶段画布（.fl-node/.fl-e/.fl-lane…）整体退役，换成三列网格：管线 ｜ 现在（橙区）｜ 接下来。
+   全部颜色走语义令牌（新增 --now/--nowtint 双主题），860px 断点整行竖排，永不横向溢出。 */
+.fgtop { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-top:22px; }
+.fgtop .sp { flex:1; min-width:0; }
+.nowh { color:var(--now); font-weight:700; }
+.fgsum { font-size:12px; color:var(--ink3); white-space:nowrap; }
+.fgsum b { font-family:var(--mono); color:var(--ink); font-size:12.5px; }
+.fgsum b.s { color:var(--ok); }
+.fgboard { position:relative; margin-top:12px; border:1px solid var(--line); border-radius:14px;
+  background:var(--card); box-shadow:var(--shadow-sm); overflow:hidden; }
+.fgcols { display:grid; grid-template-columns:200px 1fr 1.1fr; border-bottom:1px solid var(--line);
+  color:var(--ink3); font-size:11px; letter-spacing:.06em; background:var(--sect); }
+.fgcols > div { padding:8px 14px; min-width:0; }
+.fglane { border-bottom:1px solid var(--line); }
+.fglane:last-child { border-bottom:none; }
+.fgrow { display:grid; grid-template-columns:200px 1fr 1.1fr; align-items:stretch; }
+/* ---- 管线头 ---- */
+.fghead { padding:12px 14px; border-right:1px solid var(--line); min-width:0; }
+.fghead b { font-size:13.5px; }
+.fghead .sub { color:var(--ink3); font-size:11px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; }
+.fghead .pct { font-family:var(--mono); color:var(--ok); font-size:12px; margin-top:6px; }
+.fghead .lst { font-family:var(--mono); font-size:10px; font-weight:500; padding:1px 7px; margin-left:6px;
+  border-radius:999px; background:var(--chip); color:var(--ink2); }
+.fghead .lst.lag { background:var(--gatebg); color:var(--gatetx); border:1px solid var(--gateln); }
+/* ---- 两个区：现在（橙）｜接下来 ---- */
+.fgzone { padding:10px 12px; position:relative; min-width:0; }
+.fgzone.now { background:var(--nowtint); border-left:2px solid var(--now); border-right:1px dashed var(--line); }
+.fgidle { color:var(--ink3); font-size:11.5px; padding:14px 2px; text-align:center; }
+.fgidle.q { text-align:left; padding:10px 2px; }
+/* ---- 条：四型 ---- */
+/* 过渡只给 box-shadow，**不给 border-color**：条的边色全是 var(--ok/--danger/--accent) 令牌，
+   而带 transition 的属性在自定义属性被换掉（=切主题）时不重算，夜间会留着日间的绿边红边不放
+   （2026-08-08 实机抓到：--ok 已是 #2FD6A0，.fgbar.sign 的边还钉在 #0D7A5F）。
+   悬停反馈靠 box-shadow + 边色瞬时切换，观感不损，令牌正确性优先。 */
+.fgbar { display:flex; align-items:center; gap:8px; margin:4px 0; padding:5px 10px; border-radius:7px;
+  background:var(--chip); border:1px solid var(--line); cursor:pointer; min-width:0;
+  transition:box-shadow .16s var(--ease-out); }
+.fgbar:hover, .fgbar:focus-visible { border-color:var(--accent); box-shadow:var(--shadow-sm); outline:none; }
+.fgbar .id { font-family:var(--mono); font-size:11px; color:var(--accent-ink); white-space:nowrap; }
+.fgbar .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; font-size:12.5px; }
+.fgbar .st { font-size:10px; padding:1px 7px; border-radius:999px; white-space:nowrap; color:var(--ink2); background:var(--we); }
+.fgbar .deps { font-family:var(--mono); font-size:10px; color:var(--ink3); white-space:nowrap; }
+.fgbar .mile { font-size:10px; color:var(--now); white-space:nowrap; font-weight:600; }
+/* 在做：实心 + 百分比（百分比是本视图唯一的实时数，给它 mono 与最强字重） */
+.fgbar.doing { border-color:var(--accent); background:var(--accenttint); }
+.fgbar.doing .pp { font-family:var(--mono); color:var(--ink); font-size:12.5px; font-weight:700; white-space:nowrap; }
+.fgbar.doing .pp small { font-size:9px; font-weight:500; color:var(--ink3); margin-left:1px; }
+.fgbar.doing .st { color:var(--accent-ink); background:transparent; border:1px solid var(--accent-ink); }
+.fgbar.doing.nosess { border-style:dashed; }
+.fgbar.doing.nosess .st { color:var(--gatetx); border-color:var(--gateln); background:var(--gatebg); }
+/* 排队：虚框 */
+.fgbar.queue { background:transparent; border-style:dashed; }
+.fgbar.queue .st { color:var(--ink3); background:transparent; border:1px solid var(--line); }
+.fgbar.queue.ready { border-style:solid; border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-glow); }
+.fgbar.queue.ready .st { color:var(--accent-ink); border-color:var(--accent-ink); }
+.fgbar.blocked .st { color:var(--danger); border-color:var(--danger); background:var(--dangerbg); }
+/* 签字位：绿框常驻——制作人的活永远不许被别的条盖过去 */
+.fgbar.sign { border-color:var(--ok); background:var(--okbg); }
+.fgbar.sign .st { color:var(--ok); border:1px solid var(--okln); background:transparent; font-weight:700; }
+/* 卡住：红 */
+.fgbar.stuck { border-color:var(--danger); background:var(--dangerbg); }
+.fgbar.stuck .st { color:var(--danger); border:1px solid var(--danger); background:transparent; font-weight:600; }
+/* ---- 沉淀抽屉：折叠条（四类分计数）+ 展开列表 ---- */
+.fgfold { display:flex; align-items:center; gap:4px; flex-wrap:wrap; margin-top:6px; padding-top:6px;
+  border-top:1px dashed var(--line); font-size:11px; }
+.fgfold .fgfk { color:var(--ink3); margin-right:2px; }
+.fgfold .fgdot { color:var(--ink3); font-style:normal; opacity:.6; }
+.fgcat { font:inherit; font-size:11px; color:var(--ink3); background:transparent; border:1px solid transparent;
+  border-radius:999px; padding:1px 8px; cursor:pointer; min-height:22px; }
+.fgcat b { font-family:var(--mono); font-weight:700; }
+.fgcat:hover { color:var(--ink2); border-color:var(--line); }
+.fgcat.on { color:var(--ink); border-color:var(--ink3); background:var(--we); }
+.fgcat.susp.on { color:var(--gatetx); border-color:var(--gateln); background:var(--gatebg); }
+.fgcat.drop.on, .fgcat.over.on { color:var(--danger); border-color:var(--danger); background:var(--dangerbg); }
+.fgdrawer { display:none; }
+.fgdrawer.open { display:block; border-top:1px dashed var(--line); background:var(--sect); padding:8px 14px 12px; }
+.fgdh { font-size:11px; color:var(--ink3); margin-bottom:6px; }
+.fgdl { display:flex; flex-direction:column; gap:2px; }
+/* 沉淀条一律置灰：它们已经不说话了，别跟活单抢注意力 */
+.fgsi { display:flex; align-items:center; gap:10px; padding:3px 10px; border-radius:6px; text-decoration:none;
+  color:var(--ink2); opacity:.62; filter:grayscale(.5); min-width:0; }
+.fgsi:hover { opacity:1; filter:none; background:var(--we); }
+.fgsi .id { font-family:var(--mono); font-size:10.5px; color:var(--ink3); white-space:nowrap; }
+.fgsi .t { flex:1; min-width:0; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fgsi .why { font-size:10px; color:var(--ink3); white-space:nowrap; }
+.fgsi.susp .id { color:var(--gatetx); }
+.fgsi.drop .why, .fgsi.over .why { color:var(--danger); }
+/* ---- 图例 ---- */
+.fglegend { display:flex; gap:18px; color:var(--ink3); font-size:11px; margin-top:14px; flex-wrap:wrap; }
+.fglegend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+.fglegend i.lg-doing { background:var(--accent); }
+.fglegend i.lg-queue { border:1px dashed var(--ink3); }
+.fglegend i.lg-sign { background:var(--ok); }
+.fglegend i.lg-stuck { background:var(--danger); }
+/* 860px 以下：三列拆成竖排，每段自带小标题——横向滚动条一根都不许出现 */
+@media (max-width:860px) {
+  .fgcols { display:none; }
+  .fgrow { grid-template-columns:1fr; }
+  .fghead { border-right:none; border-bottom:1px solid var(--line); }
+  .fgzone { border-right:none; }
+  .fgzone::before { display:block; font-size:10px; letter-spacing:.06em; color:var(--ink3); margin-bottom:4px; }
+  .fgzone.now::before { content:'◉ 现在在做'; color:var(--now); font-weight:700; }
+  .fgzone.next::before { content:'→ 接下来（依赖序）'; }
+  .fgzone.now { border-left:2px solid var(--now); }
+  .fgsum { white-space:normal; }
+}
+@media (prefers-reduced-motion: reduce) { .fgbar, .fgsi { transition-duration:.01s; } }
 
 /* ===== 在途细粒度进度（详情页顶卡）===== */
 .livecard { margin-top:24px; padding:16px 20px 14px; }
@@ -781,7 +842,7 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
   .prow { flex-wrap:wrap; row-gap:6px; }
   .rl-wrap { min-height:calc(100vh - 150px); margin-top:12px; }
   .rl-msg { max-width:94%; }
-  .fl-wrap, .ttools { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  .ttools { overflow-x:auto; -webkit-overflow-scrolling:touch; }
   .p6grid, .p5grid, .dgrid, .artgrid { grid-template-columns:1fr !important; display:block; }
 }
 
@@ -871,9 +932,7 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 .rl-fold[open] > summary { border-bottom-left-radius:0; border-bottom-right-radius:0; }
 .rl-fold > div { border:1px solid var(--line); border-top:none; border-radius:0 0 10px 10px; padding:12px 16px; }
 
-/* 管线头行（0.23.4）：流程视图两级分组的区块标题 */
-.fl-pipehead { position:absolute; left:8px; right:8px; height:30px; display:flex; align-items:center; gap:8px;
-  font-size:13px; border-bottom:0.5px solid var(--line); padding:0 6px; }
+/* 管线头行（0.23.4）已随施工令-022 退役：管线不再是画布里的一条区块标题，它就是甘特的一整行（.fghead）。 */
 
 /* 施工令-005：在途原地展开区已删（与卡片本体信息重复），整卡点击直达详情页。
    agdIn 关键帧保留——确认层 .ask-ov 仍在用。 */
@@ -916,16 +975,18 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 
 /* ===== 挂起（施工令-021 · 制作人裁决权）：全站置灰 + ❄ 徽标 =====
    语义：挂起是「制作人按下了冻结」，不是坏了也不是没人管——所以用降饱和的冷调，
-   不用告警红。四处渲染（工单池卡 / 树形行 / 流程节点 / 在途时间轴段）共用这一组类，
-   任何新视图只要挂上 .susp 就自动同款，不必各画各的。 */
+   不用告警红。四处渲染（工单池卡 / 树形行 / 在途时间轴段 / 流程视图）共用这一组类，
+   任何新视图只要挂上 .susp 就自动同款，不必各画各的。
+   施工令-022 起流程视图不再有 .fl-node：挂起单在新流程页只出现在沉淀抽屉的 ❄ 类里（.fgsi.susp），
+   现在/接下来两段一律跳过——「全链路跳过」在视图层的兑现。 */
 .susp { filter:grayscale(.85); opacity:.55; }
 .susp:hover { opacity:.8; }
-.bcard2.susp, .trow2.susp, .fl-node.susp { border-style:dashed; }
+.bcard2.susp, .trow2.susp { border-style:dashed; }
 .tlseg.susp { opacity:.35; filter:grayscale(1); }
 .pill.susp-p { background:var(--chip); color:var(--ink3); font-weight:600; letter-spacing:.02em; }
 /* 徽标本身不跟着置灰——它是「为什么灰」的答案，灰掉就白标了 */
 .susp .snowb, .snowb { filter:none; opacity:1; }
-.bcard2 .snowb, .trow2 .snowb, .fl-node .snowb { font-size:11px; margin-right:4px; }
+.bcard2 .snowb, .trow2 .snowb { font-size:11px; margin-right:4px; }
 
 /* 详情页「已挂起」横幅：顶在最上层，解挂按钮就在横幅里——制作人不必去操作栏里翻 */
 .suspbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 18px;
