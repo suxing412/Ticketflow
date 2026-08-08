@@ -1,0 +1,12 @@
+{
+  "name": "@ticketflow/watchtower",
+  "version": "0.2.0",
+  "private": true,
+  "description": "瞭望塔：会话外统一监视守护。五路信源（journal 流水/信箱/时钟/心跳/远端 git 侦察）收口成统一事件流+未读账本+桌面通知+心跳戳，计划任务登录自启。单文件零依赖。",
+  "main": "watchtower.js",
+  "scripts": {
+    "test": "node test.js",
+    "test:fast": "node test.js --fast"
+  },
+  "author": "suxing412"
+}

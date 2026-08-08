@@ -5,7 +5,8 @@
 /docs/           @suxing412
 # apps/platform：robinwang2 全权
 /apps/platform/  @robinwang2
-# 共享地基：双签
+# 共享地基：公用件唯一家=packages/，整目录双签（制作人 2026-08-08 立规；含迁入的 enginectl/review-panel/watchtower/skill-templates/role-protocol-templates）
+/packages/            @suxing412 @robinwang2
 /packages/core/       @suxing412 @robinwang2
 /packages/providers/  @robinwang2 @suxing412
 # 治理文件本身：双签

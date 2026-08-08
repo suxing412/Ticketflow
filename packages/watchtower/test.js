@@ -193,6 +193,26 @@ function 单元() {
   eq('远端三条不串到别的信源', W.匹配规则(表远, '流水', '新提交 something').名, '兜底');
   eq('远端段默认值', [W.默认远端.启用, W.默认远端.间隔毫秒, Array.isArray(W.默认远端.仓清单)], [true, 300000, true]);
 
+  章('U13 心跳戳（施工令-024）：覆盖写一行 ISO / 读回带毫秒龄');
+  const 戳巢 = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-hb-'));
+  const 戳 = path.join(戳巢, '心跳.txt');
+  eq('文件不存在读回 null', W.读心跳戳(戳), null);
+  ok('写入成功返回 true', W.写心跳戳(戳, new Date('2026-08-09T01:02:03.456Z')));
+  eq('内容 = 一行 ISO 时刻，无换行', fs.readFileSync(戳, 'utf8'), '2026-08-09T01:02:03.456Z');
+  const 读1 = W.读心跳戳(戳);
+  ok('读回有效且时刻一致', !!读1 && 读1.有效 === true && 读1.时刻 === '2026-08-09T01:02:03.456Z', JSON.stringify(读1));
+  W.写心跳戳(戳, new Date(Date.now() - 5000));                      // 拿 5s 前的真实刻算龄，别拿写死的未来时刻
+  const 读龄 = W.读心跳戳(戳);
+  ok('毫秒龄为数且非负、量级对', !!读龄 && Number.isFinite(读龄.毫秒龄) && 读龄.毫秒龄 >= 4000 && 读龄.毫秒龄 < 60000, String(读龄 && 读龄.毫秒龄));
+  ok('覆盖写不追加', (W.写心跳戳(戳, new Date('2026-08-09T02:00:00.000Z')), fs.readFileSync(戳, 'utf8') === '2026-08-09T02:00:00.000Z'));
+  const 新读 = W.读心跳戳(戳);
+  ok('第二戳读回新时刻', !!新读 && 新读.时刻 === '2026-08-09T02:00:00.000Z');
+  fs.writeFileSync(戳, '不是时间戳', 'utf8');
+  const 脏读 = W.读心跳戳(戳);
+  ok('脏内容判无效不炸', !!脏读 && 脏读.有效 === false, JSON.stringify(脏读));
+  eq('默认间隔 30s', W.默认心跳戳间隔, 30000);
+  try { fs.rmSync(戳巢, { recursive: true, force: true }); } catch { /* 留着无妨 */ }
+
   try { fs.rmSync(巢, { recursive: true, force: true }); } catch { /* 留着无妨 */ }
 }
 
@@ -215,6 +235,7 @@ function 造假部署区(标) {
     回落: path.join(根, '瞭望塔', '通知回落.log'),
     pid: path.join(根, '瞭望塔', 'watchtower.pid'),
     远端游标: path.join(根, '瞭望塔', '远端游标.json'),
+    心跳: path.join(根, '瞭望塔', '心跳.txt'),
   };
 }
 const 读文本 = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
@@ -543,6 +564,36 @@ async function E5() {
   return 区;
 }
 
+// ════════════════════════════ E6 心跳戳（施工令-024）════════════════════════════
+// 实测用 --config 把间隔压到 500ms（生产默认 30s，验收另跑真间隔）；隔离假部署区，不碰现网。
+async function E6() {
+  章('E6 心跳戳：开机即戳 → 周期刷新 → --status 心跳段 → 下岗即断更');
+  const 区 = 造假部署区('心跳戳');
+  fs.writeFileSync(区.规则, JSON.stringify(基础规则(), null, 2), 'utf8');
+  const 配置路径 = path.join(区.根, '瞭望塔.config.json');
+  fs.writeFileSync(配置路径, JSON.stringify({ 心跳戳间隔毫秒: 500 }, null, 2), 'utf8');
+  const c = 起守护(区, null, ['--config', 配置路径]);
+  ok('守护起来了', await 等到(() => /瞭望塔上岗/.test(读文本(区.流水)), 12000));
+  const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  ok('心跳文件出现', await 等到(() => fs.existsSync(区.心跳), 6000), 区.心跳);
+  const 戳A = 读文本(区.心跳);
+  ok('内容是一行 ISO 时刻（无换行）', ISO.test(戳A), JSON.stringify(戳A));
+  ok('周期内刷新（覆盖写出新时刻）', await 等到(() => {
+    const s = 读文本(区.心跳);
+    return ISO.test(s) && s !== 戳A && s > 戳A;
+  }, 8000), `A=${戳A} 现=${读文本(区.心跳)}`);
+  const st2 = spawnSync(process.execPath, [守护, '--root', 区.根, '--rules', 区.规则, '--config', 配置路径, '--status'], { encoding: 'utf8', windowsHide: true });
+  let sj2 = null; try { sj2 = JSON.parse(String(st2.stdout).trim().split('\n').pop()); } catch { /* 下面判空 */ }
+  ok('--status 带心跳段', !!(sj2 && sj2.ok && sj2['心跳戳'] && sj2['心跳戳']['存在'] === true), String(st2.stdout).trim().slice(0, 300));
+  ok('心跳段报秒龄且在跳', !!sj2 && Number.isFinite(sj2['心跳戳']['秒龄']) && sj2['心跳戳']['在跳'] === true, JSON.stringify(sj2 && sj2['心跳戳']));
+  停守护(c);
+  await 睡(1500);
+  const 戳B = 读文本(区.心跳);
+  await 睡(1500);
+  ok('守护下岗后心跳断更（文件留最后一戳）', 读文本(区.心跳) === 戳B && ISO.test(戳B), `B=${戳B}`);
+  return 区;
+}
+
 // ════════════════════════════ 跑 ════════════════════════════
 (async () => {
   process.stdout.write('瞭望塔自测（假部署区，真部署区只读）\n');
@@ -554,6 +605,7 @@ async function E5() {
     区们.push(await E3());
     区们.push(await E4());
     区们.push(await E5());
+    区们.push(await E6());
   } catch (e) {
     挂.push('测试自身炸了：' + (e && e.stack || e));
     process.stdout.write(`\n!! ${e && e.stack || e}\n`);

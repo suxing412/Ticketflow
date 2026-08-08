@@ -23,7 +23,8 @@ Copy-Item (Join-Path $repo '套件\部署.bat') "$stage\部署.bat"
 Copy-Item (Join-Path $repo '套件\SETUP.md') "$stage\SETUP.md"
 Copy-Item (Join-Path $repo '套件\studio.config.template.json') "$stage\骨架\studio.config.json"
 # 岗位协议用通用模板（不打包本工作室的 TK 定制版——发布纪律：套件内容全部通用默认）
-Copy-Item (Join-Path $repo '套件\岗位协议模板\*.md') "$stage\骨架\岗位协议\"
+# 施工令-024：模板迁 packages/role-protocol-templates；包自带的 README.md 是包说明不是章程，排除
+Copy-Item (Join-Path $repo 'packages\role-protocol-templates\*.md') "$stage\骨架\岗位协议\" -Exclude 'README.md'
 # 风格库空模板（新部署不继承本项目的公理）
 Set-Content -Encoding UTF8 "$stage\骨架\风格库\策划标杆.md" "# 策划标杆（提炼式设计公理）`n"
 
