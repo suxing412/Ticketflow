@@ -114,7 +114,10 @@ function 建工作区(目录) {
   fs.mkdirSync(章程目录, { recursive: true });
   const src = 模板目录();
   const 落章程 = [];
-  for (const 名 of ['通用', '策划', '程序', '美术', 'QA', '装配']) {
+  // 铺哪几份 = 内置章程有哪几份（施工令-027 去重复清单）：这里是**新建**工作区，
+  // 没有 cfg 可活读，而"能落地的章程"上限本来就由 内置章程 决定——列第二遍只会漂。
+  // 升级模式下新增职能（如 技术策划）的章程由 /api/env 的「岗位协议」项按 cfg.职能 报缺，不在这里补。
+  for (const 名 of Object.keys(内置章程)) {
     const dst = path.join(章程目录, `${名}.md`);
     if (fs.existsSync(dst)) continue;
     let 内容 = 内置章程[名];

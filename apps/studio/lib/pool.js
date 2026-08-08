@@ -5,9 +5,20 @@ const gates = require('./gates');
 
 const PRI = { P0: 0, P1: 1, P2: 2, P3: 3 };
 
+// ---- 池归属（施工令-027 去双账，2026-08-09）----
+// 双账病历：H85 之后「职能挂哪个池」有两本账——① 编制表 cfg.编制[].池序（派发/领单实际走的那本）
+// ② 老映射 cfg.执行池.<池>.职能（poolFor 读的那本）。两本一旦分歧，poolFor 就在撒谎：
+// 现网 2026-08-09 实测 程序 编制 claude→codex 而老映射答 codex、美术 编制 codex 而老映射答 claude。
+// 之所以没炸，是因为所有调用点都写成「池序[0] || poolFor(...)」——poolFor 只是池序为空时的兜底，
+// 它那个错答案压根没被消费（TK-106~108 跑通属侥幸）。现在把权威收归一处：
+//   编制表是唯一权威 → 职能→池序首位；老映射降为**迁移期兜底**，仅在该职能无编制行/池序为空时才查。
+// 冻结不在这里算：poolFor 是同步函数（自检 lint 也在调），把额度冻结判据塞进来会让"归属"随额度漂移；
+// 「首位**可用**池」的可用性由 dispatch.routePool 用 poolFrozen 逐池挑，两处职责不混。
 function poolFor(cfg, 职能) {
-  for (const [pool, c] of Object.entries(cfg.执行池 || {})) {
-    if ((c.职能 || []).includes(职能)) return pool;
+  const 池序 = require('./roster').poolsOf(cfg, 职能);
+  if (池序.length) return 池序[0];
+  for (const [pool, c] of Object.entries((cfg && cfg.执行池) || {})) {
+    if ((c.职能 || []).includes(职能)) return pool; // 兜底：未迁移配置 / 旧测试夹具 / 编制漏挂
   }
   return null;
 }

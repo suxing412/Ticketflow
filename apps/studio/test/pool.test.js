@@ -125,6 +125,57 @@ t('原子领单竞态：跳过被抢走的，领下一张', async () => {
   assert.equal(r.id, 'B'); // A 被抢走，领到 B
 });
 
+/* ===== poolFor 去双账（施工令-027，2026-08-09）=====
+   现网 2026-08-09 03:00 的真实分歧（本夹具 1:1 复刻，只是把职能名换成中性名）：
+     · 编制表 cfg.编制 —— 派发/领单真正走的那本账
+     · 老映射 cfg.执行池.<池>.职能 —— 改造前 poolFor 读的那本账
+   两本一旦对不上，poolFor 就在撒谎；之所以没炸，是所有调用点都写成「池序[0] || poolFor()」。*/
+const 双账CFG = {
+  职能: ['策划', '程序', '美术', '技术策划'],
+  执行池: { codex: { 职能: ['程序'] }, claude: { 职能: ['策划', '美术'] }, deepseek: { 职能: [] } },
+  编制: [
+    { 职能: '策划', 池序: [{ 池: 'claude', 档: '' }] },                              // 两账一致
+    { 职能: '程序', 池序: [{ 池: 'claude', 档: '' }, { 池: 'codex', 档: '' }] },      // 分歧：老表说 codex
+    { 职能: '美术', 池序: [{ 池: 'codex', 档: '' }] },                               // 分歧：老表说 claude
+    { 职能: '技术策划', 池序: [{ 池: 'claude', 档: '' }] },                          // 编制有、老表**没有**
+  ],
+};
+// 改造前的 poolFor 原文（对拍基准，逐字保留）
+const poolForOld = (cfg, 职能) => {
+  for (const [p, c] of Object.entries(cfg.执行池 || {})) if ((c.职能 || []).includes(职能)) return p;
+  return null;
+};
+
+t('poolFor 委托编制表：编制有而老表无的职能照样解析得出池（技术策划误报红灯案）', () => {
+  assert.equal(poolForOld(双账CFG, '技术策划'), null, '前提：老映射里确实没有这个职能');
+  assert.equal(pool.poolFor(双账CFG, '技术策划'), 'claude', '编制表说 claude，就该答 claude');
+});
+
+t('poolFor 两账分歧时以编制为准（老表的答案是过期的那个）', () => {
+  assert.equal(pool.poolFor(双账CFG, '程序'), 'claude'); // 老表答 codex
+  assert.equal(pool.poolFor(双账CFG, '美术'), 'codex');  // 老表答 claude
+});
+
+t('poolFor 老映射兜底：无编制行 / 池序为空时逐字回落旧行为', () => {
+  const 无编制 = { ...双账CFG, 编制: [] };
+  for (const fn of 无编制.职能) assert.equal(pool.poolFor(无编制, fn), poolForOld(无编制, fn), fn);
+  const 空池序 = { ...双账CFG, 编制: [{ 职能: '美术', 池序: [] }] };
+  assert.equal(pool.poolFor(空池序, '美术'), 'claude', '池序显式清空 = 回落职能默认池');
+  assert.equal(pool.poolFor(双账CFG, '不存在的职能'), null);
+});
+
+t('行为等价：所有调用点的「池序[0] || poolFor()」新旧解析结果零差异', () => {
+  // 全仓调用点都是这个形状（dispatch.js:107 / recommend.js:55 / pool.claim / roster.snapshot），
+  // 即 poolFor 只在池序为空时才被消费——这条断言就是施工令-027「行为等价」那一条的机器化。
+  const roster = require('../lib/roster');
+  for (const cfg of [双账CFG, CFG, { ...双账CFG, 编制: [] }]) {
+    for (const fn of [...(cfg.职能 || []), ...roster.read(cfg).map((r) => r.职能)]) {
+      const 池序 = roster.poolsOf(cfg, fn);
+      assert.equal(池序[0] || pool.poolFor(cfg, fn), 池序[0] || poolForOld(cfg, fn), `${fn} 生效池不该变`);
+    }
+  }
+});
+
 (async () => {
   for (const [n, f] of tests) { await f(); passed++; console.log('  ✓ ' + n); }
   console.log(`全部通过：${passed} 项`);

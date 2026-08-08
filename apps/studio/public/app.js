@@ -742,9 +742,12 @@ function timelineHtml(agents, all, opts) {
   const online = byFn ? [] : agents.filter((a) => a.上线 !== false).map((a) => a.id);
   const withSegs = all.filter((t) => t.主办 && t.领单时间);
   const laneOf = (t) => byFn ? (t.职能 || '其他') : t.主办;
-  const FN_ORDER = ['策划', '程序', '美术', '装配', 'QA', '其他'];
+  // 泳道 = 数据里真实出现的职能（施工令-027）：FN_ORDER 只当"排序偏好"，不当"白名单"——
+  // 写死六项的年代，新增职能（技术策划）的在途单泳道会被 filter 直接滤掉，人在时间轴上凭空消失。
+  const FN_ORDER = ['策划', '技术策划', '程序', '美术', '装配', 'QA', '其他'];
+  const 出现的职能 = [...new Set(withSegs.map((t) => t.职能 || '其他'))];
   const ids = byFn
-    ? FN_ORDER.filter((fn) => withSegs.some((t) => (t.职能 || '其他') === fn))
+    ? [...FN_ORDER.filter((fn) => 出现的职能.includes(fn)), ...出现的职能.filter((fn) => !FN_ORDER.includes(fn)).sort()]
     : [...new Set([...online, ...withSegs.map((t) => t.主办)])];
   const segs = {}; let any = false;
   for (const t of withSegs) {
@@ -2575,25 +2578,38 @@ window.compatEdit = async (name) => {
    授权流程全程第一方，厂商改登录页与我们无关。key 才由 app 保管（DPAPI 密文）。 */
 window.credsLoad = async () => {
   const el = $('creds-card'); if (!el) return;
-  let d; try { d = await api('/api/creds'); } catch { el.innerHTML = '<p class="dim">凭据读取失败</p>'; return; }
+  // no-store 是「重新检测」这个按钮的全部意义（施工令-027 自测抓到）：走默认缓存时
+  // 浏览器会把上一次 /api/creds 原样端回来，登录完回来点它，卡片纹丝不动，按钮看着像坏的。
+  let d; try { d = await api('/api/creds', { cache: 'no-store' }); } catch { el.innerHTML = '<p class="dim">凭据读取失败</p>'; return; }
   if (d.error) { el.innerHTML = `<p class="dim">${esc(d.error)}</p>`; return; }
-  const 灯 = (ok) => `<span class="dot ${ok ? 'on' : 'off'}"></span>`;
-  const 订阅行 = (厂商, s) => `<p class="rowline">${灯(s.已登录)}<b>${厂商}</b> <span class="dim">${esc(s.note || '')}</span>
-    <button class="btn xs" onclick="credsLogin('${厂商}')">${s.已登录 ? '重新登录' : '登录'}</button></p>`;
+  // 圆点四档（施工令-027），与 /api/creds 的 态 一一对应，两个厂商同一把尺：
+  //   绿=可用（登录态实测有效）/ 黄=受限（过期但能自愈，不用人管）/ 红=失效（要人重登）/ 灰=未知（探不到，不假绿也不乱报红）
+  // 旧样 codex 那一行是**写死**的 灯(false)+写死文案，灰点纯属巧合正确；claude 绿点则只看"有没有 token"。
+  const 灯类 = { 可用: 'dot on', 受限: 'dot warn', 失效: 'dot err', 未知: 'dot' };
+  // 名称由 <b> 出、状态由 note 出，两边都写厂商名就是 08-09 巡检抓到的「codex codex 登录态…」叠字。
+  const 订阅行 = (厂商, s) => {
+    const 态 = 灯类[s.态] ? s.态 : '未知';
+    const 按钮 = s.可登录
+      ? `<button class="btn xs rl-push" title="${esc('拉起可见终端执行：' + (s.命令 || '') + '（授权在浏览器里由厂商完成，app 只等它退出后重探）')}"
+          onclick="credsLogin('${厂商}')">${s.已登录 ? '重新登录' : '登录'}</button>`
+      : `<span class="dim rl-push" title="${esc((s.命令 || '') + '：可执行体不在 PATH，按钮点了只会弹一个报错黑窗')}">CLI 未装 · 无法登录</span>`;
+    return `<p class="rowline"><span class="${灯类[态]}" title="${esc(态)}"></span><b class="rl-name">${esc(厂商)}</b>
+      <span class="rl-note">${esc(s.note || '')}</span>${按钮}</p>`;
+  };
   const 托管行 = (r) => `<p class="rowline"><span class="pill sm">${esc(r.池)}</span>
-    <code>${esc(r.指纹)}</code>${r.base ? ` <span class="dim">${esc(r.base)}</span>` : ''}${r.模型 ? ` <span class="dim">· ${esc(r.模型)}</span>` : ''}
-    <button class="btn xs" onclick="credsDel('${qesc(r.池)}')">删除</button></p>`;
+    <span class="rl-note"><code>${esc(r.指纹)}</code>${r.base ? ` · ${esc(r.base)}` : ''}${r.模型 ? ` · ${esc(r.模型)}` : ''}</span>
+    <button class="btn xs rl-push" onclick="credsDel('${qesc(r.池)}')">删除</button></p>`;
   el.innerHTML = `
     <p class="subnote">订阅（凭据归 CLI，app 不保存）</p>
     ${订阅行('claude', d.订阅.claude)}
-    <p class="rowline">${灯(false)}<b>codex</b> <span class="dim">${esc(d.订阅.codex.note)}</span>
-      <button class="btn xs" onclick="credsLogin('codex')">登录</button></p>
+    ${订阅行('codex', d.订阅.codex)}
+    <p class="subnote dotlegend" style="margin-top:10px"><span><span class="dot on"></span>可用</span><span><span class="dot warn"></span>受限·自愈中</span><span><span class="dot err"></span>失效·需重登</span><span><span class="dot"></span>未知·探不到</span></p>
     <p class="subnote" style="margin-top:14px">API key（app 保管 · DPAPI 密文 · 不入 studio.config.json）</p>
-    ${d.托管.length ? d.托管.map(托管行).join('') : '<p class="dim">尚未托管任何 key</p>'}
-    <p style="margin-top:10px">
+    ${d.托管.length ? d.托管.map(托管行).join('') : '<p class="rowline"><span class="rl-note">尚未托管任何 key</span></p>'}
+    <p class="rowline" style="margin-top:10px;border-bottom:none">
       <button class="btn xs" onclick="credsAdd()">＋ 添加 key</button>
       <button class="btn xs" onclick="credsLoad()">重新检测</button>
-      ${d.可加密 ? '' : '<span class="dim" style="color:var(--bad)">DPAPI 不可用，无法保存 key</span>'}
+      ${d.可加密 ? '' : '<span class="rl-note" style="color:var(--danger)">DPAPI 不可用，无法保存 key</span>'}
     </p>`;
 };
 window.credsLogin = async (厂商) => {

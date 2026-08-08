@@ -716,6 +716,26 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .dot.on { background:var(--ok); }
 .dot.err { background:var(--danger); }
 .dot.warn { background:var(--gatetx); } /* 黄=能力受限（降级） */
+/* 卡片内单行（凭据卡 / 向导候选目录）——施工令-027：
+   此前 .rowline 全站没有一条 CSS 规则，是裸 <p>：行距随浏览器默认走、按钮吊在文字基线上、
+   两行之间没有分隔。现按 .envcard .envrow 的同款体例收拾——一行 flex、竖直居中、
+   说明吃掉剩余宽度把按钮顶到右缘，行与行之间一条细线。 */
+.rowline { display:flex; align-items:center; gap:10px; margin:0; padding:8px 0; font-size:13px;
+  border-bottom:1px solid var(--sect); }
+.rowline:last-of-type { border-bottom:none; }
+.rowline .dot { margin-right:0; flex-shrink:0; }
+.rowline .rl-name { font-weight:500; min-width:60px; flex-shrink:0; }
+.rowline .rl-note { color:var(--ink3); flex:1; min-width:0; }
+.rowline .btn, .rowline code, .rowline .pill { flex-shrink:0; }
+/* 窄幅（<860）说明会换行到第二行，第一行只剩 圆点+名称+按钮——不推一把按钮就吊在名字屁股后面 */
+.rowline .rl-push { margin-left:auto; }
+.rowline code { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dotlegend { display:flex; align-items:center; flex-wrap:wrap; gap:4px 14px; }
+.dotlegend .dot { margin-right:4px; }
+@media (max-width:860px) {
+  .rowline { flex-wrap:wrap; }
+  .rowline .rl-note { flex:1 0 100%; order:3; }
+}
 .warnc { color:var(--gatetx); }
 .pill.warn { background:var(--gatebg); color:var(--gatetx); }
 /* 全链路自检分组 */

@@ -99,25 +99,56 @@ const 登录命令 = (厂商) => {
   if (厂商 === 'codex') return 'codex login';
   return `"${runner.resolveCli('claude').cmd}" auth login`;
 };
-app.get('/api/creds', (req, res) => {
+// 登录命令的可执行体在不在（施工令-027「不可用的按钮不许摆着」）：
+// 不在就不给按钮——点了只会弹一个报 not recognized 的黑窗，那不叫功能。
+// 命令被 config.执行器.登录命令 覆盖过的，视为用户自己知道在干什么，一律放行。
+const 登录可用 = (厂商) => new Promise((resolve) => {
+  if ((((cfg || {}).执行器 || {}).登录命令 || {})[厂商]) return resolve(true);
+  const cmd = 厂商 === 'codex' ? 'codex' : runner.resolveCli('claude').cmd;
+  if (/[\\/:]/.test(cmd)) return resolve(fs.existsSync(cmd)); // 绝对路径：直接看文件在不在
+  require('child_process').execFile('where', [cmd], { timeout: 5000, windowsHide: true }, (e) => resolve(!e));
+});
+// 订阅态四档（施工令-027 圆点语义统一）：可用=绿 / 受限=黄（能自愈，无需人管）/ 失效=红（要人重登）/ 未知=灰（探不到，别假绿也别乱报红）。
+// note **不含厂商名**——名字由前端的 <b>厂商</b> 出，两边都写就是 08-09 巡检抓到的「codex codex …」叠字。
+app.get('/api/creds', async (req, res) => {
   if (!ready(res)) return;
   const os2 = require('os');
-  // 订阅态：claude 读凭据文件、codex 问 app-server——app 不存它们的任何东西
-  let claude订阅 = { 已登录: false, note: '未登录（点登录按钮）' };
+  // 订阅态：claude 读凭据文件、codex 问 app-server（本地零 token）——app 不存它们的任何东西
+  let claude订阅;
   try {
     const c = JSON.parse(fs.readFileSync(path.join(os2.homedir(), '.claude', '.credentials.json'), 'utf8')).claudeAiOauth;
-    if (c && c.accessToken) {
-      claude订阅 = c.expiresAt > Date.now()
-        ? { 已登录: true, note: 'token 有效至 ' + new Date(c.expiresAt).toTimeString().slice(0, 5) }
-        : { 已登录: !!c.refreshToken, note: c.refreshToken ? 'token 过期，将自动续期' : 'token 过期且无 refresh，需重登' };
-    }
-  } catch { /* 无凭据文件 = 未登录 */ }
-  res.json({
-    订阅: { claude: claude订阅, codex: { note: 'codex 登录态见环境探针（app-server 探测）' } },
-    托管: creds.list(ROOT),
-    可加密: creds.可加密(),
-    登录命令: { claude: 登录命令('claude'), codex: 登录命令('codex') },
-  });
+    if (!c || !c.accessToken) claude订阅 = { 态: '失效', 已登录: false, note: '凭据文件里没有 token，需重新登录' };
+    else if (c.expiresAt > Date.now()) claude订阅 = { 态: '可用', 已登录: true, note: 'token 有效至 ' + new Date(c.expiresAt).toTimeString().slice(0, 5) };
+    else if (c.refreshToken) claude订阅 = { 态: '受限', 已登录: true, note: 'token 已过期，下次调用凭 refresh 自动续期' };
+    else claude订阅 = { 态: '失效', 已登录: false, note: 'token 过期且无 refresh，需重新登录' };
+  } catch (e) {
+    claude订阅 = (e && e.code === 'ENOENT')
+      ? { 态: '失效', 已登录: false, note: '本机没有凭据文件（未登录）' }
+      : { 态: '未知', 已登录: false, note: '凭据文件读不动：' + String(e && e.message).slice(0, 40) };
+  }
+  // codex 没有可读的凭据文件，只能问 app-server：无响应时「未装 / 未登录 / 服务没起」三者分不清，
+  // 那就是**未知**（灰），不是失效（红）——按施工令-027 的圆点语义如实呈。
+  const rl = await require('./lib/quota').getRateLimits(cfg).catch(() => null);
+  const w0 = rl ? (require('./lib/quota').windowsOf(rl)[0] || null) : null;
+  const codex订阅 = rl
+    ? { 态: '可用', 已登录: true, note: 'app-server 应答' + (w0 ? ` · ${w0.label}已用 ${w0.pct}%` : '') }
+    : { 态: '未知', 已登录: false, note: 'app-server 无响应——未装 / 未登录 / 服务没起，探不出是哪种（额度盲飞）' };
+  // 本处理器改成 async 之后多了一条纪律：express 4 不接管 async 抛出的异常，
+  // 漏抛一次这个请求就永远不回，凭据卡在"读取中…"上转到天荒地老。整体兜底，宁可如实报错。
+  try {
+    const [claude可登, codex可登] = await Promise.all([登录可用('claude'), 登录可用('codex')]);
+    res.json({
+      订阅: {
+        claude: { ...claude订阅, 可登录: claude可登, 命令: 登录命令('claude') },
+        codex: { ...codex订阅, 可登录: codex可登, 命令: 登录命令('codex') },
+      },
+      托管: creds.list(ROOT),
+      可加密: creds.可加密(),
+      登录命令: { claude: 登录命令('claude'), codex: 登录命令('codex') },
+    });
+  } catch (e) {
+    res.status(500).json({ error: '凭据探测失败：' + String(e && e.message).slice(0, 120) });
+  }
 });
 app.post('/api/auth/login', (req, res) => {
   if (!ready(res)) return;
@@ -601,11 +632,15 @@ app.get('/api/env', async (req, res) => {
 
   // 组4 协议资产与配置完整性
   const 协议配置 = [];
-  const charters = ['通用', '策划', '程序', '美术', 'QA', '装配'];
+  // 章程清单活读 cfg.职能（施工令-027）：写死六份的年代，新增职能（技术策划）注册后自检照报"齐全"，
+  // 缺的那份章程要等 agent 开工才发现。通用是所有职能共读的底章，永远算一份。
+  const charters = ['通用', ...(cfg.职能 || []).map(String)].filter((n, i, a) => n && a.indexOf(n) === i);
   const missing = charters.filter((n) => !fs.existsSync(path.join(ROOT, '岗位协议', n + '.md')));
-  协议配置.push(missing.length ? item('岗位协议', '黄', '缺：' + missing.join('、')) : item('岗位协议', '绿', charters.length + ' 份齐全'));
+  协议配置.push(missing.length ? item('岗位协议', '黄', `缺：${missing.join('、')}（应有 ${charters.length} 份：通用 + ${(cfg.职能 || []).length} 职能）`)
+    : item('岗位协议', '绿', charters.length + ' 份齐全'));
   const lint = [];
-  for (const fn of cfg.职能 || []) if (!pool.poolFor(cfg, fn)) lint.push(`职能「${fn}」无执行池归属（领单会失败）`);
+  // 池归属走编制口径（施工令-027）：poolFor 已委托 cfg.编制 池序，老映射 执行池.<池>.职能 仅兜底
+  for (const fn of cfg.职能 || []) if (!pool.poolFor(cfg, fn)) lint.push(`职能「${fn}」无执行池归属（编制表未挂池序、老映射也没有——领单/派发会失败）`);
   for (const r of roster.read(cfg)) {
     if (!(cfg.职能 || []).includes(r.职能)) lint.push(`编制行「${r.职能}」的职能不在职能表`);
     for (const p of r.池序) if (!(cfg.执行池 || {})[p.池]) lint.push(`编制行「${r.职能}」池序里的 ${p.池} 池未注册`);
