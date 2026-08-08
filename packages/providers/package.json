@@ -1,0 +1,11 @@
+{
+  "name": "@papercrew/providers",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CLI 厂商适配层：把「由哪家 AI 执行」从业务逻辑里解耦出来。不含调度逻辑。",
+  "main": "registry.js",
+  "scripts": {
+    "test": "node test/providers.test.js"
+  },
+  "author": "robinwang2"
+}
