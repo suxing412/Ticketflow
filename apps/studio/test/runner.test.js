@@ -606,5 +606,65 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.equal(patrol.零输出(root, CFG, { 执行中: [哑2] }).告警.length, 1, '未挂起的真零输出照报');
   });
 
+  /* ===== 凭据解析三态（施工令-029：deepseek key 迁 DPAPI 托管）=====
+     夹具里的 key 全是明摆着的假串（sk-FAKE-*），真 key 永远不进版本库。
+     不碰真 DPAPI：直接换掉 require.cache 里的 creds 导出——三态由夹具决定，不由本机加密链路决定。*/
+  const credsPath = require.resolve('../lib/creds');
+  const 真creds = require('../lib/creds');
+  const 装creds = (fake) => { require.cache[credsPath].exports = fake; };
+  const 还原creds = () => { require.cache[credsPath].exports = 真creds; };
+  const DS = (兼容) => ({ 执行池: { deepseek: 兼容 ? { 兼容 } : {} } });
+
+  await t('凭据三态①托管命中：key 走托管，config 明文可以是空的', async () => {
+    装creds({ has: () => true, getKey: () => 'sk-FAKE-hosted-0001',
+      meta: () => ({ base: 'https://api.example.com', 模型: 'ds-flash' }) });
+    const r = runner.凭据Of('/x', DS({ base: '', key: '', 模型: '' }), 'deepseek');
+    assert.equal(r.key, 'sk-FAKE-hosted-0001');
+    assert.equal(r.base, 'https://api.example.com');
+    assert.equal(r.来源, '托管');
+    还原creds();
+  });
+
+  await t('凭据三态②托管缺失：逐字回落 config 兼容段（迁移失败可回退）', async () => {
+    装creds({ has: () => false, getKey: () => null, meta: () => null });
+    const r = runner.凭据Of('/x', DS({ base: 'https://api.example.com', key: 'sk-FAKE-inline-0002', 模型: 'ds-pro' }), 'deepseek');
+    assert.equal(r.key, 'sk-FAKE-inline-0002');
+    assert.equal(r.来源, '内联');
+    还原creds();
+  });
+
+  await t('凭据三态③两处皆无：返回 null（不编一个空 key 送进 env）', async () => {
+    装creds({ has: () => false, getKey: () => null, meta: () => null });
+    assert.equal(runner.凭据Of('/x', DS({ base: 'https://api.example.com', key: '', 模型: 'ds-pro' }), 'deepseek'), null);
+    assert.equal(runner.凭据Of('/x', DS(null), 'deepseek'), null);
+    assert.equal(runner.凭据Of('/x', {}, 'deepseek'), null);
+    还原creds();
+  });
+
+  await t('凭据兜底做到字段粒度：托管只有 key 时 base 回落 config（否则 deepseek 的 key 会被送去官方端点）', async () => {
+    装creds({ has: () => true, getKey: () => 'sk-FAKE-hosted-0003', meta: () => ({ base: null, 模型: null }) });
+    const r = runner.凭据Of('/x', DS({ base: 'https://api.example.com', key: '', 模型: 'ds-pro' }), 'deepseek');
+    assert.equal(r.key, 'sk-FAKE-hosted-0003');
+    assert.equal(r.base, 'https://api.example.com', 'base 丢了就等于把第三方 key 发给 Anthropic 官方');
+    assert.equal(r.模型, 'ds-pro');
+    assert.equal(r.来源, '托管(key)+config(端点)');
+    还原creds();
+  });
+
+  await t('托管在册但解不开（DPAPI 挂了）：不硬撑，回落 config 兜底', async () => {
+    装creds({ has: () => true, getKey: () => null, meta: () => ({}) });
+    const r = runner.凭据Of('/x', DS({ base: 'https://api.example.com', key: 'sk-FAKE-inline-0004', 模型: 'ds-pro' }), 'deepseek');
+    assert.equal(r.key, 'sk-FAKE-inline-0004');
+    assert.equal(r.来源, '内联');
+    还原creds();
+  });
+
+  await t('订阅池不碰托管：claude/codex 恒 null（凭据归 CLI，app 一个字节不存）', async () => {
+    装creds({ has: () => false, getKey: () => null, meta: () => null });
+    assert.equal(runner.凭据Of('/x', CFG, 'claude'), null);
+    assert.equal(runner.凭据Of('/x', CFG, 'codex'), null);
+    还原creds();
+  });
+
   console.log(`全部通过：${passed} 项`);
 })().catch((e) => { console.error('  ✗ ' + e.message); process.exit(1); });

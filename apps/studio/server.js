@@ -1093,7 +1093,15 @@ app.get('/api/config', (req, res) => {
   if (!ready(res)) return;
   // 兼容池密钥脱敏（0.22.1）：config 会流向远程客户端，密钥只留尾四位指纹
   const pools = JSON.parse(JSON.stringify(cfg.执行池 || {}));
-  for (const p of Object.values(pools)) if (p.兼容 && p.兼容.key) p.兼容.key = '●●●●' + String(p.兼容.key).slice(-4);
+  // 托管标记（施工令-029）：key 迁进 DPAPI 托管后 config 明文字段是空的，
+  // 界面若照旧渲染「密钥 未设」会像掉了配置——如实标出「已托管」，兜底字段还在就一并说明。
+  let 托管池 = new Set();
+  try { 托管池 = new Set(creds.list(ROOT).map((r) => r.池)); } catch { /* 托管库读不动不影响参数页 */ }
+  for (const [n, p] of Object.entries(pools)) {
+    if (!p.兼容) continue;
+    if (p.兼容.key) p.兼容.key = '●●●●' + String(p.兼容.key).slice(-4);
+    if (托管池.has(n)) p.兼容.托管 = true;
+  }
   res.json({ 闸值: cfg.闸值, 执行池: pools, 编制: cfg.编制 || roster.read(cfg), 职能: cfg.职能, 推荐: cfg.推荐 || {}, 项目: cfg.项目 || {}, 模型: cfg.模型 || {}, 执行器: cfg.执行器 || {}, quota: cfg.quota || {}, server: cfg.server || {} });
 });
 app.get('/api/quota', async (req, res) => {

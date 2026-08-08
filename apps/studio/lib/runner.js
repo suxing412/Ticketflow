@@ -32,18 +32,28 @@ function isSim(opts) { return opts && opts.durMs != null; }
 // ---- 池凭据解析（2026-08-08 凭据托管，路 B）----
 // 顺序：托管库（<root>/凭据.json，DPAPI 密文）> config 内联 兼容 段（旧路径，保兼容）。
 // 订阅池永远返回 null——它们的凭据归 CLI 自己管，app 一个字节都不存（路 B 的核心红利）。
+// 施工令-029 补章：兜底做到**字段粒度**，不是整块二选一。
+// 迁移只搬 key（base/模型 仍留在 config 兼容段）时，旧写法会把 base 一并置空，
+// 而「base 缺省 = 走 Anthropic 官方端点」——结果是拿 deepseek 的 key 去敲官方的门：
+// 必然 401，且等于把第三方密钥递给了错误的收件人。端点因此单独兜底。
 function 凭据Of(root, cfg, poolName) {
+  const c = (cfg.执行池 && cfg.执行池[poolName] && cfg.执行池[poolName].兼容) || null;
   try {
     const creds = require('./creds');
     if (creds.has(root, poolName)) {
       const k = creds.getKey(root, poolName);
       if (k) {
         const m = creds.meta(root, poolName) || {};
-        return { key: k, base: m.base || null, 模型: m.模型 || null, 来源: '托管' };
+        const 端点自config = !m.base && !!(c && c.base);
+        return {
+          key: k,
+          base: m.base || (c && c.base) || null,
+          模型: m.模型 || (c && c.模型) || null,
+          来源: 端点自config ? '托管(key)+config(端点)' : '托管',
+        };
       }
     }
   } catch { /* 托管库不可用（DPAPI 挂了等）→ 回落内联，不阻塞派发 */ }
-  const c = cfg.执行池 && cfg.执行池[poolName] && cfg.执行池[poolName].兼容;
   if (c && c.key) return { key: c.key, base: c.base || null, 模型: c.模型 || null, 来源: '内联' };
   return null;
 }
@@ -547,7 +557,9 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   } catch (e) { failLocal('CLI 启动失败：' + e.message); return true; }
   entry.child = child;
   const cliPool = kind === '执行' ? poolName : 'claude'; // 质检/代核实际走 claude，流水如实记
-  journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name} · 超时闸 ${rc.执行超时分钟 ?? 30}m 派发时快照）`); // 夜班推演 #3：热改超时不作用于在跑会话，快照值写明防误判
+  // 凭据来源入流水（施工令-029）：迁移后要看得见「这一发到底是从托管取的还是从 config 兜底取的」。
+  // 只记来源三个字，key/指纹一律不进流水。
+  journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name} · 超时闸 ${rc.执行超时分钟 ?? 30}m 派发时快照${compat ? ' · 凭据' + compat.来源 : ''}）`); // 夜班推演 #3：热改超时不作用于在跑会话，快照值写明防误判
   let out = '', errout = '';
   child.stdout.on('data', (d) => { out += d; if (out.length > 800000) out = out.slice(-400000);
     entry.收字节 = (entry.收字节 || 0) + d.length; // 活性字节（施工令-010）：零输出看门狗的判据 = stdout∪stderr
