@@ -1,4 +1,4 @@
-// 公用件契约测试 — 钉住本仓对 Ticketflow packages 的**全部消费面**。
+// 公用件契约测试 — 钉住本产品对仓根 packages 的**全部消费面**。
 //
 // 为什么需要它：公用件走文件路径消费，**没有 semver 锁**。对方往 packages 合一个
 // 破坏性改动，我们这边下次启动才炸，而且中间没有任何提示——因为我们除了
@@ -12,7 +12,7 @@ const fs = require('fs');
 const 公用件 = require('../lib/公用件');
 
 let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
-console.log('公用件契约测试（跨仓消费面）');
+console.log('公用件契约测试（消费面）');
 
 t('公用件解析：仓根的 packages/（一仓拓扑），TICKETFLOW_PACKAGES 可覆盖', () => {
   assert.equal(path.basename(公用件.仓根), 'Ticketflow');

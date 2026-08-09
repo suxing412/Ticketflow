@@ -7,8 +7,8 @@
 //   - 执行器接线只到「providers 注册表可枚举 + echo 级测试调用（桩模式）」为止；
 //   - 桩模式是物理性的：本文件不引入 child_process，任何路径都发不起真实 CLI 进程，零计费。
 //
-// providers 消费走并排克隆约定：../Ticketflow/packages/providers（@papercrew/providers），
-// 仓位不同时用环境变量 TICKETFLOW_HOME 指向 Ticketflow 仓根。
+// providers 消费走仓根 packages/providers（@papercrew/providers），
+// 换布局时用环境变量 TICKETFLOW_PACKAGES 指向 packages/。
 'use strict';
 
 const http = require('http');
@@ -16,7 +16,9 @@ const fs = require('fs');
 const path = require('path');
 
 const 仓根 = __dirname;
-const TICKETFLOW_HOME = process.env.TICKETFLOW_HOME || path.resolve(仓根, '..', 'Ticketflow');
+// 公用件解析统一走 lib/公用件（一仓拓扑）。此处曾自抄一份「往上找兄弟仓 Ticketflow」的
+// 算法，一仓合并后解析成 <仓根>/apps/Ticketflow 而失效——同一个约定不留第二份。
+const 公用件 = require('./lib/公用件');
 
 // ——————————————————————————————————————————————————————————
 // 配置
@@ -31,15 +33,15 @@ const 平台名 = 配置.名称 || 包.name || 'AI-DevPlatform';
 const 版本 = 配置.版本 || 包.version || '0.0.0';
 
 // ——————————————————————————————————————————————————————————
-// providers 注册表（并排克隆约定 + TICKETFLOW_HOME 覆盖）
+// providers 注册表（一仓：仓根 packages/；TICKETFLOW_PACKAGES 可覆盖）
 // ——————————————————————————————————————————————————————————
 let registry = null;
 let registry错误 = null;
 try {
-  registry = require(path.join(TICKETFLOW_HOME, 'packages', 'providers', 'registry.js'));
+  registry = 公用件.载入('providers', 'registry.js');
 } catch (e) {
-  registry错误 = `providers 包加载失败：${e.message}；请确认两仓并排克隆（Ticketflow 与本仓同级），` +
-    `或设环境变量 TICKETFLOW_HOME 指向 Ticketflow 仓根（当前解析：${TICKETFLOW_HOME}）`;
+  registry错误 = String(e.message); // lib/公用件 已给出人话修法与实际解析路径
+
 }
 
 // ——————————————————————————————————————————————————————————
@@ -118,7 +120,7 @@ const 服务 = http.createServer((req, res) => {
       ok: true, 平台: 平台名, 版本, 端口,
       时刻: new Date().toISOString(),
       桩模式: true,
-      TICKETFLOW_HOME,
+      公用件: 公用件.PACKAGES,
     });
   }
 
@@ -142,7 +144,7 @@ const 服务 = http.createServer((req, res) => {
         roles: p.roles || [],
         说明: p.说明 || '',
       }));
-      return 发JSON(res, 200, { ok: true, 来源: path.join(TICKETFLOW_HOME, 'packages', 'providers'), providers });
+      return 发JSON(res, 200, { ok: true, 来源: 公用件.解析('providers'), providers });
     } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
   }
 
