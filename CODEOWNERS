@@ -3,6 +3,8 @@
 /apps/studio/    @suxing412
 /套件/           @suxing412
 /docs/           @suxing412
+# 双向信箱：投递不需要收件人批准——信箱不该有守门人（2026-08-09 收货回执死结案，解法①）；文书责任在发件人，历史不删不改靠自律+git 兜底
+/docs/信道/
 # 共享地基：公用件唯一家=packages/，整目录双签（制作人 2026-08-08 立规；含迁入的 enginectl/review-panel/watchtower/skill-templates/role-protocol-templates）
 /packages/            @suxing412 @robinwang2
 /packages/core/       @suxing412 @robinwang2
