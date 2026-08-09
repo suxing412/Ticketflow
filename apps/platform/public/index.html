@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-DevPlatform · 仪表盘</title>
+<style>
+  :root { --墨: #24292f; --灰: #6a737d; --线: #d8dee4; --底: #f6f8fa; --绿: #1a7f37; --红: #cf222e; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; font: 14px/1.6 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--墨); background: #fff; max-width: 880px; margin-inline: auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 28px 0 8px; border-bottom: 1px solid var(--线); padding-bottom: 6px; }
+  .淡 { color: var(--灰); }
+  .徽 { display: inline-block; font-size: 12px; padding: 1px 8px; border: 1px solid var(--线); border-radius: 10px; color: var(--灰); margin-left: 8px; vertical-align: 2px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--线); vertical-align: top; }
+  th { font-weight: 600; background: var(--底); }
+  .灯 { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; vertical-align: -1px; background: var(--灰); }
+  .灯.绿 { background: var(--绿); } .灯.红 { background: var(--红); }
+  button { font: inherit; font-size: 13px; padding: 2px 10px; border: 1px solid var(--线); border-radius: 6px; background: var(--底); cursor: pointer; }
+  button:hover { background: #eef1f4; }
+  pre { background: var(--底); border: 1px solid var(--线); border-radius: 6px; padding: 10px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  code { background: var(--底); border: 1px solid var(--线); border-radius: 4px; padding: 0 4px; font-size: 12px; }
+  ul.账本 { list-style: none; padding: 0; margin: 0; }
+  ul.账本 li { padding: 5px 0; border-bottom: 1px dashed var(--线); font-size: 13px; }
+  .级急 { color: var(--红); font-weight: 600; margin-right: 6px; }
+  .级常 { color: var(--灰); margin-right: 6px; }
+</style>
+</head>
+<body>
+
+<h1 id="标题">AI-DevPlatform<span class="徽">桩模式 · 零真实 CLI 调用</span></h1>
+<div class="淡" id="健康行">开机检查中…</div>
+
+<h2>瞭望塔在岗灯</h2>
+<div><span id="灯" class="灯"></span><span id="灯文">读取中…</span></div>
+<div class="淡" id="灯注"></div>
+
+<h2>Providers（枚举自并排的 Ticketflow packages/providers）</h2>
+<table>
+  <thead><tr><th>名称</th><th>adapter</th><th>启用</th><th>说明</th><th>操作</th></tr></thead>
+  <tbody id="表体"><tr><td colspan="5" class="淡">读取中…</td></tr></tbody>
+</table>
+<div id="回声区" style="display:none">
+  <h2>echo 桩调用结果</h2>
+  <pre id="回声"></pre>
+</div>
+
+<h2>未读账本 <span class="淡" id="账本计数"></span></h2>
+<ul class="账本" id="账本"><li class="淡">读取中…</li></ul>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const 万 = (n) => (n == null ? '—' : Math.round(n / 1000) + 's');
+
+async function 刷健康() {
+  try {
+    const j = await fetch('/api/health').then((r) => r.json());
+    $('标题').firstChild.textContent = j.平台 + ' v' + j.版本;
+    document.title = j.平台 + ' · 仪表盘';
+    $('健康行').textContent = '服务在线 · 端口 ' + j.端口 + ' · ' + j.时刻;
+  } catch { $('健康行').textContent = '服务不可达'; }
+}
+
+async function 刷瞭望塔() {
+  try {
+    const j = await fetch('/api/watchtower').then((r) => r.json());
+    const 心 = j.心跳 || {};
+    const 灯 = $('灯');
+    if (心.在岗) {
+      灯.className = '灯 绿';
+      $('灯文').textContent = '在岗 · 心跳戳 ' + 心.时刻 + '（' + 万(心.毫秒龄) + ' 前）';
+      $('灯注').textContent = '';
+    } else {
+      灯.className = '灯 红';
+      $('灯文').textContent = '离岗 · ' + (心.存在 ? ('心跳戳已停更 ' + 万(心.毫秒龄)) : (心.说明 || '未见心跳戳'));
+      $('灯注').textContent = '拉起：' + (j.拉起命令 || 'npm run watchtower');
+    }
+    const 账 = j.未读 || { 总数: 0, 条目: [] };
+    $('账本计数').textContent = '（共 ' + 账.总数 + ' 条，示最近 ' + 账.条目.length + '）';
+    $('账本').innerHTML = 账.条目.length
+      ? 账.条目.slice().reverse().map((e) => {
+          const 级 = e.级别 || e.级 || '常';
+          const 正文 = e.文本 || e.正文 || e.摘要 || e.原文 || JSON.stringify(e);
+          const 时 = e.t || e.时刻 || e.at || '';
+          return '<li><span class="' + (级 === '急' ? '级急' : '级常') + '">[' + 级 + ']</span>'
+            + 转义(String(正文)) + ' <span class="淡">' + 转义(String(时)) + '</span></li>';
+        }).join('')
+      : '<li class="淡">暂无未读</li>';
+  } catch { $('灯文').textContent = '读取失败'; }
+}
+
+function 转义(s) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+async function 刷providers() {
+  try {
+    const j = await fetch('/api/providers').then((r) => r.json());
+    if (!j.ok) { $('表体').innerHTML = '<tr><td colspan="5" class="级急">' + 转义(j.error || '加载失败') + '</td></tr>'; return; }
+    $('表体').innerHTML = j.providers.map((p) =>
+      '<tr><td><code>' + 转义(p.名称) + '</code></td><td>' + 转义(p.adapter || '') + '</td><td>' + (p.启用 ? '✔' : '✘')
+      + '</td><td class="淡">' + 转义(p.说明 || '') + '</td><td><button onclick="回声测(\'' + 转义(p.名称) + '\')">echo 桩测</button></td></tr>'
+    ).join('');
+  } catch { $('表体').innerHTML = '<tr><td colspan="5" class="级急">providers 接口不可达</td></tr>'; }
+}
+
+async function 回声测(名) {
+  $('回声区').style.display = '';
+  $('回声').textContent = '调用中…';
+  try {
+    const j = await fetch('/api/providers/echo', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 名, prompt: 'echo：交钥匙壳联测 ' + new Date().toISOString() }),
+    }).then((r) => r.json());
+    $('回声').textContent = JSON.stringify(j, null, 2);
+  } catch (e) { $('回声').textContent = '调用失败：' + e.message; }
+}
+
+刷健康(); 刷providers(); 刷瞭望塔();
+setInterval(刷瞭望塔, 5000);
+setInterval(刷健康, 30000);
+</script>
+</body>
+</html>

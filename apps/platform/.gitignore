@@ -1,0 +1,18 @@
+# 运行时写区（瞭望塔出口：心跳戳/流水/账本/pid，全部不入库）
+watchtower-out/
+
+# 运行时流水与信箱（目录占位入库，内容不入库）
+journal/*
+!journal/.gitkeep
+呼叫/*
+!呼叫/.gitkeep
+
+# node
+node_modules/
+npm-debug.log*
+
+# 本地覆盖配置（如有）
+*.local.json
+node_modules/
+package-lock.json
+dist/

@@ -1,0 +1,17 @@
+{
+  "_说明": [
+    "AI-DevPlatform 平台配置（施工令-025 出厂）。",
+    "providers 段按 @papercrew/providers 的 V2 声明式写法：一名一适配器；",
+    "本壳一律桩模式（server.js 物理上不含进程调用），真实执行器由仓主自行生长。",
+    "watchtower 段只供 server 读心跳戳/未读账本用；守护自身配置见 config/瞭望塔.config.json。"
+  ],
+  "名称": "AI-DevPlatform",
+  "版本": "0.1.0",
+  "server": { "port": 4370 },
+  "watchtower": { "outDir": "watchtower-out", "freshMs": 45000, "unreadLimit": 50 },
+  "providers": {
+    "codex": { "adapter": "codex-cli", "enabled": true, "roles": [], "说明": "Codex CLI（无头 exec，提示词走 stdin）" },
+    "claude": { "adapter": "claude-cli", "enabled": true, "roles": [], "说明": "Claude Code CLI（无头 -p，提示词走 stdin）" },
+    "echo": { "adapter": "command-cli", "enabled": true, "roles": [], "command": "echo", "args": [], "说明": "通用命令行适配器示例（任意厂商可按此声明接入）" }
+  }
+}

@@ -1,6 +1,8 @@
 # Ticketflow 疆界（D45，H47/H48 更名自 Papercrew）——PR 触碰以下路径时自动请求属主评审
 # apps/studio 与协议文档：suxing412 全权（协议 D 系列只经制作人逐条决议修改）
 /apps/studio/    @suxing412
+# apps/platform：robinwang2 全权（两产品一仓拓扑，制作人 2026-08-09 20:11 正音）
+/apps/platform/  @robinwang2
 /套件/           @suxing412
 /docs/           @suxing412
 # 双向信箱：投递不需要收件人批准——信箱不该有守门人（2026-08-09 收货回执死结案，解法①）；文书责任在发件人，历史不删不改靠自律+git 兜底
