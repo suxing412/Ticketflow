@@ -1017,8 +1017,8 @@ ACTIONS.定稿 = (b) => {
     journal.append(ROOT, `定稿预检拦截 ${b.id}：${errs.length} 条（H62）`);
     return { ok: false, error: '预检不过：' + errs.join('；') };
   }
-  const warns = preflightWarn(t0); // 短题制警示：只提醒不拦截，老单在途单照过
-  if (warns.length) journal.append(ROOT, `定稿预检警示 ${b.id}：${warns.join('；')}（H83 短题制，未拦截）`);
+  const warns = preflightWarn(t0, ROOT); // 短题制 + 管线归属警示：只提醒不拦截，老单在途单照过（传 ROOT 才能沿父链判继承）
+  if (warns.length) journal.append(ROOT, `定稿预检警示 ${b.id}：${warns.join('；')}（未拦截）`);
   if (t0 && !['战役', '专项'].includes(t0.fm.父单类型)) {
     store.update(ROOT, b.id, (fm) => { fm.审批人 = '总监'; fm.审批时间 = new Date().toISOString(); }); // H62 归因记账：放行章落单
   }

@@ -78,6 +78,7 @@ function buildCutPrompt(root, cfg, parent, projPath) {
     '承重实现单挂依据（H88）：凡实现单落在已出方案的承重面上，frontmatter 必须写 依据: <已落袋的方案单号>——方案没落袋就不许切实现单，先切方案单、再把实现单的 依赖 挂到它身上。',
     '实现单/装配单/修复单——无方案不开工（H92 项管侧，施工令-020）：程序与装配类单型的**依据栏应指向已落袋技术方案**（方案单号或 `Docs/SLG/技术方案/` 下已定案的那一篇）；**无对应方案先切方案单**，再把本单 依赖 挂上去。判不出该挂哪篇就是方案缺位，按缺位处置——不许拿「边做边定」搪塞。',
     '职能定夺（H98）：职能按改动面实质定——改动面全落 Scripts/Tests 代码的单一律 职能: 程序（不论单型叫什么）；装配单型只用于场景/预制体/资产拼装写区动作。',
+    '管线归属必填：凡属某条管线域的单（看板管线注册表见 /api/pipelines 或工单正文域语义），frontmatter 必须写 管线: P-N；确无归属的独立杂务才允许留空进散单。案源：TK-106~116 整条地图施工链漏章堆散单，制作人亲自抓出。',
     '不设收口单（H56）：全部子单完成后项管自动生成收口报告、专项父单自动转待验收——制作人的保留签字在父单，一个专项只签一次（H53）。最后一张实现/装配单须含受控重建与全量测试绿的交付责任。',
     '',
     '=== 输出契约（机器解析，严格遵守）===',
@@ -94,6 +95,7 @@ function buildCutPrompt(root, cfg, parent, projPath) {
     '预计token: <数字>',
     '依赖: <逗号分隔的同批序号如 1,2；无则留空>',
     '依据: <承重实现单填已落袋的方案单号（H88）；其余留空>',
+    '管线: <本单所属管线号 P-N（注册表见 /api/pipelines）；确无归属的独立杂务才留空>',
     '---',
     '<正文：## 范围 / ## 不要做 / ## 验收标准>',
     '```',
@@ -122,6 +124,39 @@ function parseTickets(text) {
   }
   const brief = (text.match(/## 拆单简报[\s\S]*$/) || [''])[0].trim();
   return { tickets: out, brief };
+}
+
+// 子单 frontmatter 白名单：ticket 块解析出来的字段，只有列在这里的才落得到盘。
+// 抽成纯函数是为了能单测——白名单漏字段已经吃过两次（H88 依据、TK-106~116 管线），
+// 都是「提示词要求写了、落盘时被静默吞掉」，肉眼审不出来。
+// ids 用于把 依赖 里的同批序号（1,2…）换成实际编号。
+function childFm(tk, { id, ids, parentId, 项目 }) {
+  const dep = String(tk.fm.依赖 || '').split(/[，,\s]+/).filter(Boolean)
+    .map((n) => (ids || [])[Number(n) - 1]).filter(Boolean).join('，');
+  return {
+    id, title: tk.fm.title || '子单', 职能: tk.fm.职能 || '程序',
+    产出物类型: tk.fm.产出物类型 || '代码', 优先级: tk.fm.优先级 || 'P1', 规模: '单兵',
+    QA: tk.fm.QA || '开', 验收方式: tk.fm.验收方式 || '委托',
+    预计时间: tk.fm.预计时间 || '0.25', 预计token: tk.fm.预计token || '50000',
+    项目, 创建时间: new Date().toISOString().slice(0, 10),
+    父单: parentId, ...(dep ? { 依赖: dep } : {}),
+    ...(tk.fm.依据 ? { 依据: tk.fm.依据 } : {}), // H88：承重实现单挂方案单号，白名单不带就落不到盘
+    ...(tk.fm.管线 ? { 管线: tk.fm.管线 } : {}), // TK-106~116：管线归属同理，不带就只能靠父链继承
+    单型: tk.fm.单型 || '实现单', 切单人: '项管',
+  };
+}
+
+// 单张起草单的 frontmatter 白名单（draftTicket 用，与 childFm 同口径、独立一份因为无父单/无同批依赖）。
+// 无父单意味着归属没得继承——管线漏写就直接进散单行（TK-115/116 案发现场），比子单路径更该带。
+function draftFm(tk, { id, 项目 }) {
+  return {
+    id, title: tk.fm.title || '起草单', 职能: tk.fm.职能 || '程序', 产出物类型: tk.fm.产出物类型 || '代码',
+    优先级: tk.fm.优先级 || 'P1', 规模: '单兵', QA: tk.fm.QA || '开', 验收方式: tk.fm.验收方式 || '委托',
+    预计时间: tk.fm.预计时间 || '0.25', 预计token: tk.fm.预计token || '50000', 项目,
+    单型: tk.fm.单型 || '修复单', 切单人: '项管', 创建时间: new Date().toISOString().slice(0, 10),
+    ...(tk.fm.依据 ? { 依据: tk.fm.依据 } : {}), // H88：同 cut，依据栏要落盘
+    ...(tk.fm.管线 ? { 管线: tk.fm.管线 } : {}), // TK-106~116：同 cut，管线归属要落盘
+  };
 }
 
 // 切单主流程：调 fable → 解析 → 建草稿挂父单 → 简报落台账待审
@@ -155,18 +190,7 @@ function cut(root, cfg, parentId, projPath, cb) {
     const ids = tickets.map(() => `${px}-${++mx}`);
     const created = [];
     tickets.forEach((tk, i) => {
-      const dep = String(tk.fm.依赖 || '').split(/[，,\s]+/).filter(Boolean)
-        .map((n) => ids[Number(n) - 1]).filter(Boolean).join('，');
-      const fm = {
-        id: ids[i], title: tk.fm.title || '子单', 职能: tk.fm.职能 || '程序',
-        产出物类型: tk.fm.产出物类型 || '代码', 优先级: tk.fm.优先级 || 'P1', 规模: '单兵',
-        QA: tk.fm.QA || '开', 验收方式: tk.fm.验收方式 || '委托',
-        预计时间: tk.fm.预计时间 || '0.25', 预计token: tk.fm.预计token || '50000',
-        项目: parent.fm.项目, 创建时间: new Date().toISOString().slice(0, 10),
-        父单: parentId, ...(dep ? { 依赖: dep } : {}),
-        ...(tk.fm.依据 ? { 依据: tk.fm.依据 } : {}), // H88：承重实现单挂方案单号，白名单不带就落不到盘
-        单型: tk.fm.单型 || '实现单', 切单人: '项管',
-      };
+      const fm = childFm(tk, { id: ids[i], ids, parentId, 项目: parent.fm.项目 });
       const r = store.create(root, ids[i], fm, tk.body);
       if (r.ok) created.push(ids[i]);
     });
@@ -348,7 +372,8 @@ function draftTicket(root, cfg, 需求, projPath, cb) {
     '纪律：①先盘仓核实需求描述的现状 ②单元标准 ' + (单元.小时 || 0.25) + 'h/≤' + (单元.token || 50000) + ' token，顶格 2 单元 ③验收标准全部可判定 ④收尾锚点（受控重建/SavedScene/体积闸）只属装配单 ⑤如需求实际需要多张单，直说并建议走专项拍板，不要硬塞。',
     '短题制（H83，2026-08-06 制作人裁决，适用全部单型——子单/专项/父单/机制单一视同仁）：标题 ≤16 字、「对象+动作」结构（如「海岸线钉零与衰减」），不堆机制词不带括号补语；范围枚举（①②③…）一律写进正文「范围」章，禁入标题——标题是卡片的脸，长到要点进详情才认得出就是不合格。',
     FIELD_RULES,
-    '输出契约与拆单相同：一个 ```ticket 代码块（title/单型/职能/产出物类型/优先级/QA/验收方式/预计时间/预计token/依赖（需求点名了就写，否则留空）+ --- + 正文三章）。之后一段「起草说明」：盘点发现+边界取舍。',
+    '输出契约与拆单相同：一个 ```ticket 代码块（title/单型/职能/产出物类型/优先级/QA/验收方式/预计时间/预计token/依赖（需求点名了就写，否则留空）/管线 + --- + 正文三章）。之后一段「起草说明」：盘点发现+边界取舍。',
+    '管线归属必填（案源 TK-106~116，起草单尤重）：单张起草单没有父单可继承归属，漏写就必落看板「散单」行——凡属某条管线域的单，frontmatter 必须写 管线: P-N（注册表见 /api/pipelines 或按工单正文域语义判），确无归属的独立杂务才允许留空。',
     '', '=== 制作人层需求 ===', String(需求 || '').slice(0, 4000),
   ].join(String.fromCharCode(10));
   const cmd = cli();
@@ -374,11 +399,7 @@ function draftTicket(root, cfg, 需求, projPath, cb) {
     }
     const nid = px + '-' + (mx + 1);
     const tk = tickets[0];
-    const fm = { id: nid, title: tk.fm.title || '起草单', 职能: tk.fm.职能 || '程序', 产出物类型: tk.fm.产出物类型 || '代码',
-      优先级: tk.fm.优先级 || 'P1', 规模: '单兵', QA: tk.fm.QA || '开', 验收方式: tk.fm.验收方式 || '委托',
-      预计时间: tk.fm.预计时间 || '0.25', 预计token: tk.fm.预计token || '50000', 项目: (cfg.项目 && cfg.项目.默认) || '',
-      单型: tk.fm.单型 || '修复单', 切单人: '项管', 创建时间: new Date().toISOString().slice(0, 10),
-      ...(tk.fm.依据 ? { 依据: tk.fm.依据 } : {}) }; // H88：同 cut，依据栏要落盘
+    const fm = draftFm(tk, { id: nid, 项目: (cfg.项目 && cfg.项目.默认) || '' });
     const r = store.create(root, nid, fm, tk.body);
     if (!r.ok) return cb(r);
     try { require('../relay').append(root, '项管', '受托起草：' + nid + ' ' + fm.title + '（草稿区待 Claude 审）' + String.fromCharCode(10) + String.fromCharCode(10) + (brief || '')); } catch { /**/ }
@@ -388,4 +409,4 @@ function draftTicket(root, cfg, 需求, projPath, cb) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
-module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, buildCutPrompt, parseTickets, getWorking };
+module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, buildCutPrompt, parseTickets, childFm, draftFm, getWorking };
