@@ -125,7 +125,17 @@ input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outlin
 /* 项目注册卡（全量配置 UI） */
 .prow { display:flex; align-items:center; gap:10px; padding:8px 0; font-size:12.5px; border-bottom:1px solid var(--sect); }
 .prow:last-of-type { border-bottom:none; }
-.prow .pv { flex:1; font-family:var(--mono); font-size:11px; color:var(--ink3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+/* ===== width:0 的由来（施工令-035，全站同病统一修法；首次落地见 034 的 .credrow .cr-stat）=====
+   病症：`flex:1` + `white-space:nowrap` + `overflow:hidden;text-overflow:ellipsis` 只配 `min-width:0`。
+   `min-width:0` 管的是**自动最小尺寸**（元素自己在确定宽度里肯不肯缩），管不住 nowrap 的**固有
+   min-content 贡献**——当祖先是靠内容定宽的 flex/grid（如 .p6grid 的 fr 列）时，整串文字的宽度会
+   一路顶穿 flex 容器传到列宽上。实测：#/params 注册 147 字符路径 → p6grid 列宽 100px+1322px、
+   文档宽 1503 而视口 790，全页横滚。
+   修法：显式 `width:0` 配 `flex:1 1 0` 把固有贡献真正归零，flex-grow 照常把它撑回可用宽度，
+   省略号不受影响。**只对「自己就是 flex 项」的元素这么写**；若 nowrap 落在 flex 项的**块级子元素**
+   上（如 .arow2 .at），width:0 要加在**父 flex 项**上——加在文字元素自己身上会把它压成 0 宽、
+   文字整条消失（实测：标题可见宽 728 → 0）。 */
+.prow .pv { flex:1 1 0; width:0; font-family:var(--mono); font-size:11px; color:var(--ink3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
 .prow .pn { font-size:11px; color:var(--ink2); flex-shrink:0; }
 .paddrow { display:flex; gap:8px; margin-top:12px; align-items:center; }
 .paddrow input { height:32px; padding:0 10px; font-size:11.5px; border-radius:8px; min-width:0; }
@@ -422,7 +432,7 @@ a.gear { text-decoration:none; }
   transition:box-shadow .16s var(--ease-out); }
 .fgbar:hover, .fgbar:focus-visible { border-color:var(--accent); box-shadow:var(--shadow-sm); outline:none; }
 .fgbar .id { font-family:var(--mono); font-size:11px; color:var(--accent-ink); white-space:nowrap; }
-.fgbar .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; font-size:12.5px; }
+.fgbar .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 1 0; width:0; min-width:0; font-size:12.5px; } /* width:0 同病同修，见 .prow .pv 上方注释 */
 .fgbar .st { font-size:10px; padding:1px 7px; border-radius:999px; white-space:nowrap; color:var(--ink2); background:var(--we); }
 .fgbar .deps { font-family:var(--mono); font-size:10px; color:var(--ink3); white-space:nowrap; }
 .fgbar .mile { font-size:10px; color:var(--now); white-space:nowrap; font-weight:600; }
@@ -468,7 +478,7 @@ a.gear { text-decoration:none; }
   color:var(--ink2); opacity:.62; filter:grayscale(.5); min-width:0; }
 .fgsi:hover { opacity:1; filter:none; background:var(--we); }
 .fgsi .id { font-family:var(--mono); font-size:10.5px; color:var(--ink3); white-space:nowrap; }
-.fgsi .t { flex:1; min-width:0; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fgsi .t { flex:1 1 0; width:0; min-width:0; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } /* width:0 同病同修，见 .prow .pv 上方注释 */
 .fgsi .why { font-size:10px; color:var(--ink3); white-space:nowrap; }
 .fgsi.susp .id { color:var(--gatetx); }
 .fgsi.drop .why, .fgsi.over .why { color:var(--danger); }
@@ -550,7 +560,10 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .arow2 .ar-row { display:flex; align-items:center; gap:16px; }
 .arow2 .av { width:44px; height:44px; border-radius:10px; flex:none;
   display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; }
-.arow2 .ar-id { min-width:0; flex:1; }
+/* width:0 加在这个**父 flex 项**上，不是加在带 nowrap 的 .at 上——.at 是块级子元素，
+   给它 width:0 会把标题压成 0 宽整条消失（实测 728→0）；加在这里则 flex-grow 照常撑回。
+   同病同修，原理见 .prow .pv 上方注释。 */
+.arow2 .ar-id { min-width:0; flex:1 1 0; width:0; }
 .arow2 .ar-idline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .arow2 .aid { font-family:var(--mono); font-size:12px; color:var(--accent-ink); }
 .arow2 .ar-who { font-size:11px; color:var(--ink3); }
@@ -580,7 +593,7 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 @keyframes arpulse { 0% { opacity:1; } 50% { opacity:.35; } 100% { opacity:1; } }
 /* 阶段分段条：填满=已过 · 当前=段内进度条（右缘扫光示意「活着」）· 未到=灰槽 */
 .segbar { display:flex; gap:6px; margin-top:14px; }
-.segbar .seg { flex:1; min-width:0; }
+.segbar .seg { flex:1 1 0; width:0; min-width:0; } /* width:0 加在父 flex 项：阶段名 span 是块级子元素带 nowrap，同 .arow2 .ar-id 的处理 */
 .segbar .seg i { display:block; height:5px; border-radius:99px; background:var(--chip); position:relative; overflow:hidden; }
 .segbar .seg.done i { background:var(--ok); }
 .segbar .seg.cur i em { position:absolute; inset:0; width:var(--fill,0%); border-radius:99px;
@@ -606,8 +619,8 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
   border-bottom:1px solid var(--line); }
 .ovrun-row:last-child { border-bottom:0; }
 .ovrun-row .rid { font-size:11px; color:var(--ink3); flex:none; }
-.ovrun-row .rt { font-size:12.5px; color:var(--ink2); flex:1; min-width:0;
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ovrun-row .rt { font-size:12.5px; color:var(--ink2); flex:1 1 0; width:0; min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } /* width:0 同病同修，见 .prow .pv 上方注释 */
 .ovrun-row .pct { font-size:14px; font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums; }
 .ovrun-row .pct.over { color:var(--danger); }
 .ovrun-row .st { font-size:11px; color:var(--ink3); flex:none; }
@@ -744,7 +757,7 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .rowline .btn, .rowline code, .rowline .pill { flex-shrink:0; }
 /* 窄幅（<860）说明会换行到第二行，第一行只剩 圆点+名称+按钮——不推一把按钮就吊在名字屁股后面 */
 .rowline .rl-push { margin-left:auto; }
-.rowline code { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rowline code { flex:1 1 0; width:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } /* width:0 同病同修（向导候选目录是长路径重灾区），见 .prow .pv 上方注释 */
 .dotlegend { display:flex; align-items:center; flex-wrap:wrap; gap:4px 14px; }
 .dotlegend .dot { margin-right:4px; }
 @media (max-width:860px) {
@@ -810,7 +823,7 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .envcard .envrow { display:flex; align-items:center; gap:10px; padding:7px 0; font-size:13px; border-bottom:1px solid var(--sect); }
 .envcard .envrow:last-of-type { border-bottom:none; }
 .envcard .ek { width:56px; font-weight:500; }
-.envcard .ev { flex:1; min-width:0; font-family:var(--mono); font-size:11.5px; color:var(--ink2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.envcard .ev { flex:1 1 0; width:0; min-width:0; font-family:var(--mono); font-size:11.5px; color:var(--ink2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } /* width:0 同病同修，见 .prow .pv 上方注释 */
 .envcard .ev.err { color:var(--danger); }
 .poolcard { border-radius:12px; padding:18px 26px 22px; margin-bottom:16px; }
 .poolcard .pr { display:flex; align-items:baseline; gap:16px; }
