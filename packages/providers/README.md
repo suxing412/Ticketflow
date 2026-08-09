@@ -18,6 +18,55 @@ CLI 厂商适配层——把"由哪家 AI 执行"从两个产品的业务逻辑�
 基于 `main` 开 feature 分支，把原 PR 中的 `_app/lib/providers/*` 重切至本目录并补
 `package.json`（包名建议 `@papercrew/providers`），提交 PR。原 PR #1 在两刀重切完成后关闭。
 
+## 使用说明 · 对消费方的接口契约
+
+> 2026-08-09 对等交付（主笔方写自己包的说明）。**只有本节列出的才是稳定公开面**，
+> 其余导出属内部实现，可能随版本变化——不要在契约测试里断言它们。
+
+### 公开面
+
+| 导出 | 稳定性 | 用途 |
+|---|---|---|
+| `list(cfg)` | **稳定** | 枚举全部 provider 配置。UI / 仪表盘用 |
+| `create(cfg, name)` | **稳定** | 取某 provider 的 adapter 实例，用 `.buildInvocation({model})` 组装调用 |
+| `register(adapter, factory)` | **稳定** | 注册新 Adapter。新增厂商只动这里，消费方不新增分支 |
+| `configs(cfg)` | 内部 | `list` 的底层，返回对象而非数组。形状可能变 |
+| `resolveLegacy(name, model)` | **已弃用** | 旧测试兼容入口。新代码一律走 `create().buildInvocation()` |
+
+### `list(cfg)` 的字段契约
+
+返回**数组**，元素字段（注意是英文键——中文键是消费方自己映射的，不是本包契约）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `name` | string | provider 名，与 cfg 里的键一致 |
+| `adapter` | string | `codex-cli` \| `claude-cli` \| `command-cli`，或经 `register` 注册的自定义名 |
+| `enabled` | boolean | `false` 时 `create()` 会抛「Provider 已停用」 |
+| `roles` | string[] | 该 provider 承接的角色/职能 |
+| `legacyPool` | object | **仅旧配置路径出现**（见下），新配置不带 |
+
+**两条配置路径**：`cfg.providers` 非空时直接用；否则从 `cfg.执行池` 推导（`codex`→`codex-cli`、`claude`→`claude-cli`、其余→`command-cli`），推导出的元素才带 `legacyPool`。
+
+### 入参容错边界
+
+| 入参 | 行为 |
+|---|---|
+| `list()` / `list({})` | ✅ 返回 `[]`（默认参数生效） |
+| `list({执行池:{...}})` | ✅ 走旧配置推导 |
+| **`list(null)`** | ❌ **抛 `Cannot read properties of null`** —— `configs(cfg = {})` 的默认参数只对 `undefined` 生效，`null` 穿透。修复 PR 由 suxin 方出（已认领） |
+| `create(cfg, 未注册名)` | 抛「Provider 未注册」 |
+| `create(cfg, 已停用)` | 抛「Provider 已停用」 |
+| `create(cfg, 未知 adapter)` | 抛「未知 Provider Adapter」 |
+
+> ⚠️ **写契约测试的人注意**：`list({})` 返回空数组，所以「遍历元素断言字段」的写法会**静默空转**——
+> 循环体一次都不执行，测试照样绿。断言字段契约必须喂一份真配置
+> （如 `{执行池:{codex:{职能:['程序']}}}`）。这个洞我方自己踩过。
+
+### 破坏性改动通知
+
+本包改动的 PR 描述须列**消费方影响面**并信道知会（2026-08-09 入协作规范）。
+公用件走路径消费、无 semver 锁，这是唯一的提前预警。
+
 ## 已知的现网调用约定（studio 实测踩坑，供适配层吸收）
 
 - claude 无头：`-p --permission-mode acceptEdits`，中文 prompt 走 stdin（argv 会乱码），
