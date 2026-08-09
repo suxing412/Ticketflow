@@ -1,4 +1,4 @@
-# docs/信道 · 双向信箱（git push 即投递）
+# docs/信道 · 双向信箱（**push 分支即投递，合入 main 即归档**（瞭望塔判据=ref 变化，非 main 变化））
 
 两端各跑一座瞭望塔（packages/watchtower），远端信道每 5 分钟 fetch 本仓：寄给自己的文书→急+弹通知+唤醒常驻 Claude Code 会话；寄给对方的→只记流水。存转信箱，双方无需同时在线，消息不丢。
 
