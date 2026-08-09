@@ -436,8 +436,15 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
         if (mq) { try { require('./pm/ledger').score(root, { 线: '审检评执行', 席: '核查', 单: t.id, 职能: t.fm.职能, 池: t.fm.执行池 || 'claude', 模型: model || '', 分: Number(mq[1]) }); } catch { /* 不阻塞 */ } }
       }
       if (verdict) {
-        const r = lifecycle.验收(root, t.id, true);
-        if (r.ok) journal.append(root, `核查通过 ${t.id} → 验收完成（Claude 代劳，D11/D34）`);
+        // 施工令-032②（H97）引擎门禁停闸：验收标准点名 enginectl/unity-test 这类引擎实测的单，
+        // 判官读的只是回执文字——引擎到底跑没跑它看不出来。核查过了也只盖候检印停在待验收，
+        // 等总监确认实测证据真入回执后走「实证放行」。非门禁单一个字不变，照旧直转完成。
+        const 门 = lifecycle.引擎门禁命中(cfg, cur);
+        if (门) lifecycle.候引擎实证(root, t.id, 门, '核查');
+        else {
+          const r = lifecycle.验收(root, t.id, true);
+          if (r.ok) journal.append(root, `核查通过 ${t.id} → 验收完成（Claude 代劳，D11/D34）`);
+        }
       } else {
         journal.append(root, `核查不过 ${t.id}：留在待验收，附核验报告等你裁（不自动打回）`);
         inbox.post(root, '急', '代核不过', `${t.id} 核验报告待裁（返工草稿已备）`, { 单号: t.id });
@@ -862,13 +869,14 @@ function engineJobs(cfg) {
   return out;
 }
 
-// 按单终止（2026-08-05 推演补漏）：收回/废弃在途单时同步掐掉执行会话——此前文件挪走、进程仍在跑
-function killTicket(root, id) {
+// 按单终止（2026-08-05 推演补漏）：收回/废弃在途单时同步掐掉执行会话——此前文件挪走、进程仍在跑。
+// 施工令-032① 起 返修 也走这条路（掐在飞审检），因 参数带上因由——流水不能再一律写「收回/废弃」。
+function killTicket(root, id, 因) {
   for (const [agentId, e] of running.entries()) {
     if (e.id !== id) continue;
     try { if (e.child && e.child.pid) spawn('taskkill', ['/pid', String(e.child.pid), '/T', '/F'], { windowsHide: true }); } catch { /* 尽力 */ }
     running.delete(agentId);
-    journal.append(root, `终止会话 ${id}（${agentId}）：单被收回/废弃`);
+    journal.append(root, `终止会话 ${id}（${agentId}）：${String(因 || '单被收回/废弃').slice(0, 40)}`);
     return true;
   }
   return false;

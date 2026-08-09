@@ -274,4 +274,107 @@ t('挂起兼容旧单：无挂起字段=未挂，废弃/收回等既有动作不
   assert.equal(st(root, 'S-2'), '已归档');
 });
 
+// ---- 施工令-032② 引擎门禁停闸（H97）：命中判定 + 候检印 + 实证放行 ----
+const 门禁单 = `## 背景
+随口提一句无关紧要。
+
+## 验收标准
+
+1. 编译零错误
+2. 四个测试类全绿：\`node tools/enginectl.js unity-test --project D:/GitHub/TK\`
+
+## 不要做
+不打包。`;
+const 普通单 = '## 验收标准\n\n1. 文档落盘\n2. 术语表齐备\n';
+
+t('门禁命中：默认特征扫「验收标准」章，命中即报出是哪条特征', () => {
+  assert.equal(life.引擎门禁命中(CFG, { body: 门禁单 }), 'enginectl');
+  assert.equal(life.引擎门禁命中(CFG, { body: 普通单 }), null);
+  assert.equal(life.引擎门禁命中(CFG, { body: '## 验收标准\n\n1. 走 unity-test 子集\n' }), 'unity-test');
+  assert.equal(life.引擎门禁命中(CFG, { body: '## 验收标准\n\n1. 受控重建一次\n' }), '受控重建');
+});
+
+t('门禁命中只扫验收标准章：背景里提 enginectl 不把整张单拖进门禁', () => {
+  const b = '## 背景\n上游 TK-112 是用 enginectl 跑的。\n\n## 验收标准\n\n1. 文档落盘\n';
+  assert.equal(life.引擎门禁命中(CFG, { body: b }), null);
+  assert.equal(life.引擎门禁命中(CFG, { body: '## 范围\n随便写\n' }), null, '无验收标准章 → 不判门禁');
+});
+
+t('门禁特征走 config：自定义正则生效、非法配置回落内置默认、总开关可关', () => {
+  const cfg2 = { ...CFG, 执行器: { ...CFG.执行器, 引擎门禁: { 特征: ['实机跑一遍', 'dotnet\\s+build'] } } };
+  assert.deepEqual(life.引擎门禁特征(cfg2), ['实机跑一遍', 'dotnet\\s+build']);
+  assert.equal(life.引擎门禁命中(cfg2, { body: 门禁单 }), null, '换了特征表后旧词不再命中');
+  assert.equal(life.引擎门禁命中(cfg2, { body: '## 验收标准\n\n1. dotnet   build 零错误\n' }), 'dotnet\\s+build', '正则语义生效（不是字面量）');
+  for (const bad of [{ 特征: [] }, { 特征: 'enginectl' }, { 特征: [1, 2] }, {}]) {
+    assert.deepEqual(life.引擎门禁特征({ 执行器: { 引擎门禁: bad } }), life.引擎门禁默认特征, '非法配置回落默认：' + JSON.stringify(bad));
+  }
+  assert.equal(life.引擎门禁命中({ 执行器: { 引擎门禁: { 开: false } } }, { body: 门禁单 }), null, '总开关关掉即不判');
+});
+
+t('门禁特征坏正则：不炸路径，回落字面量包含判定（fail-safe 向严，不静默放行）', () => {
+  const cfg2 = { 执行器: { 引擎门禁: { 特征: ['unity-test('] } } }; // 括号不闭合 = 非法正则
+  assert.equal(life.引擎门禁命中(cfg2, { body: '## 验收标准\n\n1. 跑 unity-test(subset)\n' }), 'unity-test(');
+  assert.equal(life.引擎门禁命中(cfg2, { body: 普通单 }), null);
+});
+
+t('候检印 + 实证放行：单不动窝盖印 → 放行转完成，fm 与既有动作族同构', () => {
+  const root = makeRoot();
+  seed(root, '待验收', { id: 'G-01', 验收方式: '委托', body: 门禁单 });
+  const r = life.候引擎实证(root, 'G-01', 'enginectl', '核查');
+  assert.ok(r.ok);
+  assert.equal(st(root, 'G-01'), '待验收', '原位不动（store.update 不是 move）');
+  const 印 = store.find(root, 'G-01').fm.待引擎实证;
+  assert.equal(印.命中, 'enginectl');
+  assert.equal(印.判源, '核查');
+  assert.ok(印.时间 && !Number.isNaN(Date.parse(印.时间)), '时间是可解析 ISO（与 挂起/核查 同构）');
+
+  const r2 = life.实证放行(root, 'G-01', '总监', '137/137 全绿已誊入回执终节');
+  assert.ok(r2.ok);
+  assert.equal(st(root, 'G-01'), '完成');
+  const 放 = store.find(root, 'G-01').fm.实证放行;
+  assert.equal(放.操作者, '总监');
+  assert.equal(放.候检于, 印.时间, '候检于 = 盖印时刻（与 解挂记录.挂起于 同构）');
+  assert.equal(放.命中, 'enginectl');
+  assert.ok(放.说明.includes('137/137'));
+  assert.ok(!store.find(root, 'G-01').fm.待引擎实证, '放行后清候检印');
+});
+
+t('实证放行守卫：没盖候检印的单拒开、非待验收拒开、不存在拒开', () => {
+  const root = makeRoot();
+  seed(root, '待验收', { id: 'G-02', 验收方式: '委托', body: 门禁单 });
+  const a = life.实证放行(root, 'G-02', '总监');
+  assert.ok(!a.ok && a.error.includes('未停引擎门禁闸'), a.error);
+  assert.equal(st(root, 'G-02'), '待验收', '拒开不动单');
+  seed(root, '在途', { id: 'G-03', 主办: '程序-A' });
+  assert.ok(!life.实证放行(root, 'G-03', '总监').ok);
+  assert.ok(!life.实证放行(root, 'G-99', '总监').ok);
+  assert.ok(!life.候引擎实证(root, 'G-03', 'enginectl').ok, '候检印也只盖待验收单');
+});
+
+t('人闸不受影响：盖了候检印的单，制作人「验收 通过」照样一步到完成（并清掉失效印）', () => {
+  const root = makeRoot();
+  seed(root, '待验收', { id: 'G-04', 验收方式: '委托', body: 门禁单 });
+  life.候引擎实证(root, 'G-04', 'enginectl', '核查');
+  const r = life.验收(root, 'G-04', true);
+  assert.ok(r.ok);
+  assert.equal(st(root, 'G-04'), '完成');
+  assert.ok(!store.find(root, 'G-04').fm.待引擎实证, '终态单不留候检印');
+  // 打回路径同样照旧
+  const root2 = makeRoot();
+  seed(root2, '待验收', { id: 'G-05', 验收方式: '委托', body: 门禁单 });
+  life.候引擎实证(root2, 'G-05', 'enginectl', '核查');
+  assert.ok(life.验收(root2, 'G-05', false).ok);
+  assert.equal(st(root2, 'G-05'), '已归档');
+  assert.equal(store.find(root2, 'G-05').fm.归档原因, '验收打回');
+});
+
+t('门禁单返修照旧：候检印随返修清场（下一轮重新过检重新判门禁）', () => {
+  const root = makeRoot();
+  seed(root, '待验收', { id: 'G-06', 验收方式: '委托', body: 门禁单 });
+  life.候引擎实证(root, 'G-06', 'enginectl', '核查');
+  assert.ok(life.返修(root, 'G-06', '证据不合格，重跑').ok);
+  assert.equal(st(root, 'G-06'), '草稿');
+  assert.equal(store.find(root, 'G-06').fm.返修轮, 1);
+});
+
 console.log(`全部通过：${passed} 项`);

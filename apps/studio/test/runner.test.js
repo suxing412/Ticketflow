@@ -666,5 +666,150 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     还原creds();
   });
 
+  // ---- 施工令-032①（H97）：返修先掐在飞审检（竞态修补，案源 TK-113）----
+  await t('竞态：在飞审检时返修 → 会话被掐、状态迁移干净、无孤儿判词落 fm', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'K-01.md'), '# 完工报告 K-01\n', 'utf8');
+    seed(root, '待验收', { id: 'K-01', 职能: '程序', 验收方式: '委托' });
+    // 悬挂会话 = 在飞审检（durMs 大，收线遥遥无期）
+    await runner.startWork(root, CFG, store.find(root, 'K-01'), '核查', '代核', { durMs: 600000 });
+    assert.ok(runner.running.has('核查'), '前置：核查会话确实在飞');
+    assert.ok(runner.status(root, CFG).执行中.some((x) => x.id === 'K-01'));
+
+    const r = life.返修(root, 'K-01', '证据不合格，重跑');
+    assert.ok(r.ok, r.error);
+    assert.ok(!runner.running.has('核查'), '返修把在飞审检会话掐了');
+    assert.ok(!runner.status(root, CFG).执行中.some((x) => x.id === 'K-01'), '在跑表里不留残影');
+    const cur = store.find(root, 'K-01');
+    assert.equal(cur.state, '草稿', '状态迁移干净');
+    assert.equal(cur.fm.返修轮, 1);
+    assert.equal(cur.fm.放行, false);
+    for (const k of ['核查', '代核', '初检', '主办', '交付时间', '待引擎实证']) assert.ok(!cur.fm[k], `无孤儿判词/残留字段：${k}`);
+    const 流水 = fs.readFileSync(path.join(root, 'journal', fs.readdirSync(path.join(root, 'journal'))[0]), 'utf8');
+    assert.ok(/终止会话 K-01（核查）：单被返修/.test(流水), '掐会话留痕且因由如实（不再一律写「收回/废弃」）：' + 流水);
+    assert.ok(/返修 K-01.*已掐在飞审检会话/.test(流水), '返修流水标注已掐：' + 流水);
+    runner.running.clear();
+  });
+
+  await t('竞态：无在飞会话时返修一切照旧（掐是无副作用的，不改流水口径）', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '执行失败', { id: 'K-02', 职能: '程序', 验收方式: '委托', 失败次数: 2 });
+    const r = life.返修(root, 'K-02', '换思路');
+    assert.ok(r.ok);
+    assert.equal(store.find(root, 'K-02').state, '草稿');
+    assert.equal(store.find(root, 'K-02').fm.失败次数, 2, 'H65 计数保留');
+    const 流水 = fs.readFileSync(path.join(root, 'journal', fs.readdirSync(path.join(root, 'journal'))[0]), 'utf8');
+    assert.ok(!/已掐在飞审检会话/.test(流水), '没掐到就不写掐（流水不撒谎）');
+  });
+
+  await t('竞态：掐在移单之前——被掐会话即便随后收线也进不了 settleClose', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'K-03.md'), '# 完工报告 K-03\n', 'utf8');
+    seed(root, '待验收', { id: 'K-03', 职能: '程序', 验收方式: '委托' });
+    await runner.startWork(root, CFG, store.find(root, 'K-03'), '核查', '代核', { durMs: 600000 });
+    life.返修(root, 'K-03', 'x');
+    // 模拟迟到收线：running 里已无该席位 —— 这正是 child.on('close') 的守卫判据
+    assert.ok(!runner.running.has('核查'));
+    const 回执 = fs.readFileSync(path.join(root, '回执', 'K-03.md'), 'utf8');
+    assert.ok(!/##\s*核查/.test(回执), '回执不被迟到判词污染');
+    assert.equal(store.find(root, 'K-03').state, '草稿');
+    runner.running.clear();
+  });
+
+  // ---- 施工令-032②（H97）：引擎门禁停闸三态 ----
+  const 门禁正文 = '## 验收标准\n\n1. 编译零错误\n2. 四类测试全绿：`node tools/enginectl.js unity-test --project D:/GitHub/TK`\n';
+  const 普通正文 = '## 验收标准\n\n1. 文档落盘\n2. 术语表齐备\n';
+
+  await t('停闸：门禁单核查通过 → 不转完成，停待验收盖候检印 + 流水记「核查过·候引擎实证」', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'E-01.md'), '# 完工报告 E-01\n', 'utf8');
+    seed(root, '待验收', { id: 'E-01', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok((r.代核 || []).includes('E-01'), '核查照常开会话');
+    const cur = store.find(root, 'E-01');
+    assert.equal(cur.state, '待验收', '停闸：不转完成');
+    assert.equal(cur.fm.核查.结论, '通过', '核查章照旧盖');
+    assert.equal(cur.fm.待引擎实证.命中, 'enginectl');
+    assert.ok(fs.readFileSync(path.join(root, '回执', 'E-01.md'), 'utf8').includes('## 核查'), '核验报告照旧入回执');
+    const 流水 = fs.readFileSync(path.join(root, 'journal', fs.readdirSync(path.join(root, 'journal'))[0]), 'utf8');
+    assert.ok(/核查过·候引擎实证 E-01/.test(流水), 流水);
+    assert.ok(!/验收 E-01/.test(流水), '没有偷偷验收');
+    assert.ok(require('../lib/inbox').list(root).some((x) => x.类型 === '候引擎实证' && x.单号 === 'E-01'), '呼叫信箱有候检条目');
+  });
+
+  await t('放行：候检单走「实证放行」转完成；停闸期间不被再次核查', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'E-02.md'), '# 完工报告 E-02\n', 'utf8');
+    seed(root, '待验收', { id: 'E-02', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
+    await runner.tick(root, CFG, UN);
+    const r2 = await runner.tick(root, CFG, UN);
+    assert.ok(!(r2.代核 || []).includes('E-02'), '候检期间不重复开核查会话（代核章已盖）');
+    assert.equal(store.find(root, 'E-02').state, '待验收');
+    const r3 = life.实证放行(root, 'E-02', '总监', '137/137 全绿已入回执');
+    assert.ok(r3.ok);
+    assert.equal(store.find(root, 'E-02').state, '完成');
+    assert.equal(store.find(root, 'E-02').fm.实证放行.操作者, '总监');
+  });
+
+  await t('直通：非门禁单核查通过 → 照旧直转完成（本补丁零影响）', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'E-03.md'), '# 完工报告 E-03\n', 'utf8');
+    seed(root, '待验收', { id: 'E-03', 职能: '程序', 验收方式: '委托', body: 普通正文 });
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok((r.代核 || []).includes('E-03'));
+    const cur = store.find(root, 'E-03');
+    assert.equal(cur.state, '完成');
+    assert.ok(!cur.fm.待引擎实证);
+    const 流水 = fs.readFileSync(path.join(root, 'journal', fs.readdirSync(path.join(root, 'journal'))[0]), 'utf8');
+    assert.ok(/核查通过 E-03 → 验收完成/.test(流水), '既有文案一字不改：' + 流水);
+  });
+
+  await t('停闸可关：config 关掉引擎门禁后，门禁单也直转完成（回滚路）', async () => {
+    const root = makeRoot(); on(root);
+    const cfg = { ...CFG, 执行器: { ...CFG.执行器, 引擎门禁: { 开: false } } };
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'E-04.md'), '# 完工报告 E-04\n', 'utf8');
+    seed(root, '待验收', { id: 'E-04', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
+    await runner.tick(root, cfg, UN);
+    assert.equal(store.find(root, 'E-04').state, '完成');
+  });
+
+  await t('031+032 串起来：门禁单机判初检过 → 同轮核查过 → 停闸候检 → 实证放行落袋', async () => {
+    const root = makeRoot(); on(root);
+    const cfg = { ...CFG, 执行器: { 两检: { 开: true } } }; // 机判初检零池
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'E-06.md'), `# 完工报告 E-06
+
+## 自测结果
+
+| # | 验收标准 | 结论 | 证据 |
+|---|---|---|---|
+| 1 | 编译零错误 | ✓ | 退出码 0 |
+| 2 | 四类测试全绿 | ✓ | 137/137 |
+
+## 实际消耗
+40 分钟 / 90000 token
+
+## 异议
+无
+`, 'utf8');
+    seed(root, '待验收', { id: 'E-06', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
+    const r = await runner.tick(root, cfg, UN);
+    assert.deepEqual(r.初检, ['E-06'], '机判初检');
+    assert.ok((r.代核 || []).includes('E-06'), '同轮进深检');
+    const cur = store.find(root, 'E-06');
+    assert.equal(cur.fm.初检.判源, '机判');
+    assert.equal(cur.fm.核查.结论, '通过');
+    assert.equal(cur.state, '待验收', '门禁停闸兜住了「初检过+核查过」的自动落袋');
+    assert.equal(cur.fm.待引擎实证.命中, 'enginectl');
+    assert.ok(life.实证放行(root, 'E-06', '总监').ok);
+    assert.equal(store.find(root, 'E-06').state, '完成');
+  });
+
   console.log(`全部通过：${passed} 项`);
 })().catch((e) => { console.error('  ✗ ' + e.message); process.exit(1); });
