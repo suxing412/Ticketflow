@@ -410,12 +410,19 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       if (!cur || cur.state !== '待验收') return;
       let v = {}; try { v = JSON.parse(note); } catch { /* finishOk 已保证可解析 */ }
       const 缺 = (v.缺项 || []).slice(0, 10);
+      // 判源（施工令-031）：机判 = 进程内 precheck.js；否则是二线 LLM 的模型名。
+      // 流水/回执文案照旧，只在括号里标注判源——口径不变，来源可溯。
+      const 判源 = v.判源 || (cfg.执行器 && cfg.执行器.两检 && cfg.执行器.两检.模型) || 'deepseek-v4-flash';
+      const 机判 = 判源 === '机判';
       const rp0 = path.join(root, '回执', `${t.id}.md`);
-      try { fs.appendFileSync(rp0, `\n\n## 两检初检（${(cfg.执行器 && cfg.执行器.两检 && cfg.执行器.两检.模型) || 'deepseek-v4-flash'}）\n结论：${v.初检}${缺.length ? '\n缺项：' + 缺.join('；') : ''}\n`, 'utf8'); } catch { /* 不阻塞 */ }
-      store.update(root, t.id, (fm) => { fm.初检 = { 结论: v.初检, ...(缺.length ? { 缺项: 缺 } : {}), 时间: new Date().toISOString() }; delete fm.初检失败次数; });
-      if (verdict) journal.append(root, `两检初检过 ${t.id} → 进深检（opus 内容质量）`);
+      try {
+        fs.appendFileSync(rp0, `\n\n## 两检初检（${判源}）\n结论：${v.初检}${缺.length ? '\n缺项：' + 缺.join('；') : ''}`
+          + `${v.备注 ? '\n备注：\n' + v.备注 : ''}\n`, 'utf8');
+      } catch { /* 不阻塞 */ }
+      store.update(root, t.id, (fm) => { fm.初检 = { 结论: v.初检, ...(v.备注 ? { 备注: v.备注 } : {}), ...(缺.length ? { 缺项: 缺 } : {}), 判源, 时间: new Date().toISOString() }; delete fm.初检失败次数; });
+      if (verdict) journal.append(root, `两检初检过 ${t.id}${机判 ? '（机判）' : ''} → 进深检（opus 内容质量）`);
       else {
-        journal.append(root, `两检初检不过 ${t.id}：${缺.join('；').slice(0, 120)}——留待验收（返修或人工裁），未烧深检`);
+        journal.append(root, `两检初检不过 ${t.id}${机判 ? '（机判）' : ''}：${缺.join('；').slice(0, 120)}——留待验收（返修或人工裁），未烧深检`);
         inbox.post(root, '常', '初检不过', `${t.id} 格式规范缺项：${缺.join('；').slice(0, 150)}`, { 单号: t.id });
       }
     } else if (kind === '代核') {
@@ -508,6 +515,22 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   };
 
   if (opts.failWith) { failLocal(opts.failWith); return true; } // 测试注入
+
+  // ---- 初检机判（施工令-031 / H96）：schema 校验是纯代码的活，进程内一次函数调用判完 ----
+  // 零 token、零会话、结果可复现。放在 isSim 之前——机判本来就不烧额度，测试与生产同一条路，
+  // 免得又出「测试走假路、生产走真路」的两套行为。二线LLM 开关打开才回落到下方 flash CLI。
+  if (kind === '初检' && !require('./precheck').用二线LLM(cfg)) {
+    let v;
+    try {
+      v = require('./precheck').run(root, t, cfg);
+    } catch (e) {
+      // 机判自己炸了不能盖章（同判官失败口径：计数重试，不动单）
+      failLocal('机判初检异常：' + String(e.message).slice(0, 100));
+      return true;
+    }
+    finishOk(JSON.stringify({ 初检: v.初检, 缺项: v.缺项, 备注: v.备注, 判源: v.判源 }), v.初检 === '过');
+    return true;
+  }
 
   if (isSim(opts)) { // 测试内部钩子：模拟收线，零 CLI 调用
     const durMs = opts.durMs;
@@ -762,7 +785,10 @@ async function tick(root, cfg, opts = {}) {
   // ④a 两检制·初检（H67，2026-08-05 用户拍板）：便宜模型先核格式与规范（回执契约/禁语/报数存在性），
   // 不过直接打回不烧 opus；过了才进 ④b 深检。开关与池在 config.执行器.两检。
   const 两检 = (cfg.执行器 || {}).两检 || {};
-  const 两检开 = 两检.开 !== false && (cfg.执行池 || {})[两检.池 || 'deepseek'];
+  // 施工令-031：机判初检零池零凭据——「有没有 deepseek 池」不再是初检开不开的前提条件。
+  // 只有回落二线 LLM（config.执行器.两检.初检.二线LLM=true）时才仍要求池在册。
+  const 二线 = require('./precheck').用二线LLM(cfg);
+  const 两检开 = 两检.开 !== false && (!二线 || (cfg.执行池 || {})[两检.池 || 'deepseek']);
   if (两检开) {
     await 开审检('初检', '两检初检', '初检', () => store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !['战役', '专项'].includes(x.fm.父单类型) && !x.fm.初检 && !x.fm.代核
       && !x.fm.挂起 // 施工令-021④a

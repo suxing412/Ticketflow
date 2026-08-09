@@ -553,7 +553,7 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     seed(root, '待验收', { id: 'H-06', 职能: '程序', 验收方式: '委托' });
     seed(root, '待验收', { id: 'H-07', 职能: '程序', 验收方式: '委托' });
     life.挂起(root, 'H-06', '制作人');
-    const r = await runner.tick(root, CFG, UN); // 默认两检关（CFG 无 deepseek 池）→ 直接走 ④b 代核
+    const r = await runner.tick(root, CFG, UN); // 基础 CFG 显式关两检（helper）→ 直接走 ④b 代核
     assert.ok(!(r.代核 || []).includes('H-06'), '挂起单不核');
     assert.ok((r.代核 || []).includes('H-07'), '对照组照核——证明是挂起在拦，不是环节整个没跑');
     assert.equal(store.find(root, 'H-06').state, '待验收', '原位不动');
