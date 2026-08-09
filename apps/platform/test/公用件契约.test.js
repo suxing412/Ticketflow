@@ -14,17 +14,16 @@ const 公用件 = require('../lib/公用件');
 let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
 console.log('公用件契约测试（跨仓消费面）');
 
-t('并排克隆约定：默认解析到同级 Ticketflow，TICKETFLOW_HOME 可覆盖', () => {
-  assert.equal(path.basename(公用件.仓根), 'AI-DevPlatform');
-  const 默认 = path.resolve(公用件.仓根, '..', 'Ticketflow');
-  assert.equal(公用件.TICKETFLOW_HOME, process.env.TICKETFLOW_HOME || 默认);
+t('公用件解析：仓根的 packages/（一仓拓扑），TICKETFLOW_PACKAGES 可覆盖', () => {
+  assert.equal(path.basename(公用件.仓根), 'Ticketflow');
+  assert.ok(fs.existsSync(公用件.PACKAGES), '公用件目录必须存在：' + 公用件.PACKAGES);
   assert.ok(公用件.解析('providers', 'registry.js').endsWith(path.join('packages', 'providers', 'registry.js')));
 });
 
 t('公用件缺位时报人话错误（部署问题必须直接给出修法）', () => {
   assert.throws(() => 公用件.载入('这个包不存在', 'x.js'), (e) => {
-    assert.ok(e.message.includes('并排克隆'), '错误里要写清修法：' + e.message);
-    assert.ok(e.message.includes('TICKETFLOW_HOME'));
+    assert.ok(e.message.includes('packages'), '错误里要写清公用件在哪：' + e.message);
+    assert.ok(e.message.includes('TICKETFLOW_PACKAGES'));
     assert.ok(e.message.includes('当前解析'), '要报出实际解析到的路径，否则没法排查');
     return true;
   });
@@ -46,7 +45,7 @@ t('依赖面只有 providers 与 watchtower 两个包（变宽必须是显式决
       for (const m of src.matchAll(/packages[\/\\'",\s]+([a-z][\w-]*)/g)) 命中.add(m[1]);
     }
   };
-  扫(公用件.仓根);
+  扫(path.resolve(__dirname, '..'));
   for (const 包 of 命中) assert.ok(允许.has(包), `新增了对公用件 ${包} 的依赖——请确认这是显式决定并更新本测试`);
 });
 
@@ -56,14 +55,17 @@ t('providers/registry 存在且导出我们用到的 list()', () => {
   assert.equal(typeof registry.list, 'function', 'router.js:60 依赖 registry.list(cfg)');
 });
 
-t('registry.list(cfg) 返回数组，元素带 名称/adapter/启用（server.js 的 /api/providers 按此渲染）', () => {
+t('registry.list(cfg) 字段契约：英文键（中文键是 server.js 自己映射的，不是本包契约）', () => {
   const registry = 公用件.载入('providers', 'registry.js');
-  const out = registry.list({});
+  // **必须喂真配置**：list({}) 返回空数组，遍历断言会静默空转——循环体一次不执行，测试照样绿。
+  // 本测试自己踩过这个洞（2026-08-09），已写进 packages/providers/README 的使用说明节。
+  const out = registry.list({ 执行池: { codex: { 职能: ['程序'] }, claude: { 职能: ['策划'] } } });
   assert.ok(Array.isArray(out), 'list 必须返回数组');
+  assert.ok(out.length >= 2, `空数组会让下面的断言全部空转（实得 ${out.length} 项）`);
   for (const p of out) {
-    assert.equal(typeof p.名称, 'string');
+    assert.equal(typeof p.name, 'string');
     assert.equal(typeof p.adapter, 'string');
-    assert.ok('启用' in p, '/api/providers 与仪表盘按 启用 分色');
+    assert.ok('enabled' in p, 'server.js 映射成 启用 供仪表盘分色');
   }
 });
 
