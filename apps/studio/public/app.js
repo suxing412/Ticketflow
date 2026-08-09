@@ -1179,7 +1179,7 @@ async function viewParams() {
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">参数闸值</h3><span class="subnote">监制台可调</span></div>${params}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">模型档</h3><span class="subnote">贵裁判 · 贱体力（D38）</span></div>${modelCards}${compatCards}</div>
     <div><div class="sec-h"><h3 class="h17">环境探针</h3><span class="subnote">实弹前置检查</span></div>${envCard}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">凭据</h3><span class="subnote">订阅归 CLI · key 归 app（DPAPI 密文）</span></div><div id="creds-card" class="card"><p class="dim">读取中…</p></div>
+      <div class="sec-h" style="margin-top:26px"><h3 class="h17">凭据</h3></div><div id="creds-card" class="card credcard"><p class="dim">读取中…</p></div>
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">项目注册</h3><span class="subnote">执行 agent 的目标仓库（D32）</span></div>${projCard}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">执行池阈值</h3><span class="subnote">额度锁的杆（D26）</span></div>${poolCards}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">额度双池</h3></div>
@@ -1424,14 +1424,23 @@ function engJobPill(j) {
   if (!j) return '';
   return `<span class="pill sm ${j.停滞 ? 'red' : 'ok'}" title="引擎作业持锁 pid ${esc(j.pid)}${j.log秒 == null ? '（未见测试日志）' : ` · log ${j.log秒} 秒前更新`}">引擎${j.停滞 ? '停更' : '在跑'}</span>`;
 }
-// 回执最新一轮：多轮回执按「## 第 N 轮回执」或「# 完工报告」切，取最后一段（旧单单轮原样返回）
-function 回执最新轮(raw) {
+// 回执分轮（施工令-034）：多轮回执按「## 第 N 轮回执」或「# 完工报告」切成**全部**段落。
+// 返回 [{ 段, 轮, 签 }, …]，末项恒为最新一轮；单轮回执返回长度 1 且 轮/签 为空——
+// 调用方据此决定「出不出页签」，单轮单因此一个像素都不变。
+//
+// 轮号一律按**段序**数，不认标题里自称的号：TK-114 真数据里两个小节都写着「## 第 2 轮回执」
+// （返修时照抄了上一轮的标题），信标题就会出现两个「第 2 轮」页签、点了不知道点中哪个。
+// 段序是文件里的物理先后，永远唯一、永远单调，这是这里唯一可信的排序依据。
+function 回执分轮(raw) {
   const s = String(raw || '');
-  const rounds = s.split(/^(?=##\s*第\s*\d+\s*轮回执)/m).filter((x) => x.trim());
-  if (rounds.length > 1) return { 段: rounds[rounds.length - 1], 轮: `第 ${rounds.length} 轮（最新）` };
-  const reports = s.split(/^(?=#\s+完工报告)/m).filter((x) => x.trim());
-  if (reports.length > 1) return { 段: reports[reports.length - 1], 轮: `最新一份（共 ${reports.length} 份）` };
-  return { 段: s, 轮: '' };
+  const 切 = (re, 名) => {
+    const 段s = s.split(re).filter((x) => x.trim());
+    if (段s.length <= 1) return null;
+    return 段s.map((段, i) => ({ 段, 轮: `${名(i + 1, 段s.length)}`, 签: i === 段s.length - 1 ? '最新' : `第 ${i + 1} 轮` }));
+  };
+  return 切(/^(?=##\s*第\s*\d+\s*轮回执)/m, (i, n) => (i === n ? `第 ${i} 轮（最新）` : `第 ${i} 轮`))
+    || 切(/^(?=#\s+完工报告)/m, (i, n) => (i === n ? `第 ${i} 份（最新，共 ${n} 份）` : `第 ${i} 份`))
+    || [{ 段: s, 轮: '', 签: '' }];
 }
 // 正文/回执中最后一个 QA 章的结论摘要（≤10 行）：优先结论/不过项行，无则取章首几行
 function 最新QA摘要(raw, body) {
@@ -1553,25 +1562,36 @@ async function viewDetail(id) {
       </tbody></table></div></div>` : '';
   let rsecs = '';
   if (d.回执) {
-    // 多轮回执只解析最新一轮（返修/自修追加在同一文件里，旧轮章节会盖住新轮）
-    const { 段, 轮 } = 回执最新轮(d.回执.raw);
-    const secs = { 验收步骤: '', 做了什么: '', 'QA 章节': '', 实际消耗: '', 异议: '' };
-    const SECLN = { 验收步骤: 8, 做了什么: 4 }; // 验收步骤给足行数——制作人按此动手（用户定稿）
-    段.split(/^## /m).forEach((p) => { const nl = p.indexOf('\n'); const h = p.slice(0, nl < 0 ? undefined : nl).trim();
-      for (const k of Object.keys(secs)) if (h.startsWith(k) || (k === 'QA 章节' && /QA/.test(h))) secs[k] = (nl < 0 ? '' : p.slice(nl + 1)).trim().split('\n').slice(0, SECLN[k] || 1).join('\n'); });
-    if (!secs.验收步骤) delete secs.验收步骤; // 委托单免写，不占位
-    // 判「标准回执」以 做了什么 为准：这章都没有的，四件套摆出来就是一排「—」的空壳（TK-97 案），
-    // 一律补末尾 8 行原文——宁可给制作人原文，也不给他一屏破折号。
-    const 标准 = !!(secs.做了什么 && secs.做了什么.trim());
-    const 有货 = Object.entries(secs).filter(([, v]) => v && v.trim());
-    const 章节Html = (list) => list.map(([k, v]) => `<div class="rsec"><div class="rl">${k}</div><div class="rv" style="white-space:pre-line">${esc(v || '—')}</div></div>`).join('');
-    if (标准) {
-      rsecs = (轮 ? `<div class="subnote" style="margin:8px 0 2px">${esc(轮)}</div>` : '') + 章节Html(Object.entries(secs));
-    } else {
+    // 一轮回执 → 一屏四件套。解析口径与改版前一字未动，只是从「只解析最新一轮」
+    // 改成「每轮各解析一份」，好让下面按轮出页签。
+    const 轮Html = ({ 段, 轮 }) => {
+      const secs = { 验收步骤: '', 做了什么: '', 'QA 章节': '', 实际消耗: '', 异议: '' };
+      const SECLN = { 验收步骤: 8, 做了什么: 4 }; // 验收步骤给足行数——制作人按此动手（用户定稿）
+      段.split(/^## /m).forEach((p) => { const nl = p.indexOf('\n'); const h = p.slice(0, nl < 0 ? undefined : nl).trim();
+        for (const k of Object.keys(secs)) if (h.startsWith(k) || (k === 'QA 章节' && /QA/.test(h))) secs[k] = (nl < 0 ? '' : p.slice(nl + 1)).trim().split('\n').slice(0, SECLN[k] || 1).join('\n'); });
+      if (!secs.验收步骤) delete secs.验收步骤; // 委托单免写，不占位
+      // 判「标准回执」以 做了什么 为准：这章都没有的，四件套摆出来就是一排「—」的空壳（TK-97 案），
+      // 一律补末尾 8 行原文——宁可给制作人原文，也不给他一屏破折号。
+      const 标准 = !!(secs.做了什么 && secs.做了什么.trim());
+      const 有货 = Object.entries(secs).filter(([, v]) => v && v.trim());
+      const 章节Html = (list) => list.map(([k, v]) => `<div class="rsec"><div class="rl">${k}</div><div class="rv" style="white-space:pre-line">${esc(v || '—')}</div></div>`).join('');
+      if (标准) return (轮 ? `<div class="subnote" style="margin:8px 0 2px">${esc(轮)}</div>` : '') + 章节Html(Object.entries(secs));
       const tail = 段.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-8).join('\n');
-      rsecs = `<div class="subnote" style="margin:8px 0 2px">非标回执（未见「做了什么」章）${轮 ? ' · ' + esc(轮) : ''} · 附末尾 8 行原文</div>
+      return `<div class="subnote" style="margin:8px 0 2px">非标回执（未见「做了什么」章）${轮 ? ' · ' + esc(轮) : ''} · 附末尾 8 行原文</div>
         ${章节Html(有货)}
         <div class="rsec"><div class="rl">回执原文</div><div class="rv mono" style="white-space:pre-line">${esc(tail || '（回执为空文件）')}</div></div>`;
+    };
+    const 轮s = 回执分轮(d.回执.raw);
+    if (轮s.length <= 1) {
+      rsecs = 轮Html(轮s[0]); // 单轮回执：无页签、无容器，与改版前逐字节一致
+    } else {
+      // 多轮：页签 + 每轮一个 pane。全部轮次一次性渲染进 DOM，切换只改 class——
+      // 详情页是整页字符串渲染的，若切页签要走 route() 重渲染，就会把滚动位置和展开态一起丢掉。
+      const 默认 = 轮s.length - 1; // 默认落最新一轮
+      const tabs = 轮s.map((r, i) => `<button class="rtab${i === 默认 ? ' on' : ''}" data-rtab="${i}"
+        onclick="rcvRound(this,${i})">${esc(r.签)}</button>`).join('');
+      const panes = 轮s.map((r, i) => `<div class="rtab-pane${i === 默认 ? ' on' : ''}" data-rpane="${i}">${轮Html(r)}</div>`).join('');
+      rsecs = `<div class="rtabs" role="tablist">${tabs}</div>${panes}`;
     }
   }
   // ---- 已挂起横幅（施工令-021）：顶在最上层，挂起人/时间/理由/解挂按钮一屏交代完 ----
@@ -1653,6 +1673,14 @@ async function viewDetail(id) {
         ${ops.map(([b, s, fn]) => `<button class="oprow2" onclick="${fn}"><b>${b}</b><span>${s}</span></button>`).join('')}
         <div class="subnote" style="margin-top:14px">预计 ${esc(fm.预计时间 || '—')} · ${esc(fm.预计token || '—')} · 状态 ${esc(d.state)}</div></div></div></div>`;
 }
+// 回执轮页签切换（施工令-034）：纯 DOM class 开关，不重渲染、不重取数——
+// 详情页整页是字符串拼出来的，走 route() 会连滚动位置一起丢。作用域锁在本卡片内，
+// 一页上若将来出现第二处轮页签也互不干扰。
+window.rcvRound = (btn, i) => {
+  const card = btn.closest('.rside') || document;
+  card.querySelectorAll('[data-rtab]').forEach((b) => b.classList.toggle('on', Number(b.dataset.rtab) === i));
+  card.querySelectorAll('[data-rpane]').forEach((p) => p.classList.toggle('on', Number(p.dataset.rpane) === i));
+};
 // 预检警示（H83 短题制）：动作照常完成，只把提醒端到眼前
 window.act2 = async (name, id) => { const r = await post('/api/act/' + name, { id }); toast(r.ok ? (r.警示 ? '完成 · 警示：' + r.警示[0] : '完成') : (r.error || '失败')); route(); };
 // 批量验收子单（施工令-028：原树形 tAcceptAll 迁入父单详情页）。
@@ -2557,30 +2585,51 @@ window.credsLoad = async () => {
   //   绿=可用（登录态实测有效）/ 黄=受限（过期但能自愈，不用人管）/ 红=失效（要人重登）/ 灰=未知（探不到，不假绿也不乱报红）
   // 旧样 codex 那一行是**写死**的 灯(false)+写死文案，灰点纯属巧合正确；claude 绿点则只看"有没有 token"。
   const 灯类 = { 可用: 'dot on', 受限: 'dot warn', 失效: 'dot err', 未知: 'dot' };
-  // 名称由 <b> 出、状态由 note 出，两边都写厂商名就是 08-09 巡检抓到的「codex codex 登录态…」叠字。
+  // 三行一个体例（施工令-034 设计稿）：点 · 名 · 类型胶囊 · 状态一句话(+次要小字) · 右侧动作组。
+  // 订阅行与托管行此前长相不同（一个粗名+说明、一个池名胶囊+等宽指纹），同一张卡里像两张表。
+  const 行 = (态, 名, 类型, 状态Html, 动作Html) =>
+    `<p class="credrow"><span class="${灯类[态] || 'dot'}"></span><span class="cr-name">${esc(名)}</span>
+      <span class="cr-kind">${esc(类型)}</span><span class="cr-stat">${状态Html}</span>
+      <span class="cr-act">${动作Html}</span></p>`;
+  // 名称由 cr-name 出、状态由 note 出，两边都写厂商名就是 08-09 巡检抓到的「codex codex 登录态…」叠字。
   const 订阅行 = (厂商, s) => {
     const 态 = 灯类[s.态] ? s.态 : '未知';
-    const 按钮 = s.可登录
-      ? `<button class="btn xs rl-push" title="${esc('拉起可见终端执行：' + (s.命令 || '') + '（授权在浏览器里由厂商完成，app 只等它退出后重探）')}"
+    const 动作 = s.可登录
+      ? `<button class="btn xs" title="${esc('拉起可见终端执行：' + (s.命令 || '') + '（授权在浏览器里由厂商完成，app 只等它退出后重探）')}"
           onclick="credsLogin('${厂商}')">${s.已登录 ? '重新登录' : '登录'}</button>`
-      : `<span class="dim rl-push" title="${esc((s.命令 || '') + '：可执行体不在 PATH，按钮点了只会弹一个报错黑窗')}">CLI 未装 · 无法登录</span>`;
-    return `<p class="rowline"><span class="${灯类[态]}" title="${esc(态)}"></span><b class="rl-name">${esc(厂商)}</b>
-      <span class="rl-note">${esc(s.note || '')}</span>${按钮}</p>`;
+      : `<span class="dim" title="${esc((s.命令 || '') + '：可执行体不在 PATH，按钮点了只会弹一个报错黑窗')}">CLI 未装</span>`;
+    return 行(态, 厂商, '订阅', esc(s.note || ''), 动作);
   };
-  const 托管行 = (r) => `<p class="rowline"><span class="pill sm">${esc(r.池)}</span>
-    <span class="rl-note"><code>${esc(r.指纹)}</code>${r.base ? ` · ${esc(r.base)}` : ''}${r.模型 ? ` · ${esc(r.模型)}` : ''}</span>
-    <button class="btn xs rl-push" onclick="credsDel('${qesc(r.池)}')">删除</button></p>`;
+  // 托管行的圆点只敢说它敢说的：/api/creds 的脱敏清单不验证密文能不能解开（那要动数据面），
+  // 所以「记录完好（有真指纹）」才给绿，指纹是占位符 ●●●●???? 的记录判未知（灰），
+  // DPAPI 整体不可用时全部降未知——宁可说探不到，也不假绿。口径与订阅行的四档同一把尺。
+  const 托管行 = (r) => {
+    const 态 = !d.可加密 ? '未知' : (r.指纹 && !/\?{4}/.test(r.指纹) ? '可用' : '未知');
+    const 迁入 = r.更新时间 ? String(r.更新时间).slice(5, 10).replace('-', '-') + ' 迁入' : '';
+    const 小字 = [r.base, r.模型, 迁入].filter(Boolean).map(esc).join(' · ');
+    const 状态 = `${esc(r.指纹 || '')}${小字 ? ` <small>· ${小字}</small>` : ''}`;
+    // 「更换」= 复用添加流程、池名/端点/模型预填，存成功即覆写同名托管条目（轮换 key 一步到位，不必先删再加）
+    return 行(态, r.池, 'key·托管', 状态,
+      `<button class="btn xs" title="轮换这个池的 key：走添加流程、池名已预填，存成功即覆写当前条目"
+         onclick="credsAdd('${qesc(r.池)}')">更换</button>
+       <button class="btn xs" onclick="credsDel('${qesc(r.池)}')">删除</button>`);
+  };
+  // 「更换」要把旧端点/模型预填回去，而 askInput 是异步的、期间卡片可能已重渲染——
+  // 存一份最近清单（脱敏，无 key）供 credsAdd 读，比从 DOM 里抠字符串可靠。
+  window.__creds托管 = d.托管 || [];
+  el.className = 'card credcard';
   el.innerHTML = `
-    <p class="subnote">订阅（凭据归 CLI，app 不保存）</p>
+    <p class="cred-sub">订阅登录归各 CLI 保管 · API key 由监制台加密托管，绝不入配置文件</p>
     ${订阅行('claude', d.订阅.claude)}
     ${订阅行('codex', d.订阅.codex)}
-    <p class="subnote dotlegend" style="margin-top:10px"><span><span class="dot on"></span>可用</span><span><span class="dot warn"></span>受限·自愈中</span><span><span class="dot err"></span>失效·需重登</span><span><span class="dot"></span>未知·探不到</span></p>
-    <p class="subnote" style="margin-top:14px">API key（app 保管 · DPAPI 密文 · 不入 studio.config.json）</p>
-    ${d.托管.length ? d.托管.map(托管行).join('') : '<p class="rowline"><span class="rl-note">尚未托管任何 key</span></p>'}
-    <p class="rowline" style="margin-top:10px;border-bottom:none">
+    ${d.托管.length ? d.托管.map(托管行).join('') : '<p class="cred-empty">尚未托管任何 key</p>'}
+    <p class="cred-foot">
       <button class="btn xs" onclick="credsAdd()">＋ 添加 key</button>
       <button class="btn xs" onclick="credsLoad()">重新检测</button>
-      ${d.可加密 ? '' : '<span class="rl-note" style="color:var(--danger)">DPAPI 不可用，无法保存 key</span>'}
+      ${d.可加密 ? '' : '<span class="err" style="font-size:12px">DPAPI 不可用，无法保存 key</span>'}
+      <span class="grow"></span>
+      <span class="credleg" tabindex="0"><span class="dot" style="width:7px;height:7px;margin-right:5px"></span>状态图例<span class="credtip"
+        ><i class="lg-ok"></i>可用<br><i class="lg-warn"></i>受限 · 自愈中<br><i class="lg-err"></i>失效 · 需重登<br><i class="lg-unk"></i>未知 · 探不到</span></span>
     </p>`;
 };
 window.credsLogin = async (厂商) => {
@@ -2593,20 +2642,27 @@ window.credsDel = async (池) => {
   toast(r.ok ? '已删除' : (r.error || '失败'));
   if (r.ok) window.credsLoad();
 };
-window.credsAdd = async () => {
-  const 池 = await askInput('池名（如 deepseek / claude-key）', '', { note: '与 studio.config.json 的 执行池 键名一致' });
+// 添加 / 更换 同一条流程（施工令-034）：带 预填池 就是「更换」——池名与端点/模型照抄现有条目、
+// 只让人重敲那一把新 key，存成功即覆写同名条目（POST /api/creds 本就是覆写语义，不新开后端）。
+// 不带参数就是原来的「添加」，四问式一字未动。
+window.credsAdd = async (预填池) => {
+  const 换 = !!预填池;
+  const 旧 = 换 ? ((window.__creds托管 || []).find((x) => x.池 === 预填池) || {}) : {};
+  const 池 = await askInput(换 ? `更换「${预填池}」的 key` : '池名（如 deepseek / claude-key）', 预填池 || '',
+    { note: 换 ? '池名保持不变即为轮换；改名则会另存为一个新池' : '与 studio.config.json 的 执行池 键名一致' });
   if (池 === null || !池.trim()) return;
-  const key = await askInput(`${池.trim()} 的 API key`, '', { password: true, note: '只在本机以 DPAPI 密文落盘，明文不入配置文件；输入框按密码处理' });
+  const key = await askInput(`${池.trim()} 的${换 ? '新 ' : ' '}API key`, '',
+    { password: true, note: '只在本机以 DPAPI 密文落盘，明文不入配置文件；输入框按密码处理' + (换 ? '。存成功即覆盖旧 key，旧值不可找回' : '') });
   if (key === null || !key.trim()) return;
-  const base = await askInput('兼容端点 base（官方端点留空）', '', { note: '第三方兼容端点填 https://…；原生厂商留空' });
+  const base = await askInput('兼容端点 base（官方端点留空）', 旧.base || '', { note: '第三方兼容端点填 https://…；原生厂商留空' });
   if (base === null) return;
-  const 模型 = await askInput('模型名（留空=CLI 默认）', '');
+  const 模型 = await askInput('模型名（留空=CLI 默认）', 旧.模型 || '');
   if (模型 === null) return;
   const body = { 池: 池.trim(), key: key.trim() };
   if (base.trim()) body.base = base.trim();
   if (模型.trim()) body.模型 = 模型.trim();
   const r = await post('/api/creds', body);
-  toast(r.ok ? `已托管 ${r.池}（${r.指纹}）` : (r.error || '失败'));
+  toast(r.ok ? `${换 && r.池 === 预填池 ? '已更换' : '已托管'} ${r.池}（${r.指纹}）` : (r.error || '失败'));
   if (r.ok) window.credsLoad();
 };
 

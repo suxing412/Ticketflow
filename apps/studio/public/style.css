@@ -6,6 +6,10 @@
   --line:#E4E2DC; --ok:#0D7A5F; --okbg:#EBF7F1; --okln:#B9E0D2; --danger:#B4231F;
   --dangerbg:#FBEAE9; --accent:#4F46E5; --sect:#F0EFEA; --chip:#E3E2DD; --we:#F5F4F0;
   --inbg:#FCFCFB; --gatebg:#FDF3E3; --gateln:#E8CFA0; --gatetx:#7A5A1E;
+  /* 警示档语义令牌（施工令-034）：此前全站只有 --ok / --danger 两档，"黄"一直借闸门色 --gatetx 用，
+     语义上说不通（闸门是闸门，受限是受限），且新代码写 warn 时没有令牌可指、极易退回裸色值。
+     取值与闸门同一族琥珀（日间 #7A5A1E 对暖纸实测 5.66:1，过 AA），像素零变化，只是把名字摆正。 */
+  --warn:#7A5A1E; --warnbg:#FDF3E3; --warnln:#E8CFA0;
   --accent-ink:#4F46E5; /* 靛蓝当"文字"用的档：日间同 accent，夜间提亮保 ≥4.5:1 */
   /* 「现在」橙（施工令-022 流程视图现在线）：全站唯一表示"此刻正在发生"的色，不与职能色/状态色重号。
      日间取暖纸面上的琥珀橙，--nowtint 是它 7% 的底纹，只做橙区背景。
@@ -47,6 +51,7 @@ html[data-theme="glass"] {
   --now:#FF9D4D; --nowtint:rgba(255,157,77,.08); --accenttint:rgba(110,99,255,.12); /* 夜间取设计稿定稿值 */
   --sect:rgba(255,255,255,.04); --chip:rgba(255,255,255,.09); --we:rgba(255,255,255,.06);
   --inbg:rgba(255,255,255,.05); --gatebg:rgba(232,180,90,.12); --gateln:rgba(232,180,90,.35); --gatetx:#E8B45A;
+  --warn:#E8B45A; --warnbg:rgba(232,180,90,.12); --warnln:rgba(232,180,90,.35); /* 夜间琥珀对 #0B0D10 实测 10.4:1 */
   --fn-plan:#8F84FF; --fn-tplan:#D08BE8; --fn-code:#2FD6A0; --fn-art:#E8B45A; --fn-qa:#9BA6B5; --fn-asm:#4CC3E0; /* 技术策划夜值对 #0B0D10 实测 7.91:1 */
   --pool-claude:#9D8FFF; --pool-codex:#3ED6A8;
   --on-accent:#fff; --st-review-bg:#8A93A5; --st-done-bg:rgba(255,255,255,.08);
@@ -137,7 +142,13 @@ input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outlin
 .bhead .bc2 { font-size:18px; font-weight:700; }
 
 /* ===== 通用组件（几何=Figma） ===== */
-.card { background:var(--card); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow-sm); }
+/* 卡片基类。padding 是**兜底**不是定制（施工令-034 案源：制作人报凭据卡"顶着四个边"，
+   DOM 实测 padding 0/0/0/0——因为 .card 从来就没有 padding 规则，内边距全靠伴生类
+   (.paramcard/.envcard/.poolcard…) 或内联 style 现给，谁忘了写谁就贴边。
+   本规则给全站裸卡一个下限；所有伴生类都定义在本行之后，同特异度后来居上，
+   它们的既有 padding 一律照旧生效（改前后 28 张卡逐张 DOM 复测，仅裸卡一张变化）。 */
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow-sm);
+  padding:18px 22px; }
 .card.r14 { border-radius:14px; } .card.r16 { border-radius:16px; }
 .pill { display:inline-flex; align-items:center; justify-content:center; height:25px; padding:0 12px;
   border-radius:999px; font-size:11.5px; font-weight:500; background:var(--chip); color:var(--ink); white-space:nowrap; }
@@ -719,7 +730,7 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .dot { display:inline-block; width:10px; height:10px; border-radius:5px; margin-right:8px; background:var(--ink3); vertical-align:baseline; }
 .dot.on { background:var(--ok); }
 .dot.err { background:var(--danger); }
-.dot.warn { background:var(--gatetx); } /* 黄=能力受限（降级） */
+.dot.warn { background:var(--warn); } /* 黄=能力受限（降级）；施工令-034 起指语义令牌 --warn，不再借闸门色 */
 /* 卡片内单行（凭据卡 / 向导候选目录）——施工令-027：
    此前 .rowline 全站没有一条 CSS 规则，是裸 <p>：行距随浏览器默认走、按钮吊在文字基线上、
    两行之间没有分隔。现按 .envcard .envrow 的同款体例收拾——一行 flex、竖直居中、
@@ -740,8 +751,55 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
   .rowline { flex-wrap:wrap; }
   .rowline .rl-note { flex:1 0 100%; order:3; }
 }
-.warnc { color:var(--gatetx); }
-.pill.warn { background:var(--gatebg); color:var(--gatetx); }
+.warnc { color:var(--warn); }
+.pill.warn { background:var(--warnbg); color:var(--warn); }
+
+/* ===== 凭据卡（施工令-034 设计稿定稿）=====
+   三行一个体例：状态点 · 名称(定宽列) · 类型胶囊 · 状态一句话(带次要小字) · 右侧动作组。
+   订阅行与托管行此前是两套长相（一个 圆点+粗名+说明，一个 池名胶囊+等宽指纹），
+   同一张卡里读起来像两张表；现在共用 .credrow，差别只剩胶囊里那两个字。
+   边距按施工令硬指标：卡内边距 ≥20px、行纵向 padding ≥10px、分隔线不贴边（left/right 各留 2px）。 */
+.credcard { padding:20px 24px; }
+.credcard .cred-sub { margin:0 0 14px; font-size:12px; color:var(--ink3); line-height:1.55; }
+.credrow { display:flex; align-items:center; gap:12px; margin:0; padding:11px 2px; font-size:13px;
+  border-top:1px solid var(--line); }
+.credrow:first-of-type { border-top:none; }
+.credrow .dot { width:8px; height:8px; border-radius:50%; margin-right:0; flex:none; }
+/* 名称定宽 86px：三行的类型胶囊因此对齐成一列，眼睛一趟扫下来不用重新找基准 */
+.credrow .cr-name { font-weight:600; width:86px; flex:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.credrow .cr-kind { font-size:11px; color:var(--ink3); background:var(--chip); border-radius:99px;
+  padding:1px 8px; flex:none; white-space:nowrap; }
+/* width:0 不是笔误，是这一条的命门（自测抓到）：状态句要单行省略号就得 white-space:nowrap，
+   而 nowrap 让这个 flex-grow 项的 min-content 等于整句话的长度，再顺着 flex 容器一路顶到
+   .p6grid 的列宽上——参数页右列被撑到 807px，整页横向出滚动条。min-width:0 挡不住这条路
+   （它管的是自动最小尺寸），显式 width:0 才能把内在贡献真正归零；flex-grow 照常把它撑回可用宽度。
+   实测：卡片 min-content 807px → 413px，栅格回到 259/490，省略号照常工作。 */
+.credrow .cr-stat { color:var(--ink); opacity:.85; flex:1 1 0; width:0; min-width:0;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.credrow .cr-stat small { color:var(--ink3); }
+.credrow .cr-act { display:flex; align-items:center; gap:8px; margin-left:auto; flex:none; }
+.credcard .cred-foot { display:flex; align-items:center; gap:10px; margin:0; padding-top:14px; margin-top:2px;
+  border-top:1px solid var(--line); flex-wrap:wrap; }
+.credcard .cred-foot .grow { flex:1; }
+/* 状态图例：收进右下角，悬停才展开。tooltip 自绘（原生 title 在 Electron 壳里样式不可控、
+   延迟一秒才出，四档色值这种"要对着看"的信息等不起），纯 CSS，无 JS 无原生件。 */
+.credleg { position:relative; font-size:11px; color:var(--ink3); cursor:default; }
+.credleg .credtip { display:none; position:absolute; right:0; bottom:calc(100% + 8px); z-index:20;
+  background:var(--frost); backdrop-filter:blur(var(--frost-blur)) saturate(1.15);
+  -webkit-backdrop-filter:blur(var(--frost-blur)) saturate(1.15);
+  border:1px solid var(--line); border-radius:10px; padding:10px 14px; font-size:12px; color:var(--ink);
+  box-shadow:var(--shadow-lg); white-space:nowrap; line-height:1.9; }
+.credleg:hover .credtip, .credleg:focus-visible .credtip { display:block; }
+.credleg .credtip i { font-style:normal; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:7px; }
+.credleg .credtip .lg-ok { background:var(--ok); } .credleg .credtip .lg-warn { background:var(--warn); }
+.credleg .credtip .lg-err { background:var(--danger); } .credleg .credtip .lg-unk { background:var(--ink3); }
+.credcard .cred-empty { margin:0; padding:11px 2px; font-size:13px; color:var(--ink3); border-top:1px solid var(--line); }
+/* 窄幅：状态句让位换行到第二行，第一行保住 点+名+胶囊+按钮组，按钮不吊在名字屁股后面 */
+@media (max-width:860px) {
+  .credrow { flex-wrap:wrap; }
+  .credrow .cr-stat { flex:1 0 100%; order:5; white-space:normal; }
+  .credrow .cr-act { order:4; }
+}
 /* 全链路自检分组 */
 .eg-head { display:flex; align-items:center; margin-bottom:6px; }
 .envgrp { margin-top:12px; }
@@ -809,6 +867,19 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .doc2 p, .doc2 ul { margin:8px 0; }
 .rside { border-radius:16px; padding:22px 26px; margin-bottom:20px; }
 .rside h3 { margin:0 0 6px; font-size:15px; }
+/* 回执轮页签（施工令-034）：返修/自修把每一轮追加进同一个回执文件，此前详情页只渲染最新一轮，
+   旧轮内容在界面上根本不存在（要看只能去翻 .md）。现在每轮一个页签，默认落最新轮。
+   单轮回执不出这套壳——只有一轮时 .rtabs 压根不渲染，那条动线一个像素没变。 */
+.rtabs { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 2px; }
+.rtab { padding:4px 12px; border-radius:99px; border:1px solid var(--line); background:transparent;
+  color:var(--ink3); font-size:11.5px; font-weight:500; cursor:pointer; white-space:nowrap;
+  transition:color 140ms var(--ease-out), border-color 140ms var(--ease-out), background 140ms var(--ease-out); }
+.rtab:hover { color:var(--ink); border-color:var(--ink3); }
+.rtab.on { background:var(--ink); color:var(--paper); border-color:var(--ink); }
+.rtab:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.rtab-pane { display:none; }
+.rtab-pane.on { display:block; }
+@media (prefers-reduced-motion: reduce) { .rtab { transition:none; } }
 .rsec { background:var(--sect); border-radius:12px; padding:12px 22px; margin-top:14px; }
 .rsec .rl { font-size:11px; color:var(--ink3); font-weight:500; }
 .rsec .rv { font-size:12.5px; font-weight:500; margin-top:3px; }
