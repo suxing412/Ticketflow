@@ -817,6 +817,17 @@ app.get('/api/pm/ledger', (req, res) => {
   if (!ready(res)) return;
   res.json({ 台账: pmLedger.read(ROOT), 事件: pmLedger.events(ROOT, Number(req.query.limit) || 80) });
 });
+// 关键汇报事件链（施工令-037）：台账事件流水 + 工单 frontmatter 结构位按单号归组，一单一链。
+// **纯读聚合**——零新事件源、零调度语义改动、零写盘；业务全在 lib/pm/chain（可单测），此处只做路由。
+// 15s 活体轮询打的就是这个口子，所以它必须便宜：只读 jsonl 尾 N 条 + 活单目录，不碰 LLM 不碰网络。
+app.get('/api/pm/chains', (req, res) => {
+  if (!ready(res)) return;
+  res.json(require('./lib/pm/chain').汇总(ROOT, {
+    limit: Number(req.query.limit) || 12,
+    事件窗: Number(req.query.事件窗) || 300,
+    含隐藏: req.query.含隐藏 === '1',
+  }));
+});
 app.post('/api/pm/cut', (req, res) => {
   if (!ready(res)) return;
   const { 父单 } = req.body || {};

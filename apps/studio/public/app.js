@@ -2293,14 +2293,18 @@ window.ideaAct = async (动作, id) => {
 };
 
 /* ===== P13 项管信道（0.18.6，前身遥控传令板）：制作人 ↔ 项管问答 + 汇报流 ===== */
-function pmEventLine(e) {
-  // e.t 是 UTC ISO 串，必须转本地时区再显示（用户实测：00:16 曾显示成 16:16）
-  // 当日事件只显 HH:MM（跨日才带月-日，窄列不折行——2026-08-06 UI 评审项管页）
-  const d0 = new Date(e.t); const p2 = (n) => String(n).padStart(2, '0');
-  const sameDay = !isNaN(d0) && d0.toDateString() === new Date().toDateString();
-  const t = isNaN(d0) ? String(e.t || '').slice(5, 16).replace('T', ' ')
-    : sameDay ? `${p2(d0.getHours())}:${p2(d0.getMinutes())}`
+// 台账时刻 → 本地时钟串。ISO 是 UTC，必须转本地时区再显示（用户实测：00:16 曾显示成 16:16）；
+// 当日只显 HH:MM，跨日才带月-日（窄列不折行——2026-08-06 UI 评审项管页）。
+// 施工令-037：事件链每一行的时间戳与流水共用这一把尺，两处显示不许各算各的。
+function locHM(iso) {
+  const d0 = new Date(iso); const p2 = (n) => String(n).padStart(2, '0');
+  if (isNaN(d0)) return String(iso || '').slice(5, 16).replace('T', ' ');
+  const sameDay = d0.toDateString() === new Date().toDateString();
+  return sameDay ? `${p2(d0.getHours())}:${p2(d0.getMinutes())}`
     : `${p2(d0.getMonth() + 1)}-${p2(d0.getDate())} ${p2(d0.getHours())}:${p2(d0.getMinutes())}`;
+}
+function pmEventLine(e) {
+  const t = locHM(e.t);
   if (e.类型 === '待审') return { t, txt: e.单 ? `受托起草：${e.单}（草稿待总监审）` : `拆单完成：${e.父单} → ${(e.子单 || []).join('、')}，简报呈 Claude 审批`, hot: true };
   if (e.类型 === '切单启动') return { t, txt: `开始拆单：${e.父单}（仓况盘点中）`, hot: true };
   if (e.类型 === '派发') return { t, txt: `派发 ${e.id} → ${e.池} 池` };
@@ -2340,14 +2344,65 @@ function rosterSnapHtml(编制) {
       <span class="stpill pill sm ${cls}">${esc(r.态 || '')}</span></div>`;
   }).join('');
 }
+/* ===== 关键汇报 · 一单一链（施工令-037，制作人 2026-08-09 18:34 批准设计稿）=====
+   案源：平铺事件行每条都是断头账。制作人点名——「每一项都应该有回应：什么时候被委托起草/
+   切单/送审/审过/派发、为什么派发、后续等待什么、状态怎么样」。
+   数据全部由服务端 lib/pm/chain 算好下发（口径唯一、可单测），前端只画不判：
+   徽章三档与「现在等什么」都读 c.档 / c.等，**绝不在这里另立一套状态推断**。 */
+const KOPEN = 'studio.kchain.open'; // 展开态跨刷新保持：只存「制作人手动改过的那些单」
+function kOpenMap() { try { return JSON.parse(localStorage.getItem(KOPEN) || '{}') || {}; } catch { return {}; } }
+function kOpenSave(m) { try { localStorage.setItem(KOPEN, JSON.stringify(m)); } catch { /* 隐私模式拿不到就算了 */ } }
+// 默认：活单展开、完成单折叠（设计稿定案）；手动改过的以 localStorage 为准。
+const kIsOpen = (c, m) => (Object.prototype.hasOwnProperty.call(m, c.id) ? !!m[c.id] : !!c.活);
+window.kToggle = (id) => {
+  const el = document.querySelector(`.kitem[data-kid="${CSS.escape(id)}"]`);
+  if (!el) return;
+  const now = !el.classList.contains('open');
+  el.classList.toggle('open', now);
+  const arrow = el.querySelector('.karrow'); if (arrow) arrow.textContent = now ? '▾' : '▸';
+  const m = kOpenMap(); m[id] = now; kOpenSave(m);
+};
+function kChainHtml(链) {
+  if (!链 || !链.length) return '<p class="dim">暂无关键汇报。</p>';
+  const m = kOpenMap();
+  // 顺手剪枝：只留还在当前卡片里的键，不然这个 map 会永远长下去
+  const 活键 = {}; for (const c of 链) if (Object.prototype.hasOwnProperty.call(m, c.id)) 活键[c.id] = m[c.id];
+  if (JSON.stringify(活键) !== JSON.stringify(m)) kOpenSave(活键);
+  return 链.map((c) => {
+    const open = kIsOpen(c, 活键);
+    const steps = (c.链 || []).map((s) => `<div class="kstep">
+        <span class="kt">${esc(s.t ? locHM(s.t) : '·')}</span><span class="kx">${esc(s.文)}</span>${s.因 ? `<span class="kwhy"> · ${esc(s.因)}</span>` : ''}</div>`).join('')
+      || '<div class="kstep kmiss"><span class="kt">·</span><span class="kx">台账窗内无该单事件、工单也没留下时间戳——缺站不补造</span></div>';
+    // 尾端恒有一行：活单答「现在停在哪」+「在等谁」，终态单答「怎么收的」。
+    const 尾 = c.等
+      ? `<div class="kstep now"><span class="kt">现在</span><span class="kx">停在「${esc(c.态)}」${c.返修轮 ? ` · 第 ${c.返修轮 + 1} 轮` : ''}</span></div>`
+      : `<div class="kstep fin"><span class="kt">终</span><span class="kx">${esc(c.徽)}</span></div>`;
+    const foot = c.等
+      ? `<div class="kfoot ${c.等.闸 === '人' ? 'human' : 'mach'}">⏳ 现在等：${esc(c.等.什么)}<b> —— 等${esc(c.等.谁)}</b></div>`
+      : '';
+    return `<div class="kitem${open ? ' open' : ''}" data-kid="${esc(c.id)}">
+      <div class="khead" onclick="kToggle('${qesc(c.id)}')" title="点头行展开/收起（展开态跨刷新保持）">
+        <span class="karrow">${open ? '▾' : '▸'}</span>
+        <a class="kid" href="#/t/${encodeURIComponent(c.id)}" onclick="event.stopPropagation()">${esc(c.id)}</a>
+        <span class="ktitle">${esc(c.title || '')}</span>
+        ${c.职能 ? fnPill(c.职能) : ''}
+        <span class="kst ${c.档}">${esc(c.徽)}</span>
+      </div>
+      <div class="kbody"><div class="kline">${steps}${尾}</div>${foot}</div>
+    </div>`;
+  }).join('');
+}
+const kSig = (链) => (链 || []).map((c) => `${c.id}|${c.态}|${c.徽}|${(c.链 || []).length}`).join(',');
 async function viewRelay() {
   // 0.23.9 信息架构定案（用户裁定）：只留三项——状态 / 关键汇报 / 详细流水。
   // 台账与对话区退出 UI（机制层 API 保留：制作人层通道走 /api/relay，台账走 /api/pm/ledger）。
   // H85 追加第四项：编制快照（只读）——用工权归项管后，编制现况在项管页看。
-  const [d, pl, rs] = await Promise.all([
+  // 施工令-037：关键汇报由平铺事件行改为一单一链事件链卡（/api/pm/chains 纯读聚合）。
+  const [d, pl, rs, kc] = await Promise.all([
     api('/api/relay').catch(() => ({ 消息: [] })),
     api('/api/pm/ledger').catch(() => ({ 事件: [], 台账: {} })),
     api('/api/pm/roster').catch(() => ({ 编制: [] })),
+    api('/api/pm/chains').catch(() => ({ 链: [] })),
   ]);
   const 模型档 = (_cfg && _cfg.模型 && _cfg.模型.项管) || '—';
   const L = pl.台账 || {};
@@ -2356,8 +2411,7 @@ async function viewRelay() {
   const line = (e) => { const v = pmEventLine(e);
     if (!v) return ''; // null=不占流水（无异常巡检心跳）
     return `<div class="logrow"><time>${esc(v.t)}</time><span${v.hot ? ' style="color:var(--accent-ink);font-weight:600"' : ''}>${esc(v.txt)}</span></div>`; };
-  const feedKey = evAll.filter((e) => KEY.has(e.类型)).slice(-12).reverse().map(line).join('')
-    || '<p class="dim">暂无关键事件。</p>';
+  // 关键事件不再平铺进「关键汇报」（施工令-037 起改事件链卡），KEY 只剩一个职责：把它们从详细流水里滤掉。
   const feedFlow = evAll.filter((e) => !KEY.has(e.类型)).slice(-50).reverse().map(line).join('')
     || '<p class="dim">暂无流水。</p>';
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -2368,6 +2422,18 @@ async function viewRelay() {
   const on = !!d.值守;
   const stateColor = working ? 'var(--warn)' : (on ? 'var(--ok)' : 'var(--ink3)');
   const stateText = working ? `作业中 · ${esc(working.用途)}${working.对象 ? ' ' + esc(working.对象) : ''}` : (on ? '在线值守' : '离线（执行器停）');
+  // 15s 活体（与在途页/流程页同一口径）：只在「卡片构成或态/徽/链长度变了」时重画关键汇报区，
+  // 平稳期一个字都不动——每 15s 无脑重刷 innerHTML 会把文本选择和展开动画打断。
+  // 展开态不受重画影响：它的事实源是 localStorage，不是 DOM。
+  let sig0 = kSig(kc.链);
+  pollLoop('kchain', 15000, async () => {
+    const nd = await api('/api/pm/chains');
+    const s = kSig(nd.链);
+    if (s === sig0) return;
+    sig0 = s;
+    const box = $('kchain'); if (box) box.innerHTML = kChainHtml(nd.链);
+  });
+
   return `<div style="max-width:860px;margin:24px auto 0">
     <div class="card r16" style="padding:18px 22px;display:flex;align-items:center;gap:14px;margin-bottom:16px">
       <span style="width:12px;height:12px;border-radius:50%;background:${stateColor};${on && !working ? 'animation:breathe 2.4s var(--ease-out) infinite;' : ''}${working ? 'animation:breathe-warn 1.6s var(--ease-out) infinite;' : ''}"></span>
@@ -2378,8 +2444,8 @@ async function viewRelay() {
       <span class="subnote" style="margin-left:8px">每职能一行 · 池序即路由优先级 · 只读（调整走 /api/pm/roster）</span>
       <div style="margin-top:12px">${rosterSnapHtml(rs.编制)}</div></div>
     <div class="logcard card r14" style="margin-bottom:16px"><b style="font-size:13px">关键汇报</b>
-      <span class="subnote" style="margin-left:8px">拆单 / 待审 / 收口 / 上呈 / 报警</span>
-      <div style="margin-top:12px">${feedKey}</div></div>
+      <span class="subnote" style="margin-left:8px">一单一链 · 点头行展开 · 尾端永远回答「现在等什么」</span>
+      <div class="kchain" id="kchain">${kChainHtml(kc.链)}</div></div>
     <div class="logcard card r14"><b style="font-size:13px">详细流水</b>
       <span class="subnote" style="margin-left:8px">近 50 条 · 它都做了什么</span>
       <div style="margin-top:12px;max-height:46vh;overflow-y:auto">${feedFlow}</div></div>

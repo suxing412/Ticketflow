@@ -1107,3 +1107,53 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 .suspbar .sbwhy { font-size:12px; color:var(--ink2); flex-basis:100%; line-height:1.5; }
 .suspbar .sp { flex:1; }
 @media (prefers-reduced-motion: reduce) { .susp:hover { opacity:.55; } }
+
+/* ===== 关键汇报 · 一单一链事件链（施工令-037，制作人 2026-08-09 18:34 批准设计稿）=====
+   语义色三档，全部走既有令牌，不新造色也不写裸 hex（双主题自动跟随）：
+     绿 --ok        = 终态（完成/归档，默认折叠成一行）
+     橙 --now       = 在途（机闸：执行/判官在跑）——全站唯一「此刻正在发生」色，与流程视图现在线同源
+     靛 --accent-ink= 等人闸（人闸：等制作人/总监签字放行）——设计稿夜间那档 #9D93FF 正是本令牌夜值
+   几何：链条一根 2px 竖线 + 每站一颗圆点，与 .logrow 同一时间列宽（52px）以求列对齐。 */
+.kchain { margin-top:12px; }
+.kitem { border-top:1px solid var(--line); padding:8px 2px; }
+.kitem:first-child { border-top:0; }
+.khead { display:flex; align-items:center; gap:10px; cursor:pointer; padding:3px 2px; border-radius:8px;
+  transition:background .16s var(--ease-out); }
+.khead:hover { background:var(--sect); }
+.karrow { color:var(--ink3); font-size:11px; width:10px; flex:none; }
+.kid { font-weight:600; font-family:var(--mono); font-size:12.5px; color:var(--ink); text-decoration:none; flex:none; }
+.kid:hover { color:var(--accent); text-decoration:underline; }
+.ktitle { color:var(--ink2); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:13px; }
+.kst { font-size:11px; border-radius:999px; padding:2px 10px; flex:none; font-weight:600; white-space:nowrap; }
+.kst.done { background:var(--okbg); color:var(--ok); }
+.kst.doing { background:var(--nowtint); color:var(--now); }
+.kst.wait { background:var(--accenttint); color:var(--accent-ink); }
+/* 折叠：只藏链体，头行永远在（完成单折一行 = 一行说清「什么时候被谁收的」） */
+.kbody { display:none; }
+.kitem.open .kbody { display:block; }
+.kline { margin:8px 0 4px 6px; padding-left:14px; border-left:2px solid var(--line); }
+.kstep { position:relative; padding:3px 0 3px 10px; font-size:12.5px; color:var(--ink2); line-height:1.55; }
+.kstep::before { content:''; position:absolute; left:-19px; top:10px; width:8px; height:8px; border-radius:50%;
+  background:var(--ok); }
+.kstep .kt { color:var(--ink3); font-family:var(--mono); font-size:11.5px; display:inline-block;
+  width:52px; flex:none; }
+.kstep .kx { color:var(--ink); }
+.kstep .kwhy { color:var(--ink3); }
+/* 现在行：橙点带光晕——「此刻停在哪」必须一眼跳出来 */
+.kstep.now { color:var(--now); }
+.kstep.now .kx, .kstep.now .kt { color:var(--now); font-weight:600; }
+.kstep.now::before { background:var(--now); box-shadow:0 0 0 3px var(--nowtint); }
+.kstep.fin::before { background:var(--ok); box-shadow:0 0 0 3px var(--okbg); }
+.kstep.fin .kx { color:var(--ok); font-weight:600; }
+/* 缺站行：如实说「没有就是没有」，不伪装成一个站 */
+.kstep.kmiss { color:var(--ink3); font-style:italic; }
+.kstep.kmiss::before { background:var(--line); }
+/* 尾端「现在等什么」：人闸靛、机闸橙——颜色本身就在回答「该我动手了吗」 */
+.kfoot { font-size:12px; padding:6px 0 2px 10px; margin-left:6px; }
+.kfoot.human { color:var(--accent-ink); }
+.kfoot.mach { color:var(--now); }
+.kfoot b { font-weight:600; }
+@media (max-width:720px) {
+  .ktitle { display:none; } /* 窄屏先舍标题：单号与徽章是最小可用信息 */
+  .kstep .kt { width:44px; }
+}
