@@ -22,6 +22,52 @@ let cfg = null; let initError = null;
 if (!ROOT) initError = '未找到监制台仓库（缺 studio.config.json）。';
 else { try { cfg = config.load(ROOT); store.ensureDirs(ROOT); } catch (e) { initError = '读配置失败：' + e.message; } }
 
+/* ---- 官方桩闸 STUDIO_STUB=1（施工令-039，案源 037 首启真派发 40s 事故 · 021 同族第二案）----
+   工程队起桩台此前各自手搓空转钩（037 手搓 Module._load、038 手搓改写导出 + 越界计数器），
+   两起事故全因**手搓漏面**：漏的从来不是自己写的那几个调用点，是没想到的那一个（server 自身
+   的开工调用、巡检定时器、向导重挂）。根治办法不是让每个桩台作者更小心，是把闸做进服务本身。
+
+   硬关口径 = 直接空转 runner 模块的**派发导出**。模块对象在 require 缓存里只有一份，于是
+   任何调用方（路由 / 巡检 setInterval / 向导就地重挂 / 今后新增的任何一处）拿到的都是哑函数，
+   不靠调用点自觉、不随代码演进漏面。外呼面（额度真调 / 连通探测）同理停用——桩台既不派发也不计费。
+   不置位时本块整体不执行，行为逐位不变。 */
+const STUB = process.env.STUDIO_STUB === '1';
+// 空转记录：哪些派发/外呼入口被调过又被拦下。随 /api/runner 下发，桩台作者一眼看清
+// 「这台确实被调了、也确实什么都没干」——037 的事故正是没人看得见这一层才烧了 40 秒。
+const 桩台拦截 = [];
+if (STUB) {
+  const r = require('./lib/runner');
+  // 生命周期面（服务开工/停手必调）：空转即可，被调是正常的
+  for (const k of ['start', 'stop', 'stopLoop']) r[k] = function 桩台空转() { 桩台拦截.push(k); };
+  // 真派发面：拉起会话 / 掐会话 / 排调度循环——哑掉，且返回值取"什么都没发生"的形状
+  r.startLoop = function 桩台空转() { 桩台拦截.push('startLoop'); };
+  r.tick = async function 桩台空转() { 桩台拦截.push('tick'); return { skipped: true, reason: '桩台模式：派发面已硬关' }; };
+  r.startWork = async function 桩台空转() { 桩台拦截.push('startWork'); return false; };
+  r.killTicket = function 桩台空转() { 桩台拦截.push('killTicket'); return false; };
+  // 外呼面：额度查询会真调 CLI/HTTP（计费+限流），连通探测会真发请求
+  const q = require('./lib/quota');
+  q.getRateLimits = async () => null; q.queryRateLimits = async () => null;
+  q.getClaudeUsage = async () => null; q.queryClaudeUsage = async () => null;
+  q.eagerRefresh = () => {};
+  // 额度闸从严：桩台一律不放行（真派发面已哑，这里是第二道）
+  q.checkGate = async () => ({ allowed: false, threshold: 0, reason: '桩台模式：额度查询停用，一律不放行' });
+  const np = require('./lib/netprobe');
+  np.httpProbe = async () => null;
+  np.探 = async () => ({ 直连: null, 经代理: null });
+  // 项管脑（H49）：五个入口每个都 spawn 一次 claude CLI，是全站最大的一笔计费外呼。
+  // 「零计费」离了这一面就是空话——起草/切单/收口/答疑/代裁一律哑掉，回调按「桩台不作业」回。
+  const brain = require('./lib/pm/brain');
+  for (const k of ['draftTicket', 'cut', 'closeout', 'answer', 'adjudicateReferral']) {
+    brain[k] = function 桩台空转(...args) {
+      桩台拦截.push('brain.' + k);
+      const cb = args[args.length - 1];
+      if (typeof cb === 'function') cb({ ok: false, error: '桩台模式：项管脑外呼已停用' });
+    };
+  }
+}
+// /api/runner 的桩台印：桩台模式下「运行」恒 false，且带 桩台:true 让调用方一眼看出这台不是实弹台
+const 桩台印 = (st) => (STUB ? { ...st, 桩台: true, 运行: false, 桩台拦截: [...桩台拦截] } : st);
+
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 // ---- 远程访问（0.17.10）：默认只听 127.0.0.1；config.网络.远程.开 = true 时听 0.0.0.0，
@@ -237,7 +283,9 @@ app.post('/api/pm/draft', (req, res) => {
   const name = (cfg.项目 && cfg.项目.默认) || '';
   const projPath = name && reg[name] && reg[name].路径;
   journal.append(ROOT, '派单委托受理（H57）：' + 需求.slice(0, 60));
-  try { require('./lib/ledger').event(ROOT, '派单委托', { 需求: 需求.slice(0, 200) }); } catch { /**/ }
+  // 这条事件是关键汇报链「委托事由」的唯一来源（chain.js 按 30 分钟窗与随后的 单张待审 配对）——
+  // 它没落盘，起草站就只能显示「项管单张起草」这句套话，制作人问的「为什么起这张单」永远没答案。
+  记事件('派单委托', { 需求: 需求.slice(0, 200) });
   require('./lib/pm/brain').draftTicket(ROOT, cfg, 需求, projPath, (r) => {
     journal.append(ROOT, r.ok ? '项管起草完成：' + r.单 + '（草稿待审）' : '项管起草失败：' + (r.error || ''));
   });
@@ -396,18 +444,18 @@ function runnerStatus() {
     let t = null; try { t = store.find(ROOT, e.id); } catch { /* 单已挪走：按无单算 */ }
     return { ...e, 进度: 进度Of(t, e) };
   });
-  return st;
+  return 桩台印(st);
 }
 app.get('/api/runner', (req, res) => { if (!ready(res)) return; res.json(runnerStatus()); });
 app.post('/api/runner/start', (req, res) => {
   if (!ready(res)) return;
-  runner.start(ROOT, () => cfg);
-  res.json({ ok: true, ...runner.status(ROOT, cfg) });
+  runner.start(ROOT, () => cfg); // 桩台模式下这是哑函数：点了也起不来，且下面照报 运行:false
+  res.json({ ok: true, ...桩台印(runner.status(ROOT, cfg)) });
 });
 app.post('/api/runner/stop', (req, res) => {
   if (!ready(res)) return;
   runner.stop(ROOT);
-  res.json({ ok: true, ...runner.status(ROOT, cfg) });
+  res.json({ ok: true, ...桩台印(runner.status(ROOT, cfg)) });
 });
 // /api/runner/mode（试跑↔实弹）已随 H81 常开单闸制拆除：运行即实弹，停手闸是暂停总闸
 // ---- 全量配置入 UI（2026-07-11 用户指示）：以下均为白名单化分区写回 ----
@@ -801,6 +849,21 @@ app.post('/api/config/remote', (req, res) => {
 // ---- H49 双域：想法池 + 项管 ----
 const ideas = require('./lib/pm/ideas');
 const pmLedger = require('./lib/pm/ledger');
+/* 台账事件唯一出口（施工令-039，案源 037 勘察实锤）。
+   旧样：派单委托 / 定稿放行 两处写 require('./lib/ledger').event(...)——**指错了模块**。
+   lib/ledger 只有 commitStudio（git 记账），事件属主是 lib/pm/ledger。于是每次调用都抛
+   TypeError，又被 `catch { }` 空吞，两类事件一个月零落盘无人发现（现网 事件.jsonl 570 行零命中）。
+   吞异常是帮凶：错的是 require，瞒下来的是空 catch。此后事件一律走这道口子——
+   属主唯一（pmLedger），失败必留痕（console 保底 + journal 落盘，双保险各自独立 try）。
+   语义边界：event() 只 append 事件.jsonl（急件类型另投信箱），**不改状态机、零调度语义影响**。
+   函数声明有提升，模块内任何位置（含本行之上的 /api/pm/draft）运行期都调得到。 */
+function 记事件(类型, data) {
+  try { return pmLedger.event(ROOT, 类型, data); } catch (e) {
+    console.error(`台账事件落盘失败（${类型}）：${e.message}`);
+    try { journal.append(ROOT, `台账事件落盘失败（${类型}）：${e.message}`); } catch { /* 留痕失败不阻塞主流程 */ }
+    return null;
+  }
+}
 app.get('/api/ideas', (req, res) => {
   if (!ready(res)) return;
   res.json({ 想法: ideas.list(ROOT).filter((x) => req.query.全部 === '1' || x.状态 === '在池') });
@@ -1039,7 +1102,7 @@ ACTIONS.定稿 = (b) => {
   const r = legacy定稿(b);
   if (r.ok && warns.length) r.警示 = warns; // 随结果回前端提示，动作照常完成
   // H57 透明化：定稿是 Claude 审批放行动作，入台账事件供项管视图可见
-  if (r.ok) { try { require('./lib/ledger').event(ROOT, '定稿放行', { 单: b.id }); } catch { /**/ } }
+  if (r.ok) 记事件('定稿放行', { 单: b.id });
   if (r.ok && cfg.执行器 && cfg.执行器.派发制) {
     const t = store.find(ROOT, b.id);
     if (t && ['战役','专项'].includes(t.fm.父单类型)) {
@@ -1279,6 +1342,8 @@ function start() {
     const bindAddr = REMOTE().开 ? '0.0.0.0' : '127.0.0.1'; // 远程开=全接口监听（令牌把门）
     const srv = app.listen(port, bindAddr, () => {
       console.log(initError ? `监制台启动但未就绪：${initError}` : `监制台已启动：http://127.0.0.1:${port}${bindAddr === '0.0.0.0' ? '（远程监听已开，令牌把门）' : ''}`);
+      // 醒目一行：桩台与实弹台长得一模一样，唯一区别就是这行日志——起错台是 037 事故的第一步
+      if (STUB) console.log('★★ 桩台模式（STUDIO_STUB=1）：零派发零计费 —— 执行器派发面已硬关，额度查询与连通探测已停用 ★★');
       巡检();
       if (!initError) setInterval(巡检, 30 * 60000).unref();
       // 自动记账（D35）：定期把工单流转/回执/journal git commit 落袋，间隔读 config（0=关）
