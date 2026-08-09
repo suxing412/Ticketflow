@@ -509,7 +509,19 @@ async function viewFlow() {
       有单之后这里按「沉淀｜现在｜接下来」三段铺出每条管线的现在线。</p></div>`;
   }
 
-  // ---- 单条渲染：四型（doing 实心带百分比 / sign 绿框 / stuck 红 / queue 虚框）----
+  // ---- 分段判据（施工令-038）：现在区认**现场**，不认目录状态 ----
+  // 案源：TK-117 挂着核查会话（在途页 82% · 核查中·深检），流程页却按「状态=待验收」把它塞进
+  // 「接下来·等你签字」绿框——旧判据 FG_DOING 只收 在途/质检 两态，审检/质检/仲裁这类判官会话
+  // 一律漏判。凡 /api/agents 报了活跃会话（执行/初检/核查（深检）/质检（QA）/仲裁 任一 kind），
+  // 这单就是**现在正在被处理**，一律入现在区，阶段标签走既有进度口径（含 kind，如「核查中 · 深检」）。
+  const liveOf = (t) => { const r = 进度By[t.id]; return (r && r.有会话) ? r : null; };
+  // 真停人闸的三种（绿框唯一出场条件，且必须**无任何活跃会话**）：
+  //   待定夺 = 等你拍板；待验收·保留 = 你亲验；待验收·候引擎实证 = H97 门禁停闸（等实证或你直收）。
+  // 委托待验收而判官会话没起 → 是「判官还没接手」，不是「等你签字」——给它绿框等于把判官的活挂你名下。
+  const 人闸 = (t) => t.state === '待定夺'
+    || (t.state === '待验收' && (t.验收方式 === '保留' || !!t.待引擎实证));
+
+  // ---- 单条渲染：五型（doing 实心带百分比 / sign 绿框 / stuck 红 / queue 虚框 / wait 待判官接手）----
   const go = (id) => `location.hash='#/t/${encodeURIComponent(id)}'`;
   const idShort = (dep, self) => {
     const a = String(dep).match(/^(.+)-(\d+)$/), b = String(self).match(/^(.+)-(\d+)$/);
@@ -535,8 +547,12 @@ async function viewFlow() {
   const signBar = (t) => {
     const 保留 = t.验收方式 === '保留';
     const 里程碑 = isBox(t); // 专项/战役终审 = 里程碑旗
-    return bar(t, 'sign', `<span class="st">✍ ${t.state === '待定夺' ? '待你拍板' : (保留 ? '你（保留）' : '你')}</span>${里程碑 ? '<span class="mile">⚑ 里程碑</span>' : ''}`);
+    const 词 = t.state === '待定夺' ? '待你拍板' : (t.待引擎实证 ? '候引擎实证' : (保留 ? '你（保留）' : '你'));
+    return bar(t, 'sign', `<span class="st">✍ ${esc(词)}</span>${里程碑 ? '<span class="mile">⚑ 里程碑</span>' : ''}`);
   };
+  // 委托待验收、判官会话还没起：如实说「待判官接手」——不冒充等你签字，也不假装在做。
+  // 用闸门色的 .st（与 doing.nosess 同源语义：会话没起来），虚框表明它在排队等判官。
+  const waitBar = (t) => bar(t, 'queue wait', '<span class="st">待判官接手</span>');
   const stuckBar = (t) => bar(t, 'stuck', `<span class="st">${esc(t.state)}${t.自修次数 ? ' ×' + t.自修次数 : ''}</span>`);
   const queueBar = (t) => {
     const ds = depsOf(t);
@@ -557,13 +573,16 @@ async function viewFlow() {
     const 名称 = k === MISC ? '散单' : `${k} ${(P && P.名称) || ''}`.trim();
     const 活 = L.items.filter((t) => !suspOf(t) && !FG_DONE.has(t.state));
     const 可见 = (t) => !isBox(t) || FG_SIGN.has(t.state);
-    const now = 活.filter((t) => 可见(t) && (FG_DOING.has(t.state) || FG_STUCK.has(t.state)));
-    const nextSign = 活.filter((t) => 可见(t) && t.state === '待验收')
+    // 现在区：有活跃会话（任一 kind）一律入；目录态在做/卡住的照旧入（会话没起也要看得见「卡在哪」）
+    const now = 活.filter((t) => 可见(t) && (liveOf(t) || FG_DOING.has(t.state) || FG_STUCK.has(t.state)));
+    // 接下来·签字位：会话在跑的已被现在区收走，这里只剩没会话的待验收（排序口径不动）
+    const nextSign = 活.filter((t) => 可见(t) && !liveOf(t) && t.state === '待验收')
       .sort((a, b) => (b.验收方式 === '保留') - (a.验收方式 === '保留') || String(a.id).localeCompare(String(b.id)));
     const nextQ = 活.filter((t) => 可见(t) && FG_QUEUE.has(t.state))
       .sort((a, b) => (深[a.id] - 深[b.id]) || String(a.id).localeCompare(String(b.id)));
-    总在做 += now.filter((t) => FG_DOING.has(t.state)).length;
-    总签字 += nextSign.length + now.filter((t) => t.state === '待定夺').length;
+    总在做 += now.filter((t) => liveOf(t) || FG_DOING.has(t.state)).length;
+    // 「等你签字」只数真停人闸的（待验收·保留/候引擎实证 + 无会话的待定夺）——委托待验收在等判官，不算你的活
+    总签字 += nextSign.filter(人闸).length + now.filter((t) => !liveOf(t) && t.state === '待定夺').length;
     总接下来 += nextQ.length;
     // 沉淀四类
     const cats = { done: [], susp: [], drop: [], over: [] };
@@ -583,14 +602,14 @@ async function viewFlow() {
     const 闲置天 = 最近 ? Math.floor((Date.now() - 最近) / 86400000) : null;
     if (!now.length) 闲置数++;
     const nowInner = now.length
-      ? now.map((t) => (FG_DOING.has(t.state) ? doingBar(t) : t.state === '待定夺' ? signBar(t) : stuckBar(t))).join('')
+      ? now.map((t) => ((liveOf(t) || FG_DOING.has(t.state)) ? doingBar(t) : t.state === '待定夺' ? signBar(t) : stuckBar(t))).join('')
       : `<div class="fgidle">— 本管线现在无在做（${最近 ? `闲置 ${闲置天} 天` : '暂无活动记录'}）—</div>`;
     const foldInner = 沉淀数
       ? `<div class="fgfold"><span class="fgfk">▸ 沉淀</span>${FG_CATS.filter(([c]) => cats[c].length)
         .map(([c, n]) => `<button class="fgcat ${c}" data-fglane="${esc(k)}" data-fgcat="${c}" onclick="fgDrawer('${qesc(k)}','${c}')" title="点开只看这一类">${esc(n)} <b>${cats[c].length}</b></button>`)
         .join('<i class="fgdot">·</i>')}</div>`
       : '';
-    const nextInner = (nextSign.map(signBar).join('') + nextQ.map(queueBar).join(''))
+    const nextInner = (nextSign.map((t) => (人闸(t) ? signBar(t) : waitBar(t))).join('') + nextQ.map(queueBar).join(''))
       || '<div class="fgidle q">— 接下来没有排队的单 —</div>';
     return `<div class="fglane">
       <div class="fgrow">
@@ -608,7 +627,10 @@ async function viewFlow() {
   fgOpen = {}; // 每次进视图回到全折（制作人追加：默认全折叠）
 
   // ---- 15s 活体：只换百分比与阶段名，不整页重画；在跑名册变了才 route（同在途页口径）----
-  const sig = (d) => (d.在跑 || []).map((r) => r.id + ':' + r.state).sort().join(',');
+  // 签名带上「有没有会话」（施工令-038）：分段判据改吃现场后，起/收一条判官会话就要换段——
+  // 光比 id:state 看不出来（核查会话起落时单一直停在 待验收，状态一个字没变，条却该从绿框迁进现在区）。
+  // 参照 022 的 nosess 同步先例：首屏与轮询同一口径，谁都不许自己改口。
+  const sig = (d) => (d.在跑 || []).map((r) => r.id + ':' + r.state + ':' + (r.有会话 ? 1 : 0)).sort().join(',');
   const sig0 = sig(ag);
   pollLoop('fg-board', 15000, async () => {
     const nd = agentsScoped(await api('/api/agents'), all);
@@ -627,9 +649,9 @@ async function viewFlow() {
       <span class="sp"></span>
       <span class="fgsum">在做 <b>${总在做}</b> · 等你签字 <b class="s">${总签字}</b> · 排队 <b>${总接下来}</b>${闲置数 ? ` · 闲置管线 <b>${闲置数}</b>` : ''}</span></div>`;
   const legend = `<div class="fglegend">
-      <span><i class="lg-doing"></i>实心=在做（百分比接执行进度卡口径）</span>
-      <span><i class="lg-queue"></i>虚框=排队（依赖序，←标依赖）</span>
-      <span><i class="lg-sign"></i>绿框=等你签字/拍板</span>
+      <span><i class="lg-doing"></i>实心=在做（有活跃会话即在做，含判官环节；百分比接执行进度卡口径）</span>
+      <span><i class="lg-queue"></i>虚框=排队（依赖序，←标依赖）· 待判官接手=判官会话还没起</span>
+      <span><i class="lg-sign"></i>绿框=等你签字/拍板（无会话且真停人闸）</span>
       <span><i class="lg-stuck"></i>红=卡住（待定夺/执行失败）</span>
       <span class="nowh">◉ 橙区=现在（管线闲置直书「闲置 N 天」）</span>
       <span>⚑=里程碑 · ❄=挂起 · 沉淀默认全折</span></div>`;

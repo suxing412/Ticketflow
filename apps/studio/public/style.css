@@ -451,6 +451,10 @@ a.gear { text-decoration:none; }
 .fgbar.queue.ready { border-style:solid; border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-glow); }
 .fgbar.queue.ready .st { color:var(--accent-ink); border-color:var(--accent-ink); }
 .fgbar.blocked .st { color:var(--danger); border-color:var(--danger); background:var(--dangerbg); }
+/* 待判官接手（施工令-038）：委托待验收但判官会话还没起——闸门色，与 .doing.nosess 同源语义
+   （"会话没起来"），虚框表明在排队。三个令牌两主题各有一份（:root 暖纸 / html[data-theme="glass"] 玻璃），
+   实测 paper #7A5A1E on #FDF3E3、glass #E8B45A on 半透明琥珀，不写死色值。 */
+.fgbar.queue.wait .st { color:var(--gatetx); border-color:var(--gateln); background:var(--gatebg); }
 /* 签字位：绿框常驻——制作人的活永远不许被别的条盖过去 */
 .fgbar.sign { border-color:var(--ok); background:var(--okbg); }
 .fgbar.sign .st { color:var(--ok); border:1px solid var(--okln); background:transparent; font-weight:700; }
