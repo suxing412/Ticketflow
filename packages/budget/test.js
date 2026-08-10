@@ -1,15 +1,19 @@
-// budget.test.js — 预算闸（施工令-021）
-// 红线：**未配预算的池永不被冻结**（不配=不管，绝不臆造上限），
-// 以及冻结结构必须能直接喂给 dispatch.poolFrozen——那是本单零接线的全部前提。
+// test.js — 预算闸（协-003）· 包自测
+//
+// 红线：**未配预算的池永不被冻结**（不配=不管，绝不臆造上限）。
+//
+// 本文件只测本包自己的契约，**零 app 依赖**——那是 packages/ 的入包条件。
+// 「冻结结构能否喂进 dispatch」属于**消费方接线**，那两条随本体归位一并挪去了
+// apps/studio/test/budget-接线.test.js：包证明自己的输出形状，消费方证明自己接得住，
+// 各测各的那一半。原文件里「这一条不过，本单等于没做」的那条断言一字未改，只是换了家。
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const B = require('../lib/budget');
-const D = require('../lib/pm/dispatch');
+const B = require('./budget');
 
 let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
-console.log('budget 预算闸测试（施工令-021）');
+console.log('budget 预算闸测试（包自测）');
 
 const 新根 = () => fs.mkdtempSync(path.join(os.tmpdir(), 'budget-'));
 const 今 = '2026-08-08T10:00:00.000Z';
@@ -109,15 +113,6 @@ t('没配价目表时金额上限自然失效，只剩 token 口径（不臆造�
   assert.equal(B.超预算(cfg, root, 'k', 今).超, false, '算不出费用就不许判超');
 });
 
-// ---- 与 dispatch 的接线（本单零接线的全部前提）----
-t('冻结结构可直接喂 poolFrozen：不改签名即生效', () => {
-  const root = 新根();
-  const cfg = { 预算: { 池: { 'claude-key': { 日token: 10 } } }, 执行池: { 'claude-key': {} } };
-  B.记(root, { 池: 'claude-key', 输入: 20, 输出: 0, t: 今 });
-  const gi = B.并入({}, B.冻结池(cfg, root, 今));
-  assert.equal(D.poolFrozen(cfg, gi, 'claude-key'), true, '这一条不过，本单等于没做');
-});
-
 t('并入：不覆盖已有额度锁信息，同池任一锁上即锁', () => {
   const 已 = { claude: { locked: true, reason: '订阅额度锁' }, 'claude-key': { fivePct: 3 } };
   const g = B.并入(已, { 'claude-key': { locked: true, reason: '预算', 预算: true } });
@@ -125,24 +120,6 @@ t('并入：不覆盖已有额度锁信息，同池任一锁上即锁', () => {
   assert.equal(g['claude-key'].locked, true);
   assert.equal(g['claude-key'].fivePct, 3, '原有字段不丢');
   assert.equal(g['claude-key'].预算, true);
-});
-
-t('实测证据：超预算的 key 池会被池序绕开（降级链路端到端）', () => {
-  const root = 新根();
-  const cfg = {
-    执行池: { claude: { 计费: '订阅' }, 'claude-key': { 计费: '按量' }, codex: { 计费: '订阅' } },
-    编制: [{ 职能: '程序', 池序: [{ 池: 'claude' }, { 池: 'claude-key' }, { 池: 'codex' }] }],
-    预算: { 池: { 'claude-key': { 日token: 10 } } },
-  };
-  const ready = [{ id: 'T-1', 职能: '程序', 优先级: 'P1', 创建时间: '2026-08-08' }];
-  // 套餐冻结 + key 池未超 → 落 key 池
-  let gi = B.并入({ claude: { locked: true } }, B.冻结池(cfg, root, 今));
-  assert.equal(D.pickNext(cfg, ready, {}, gi, { 'claude-key': 1, codex: 1 })[0].池, 'claude-key');
-  // key 池烧超预算后 → 继续顺位到 codex，不再落 key 池
-  B.记(root, { 池: 'claude-key', 输入: 99, 输出: 0, t: 今 });
-  gi = B.并入({ claude: { locked: true } }, B.冻结池(cfg, root, 今));
-  const picks = D.pickNext(cfg, ready, {}, gi, { 'claude-key': 1, codex: 1 });
-  assert.equal(picks[0].池, 'codex', '超预算的池必须被绕开，否则保险丝形同虚设');
 });
 
 t('view：只列配了预算的池，带上限/用量/是否超', () => {
