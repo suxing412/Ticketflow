@@ -7,6 +7,13 @@
 //   - 执行器接线只到「providers 注册表可枚举 + echo 级测试调用（桩模式）」为止；
 //   - 桩模式是物理性的：本文件不引入 child_process，任何路径都发不起真实 CLI 进程，零计费。
 //
+// 2026-08-10 接线：lib/ 下六个模块此前一个都没接到接口上（写好了、测过了，但没有任何
+// 代码路径走得到）。本轮接了其中四个——判据是**不破坏上面那条物理保证**：
+//   routing/router + routing/history + toolchain + review-opinion   零 child_process，已接
+//   workspace/worktree                                              引 child_process，不接
+//   orchestration/plan                                              跨界引 studio 内部模块，不接
+// 两处未接的原因写在 docs/接线说明.md，不是遗漏。
+//
 // providers 消费走仓根 packages/providers（@papercrew/providers），
 // 换布局时用环境变量 TICKETFLOW_PACKAGES 指向 packages/。
 'use strict';
@@ -19,6 +26,13 @@ const 仓根 = __dirname;
 // 公用件解析统一走 lib/公用件（一仓拓扑）。此处曾自抄一份「往上找兄弟仓 Ticketflow」的
 // 算法，一仓合并后解析成 <仓根>/apps/Ticketflow 而失效——同一个约定不留第二份。
 const 公用件 = require('./lib/公用件');
+
+// 本仓自有模块。四个都是纯计算或只读文件，不起进程——桩模式的物理保证不受影响，
+// 契约测试里有一条断言盯着这件事（见 test/接线契约.test.js）。
+const 路由器 = require('./lib/routing/router');
+const 路由历史 = require('./lib/routing/history');
+const 工具链 = require('./lib/toolchain');
+const 评审意见 = require('./lib/review-opinion');
 
 // ——————————————————————————————————————————————————————————
 // 配置
@@ -113,7 +127,11 @@ function 发静态(res, url路径) {
 // 路由
 // ——————————————————————————————————————————————————————————
 const 服务 = http.createServer((req, res) => {
-  const url路径 = (req.url || '/').split('?')[0];
+  // 原先只 split('?')[0] 把查询串整个丢掉。新接的几条要读 role/kind/limit，故正经解析一次。
+  // 基底 URL 只为让 WHATWG URL 肯收相对路径，不参与任何判断。
+  const 请求URL = new URL(req.url || '/', 'http://127.0.0.1');
+  const url路径 = 请求URL.pathname;
+  const 查询 = 请求URL.searchParams;
 
   if (url路径 === '/api/health') {
     return 发JSON(res, 200, {
@@ -162,6 +180,73 @@ const 服务 = http.createServer((req, res) => {
           回声: String(体.prompt || 'echo'),      // 桩回声：原样弹回
           说明: '桩模式：仅经 @papercrew/providers 组装调用参数，未落任何进程，零真实 CLI 调用零计费。',
         });
+      } catch (e) { return 发JSON(res, 400, { ok: false, error: e.message }); }
+    });
+  }
+
+  // ——— 动态路由：按角色给 Provider 排名 ———
+  // 只算不派。返回每个候选的分数与理由，理由是给人看的——排名不透明就没人敢信它。
+  if (url路径 === '/api/routing/rank' && req.method === 'GET') {
+    if (!registry) return 发JSON(res, 503, { ok: false, error: registry错误 });
+    try {
+      const 角色 = 查询.get('role') || 查询.get('角色') || '';
+      const 类别 = 查询.get('kind') || 查询.get('类别') || '执行';
+      const 排名 = 路由器.rankProviders(仓根, 配置, { role: 角色, kind: 类别 });
+      return 发JSON(res, 200, {
+        ok: true,
+        角色: 排名[0] ? 排名[0].role : (角色 || (类别 === '执行' ? 'generalist' : 'reviewer')),
+        类别,
+        选中: 排名[0] ? 排名[0].name : null,
+        排名: 排名.map((r) => ({ 名称: r.name, 分数: r.score, 理由: r.reasons })),
+        说明: 排名.length ? '仅排名，未派发任何任务' : '无候选：检查 providers 是否启用、能力是否匹配',
+      });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+  }
+
+  // ——— 路由历史：只读 journal/provider-runs.jsonl ———
+  if (url路径 === '/api/routing/history' && req.method === 'GET') {
+    try {
+      const 上限 = Math.min(Math.max(Number(查询.get('limit')) || 50, 1), 500);
+      const 角色 = 查询.get('role') || 查询.get('角色') || '';
+      const 记录 = 路由历史.read(仓根, 上限);
+      const 汇总 = {};
+      if (角色 && registry) {
+        for (const p of registry.list(配置)) 汇总[p.name] = 路由历史.summary(仓根, p.name, 角色);
+      }
+      return 发JSON(res, 200, {
+        ok: true,
+        账本: 路由历史.historyPath(仓根),
+        条数: 记录.length,
+        ...(角色 ? { 角色, 汇总 } : {}),
+        记录,
+        ...(记录.length ? {} : { 说明: '尚无执行记录——桩模式不写账，真实派发接线后才会有内容' }),
+      });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+  }
+
+  // ——— 工具链探测：只查文件是否存在，不安装、不下载 ———
+  if (url路径 === '/api/toolchain' && req.method === 'GET') {
+    try {
+      const found = 工具链.resolve(仓根, 配置);
+      return 发JSON(res, 200, {
+        ok: true,
+        就位: found.ok,
+        目录: found.dir, node: found.node, npm: found.npm, npx: found.npx,
+        候选路径: 工具链.candidates(仓根, 配置),
+        注入指引: 工具链.guidance(仓根, 配置),
+      });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+  }
+
+  // ——— 评审报告归一：纯文本进、结构化字段出 ———
+  // 无状态、不落盘。各家 Provider 的 Markdown 格式不一，UI 不该自己去猜。
+  if (url路径 === '/api/review/parse' && req.method === 'POST') {
+    return 收体(req, 256 * 1024, (体) => {
+      if (!体 || typeof 体.文本 !== 'string') {
+        return 发JSON(res, 400, { ok: false, error: '需要 JSON 体 { "文本": "<评审报告 Markdown>", "通过"?: true|false }' });
+      }
+      try {
+        return 发JSON(res, 200, { ok: true, ...评审意见.parse(体.文本, 体.通过) });
       } catch (e) { return 发JSON(res, 400, { ok: false, error: e.message }); }
     });
   }
