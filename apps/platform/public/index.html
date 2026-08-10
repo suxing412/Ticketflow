@@ -78,6 +78,12 @@
   <div class="提示">带「项目」的工单执行时会走完整提交链（隔离 worktree → 检查点 → 快进发布 → 完成）；不带则只跑不提交。</div>
 </div>
 
+<!-- ── 产线状态：一眼看出「为什么没在跑」 ── -->
+<h2>产线状态<span class="右"><button onclick="刷调度()">重算</button></span></h2>
+<div class="栏" id="调度概览"><span class="淡">读取中…</span></div>
+<div id="告警区"></div>
+<div id="跳过区"></div>
+
 <!-- ── 运行结果 ── -->
 <div id="运行区" style="display:none">
   <h2>运行结果<span class="右"><button onclick="document.getElementById('运行区').style.display='none'">收起</button></span></h2>
@@ -201,7 +207,7 @@ async function 跑(id, 干跑) {
     });
     $('运行').textContent = JSON.stringify(j, null, 2);
   } catch (e) { $('运行').textContent = '调用失败：' + e.message; }
-  刷工单(); 刷战绩(); 刷排名();
+  刷工单(); 刷战绩(); 刷排名(); 刷调度();
 }
 
 function 开建单() {
@@ -220,6 +226,41 @@ async function 建单() {
   });
   $('建单反馈').textContent = j.ok ? '已落草稿' : ('失败：' + j.error);
   if (j.ok) { $('新编号').value = ''; $('新标题').value = ''; $('新正文').value = ''; 刷工单(); }
+}
+
+// ── 产线状态 ──
+// 这一块回答的是「为什么产线没在动」。没有它的话，一个空的工单看板有两种可能——
+// 没活干，或者有活但全被闸住了——而这两种的处置完全相反。
+async function 刷调度() {
+  try {
+    const { 码, 体: j } = await 取JSON('/api/exec/tick');
+    if (码 !== 200) {
+      $('调度概览').innerHTML = '<span class="淡">' + 转义(j.error || '执行器未拉起（npm run executor）') + '</span>';
+      $('告警区').innerHTML = ''; $('跳过区').innerHTML = '';
+      return;
+    }
+    const 在跑总 = Object.values(j.在跑 || {}).reduce((a, b) => a + b, 0);
+    $('调度概览').innerHTML =
+      '<div class="卡"><div class="淡">待投</div><div class="数">' + j.待投 + '</div></div>'
+      + '<div class="卡"><div class="淡">在跑</div><div class="数">' + 在跑总 + '</div></div>'
+      + '<div class="卡"><div class="淡">本轮可派</div><div class="数">' + (j.本轮可派 || []).length + '</div></div>'
+      + '<div class="提示">并发上限 ' + 转义(JSON.stringify(j.并发上限)) + '　·　'
+      + '<b>不存在后台自动连跑</b>：这里只算该派谁，真派要逐张点，每张独立过真跑三闸。</div>';
+
+    const 告 = j.告警 || [];
+    $('告警区').innerHTML = 告.length
+      ? '<ul class="账本">' + 告.map((a) =>
+        '<li><span class="' + (a.级别 === '急' ? '级急' : '级常') + '">' + 转义(a.级别) + '</span>'
+        + '<b>' + 转义(a.类型) + '</b>' + (a.单 ? ' <code>' + 转义(a.单) + '</code>' : '') + '　' + 转义(a.说明) + '</li>').join('') + '</ul>'
+      : '<div class="提示">巡检无告警</div>';
+
+    const 跳 = j.跳过 || [];
+    $('跳过区').innerHTML = 跳.length
+      ? '<div class="提示">本轮跳过：' + 跳.map((s) => 转义(s.id) + '（' + 转义(s.原因) + '）').join('、') + '</div>'
+      : '';
+  } catch {
+    $('调度概览').innerHTML = '<span class="淡">执行器未拉起（npm run executor）</span>';
+  }
 }
 
 // ── 路由排名 ──
@@ -305,7 +346,7 @@ for (const 选 of ['新角色', '排名角色']) {
 $('排名角色').value = 'backend';
 $('滤状态').onchange = 刷工单;
 
-刷健康(); 刷工单(); 刷排名(); 刷战绩(); 刷providers(); 刷瞭望塔();
+刷健康(); 刷工单(); 刷调度(); 刷排名(); 刷战绩(); 刷providers(); 刷瞭望塔();
 setInterval(刷瞭望塔, 5000);
 setInterval(刷健康, 30000);
 </script>

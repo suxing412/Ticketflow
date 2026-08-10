@@ -26,6 +26,8 @@ const 加固 = require(path.join(平台根, 'lib', '执行加固.js'));
 const 派单 = require(path.join(平台根, 'lib', '派单.js'));
 const 工单库 = require(path.join(平台根, 'lib', '工单库.js'));
 const 路由历史 = require(path.join(平台根, 'lib', 'routing', 'history.js'));
+const 调度 = require(path.join(平台根, 'lib', '调度.js'));
+const 巡检 = require(path.join(平台根, 'lib', '巡检.js'));
 
 function 读JSON(p, 缺省) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return 缺省; }
@@ -202,11 +204,49 @@ const 服务 = http.createServer((req, res) => {
   const 拒 = 门禁.校验(req, { 令牌, 端口, 路径: '/api/执行器' });
   if (拒) return 发JSON(res, 拒.码, { ok: false, error: 拒.错误 });
 
+  // ——— 调度一轮（协-004）：算出这一轮该派谁，顺带巡检 ———
+  // GET 只算不派，POST 才真派。分开是因为「看看会派什么」是个高频且无害的动作，
+  // 而它和「真的派出去」只差一个 HTTP 方法时，人迟早会点错。
+  if (路径 === '/tick') {
+    if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
+    const 全部 = 工单库.list(工单根.根);
+    const 待投表 = 全部.filter((t) => t.state === '待投').map((t) => 工单库.find(工单根.根, t.id)).filter(Boolean);
+    const 在跑 = 调度.统计在跑(全部.filter((t) => t.state === '在途'));
+    const 冻 = 派单.冻结情况(公用件, 配置, 账本根);
+
+    const 排 = 调度.排一轮(配置, {
+      待投表, 在跑,
+      依赖就绪: (单) => 派单.依赖就绪(工单库, 工单根.根, 单).ok,
+      选池: (单) => {
+        const p = 派单.选派(平台根, 配置, { 角色: (单.fm && (单.fm.role || 单.fm.职能)) || '', 公用件, 账本根 });
+        return p.ok ? p.选中 : null;
+      },
+    });
+
+    const 告警 = 巡检.巡一轮(配置, {
+      全部工单: 全部, 现在: Date.now(), 冻结: 冻.挡,
+      本轮派出: 排.派.length, 本轮跳过: 排.跳过,
+    });
+
+    return 发JSON(res, 200, {
+      ok: true, 待投: 待投表.length, 在跑, 并发上限: (配置.执行 && 配置.执行.并发) || { 默认: 1 },
+      本轮可派: 排.派, 跳过: 排.跳过, 告警,
+      说明: 'GET /tick 只算不派。真派用 POST /run/<工单> —— 一次一张，'
+        + '每张都要独立过真跑三闸。**本进程不自动连跑**，见 /health 的 自动派发 字段。',
+    });
+  }
+
   if (路径 === '/health') {
     return 发JSON(res, 200, {
       ok: true, 服务: '执行器', 端口, 允许真跑, 上限毫秒, 静默毫秒,
       工单库: 工单根.ok ? 工单根.根 : null,
-      说明: '本进程是唯一被允许拉起 AI CLI 的地方；干跑默认开启',
+      并发: (配置.执行 && 配置.执行.并发) || { 默认: 1 },
+      // 有意不做自动连跑：/tick 只**算**该派谁，真派仍要一张一张 POST /run。
+      // 让一个能自己花钱的循环在后台无人值守地转，是另一个量级的授权——
+      // 那要单独一张令，不该由「加了调度模块」顺带获得。
+      自动派发: false,
+      说明: '本进程是唯一被允许拉起 AI CLI 的地方；干跑默认开启；'
+        + 'GET /tick 只算不派，不存在后台自动连跑的循环',
     });
   }
 
@@ -263,13 +303,24 @@ const 服务 = http.createServer((req, res) => {
       (async () => {
         let 工作区 = null; let 工作目录 = null; let 临时 = false;
 
+        // 依赖闸（协-004）：DAG 写在工单里就得被执行，否则子单会拿到缺半截的工作区。
+        const 依 = 派单.依赖就绪(工单库, 工单根.根, t);
+        if (!依.ok) return 发JSON(res, 409, { ...共同, ok: false, error: 依.error, 未完成: 依.未完成, 缺失: 依.缺失 });
+
         if (项目名) {
-          const p = await 工作区请求('/write/prepare', { 项目: 项目名, 工单: { id, fm: t.fm } });
+          const p = await 工作区请求('/write/prepare', {
+            项目: 项目名, 工单: { id, fm: t.fm },
+            // 依赖单原样递过去：worktree.integrate 从它们的 fm.workspace.commit 取检查点，
+            // 把上游的产出合进本单的工作区。不递的话每张子单都从基线起步，
+            // 前一张干的活对后一张不可见。
+            依赖: 依.依赖单.map((d) => ({ id: d.id, fm: d.fm })),
+          });
           if (p.码 !== 200 || !p.体.ok) {
             return 发JSON(res, p.码, { ...共同, ok: false, error: `建隔离工作区失败：${p.体.error}` });
           }
           工作区 = p.体.工作区;
           工作目录 = 工作区.path;
+          派.工作区 = 工作区;                 // 落单时写进 fm.workspace，供后续依赖单集成
         } else {
           // 决定 3：没有隔离目录就拒绝真跑，而不是退回主工作区
           const 工作 = 取工作目录();
@@ -302,6 +353,10 @@ const 服务 = http.createServer((req, res) => {
                 fm.完成时间 = new Date().toISOString();
                 fm.检查点 = c.体.commit;
                 fm.发布提交 = pb.体.commit;
+                // 回填 commit：下游依赖单靠 fm.workspace.commit 把本单的产出合进去。
+                // 只写 fm.检查点 的话 worktree.integrate 看不见，会把本单当成
+                // 「没有可集成的检查点」而 **静默跳过**——DAG 就断在这里。
+                fm.workspace = Object.assign({}, fm.workspace, { commit: c.体.commit });
               });
               完成 = m.ok ? '完成' : `流转失败：${m.error}`;
             }

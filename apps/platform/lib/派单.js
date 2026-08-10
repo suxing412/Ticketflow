@@ -70,6 +70,36 @@ function 选派(仓根, 配置, { 角色, 类别 = '执行', 公用件, 账本�
 
 // 工单流转：待投 → 在途，并把派单结果写进 fm。
 // 只在**确实要执行**时调用；干跑不流转工单（干跑是演练，不该改变工单状态）。
+// 依赖就绪判定（协-004）。
+//
+// plan.materialize 生成的子单带 fm.依赖，但此前没人检查过——于是子单可以在依赖还没干完时
+// 就被派出去，拿到一个缺半截的工作区。DAG 写在工单里却不被执行，等于没有 DAG。
+//
+// 判据：依赖单必须已「完成」。未完成就拒派，并逐个说清卡在谁身上——
+// 只说「依赖未就绪」等于让人自己去翻，那是把排查成本转嫁给使用者。
+function 依赖就绪(工单库, 根, 工单) {
+  const 依赖 = 工单.fm && 工单.fm.依赖;
+  const 表 = Array.isArray(依赖) ? 依赖 : (依赖 ? [依赖] : []);
+  if (!表.length) return { ok: true, 依赖单: [] };
+  const 未完成 = []; const 缺失 = []; const 依赖单 = [];
+  for (const id of 表) {
+    const t = 工单库.find(根, String(id));
+    if (!t) { 缺失.push(String(id)); continue; }
+    if (t.state !== '完成') { 未完成.push({ id: t.id, 当前状态: t.state }); continue; }
+    依赖单.push(t);
+  }
+  if (缺失.length || 未完成.length) {
+    return {
+      ok: false, 依赖单,
+      error: '依赖未就绪，拒绝派活'
+        + (未完成.length ? `；未完成：${未完成.map((x) => `${x.id}(${x.当前状态})`).join('、')}` : '')
+        + (缺失.length ? `；找不到：${缺失.join('、')}` : ''),
+      未完成, 缺失,
+    };
+  }
+  return { ok: true, 依赖单 };
+}
+
 function 落单(工单库, 根, id, 派单结果) {
   const t = 工单库.find(根, id);
   if (!t) return { ok: false, error: `工单不存在：${id}` };
@@ -81,8 +111,18 @@ function 落单(工单库, 根, id, 派单结果) {
     fm.派单时间 = new Date().toISOString();
     fm.权限模式 = 派单结果.权限.模式;
     if (派单结果.降级) fm.降级留痕 = 派单结果.跳过;
+    // worktree.integrate 靠 fm.workspace.commit 找依赖单的检查点，prepare 靠
+    // fm.workspace.path 复用已存在的工作树。这两处是 worktree.js 的既有契约——
+    // 只写 fm.检查点 它们看不见，依赖集成会**静默跳过所有依赖**（skipped 而非报错）。
+    if (派单结果.工作区) {
+      fm.workspace = {
+        path: 派单结果.工作区.path,
+        branch: 派单结果.工作区.branch,
+        mode: 派单结果.工作区.mode,
+      };
+    }
   });
   return r.ok ? { ok: true, id, 状态: '在途', 执行池: 派单结果.选中 } : r;
 }
 
-module.exports = { 权限参数, 冻结情况, 选派, 落单 };
+module.exports = { 权限参数, 冻结情况, 选派, 落单, 依赖就绪 };
