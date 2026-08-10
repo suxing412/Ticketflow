@@ -60,8 +60,11 @@ if (STUB) {
   for (const k of ['draftTicket', 'cut', 'closeout', 'answer', 'adjudicateReferral']) {
     brain[k] = function 桩台空转(...args) {
       桩台拦截.push('brain.' + k);
-      const cb = args[args.length - 1];
-      if (typeof cb === 'function') cb({ ok: false, error: '桩台模式：项管脑外呼已停用' });
+      // 回调取「最后一个函数参数」而不是「最后一个参数」：draftTicket 自施工令-040 起
+      // 尾巴上多了一个 opts（粒ID 挂接），死认末位就会把 opts 当 cb，桩台从此不回调——
+      // 手搓漏面的老毛病换个地方复发（本文件顶上那段注释说的就是它）。
+      const cb = [...args].reverse().find((a) => typeof a === 'function');
+      if (cb) cb({ ok: false, error: '桩台模式：项管脑外呼已停用' });
     };
   }
 }
@@ -279,17 +282,21 @@ app.post('/api/pm/draft', (req, res) => {
   if (!ready(res)) return;
   const 需求 = String((req.body || {}).需求 || '').trim();
   if (!需求) return res.status(400).json({ error: '需求必填' });
+  // 粒ID（施工令-040 第 6 条）：这次起草是在**兑现哪一条排程计划**。可选——手工委托照旧不带。
+  // 带了就当场校验存在性：等到十分钟后起草回调里才发现粒不存在，那条 token 已经烧掉了。
+  const 粒ID = String((req.body || {}).粒ID || '').trim();
+  if (粒ID && !schedule.取(ROOT, 粒ID)) return res.status(400).json({ error: '计划粒不存在：' + 粒ID });
   const reg = (cfg.项目 && cfg.项目.注册) || {};
   const name = (cfg.项目 && cfg.项目.默认) || '';
   const projPath = name && reg[name] && reg[name].路径;
-  journal.append(ROOT, '派单委托受理（H57）：' + 需求.slice(0, 60));
+  journal.append(ROOT, '派单委托受理（H57）：' + 需求.slice(0, 60) + (粒ID ? `（兑现计划粒 ${粒ID}）` : ''));
   // 这条事件是关键汇报链「委托事由」的唯一来源（chain.js 按 30 分钟窗与随后的 单张待审 配对）——
   // 它没落盘，起草站就只能显示「项管单张起草」这句套话，制作人问的「为什么起这张单」永远没答案。
-  记事件('派单委托', { 需求: 需求.slice(0, 200) });
+  记事件('派单委托', { 需求: 需求.slice(0, 200), ...(粒ID ? { 粒ID } : {}) });
   require('./lib/pm/brain').draftTicket(ROOT, cfg, 需求, projPath, (r) => {
     journal.append(ROOT, r.ok ? '项管起草完成：' + r.单 + '（草稿待审）' : '项管起草失败：' + (r.error || ''));
-  });
-  res.json({ ok: true, 状态: '项管起草中，完成后草稿区+信道可见' });
+  }, { 粒ID: 粒ID || null });
+  res.json({ ok: true, 状态: '项管起草中，完成后草稿区+信道可见', ...(粒ID ? { 粒ID } : {}) });
 });
 
 // ---- Wiki（0.20，H52 第三类实体）：设计事实源浏览 + 待审人闸 + 关系图 ----
@@ -958,6 +965,45 @@ app.post('/api/pm/concurrency', (req, res) => {
   res.json({ ok: true, 生效: r.生效, ...concurrency.view(cfg, pmLedger.read(ROOT).并发上限) });
 });
 
+// ---- 排程台账（施工令-040 · Q1 后端半）----
+// 案源 2026-08-11 点名巡礼：「监制台看不到后续的队列工作」。计划粒 = 尚未成单的批次计划项，
+// 业务全在 lib/pm/schedule（事件折叠/状态机/CAS 都在那儿可单测），此处**只做路由**：
+// 取参 → 调 → 按 ok 决定状态码。三条写路由一律显式带 预期版本（CAS 是 API 层的硬要求，
+// 不是"底层顺手做了"——版本冲突回 409 并把现态一起下发，前端照着重试即可）。
+// 消费接线（流程页/总览/晨晚报）在施工令-041，本令不动前端。
+const schedule = require('./lib/pm/schedule');
+app.get('/api/schedule', (req, res) => {
+  if (!ready(res)) return;
+  const 粒 = schedule.现态(ROOT); // 已按 批/序 排好：排序口径在 lib 里唯一，消费端不许各排各的
+  const 计数 = {};
+  for (const s of schedule.状态全集) 计数[s] = 粒.filter((g) => g.状态 === s).length;
+  res.json({ 粒, 计数, 状态全集: schedule.状态全集, 转移表: schedule.转移表 });
+});
+// 三条写路由走 :action 参数而不是三个中文字面量路径——express 4 的静态路径按**原始 URL**
+// 匹配，而 fetch('/api/schedule/登记') 发出去的是百分号编码，字面量路由一律 404（本令实测踩到）。
+// 参数位由 express 解码，中文动作名从此两种写法都认。同 /api/act/:name 的既有口径。
+const 排程动作 = {
+  登记: (b) => schedule.登记(ROOT, b.粒 || b.批次 || [], b.操作者),
+  转移: (b) => {
+    const 人 = String(b.操作者 || '').trim();
+    if (!schedule.操作域.转移.includes(人)) return { ok: false, 越权: true, error: `转移权在 ${schedule.操作域.转移.join('/')}（收到「${人 || '空'}」）` };
+    return schedule.转移(ROOT, { 粒ID: b.粒ID, 目标: b.目标, 预期版本: b.预期版本, 操作者: 人, 单号: b.单号, 说明: b.说明 });
+  },
+  调整: (b) => schedule.调整(ROOT, { 粒ID: b.粒ID, 预期版本: b.预期版本, 序: b.序, 依赖: b.依赖, 池衡建议: b.池衡建议, 操作者: b.操作者, 说明: b.说明 }),
+};
+app.post('/api/schedule/:action', (req, res) => { // 参数名只能是 ASCII：path-to-regexp 不认中文占位符（会当字面量）
+  if (!ready(res)) return;
+  const 名 = String(req.params.action || '');
+  const fn = 排程动作[名];
+  if (!fn) return res.status(404).json({ error: `未知排程动作：${名}（可选 ${Object.keys(排程动作).join('/')}）` });
+  const b = req.body || {};
+  const r = fn(b);
+  // 409 = 拿旧版本写，前端照回传的现态静默重试即可；400 = 语义就不对，重试也没用；403 = 不在操作域
+  if (!r.ok) return res.status(r.越权 ? 403 : r.冲突 ? 409 : 400).json(r);
+  记事件('排程' + 名, { 粒ID: b.粒ID || undefined, 操作者: String(b.操作者 || ''), ...(名 === '登记' ? { 新增: r.新增.length, 跳过: r.跳过.length } : {}), ...(名 === '转移' ? { 目标: b.目标, 单号: r.粒.单号 || '' } : {}) });
+  res.json(r);
+});
+
 // ---- 产出调起：打开文件/所在文件夹（仅限该单所属项目仓内，越界拒）----
 app.post('/api/open', (req, res) => {
   if (!ready(res)) return;
@@ -1143,6 +1189,7 @@ app.post('/api/draft', (req, res) => {
     创建时间: b.创建时间 || new Date().toISOString().slice(0, 10), 更新时间: new Date().toISOString(),
   };
   if (b.阶段) fm.阶段 = String(b.阶段); // D43 阶段章
+  if (b.粒ID) fm.粒ID = String(b.粒ID); // 施工令-040：本单兑现的排程计划粒（可选，手工起草也能挂）
   if (b.父单) fm.父单 = b.父单;
   if (b.依赖) fm.依赖 = b.依赖;
   if (b.依据) fm.依据 = b.依据;

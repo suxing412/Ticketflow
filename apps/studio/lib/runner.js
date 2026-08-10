@@ -738,6 +738,10 @@ async function tick(root, cfg, opts = {}) {
         if (!mv.ok) continue;
         journal.append(root, `派发 ${p.id}（待投→在途 · ${主办} · ${p.池} · H49 派发制）`);
         pmLedger.event(root, '派发', { id: p.id, 池: p.池 });
+        // 排程台账挂钩（施工令-040 第 6 条）：定稿放行后真正"成单"的时刻就是这里——
+        // 粒 起草中→已成单 并回填单号。**只加一个钩子调用**，派发结构一字不改；
+        // 无粒ID 的单（绝大多数）在钩子里当场判「无关」直接返回，不产生任何写盘。
+        try { require('./pm/schedule').挂钩派发(root, p.id, t0.fm.粒ID); } catch (e) { journal.append(root, `排程挂钩异常（派发 ${p.id}）：${e.message}`); }
         if (p.改挂) { // H85：临时改池是自动动作，必须同时进 journal 与项管台账，事后可追
           journal.append(root, `临时改池：${p.id} ${p.改挂.原池} → ${p.池}（${p.改挂.因}）`);
           pmLedger.event(root, '临时改池', { id: p.id, 原池: p.改挂.原池, 新池: p.池, 因: p.改挂.因 });

@@ -148,7 +148,7 @@ function childFm(tk, { id, ids, parentId, 项目 }) {
 
 // 单张起草单的 frontmatter 白名单（draftTicket 用，与 childFm 同口径、独立一份因为无父单/无同批依赖）。
 // 无父单意味着归属没得继承——管线漏写就直接进散单行（TK-115/116 案发现场），比子单路径更该带。
-function draftFm(tk, { id, 项目 }) {
+function draftFm(tk, { id, 项目, 粒ID }) {
   return {
     id, title: tk.fm.title || '起草单', 职能: tk.fm.职能 || '程序', 产出物类型: tk.fm.产出物类型 || '代码',
     优先级: tk.fm.优先级 || 'P1', 规模: '单兵', QA: tk.fm.QA || '开', 验收方式: tk.fm.验收方式 || '委托',
@@ -156,6 +156,9 @@ function draftFm(tk, { id, 项目 }) {
     单型: tk.fm.单型 || '修复单', 切单人: '项管', 创建时间: new Date().toISOString().slice(0, 10),
     ...(tk.fm.依据 ? { 依据: tk.fm.依据 } : {}), // H88：同 cut，依据栏要落盘
     ...(tk.fm.管线 ? { 管线: tk.fm.管线 } : {}), // TK-106~116：同 cut，管线归属要落盘
+    // 施工令-040：粒ID 由委托方（/api/pm/draft 请求体）指定，不由起草模型自填——
+    // 它是台账与工单池的对账钥匙，让模型猜一个等于让账目自己长出来。
+    ...(粒ID ? { 粒ID: String(粒ID) } : {}),
   };
 }
 
@@ -362,7 +365,9 @@ function adjudicateReferral(root, cfg, id, cb) {
 // 制作人层提需求 → 项管起草单张工单（草稿态）→ Claude 审 → 定稿放行。审批与起草分离。
 // 字段规范硬约束（2026-08-05：TK-82/83 连续两张草稿字段非标返修）——见 FIELD_RULES 注入。
 const FIELD_RULES = '字段规范（补：单型=工程单 时 执行池 必须= deepseek，QA=关；单型=方案单 时 职能 必须= 技术策划、产出物类型=文档、QA=开、验收方式=委托，H88）（补 H90：单型=调研单/方案单 时，正文「验收标准」章必须含评审台证据项——异厂评审意见合集 md 的绝对路径 + 回执附录三件（意见原文/采纳驳回/修订点）齐备，缺则返修）（补 H91/施工令-019：评审台已行红队立场卷制，上述评审证据项还须含击杀结论——各厂领卷（可行性/不变量/成本红队）与击杀/未杀条数，构造不出击杀的卷须有「未能构造击杀」声明，缺席致落空的立场卷如实标注，缺则返修）（逐字遵守，违者返修）：职能 只能取 策划/技术策划/程序/美术/QA/装配 六者之一，不得加括号后缀；优先级 只能取 P0/P1/P2/P3；QA 只能取 开/关；需求若点名依赖单号或执行池，frontmatter 必须含 依赖:/执行池: 字段原样带上。正文三章（背景/执行内容/验收标准）必须写在 ticket 代码块内部、frontmatter 的第二个 --- 之后——写在代码块外会被解析丢弃（TK-86 空壳案）。';
-function draftTicket(root, cfg, 需求, projPath, cb) {
+// opts.粒ID（施工令-040 第 6 条，可选）：这次起草兑现的排程计划粒。落草稿成功后
+// 一并写进工单 frontmatter 并把粒推到「起草中」——挂接点就这一处，Pump/派发结构不动。
+function draftTicket(root, cfg, 需求, projPath, cb, opts) {
   setWorking({ 用途: '起草' });
   const 单元 = (cfg.单元 || {});
   const prompt = [
@@ -399,9 +404,18 @@ function draftTicket(root, cfg, 需求, projPath, cb) {
     }
     const nid = px + '-' + (mx + 1);
     const tk = tickets[0];
-    const fm = draftFm(tk, { id: nid, 项目: (cfg.项目 && cfg.项目.默认) || '' });
+    const 粒ID = ((opts || {}).粒ID) || null;
+    const fm = draftFm(tk, { id: nid, 项目: (cfg.项目 && cfg.项目.默认) || '', 粒ID });
     const r = store.create(root, nid, fm, tk.body);
     if (!r.ok) return cb(r);
+    // 排程台账挂钩：粒 计划→起草中 + 回填单号。账记不上不能把起草带崩——单已经落盘了，
+    // 这里抛异常只会让调用方以为起草失败而重起一张（同 pmLedger.event 的待遇：包一层，失败留痕）。
+    if (粒ID) {
+      try {
+        const sr = require('./schedule').挂钩起草(root, 粒ID, nid);
+        if (!sr.ok) require('../journal').append(root, `排程挂钩失败（起草 ${nid} · 粒 ${粒ID}）：${sr.error}`);
+      } catch (e) { try { require('../journal').append(root, `排程挂钩异常（起草 ${nid}）：${e.message}`); } catch { /* 留痕失败不阻塞 */ } }
+    }
     try { require('../relay').append(root, '项管', '受托起草：' + nid + ' ' + fm.title + '（草稿区待 Claude 审）' + String.fromCharCode(10) + String.fromCharCode(10) + (brief || '')); } catch { /**/ }
     ledger.event(root, '待审', { 单: nid, 起草: '单张' }); // 不写父单/子单：夜班推演 #7——伪装拆单结构会污染 H53 收口/成本归集
     cb({ ok: true, 单: nid });
