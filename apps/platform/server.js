@@ -36,6 +36,7 @@ const 评审意见 = require('./lib/review-opinion');
 // plan 只用它纯计算的那半（解析 + 校验）。落盘的 materialize/consume 需要注入工单库，
 // platform 目前没有自己的工单库，故不接——不是忘了，见 docs/接线说明.md 第四节。
 const 计划 = require('./lib/orchestration/plan');
+const 门禁 = require('./lib/门禁');
 
 // ——————————————————————————————————————————————————————————
 // 配置
@@ -46,6 +47,7 @@ function 读JSON(p, 缺省) {
 const 配置 = 读JSON(path.join(仓根, 'config', 'platform.config.json'), {});
 const 包 = 读JSON(path.join(仓根, 'package.json'), {});
 const 端口 = Number(process.env.PORT || (配置.server && 配置.server.port) || 4370);
+const { 令牌, 文件: 令牌路径, 新建: 令牌新建 } = 门禁.取令牌(仓根);
 const 平台名 = 配置.名称 || 包.name || 'AI-DevPlatform';
 const 版本 = 配置.版本 || 包.version || '0.0.0';
 
@@ -121,7 +123,16 @@ function 发静态(res, url路径) {
   }
   fs.readFile(绝对, (err, buf) => {
     if (err) return 发JSON(res, 404, { ok: false, error: '未找到：' + 相对 });
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(绝对).toLowerCase()] || 'application/octet-stream' });
+    const 类型 = MIME[path.extname(绝对).toLowerCase()] || 'application/octet-stream';
+    // 首页发出去之前把令牌注进 </head> 前。注入脚本给同源请求自动带上 Authorization
+    // 与 JSON 头，于是 public/index.html 里已有的 fetch 调用一行都不用改。
+    // 令牌只随首页出门：跨站页面读不到本页内容，拿不到它。
+    if (绝对 === path.join(静态根, 'index.html')) {
+      const 注入 = String(buf).replace('</head>', 门禁.注入脚本(令牌) + '\n</head>');
+      res.writeHead(200, { 'Content-Type': 类型 });
+      return res.end(注入);
+    }
+    res.writeHead(200, { 'Content-Type': 类型 });
     res.end(buf);
   });
 }
@@ -135,6 +146,13 @@ const 服务 = http.createServer((req, res) => {
   const 请求URL = new URL(req.url || '/', 'http://127.0.0.1');
   const url路径 = 请求URL.pathname;
   const 查询 = 请求URL.searchParams;
+
+  // 门禁在路由之前。放在之后的话，未知路径的 404 会泄露「哪些接口存在」——
+  // 未授权者不该有能力区分「这条接口不存在」和「这条接口存在但你进不来」。
+  if (url路径.startsWith('/api/')) {
+    const 拒 = 门禁.校验(req, { 令牌, 端口, 路径: url路径 });
+    if (拒) return 发JSON(res, 拒.码, { ok: false, error: 拒.错误 });
+  }
 
   if (url路径 === '/api/health') {
     return 发JSON(res, 200, {
@@ -295,5 +313,8 @@ const 服务 = http.createServer((req, res) => {
 
 服务.listen(端口, '127.0.0.1', () => {
   process.stdout.write(`[${平台名}] v${版本} 开机 → http://127.0.0.1:${端口}  （桩模式，零真实 CLI 调用）\n`);
+  process.stdout.write(`[${平台名}] 门禁：${令牌新建 ? '已生成新令牌' : '沿用既有令牌'} → ${令牌路径}`
+    + `（浏览器打开首页无需手工填；curl 需带 Authorization: Bearer <令牌>；`
+    + `/api/health 免令牌，供瞭望塔心跳探测）\n`);
   if (registry错误) process.stderr.write(`[${平台名}] 警告：${registry错误}\n`);
 });

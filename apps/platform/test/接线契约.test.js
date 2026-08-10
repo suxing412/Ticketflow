@@ -17,6 +17,10 @@ console.log('接线契约测试');
 const 平台根 = path.resolve(__dirname, '..');
 const 源 = fs.readFileSync(path.join(平台根, 'server.js'), 'utf8');
 
+// 令牌由服务开机时落盘，测试从同一处读——不另起一套真相。
+// 必须**每次现读**：服务是子进程起的，文件可能在本测试加载之后才生成。
+const 门禁令牌 = () => JSON.parse(fs.readFileSync(path.join(平台根, 'config', '接口令牌.local.json'), 'utf8')).令牌;
+
 // ---- 这条是本文件的核心：桩模式的物理保证 ----
 // server.js 声称「本文件不引入 child_process，任何路径都发不起真实 CLI 进程，零计费」。
 // 这个承诺不能只靠自觉——接线时随手 require 一个带 child_process 的模块就破了，
@@ -96,8 +100,12 @@ const 起服务 = async () => {
   return { srv, port };
 };
 
+// 默认带令牌——绝大多数断言测的是业务行为，不该被门禁噪音淹掉。
+// 门禁本身的行为另有专门几条，用 选项.免令牌 / 选项.头 显式绕开默认。
 const 取 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
-  const req = http.request({ host: '127.0.0.1', port, path: 路径, method: 选项.method || 'GET', headers: 选项.体 ? { 'Content-Type': 'application/json' } : {} }, (res) => {
+  const 头 = { ...(选项.体 ? { 'Content-Type': 'application/json' } : {}), ...(选项.头 || {}) };
+  if (!选项.免令牌 && !头.Authorization) 头.Authorization = 'Bearer ' + 门禁令牌();
+  const req = http.request({ host: '127.0.0.1', port, path: 路径, method: 选项.method || 'GET', headers: 头 }, (res) => {
     let s = ''; res.on('data', (d) => s += d);
     res.on('end', () => { try { resolve({ 码: res.statusCode, 体: JSON.parse(s) }); } catch (e) { reject(new Error('非 JSON 响应：' + s.slice(0, 200))); } });
   });
@@ -206,6 +214,57 @@ const 取 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
       }
       const h = await 取(port, '/api/health');
       assert.equal(h.体.桩模式, true, '桩模式标记不能因接线而改变');
+    });
+
+    // ---- 门禁三道闸 ----
+    // 挡的是「你随手打开的网页往 127.0.0.1 发请求」。绑 127.0.0.1 挡不住这个：
+    // 浏览器就在 localhost 上。实测确认过这条路真的通（2026-08-10）。
+    await ta('门禁①：无令牌被拒，且未知路径不泄露存在性', async () => {
+      const r = await 取(port, '/api/providers', { 免令牌: true });
+      assert.equal(r.码, 401);
+      assert.ok(/Bearer/.test(r.体.error), '要告诉人怎么带令牌：' + r.体.error);
+      // 未授权时「不存在的接口」也必须是 401 而不是 404——
+      // 否则未授权者可以靠状态码差异枚举出有哪些接口。
+      const 未知 = await 取(port, encodeURI('/api/根本没有这条'), { 免令牌: true });
+      assert.equal(未知.码, 401, '未授权时不得用 404 泄露接口是否存在');
+    });
+
+    await ta('门禁②：跨站 Origin 被拒（模拟恶意网页）', async () => {
+      const r = await 取(port, '/api/providers', { 头: { Origin: 'https://evil.example' } });
+      assert.equal(r.码, 403);
+      assert.ok(/跨站|来源/.test(r.体.error), r.体.error);
+      // 同源必须放行，否则自家 UI 就废了
+      const 同源 = await 取(port, '/api/providers', { 头: { Origin: `http://127.0.0.1:${port}` } });
+      assert.equal(同源.码, 200, '同源页面必须放行');
+    });
+
+    await ta('门禁③：POST 的 Content-Type 卡死成 application/json', async () => {
+      const r = await 取(port, '/api/review/parse', {
+        method: 'POST', 头: { 'Content-Type': 'text/plain' }, 体: { 文本: '结论：通过' },
+      });
+      assert.equal(r.码, 415, 'text/plain 是跨域简单请求，不触发预检，必须挡掉');
+      assert.ok(/预检|application\/json/.test(r.体.error), r.体.error);
+    });
+
+    await ta('门禁例外：/api/health 免令牌（瞭望塔心跳要探它）', async () => {
+      const r = await 取(port, '/api/health', { 免令牌: true });
+      assert.equal(r.码, 200, '守护住在 packages/（双签共建），没法单方面让它带令牌');
+      // 例外只此一条，多一条都要显式决定
+      const 门禁 = require(path.join(平台根, 'lib', '门禁.js'));
+      assert.deepEqual([...门禁.免令牌], ['/api/health'], '免令牌名单变动必须是显式决定');
+    });
+
+    t('令牌比较是定长的（避免按前缀提前返回）', () => {
+      const 门禁 = require(path.join(平台根, 'lib', '门禁.js'));
+      assert.equal(门禁.等值('abc', 'abc'), true);
+      assert.equal(门禁.等值('abc', 'abd'), false);
+      assert.equal(门禁.等值('abc', 'ab'), false, '长度不等也要安全返回 false，不能抛');
+      assert.equal(门禁.等值('', ''), true);
+    });
+
+    t('令牌文件被 gitignore 挡住（不能入库）', () => {
+      const 忽略 = fs.readFileSync(path.join(平台根, '.gitignore'), 'utf8');
+      assert.ok(/\*\.local\.json/.test(忽略), '.gitignore 必须挡住 *.local.json，否则令牌会进版本库');
     });
 
     await ta('查询串解析不影响未知 API 的 404', async () => {
