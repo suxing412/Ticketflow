@@ -218,7 +218,11 @@ const 服务 = http.createServer((req, res) => {
     const id = decodeURIComponent(m[1]);
 
     return 收体(req, 256 * 1024, (体) => {
-      const 干跑 = !(体 && 体.干跑 === false);      // 缺省即干跑
+      // 缺省即干跑。dry_run 是 干跑 的 ASCII 别名——PowerShell 5.1 传中文键的
+      // 请求体要先 [Encoding]::UTF8.GetBytes 绕一圈，否则按 ISO-8859-1 编码，
+      // 服务端解析不出来（实测踩过）。两个键都认，显式 false 才真跑。
+      const 干跑值 = 体 && (体.干跑 !== undefined ? 体.干跑 : 体.dry_run);
+      const 干跑 = !(干跑值 === false);
       const t = 工单库.find(工单根.根, id);
       if (!t) return 发JSON(res, 404, { ok: false, error: `工单不存在：${id}` });
 

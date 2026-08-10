@@ -211,6 +211,23 @@ const 请求 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
       assert.equal(工单库.find(沙盒, 'X-2').state, '待投', '干跑不得改变工单状态');
     });
 
+    await ta('ASCII 别名：dry_run 与 干跑 等效（PowerShell 5.1 传中文键会乱码）', async () => {
+      // 令牌文件同理有 token 别名。这两处别名不是洁癖：Windows PowerShell 5.1
+      // 按系统 ANSI 码页读写，中文键在读文件和发请求两个方向上都会坏。实测踩过两次。
+      const r = await 请求(port, '/run/X-2', { method: 'POST', 体: { dry_run: false } });
+      assert.equal(r.码, 403, 'dry_run:false 应与 干跑:false 一样触发真跑三闸');
+      assert.ok(/允许真跑/.test(r.体.error), r.体.error);
+      const 令牌文件 = JSON.parse(fs.readFileSync(path.join(平台根, 'config', '接口令牌.local.json'), 'utf8'));
+      assert.equal(令牌文件.token, 令牌文件.令牌, 'token 与 令牌 必须同值');
+      // 明文副本：JSON 里加别名救不了 PowerShell——坏的是整份文件（中文键在 GBK 下解不开）。
+      // 所以必须另有一份纯 ASCII 内容的文件，让 Get-Content 一句话拿到。
+      const 明文 = fs.readFileSync(path.join(平台根, 'config', 'api-token.txt'), 'utf8');
+      assert.equal(明文, 令牌文件.令牌, '明文副本必须与 JSON 同值');
+      assert.ok(/^[0-9a-f]{64}$/.test(明文), '明文文件里只许有令牌本身，不能有换行或 BOM：' + JSON.stringify(明文.slice(0, 8)));
+      const 忽略 = fs.readFileSync(path.join(平台根, '.gitignore'), 'utf8');
+      assert.ok(/api-token\.txt/.test(忽略), '明文令牌文件必须被 gitignore 挡住');
+    });
+
     await ta('闸②：请求关了干跑，但总开关没开 → 403', async () => {
       const r = await 请求(port, '/run/X-2', { method: 'POST', 体: { 干跑: false } });
       assert.equal(r.码, 403);
