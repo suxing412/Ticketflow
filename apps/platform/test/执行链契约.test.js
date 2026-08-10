@@ -97,6 +97,26 @@ t('权限：白名单之外一律受限，缺配置即最严不是最松', () =>
   assert.equal(派单.权限参数({ 执行: { 权限: { 放开: [] } } }, 'backend').模式, '受限');
 });
 
+// ---- 账本卫生（2026-08-10 首次真跑踩出来的）----
+t('战绩账本不得写入 _输出（一次真跑曾写进 76468 字符）', () => {
+  const 源 = fs.readFileSync(path.join(平台根, 'scripts', '执行器.js'), 'utf8');
+  // 必须先把 _输出 摘出去再 append。首次真跑时没摘，一条记录 84KB，
+  // 其中绝大部分是完整 CLI 会话——账本体积失控（rank 每次都要读它），
+  // 且把 agent 干活的全过程静默持久化到磁盘。
+  assert.ok(/const\s*\{\s*_输出\s*,\s*\.\.\.\s*入账\s*\}\s*=\s*条目/.test(源),
+    '记战绩 必须先解构剥掉 _输出 再入账');
+  assert.ok(/路由历史\.append\(账本根,\s*入账\)/.test(源),
+    'append 的必须是剥过的 入账，不是原始 条目');
+  assert.ok(!/路由历史\.append\(账本根,\s*条目\)/.test(源), '不得把原始条目直接入账');
+});
+
+t('运行时账本都被 gitignore 挡住（不入库）', () => {
+  const 忽略 = fs.readFileSync(path.join(平台根, '.gitignore'), 'utf8');
+  assert.ok(/journal\/\*/.test(忽略), '战绩账本在 journal/ 下');
+  assert.ok(/预算账\.jsonl/.test(忽略),
+    'budget 把账本写在平台根，原先没人挡它——一跑就冒进 git status，迟早被误提交');
+});
+
 // ---- 本地覆盖：危险开关只能从不入库的文件打开 ----
 t('入库配置的 允许真跑 必须是 false（危险开关不许带着 true 入库）', () => {
   const c = JSON.parse(fs.readFileSync(path.join(平台根, 'config', 'platform.config.json'), 'utf8'));
@@ -145,9 +165,13 @@ const 探端口 = () => new Promise((resolve, reject) => {
   p.listen(0, '127.0.0.1', () => { const n = p.address().port; p.close(() => resolve(n)); });
 });
 
+// 测试必须测**入库默认**的行为，不能被本机的 config/*.local.json 影响——
+// 否则「谁本地开了真跑，谁的测试就变个样」，测试就不再是共同基准了。
+// PLATFORM_NO_LOCAL 让执行器跳过本地覆盖。（这个坑是真跑之后跑测试当场踩到的：
+// 我本机放了 执行.local.json，「默认必须关闭」那条立刻红了。）
 const 起执行器 = async (额外环境 = {}) => {
   const port = await 探端口();
-  const env = { ...process.env, EXECUTOR_PORT: String(port), PLATFORM_TICKETS: 沙盒, PLATFORM_JOURNAL: 沙盒, ...额外环境 };
+  const env = { ...process.env, EXECUTOR_PORT: String(port), PLATFORM_TICKETS: 沙盒, PLATFORM_JOURNAL: 沙盒, PLATFORM_NO_LOCAL: '1', ...额外环境 };
   const srv = require('child_process').spawn(process.execPath, [path.join(平台根, 'scripts', '执行器.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   await new Promise((resolve, reject) => {
     const 超时 = setTimeout(() => reject(new Error('执行器起不来')), 10000);

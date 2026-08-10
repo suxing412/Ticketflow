@@ -145,11 +145,16 @@ const 账本根 = process.env.PLATFORM_JOURNAL || 平台根;
 // 所以干跑再多次也不会让 rank 产生区分度——干跑是演练，不是战绩。
 // 这条是有意的：如果干跑能刷出信号，那 rank 就成了「谁演练得多谁排前面」。
 function 记战绩(条目) {
-  try { 路由历史.append(账本根, 条目); } catch { /* 账写不进不该反过来打断执行 */ }
+  // _输出 是**内部字段**：只为传给 budget.usageOf 提取 token 数，绝不能落进账本。
+  // 首次真跑（2026-08-10）踩到了：一次运行往 provider-runs.jsonl 写了 84KB，
+  // 其中 76468 字符是完整的 CLI 会话记录。两重问题——账本体积失控（rank 每次
+  // 都要读它），以及把 agent 干活的全部过程静默持久化到磁盘。
+  const { _输出, ...入账 } = 条目;
+  try { 路由历史.append(账本根, 入账); } catch { /* 账写不进不该反过来打断执行 */ }
   if (条目.dry) return;                       // 干跑不进预算账——没花钱就别记账
   try {
     const budget = 公用件.载入('budget', 'budget.js');
-    const u = budget.usageOf(条目._输出 || '');
+    const u = budget.usageOf(_输出 || '');
     if (u.输入 || u.输出) budget.记(账本根, { 池: 条目.provider, 单: 条目.ticket, ...u });
   } catch { /* budget 缺位不阻断 */ }
 }

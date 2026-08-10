@@ -4,6 +4,10 @@ watchtower-out/
 # 运行时流水与信箱（目录占位入库，内容不入库）
 journal/*
 !journal/.gitkeep
+
+# 预算账（协-002 首次真跑发现）：budget 把账本写在根目录下，原先没人挡它，
+# 一跑就冒进 git status，迟早被误提交。它是运行时账目，不入库。
+预算账.jsonl
 呼叫/*
 !呼叫/.gitkeep
 
