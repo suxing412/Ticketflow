@@ -30,7 +30,10 @@ const 路由历史 = require(path.join(平台根, 'lib', 'routing', 'history.js'
 function 读JSON(p, 缺省) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return 缺省; }
 }
-const 配置 = 读JSON(path.join(平台根, 'config', 'platform.config.json'), {});
+const 本地覆盖 = require(path.join(平台根, 'lib', '本地覆盖.js'));
+// 危险开关（允许真跑 / 预算上限）只能从 config/*.local.json 打开——那些文件不入库。
+// 入库的 platform.config.json 永远是最严默认，本机放宽是本机的事。
+const { 配置, 生效的覆盖 } = 本地覆盖.应用(平台根, 读JSON(path.join(平台根, 'config', 'platform.config.json'), {}));
 const 端口 = Number(process.env.EXECUTOR_PORT || (配置.执行 && 配置.执行.port) || 4372);
 const 允许真跑 = (配置.执行 && 配置.执行.允许真跑) === true;
 const 上限毫秒 = Number((配置.执行 && 配置.执行.超时毫秒) || 900000);
@@ -61,6 +64,33 @@ function 真跑许可(池) {
       + '这道闸独立于总开关：开了总开关也不代表每个池都有上限。' };
   }
   return { 准: true };
+}
+
+// ——————————————————————————————————————————————————————————
+// 工作目录：绝不在主工作区跑（施工令决定 3）
+// ——————————————————————————————————————————————————————————
+// 决定 3 原文：「不给『直接在主工作区跑』这个选项。主工作区全程零改动。」
+// 完整的 worktree 隔离（prepare→checkpoint→publish）属协-003，本期未做。
+// 但「未做隔离」不等于「可以在主工作区跑」——那是把一条已批准的安全决定悄悄降级。
+// 故本期的处置是：**没有隔离目录就拒绝真跑**，而不是退回主工作区。
+//
+// 隔离目录来源：配置 执行.工作目录（须在仓外），或每次真跑现建一个临时目录。
+// 无论哪种，落在仓根之内一律拒——那正是决定 3 要挡的事。
+const 仓根 = path.resolve(平台根, '..', '..');
+
+function 取工作目录() {
+  const 配的 = String((配置.执行 && 配置.执行.工作目录) || '').trim();
+  const 目标 = 配的 ? path.resolve(配的) : fs.mkdtempSync(path.join(require('os').tmpdir(), 'platform-run-'));
+  const 相对 = path.relative(仓根, 目标);
+  if (!相对.startsWith('..') && !path.isAbsolute(相对)) {
+    return {
+      ok: false,
+      错: `工作目录落在仓根之内（${目标}）。施工令决定 3：不给「直接在主工作区跑」这个选项。`
+        + `请把 执行.工作目录 指向仓外，或留空由本进程现建临时目录。`,
+    };
+  }
+  if (!fs.existsSync(目标)) fs.mkdirSync(目标, { recursive: true });
+  return { ok: true, 目录: 目标, 临时: !配的 };
 }
 
 // codex 的消耗取不到 usage（非 stream-json），必须显式呈报，闷着跑等于账目失真
@@ -187,10 +217,14 @@ const 服务 = http.createServer((req, res) => {
       const 许 = 真跑许可(派.选中);
       if (!许.准) return 发JSON(res, 许.码, { ...共同, ok: false, error: 许.错 });
 
+      // 决定 3：没有隔离目录就拒绝真跑，而不是退回主工作区
+      const 工作 = 取工作目录();
+      if (!工作.ok) return 发JSON(res, 403, { ...共同, ok: false, error: 工作.错 });
+
       const 落 = 派单.落单(工单库, 工单根.根, id, 派);
       if (!落.ok) return 发JSON(res, 409, { ...共同, ok: false, error: 落.error });
 
-      拉起(调用, (体 && 体.提示词) || t.body || '', 平台根, (r) => {
+      拉起(调用, (体 && 体.提示词) || t.body || '', 工作.目录, (r) => {
         const 判 = 加固.成败判定({ 退出码: r.退出码, 输出: r.输出 });
         记战绩({
           provider: 派.选中, role: 共同.角色, ticket: id,
@@ -201,6 +235,8 @@ const 服务 = http.createServer((req, res) => {
           ...(判.成 ? {} : { 失败原因: 判.原因 }),
           耗时毫秒: r.耗时毫秒,
           ...(r.验尸 ? { 验尸: r.验尸, 活尾巴: r.活尾巴 } : {}),
+          工作目录: 工作.目录,
+          ...(工作.临时 ? { 工作目录说明: "本次现建的临时隔离目录（仓外）——决定 3：主工作区全程零改动" } : {}),
           ...(计量提示(派.选中) ? { 计量提示: 计量提示(派.选中) } : {}),
         });
       });
@@ -213,4 +249,8 @@ const 服务 = http.createServer((req, res) => {
 服务.listen(端口, '127.0.0.1', () => {
   process.stdout.write(`[执行器] 上岗 → http://127.0.0.1:${端口}\n`);
   process.stdout.write(`[执行器] 真跑：${允许真跑 ? '**总开关已开**（仍需逐池预算上限 + 请求显式关干跑）' : '关闭（默认）'}\n`);
+  // 本机放宽了哪几处必须看得见：悄悄生效的安全降级比不降级更危险，人会以为还锁着
+  process.stdout.write(`[执行器] ${本地覆盖.摘要(生效的覆盖)}\n`);
+  const 有上限 = Object.keys((配置.预算 && 配置.预算.池) || {});
+  process.stdout.write(`[执行器] 配了预算上限的池：${有上限.length ? 有上限.join('/') : '无（任何池都不许真跑）'}\n`);
 });

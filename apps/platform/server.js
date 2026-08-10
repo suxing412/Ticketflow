@@ -52,7 +52,11 @@ const 工单根 = 工单库.解析根目录(仓根);
 function 读JSON(p, 缺省) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return 缺省; }
 }
-const 配置 = 读JSON(path.join(仓根, 'config', 'platform.config.json'), {});
+// 危险开关只能从 config/*.local.json 打开——那些文件被 .gitignore 结构性挡住。
+// server 侧也要走同一套合并，否则它看到的配置与执行器不一致（比如工作区写开关），
+// 两个进程对同一份事实各执一词，是最难查的那类 bug。
+const 本地覆盖 = require('./lib/本地覆盖');
+const { 配置, 生效的覆盖 } = 本地覆盖.应用(仓根, 读JSON(path.join(仓根, 'config', 'platform.config.json'), {}));
 const 包 = 读JSON(path.join(仓根, 'package.json'), {});
 const 端口 = Number(process.env.PORT || (配置.server && 配置.server.port) || 4370);
 const { 令牌, 文件: 令牌路径, 新建: 令牌新建 } = 门禁.取令牌(仓根);

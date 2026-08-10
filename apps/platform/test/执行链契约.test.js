@@ -97,6 +97,39 @@ t('权限：白名单之外一律受限，缺配置即最严不是最松', () =>
   assert.equal(派单.权限参数({ 执行: { 权限: { 放开: [] } } }, 'backend').模式, '受限');
 });
 
+// ---- 本地覆盖：危险开关只能从不入库的文件打开 ----
+t('入库配置的 允许真跑 必须是 false（危险开关不许带着 true 入库）', () => {
+  const c = JSON.parse(fs.readFileSync(path.join(平台根, 'config', 'platform.config.json'), 'utf8'));
+  assert.equal(c.执行.允许真跑, false, '这条红了说明有人把「可以花钱」提交进了版本库');
+  assert.deepEqual(c.预算.池, {}, '入库配置不该带任何预算上限——那是本机的事');
+});
+
+t('*.local.json 被 gitignore 挡住（结构上不可能入库）', () => {
+  const 忽略 = fs.readFileSync(path.join(平台根, '.gitignore'), 'utf8');
+  assert.ok(/\*\.local\.json/.test(忽略), '覆盖机制的全部安全性都压在这一行上');
+});
+
+t('本地覆盖：深合并而非整段替换，且只认白名单文件', () => {
+  const 覆盖 = require(path.join(平台根, 'lib', '本地覆盖.js'));
+  const 基 = { 执行: { port: 4372, 允许真跑: false, 权限: { 放开: ['backend'], 受限参数: ['--x'] } } };
+  // 深合并：只写 允许真跑，权限段必须原样保留（否则使用者被迫抄整段，抄完就会过期）
+  const 合 = 覆盖.深合并(基.执行, { 允许真跑: true });
+  assert.equal(合.允许真跑, true);
+  assert.equal(合.port, 4372, '未提及的字段要保留');
+  assert.deepEqual(合.权限.放开, ['backend'], '嵌套段也要保留');
+  // 白名单：只有表里的文件名能覆盖对应的顶层键。
+  // 不做白名单的话，随手建个 .local.json 就能改任意配置——覆盖机制会变成后门。
+  assert.deepEqual(Object.values(覆盖.覆盖表).sort(), ['workspace', '执行', '预算'].sort());
+  assert.equal(覆盖.覆盖表['执行.local.json'], '执行');
+  assert.ok(!覆盖.覆盖表['providers.local.json'], 'providers 不在白名单内，不许被本地覆盖');
+});
+
+t('无覆盖文件时摘要说清「全部按入库默认，即最严」', () => {
+  const 覆盖 = require(path.join(平台根, 'lib', '本地覆盖.js'));
+  assert.ok(/最严/.test(覆盖.摘要([])), '没有覆盖时也要明说当前是最严状态');
+  assert.ok(/生效/.test(覆盖.摘要([{ 文件: '执行.local.json', 键: '执行', 字段: ['允许真跑'] }])));
+});
+
 // ---- 接口层：三闸各自独立 ----
 const 门禁令牌 = () => JSON.parse(fs.readFileSync(path.join(平台根, 'config', '接口令牌.local.json'), 'utf8')).令牌;
 const 沙盒 = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-tickets-'));
