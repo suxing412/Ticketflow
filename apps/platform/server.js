@@ -38,6 +38,10 @@ const 评审意见 = require('./lib/review-opinion');
 // platform 目前没有自己的工单库，故不接——不是忘了，见 docs/接线说明.md 第四节。
 const 计划 = require('./lib/orchestration/plan');
 const 门禁 = require('./lib/门禁');
+// 工单库（协-001）：纯 fs+path，落盘是文件操作不需要 git，故住本进程即可。
+// 但它让本进程有了往仓外写文件的能力，三条约束见 lib/工单库.js 头部。
+const 工单库 = require('./lib/工单库');
+const 工单根 = 工单库.解析根目录(仓根);
 
 // ——————————————————————————————————————————————————————————
 // 配置
@@ -306,6 +310,82 @@ const 服务 = http.createServer((req, res) => {
         // 校验不通过是**正常业务结果**，不是服务故障，所以是 200 + 合规:false。
         return 发JSON(res, 200, { ok: true, 合规: false, 原因: e.message });
       }
+    });
+  }
+
+  // ——— 工单库（协-001）———
+  // 未配置根目录时一律 503 + 人话修法。**不猜路径不兜底**：猜一个位置往里写业务数据，
+  // 等发现写错地方时数据已经散在两处了，比直接报错严重得多。
+  if (url路径 === '/api/tickets' || url路径.startsWith('/api/tickets/')) {
+    if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
+    const 根 = 工单根.根;
+
+    if (url路径 === '/api/tickets' && req.method === 'GET') {
+      try {
+        const 状态 = 查询.get('state') || 查询.get('状态') || '';
+        if (状态 && !工单库.STATES.includes(状态)) {
+          return 发JSON(res, 400, { ok: false, error: `未知状态：${状态}（合法：${工单库.STATES.join('/')}）` });
+        }
+        const 单 = 工单库.list(根, 状态);
+        return 发JSON(res, 200, { ok: true, 根目录: 根, 来源: 工单根.来源, 条数: 单.length, 工单: 单 });
+      } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+    }
+
+    if (url路径 === '/api/tickets' && req.method === 'POST') {
+      return 收体(req, 256 * 1024, (体) => {
+        if (!体 || !体.id) return 发JSON(res, 400, { ok: false, error: '需要 JSON 体 { "id": "<编号>", "fm"?: {}, "正文"?: "" }' });
+        try {
+          const r = 工单库.create(根, String(体.id), 体.fm || {}, 体.正文 || '');
+          return 发JSON(res, r.ok ? 201 : 400, r.ok ? { ok: true, ...r } : { ok: false, error: r.error });
+        } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+      });
+    }
+
+    const 迁移 = url路径.match(/^\/api\/tickets\/([^/]+)\/move$/);
+    if (迁移 && req.method === 'POST') {
+      const id = decodeURIComponent(迁移[1]);
+      return 收体(req, 64 * 1024, (体) => {
+        if (!体 || !体.到) return 发JSON(res, 400, { ok: false, error: '需要 JSON 体 { "到": "<目标状态>" }' });
+        try {
+          const 当前 = 工单库.find(根, id);
+          if (!当前) return 发JSON(res, 404, { ok: false, error: `工单不存在：${id}` });
+          const r = 工单库.move(根, id, 当前.state, String(体.到));
+          return 发JSON(res, r.ok ? 200 : 409, r.ok ? { ok: true, ...r } : { ok: false, error: r.error });
+        } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+      });
+    }
+
+    const 单张 = url路径.match(/^\/api\/tickets\/([^/]+)$/);
+    if (单张 && req.method === 'GET') {
+      try {
+        const t = 工单库.find(根, decodeURIComponent(单张[1]));
+        if (!t) return 发JSON(res, 404, { ok: false, error: `工单不存在：${decodeURIComponent(单张[1])}` });
+        return 发JSON(res, 200, { ok: true, id: t.id, 状态: t.state, fm: t.fm, 正文: t.body });
+      } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+    }
+
+    return 发JSON(res, 404, { ok: false, error: '未知工单接口：' + url路径 });
+  }
+
+  // ——— 计划物化：把 /api/plan/validate 的下半场接上 ———
+  // plan.js 的 materialize 要注入工单库，这里把两头接起来。**这是唯一会落盘的计划接口**。
+  if (url路径 === '/api/plan/materialize' && req.method === 'POST') {
+    if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
+    return 收体(req, 512 * 1024, (体) => {
+      if (!体 || typeof 体.输出 !== 'string' || !体.父单) {
+        return 发JSON(res, 400, { ok: false, error: '需要 JSON 体 { "输出": "<Orchestrator 回复原文>", "父单": "<父单编号>" }' });
+      }
+      try {
+        const 父 = 工单库.find(工单根.根, String(体.父单));
+        if (!父) return 发JSON(res, 404, { ok: false, error: `父单不存在：${体.父单}` });
+        工单库.建目录(工单根.根);
+        const r = 计划.consume(工单根.根, 配置, { id: 父.id, fm: 父.fm }, 体.输出, { store: 工单库 });
+        return 发JSON(res, 200, {
+          ok: true, 来源: r.source, 摘要: r.plan.summary || '',
+          子单: r.children, 新建: r.created, 更新: r.updated, 保留: r.retained,
+          说明: '保留的是已开工或已完成的旧计划子单，重规划不覆盖它们',
+        });
+      } catch (e) { return 发JSON(res, 400, { ok: false, error: e.message }); }
     });
   }
 
