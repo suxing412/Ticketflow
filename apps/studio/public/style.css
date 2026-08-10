@@ -312,6 +312,16 @@ a.gear { text-decoration:none; }
 .inbox-row .rid { font-family:var(--mono); font-size:13px; color:var(--ink2); font-weight:500; width:64px; }
 .inbox-row .rt { font-size:14px; font-weight:500; width:170px; }
 .inbox-row .rnote { font-size:12px; color:var(--ink3); flex:1; }
+/* 今日排程横幅（施工令-041 §二）：需你处理区下方一条横幅，一行话答三问。
+   刻意比收件箱行矮、比它淡——它是**导航与态势**，不是待办；抢了收件箱的注意力就本末倒置。 */
+.ovsched { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:12px 20px; margin:4px 0 8px;
+  cursor:pointer; font-size:12.5px; color:var(--ink2); border-radius:12px; }
+.ovsched:hover { border-color:var(--accent); box-shadow:var(--shadow-sm); }
+.ovsched .osk { font-size:11px; letter-spacing:.06em; color:var(--ink3); padding-right:4px;
+  border-right:1px solid var(--line); margin-right:4px; }
+.ovsched .ost b { font-family:var(--mono); font-size:13.5px; color:var(--ink); font-weight:700; }
+.ovsched .ost.s b { color:var(--ok); }
+.ovsched .osa { font-style:normal; color:var(--ink3); }
 .suggest { border-radius:12px; padding:18px 24px; }
 .logrow { display:flex; gap:16px; margin-bottom:18px; font-size:13px; }
 .logrow time { font-family:var(--mono); font-size:12px; color:var(--ink3); width:52px; flex-shrink:0; }
@@ -486,6 +496,19 @@ a.gear { text-decoration:none; }
 .fgsi .why { font-size:10px; color:var(--ink3); white-space:nowrap; }
 .fgsi.susp .id { color:var(--gatetx); }
 .fgsi.drop .why, .fgsi.over .why { color:var(--danger); }
+/* ---- 计划粒（施工令-041 §一）：第六型条。与排队条同族（虚框），但更淡——
+   它还没有工单号，视觉上必须一眼弱于任何一张真单，否则「计划」会冒充「在排队」。 */
+.fgbar.queue.plan { border-color:var(--line); opacity:.86; }
+.fgbar.queue.plan:hover, .fgbar.queue.plan:focus-visible { opacity:1; }
+.fgbar.queue.plan .id { color:var(--ink3); }
+.fgbar.queue.plan .t { color:var(--ink2); }
+.fgbar .plb { font-size:10px; padding:1px 7px; border-radius:999px; white-space:nowrap;
+  color:var(--ink3); background:transparent; border:1px dashed var(--ink3); }
+/* 空态收敛（巡礼 F6）：整条管线无在做/无排队/无计划时只出一行，横跨现在+接下来两格 */
+.fgzone.empty { grid-column:2 / 4; border-left:2px solid var(--line); }
+/* 监制台维护队列行：非管线归属的计划粒（Q 队列） */
+.fglane.qlane .fghead b { color:var(--ink2); }
+.fglane.qlane .fghead .pct { color:var(--ink3); }
 /* ---- 图例 ---- */
 .fglegend { display:flex; gap:18px; color:var(--ink3); font-size:11px; margin-top:14px; flex-wrap:wrap; }
 .fglegend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
@@ -493,6 +516,7 @@ a.gear { text-decoration:none; }
 .fglegend i.lg-queue { border:1px dashed var(--ink3); }
 .fglegend i.lg-sign { background:var(--ok); }
 .fglegend i.lg-stuck { background:var(--danger); }
+.fglegend i.lg-plan { border:1px dashed var(--ink3); opacity:.6; }
 /* 860px 以下：三列拆成竖排，每段自带小标题——横向滚动条一根都不许出现 */
 @media (max-width:860px) {
   /* 折行后竖分隔线可能落在行首，成一根无所指的孤线——窄屏一律不出（原在 680 块，随折行上提到 860） */
@@ -588,6 +612,8 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .arow2 .ar-timer { font-family:var(--mono); font-size:11px; color:var(--ink3); margin-top:3px;
   font-variant-numeric:tabular-nums; }
 .arow2 .ar-timer .over { color:var(--danger); }
+/* 「（时长）」尾注（施工令-041 §四）：这一行是时长不是进度——页面上唯一的进度百分比在卡头 */
+.arow2 .ar-timer .tmnote { font-family:var(--sans, inherit); color:var(--ink3); opacity:.75; margin-left:2px; }
 /* 无会话态（建设性①，施工令-012）：在途但没有执行会话＝卡住了。三件套自证——
    降饱和 + 虚线边（不是实心在跑卡）+ 计时行直写「已等 N 分钟未起会话」，不用读小字分辨。 */
 .arow2.noagent { border:1px dashed var(--ink3); background:var(--we); filter:saturate(.35); }

@@ -1004,6 +1004,41 @@ app.post('/api/schedule/:action', (req, res) => { // 参数名只能是 ASCII：
   res.json(r);
 });
 
+// ---- 排程台账 · 三消费读口（施工令-041 · Q2）----
+// 呈现判据全在 lib/pm/schedule-view（纯函数，5 态 × 3 消费可整片单测），此处仍**只做路由**：
+// 取现态 → 喂进去 → 下发。三条都是纯读，没有一条会写账。
+// 路由同样走 :action 参数：中文字面量路径在 express 4 下按原始 URL 匹配，
+// fetch('/api/schedule/切片') 发出去是百分号编码，字面量一律 404（040 实测踩过）。
+const scheduleView = require('./lib/pm/schedule-view');
+const 排程读 = {
+  // 流程页：管线行 + 「监制台维护队列」（批无管线的 Q 队列粒）
+  流程: () => scheduleView.流程页(schedule.现态(ROOT)),
+  // 总览横幅：在做 + 排程待办 + 决策台待签，一行话三问。
+  // 「在做」与流程页现在区同一口径：目录态 在途/质检 ∪ 有活跃会话（判官会话也算在做）——
+  // 只数 runner.执行中 的话，一张已领单但会话还没起的单会让横幅报「现在无在做」，
+  // 而同一时刻流程页那条橙区里明明躺着它。挂起的原位冻结单两处都不算在做。
+  摘要: () => {
+    const 在跑 = []; const 见 = new Set();
+    const 收 = (id, title) => { if (id && !见.has(id)) { 见.add(id); 在跑.push({ id, title: title || '' }); } };
+    for (const t of pool.inFlight(ROOT)) if (['在途', '质检'].includes(t.state) && !t.fm.挂起) 收(t.id, t.fm.title);
+    for (const e of (runnerStatus().执行中 || [])) {
+      let t = null; try { t = store.find(ROOT, e.id); } catch { /* 单已挪走：只报单号 */ }
+      if (!t || !t.fm.挂起) 收(e.id, t && t.fm ? t.fm.title : '');
+    }
+    const 待签 = store.list(ROOT, '待验收').length + store.list(ROOT, '待定夺').length;
+    return scheduleView.摘要({ 在跑, 粒们: schedule.现态(ROOT), 待签 });
+  },
+  // 晨晚报组稿：当日状态变更过的 + 计划中的前 N 条
+  切片: (q) => scheduleView.切片(schedule.现态(ROOT), { 日: q.日, 上限: q.上限 ? Number(q.上限) : undefined }),
+};
+app.get('/api/schedule/:action', (req, res) => {
+  if (!ready(res)) return;
+  const 名 = String(req.params.action || '');
+  const fn = 排程读[名];
+  if (!fn) return res.status(404).json({ error: `未知排程读口：${名}（可选 ${Object.keys(排程读).join('/')}）` });
+  res.json(fn(req.query || {}));
+});
+
 // ---- 产出调起：打开文件/所在文件夹（仅限该单所属项目仓内，越界拒）----
 app.post('/api/open', (req, res) => {
   if (!ready(res)) return;

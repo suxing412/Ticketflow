@@ -162,7 +162,8 @@ async function viewHub() {
       if (hit) { const m = String(hit).match(/^\[[^\]]*?([\d:]{5})[^\]]*\]\s*(.*)$/); el.textContent = (m ? m[1] + ' · ' + m[2] : hit).slice(0, 56); }
     }
   } catch { /* 无动态不补 */ } }, 0);
-  // 工程队状态卡（施工令-002）：只读外部状态文件，无文件/坏文件 → 整卡不渲染（占位 div 保持空）
+  // 工程队卡（施工令-002 立卡，041 §五 改直读）：服务端直读 工程队/ 目录实况算出四字段，
+  // 无目录/无施工令文件 → 整卡不渲染（占位 div 保持空）。卡上不再有任何要人手维护的字段。
   setTimeout(async () => { try {
     const c = (await api('/api/crew')).卡; const el = $('hub-crew');
     if (!el || !c) return;
@@ -173,7 +174,7 @@ async function viewHub() {
       <b style="font-size:13px">工程队</b><span class="pill sm ${cls}">${esc(c.状态 || '—')}</span>
       <span class="cwo mono">施工令 ${esc(c.施工令 || '—')}</span>
       <span class="cwn clamp2" title="${esc(c.名称 || '')}">${esc(c.名称 || '')}</span>
-      <span class="spacer"></span><span class="subnote">${esc(时)} 更新 · 只读</span></div>`;
+      <span class="spacer"></span><span class="subnote">${esc(时)} 更新 · 直读工程队目录</span></div>`;
   } catch { /* 无状态文件不渲染 */ } }, 0);
   setTimeout(async () => { try {
     const e2 = await api('/api/env'); const el = $('hub-env'); if (!el) return;
@@ -319,6 +320,22 @@ async function viewOverview() {
   };
   setTimeout(() => { fillEnv().catch(() => { /* 保持占位 */ }); }, 0);
   pollLoop('ov-env', 60000, fillEnv);
+  // 今日排程横幅（施工令-041 §二）：一行话答三问——现在在做什么、接下来是什么、几件等我。
+  // 口径在服务端 lib/pm/schedule-view.摘要 算好（runner 执行中 + 排程待办 + 决策台待签），
+  // 前端只画：三个数各算各的，正是「流程页说 6 项、总览说 4 项」那类打架的来源。
+  const fillSched = async () => {
+    const s = await api('/api/schedule/摘要');
+    const el = $('ov-sched'); if (!el || !s || s.文 == null) return;
+    el.innerHTML = `<div class="ovsched card r14" onclick="location.hash='#/flow'" tabindex="0" role="button"
+        onkeydown="if(event.key==='Enter'){location.hash='#/flow'}" title="点击进流程页看每条管线的现在线">
+        <span class="osk">今日排程</span>
+        <span class="ost"><b>${s.在做}</b> 在做${s.首条题 ? `（${esc(s.首条题)}）` : ''}</span><i class="osa">→</i>
+        <span class="ost"><b>${s.接下来}</b> 项接下来${s.下一项题 ? `（${esc(s.下一项题)}）` : ''}</span><i class="osa">→</i>
+        <span class="ost s"><b>${s.等你}</b> 项等你</span>
+        <span class="spacer"></span><span class="subnote">进流程页 →</span></div>`;
+  };
+  setTimeout(() => { fillSched().catch(() => { /* 排程台账不在（老部署）→ 横幅不出，不占版面 */ }); }, 0);
+  pollLoop('ov-sched', 30000, fillSched);
   return `<div class="stat-strip card r14">${strip}
       <div class="vdiv"></div>
       <div class="grp"><span class="lbl">派发闸</span><span class="num dim" id="ov-pause">—</span></div>
@@ -331,6 +348,7 @@ async function viewOverview() {
     <div class="p1-grid"><div>
       <div class="sec-h"><h3 class="h17">需你处理</h3><span class="subnote">${inbox.length} 项待你决定</span></div>
       ${inboxHtml}
+      <div id="ov-sched"></div>
       <div class="sec-h" style="margin-top:28px"><span class="subnote" style="font-weight:500">派发窗（H49）</span></div>
       ${ovRunHtml(ag)}
       <div class="suggest card">${n('待投') ? `<div style="font-size:13px">待投区 <b>${n('待投')}</b> 单——依赖就绪且已放行的会被自动派发</div>
@@ -461,11 +479,16 @@ const fgCat = (t) => {
 };
 let fgOpen = {}; // 沉淀抽屉展开态：laneKey -> 类别 key。空 = 全折——**默认全折叠，页面上只活人说话**
 async function viewFlow() {
-  const [{ all }, pls, agRaw] = await Promise.all([
+  const [{ all }, pls, agRaw, sched] = await Promise.all([
     loadBoard(),
     api('/api/pipelines').catch(() => ({ 管线: [] })),
     api('/api/agents').catch(() => ({ 在跑: [] })),
+    // 计划粒（施工令-041 §一）：还没成单的活。取不到就当没有——排程台账是新实体，
+    // 老部署/桩台环境下这个接口可能压根不在，整页不能因为它 404 就白屏。
+    api('/api/schedule/流程').catch(() => ({ 管线行: {}, 维护队列: [] })),
   ]);
+  const 计划行 = (sched && sched.管线行) || {};
+  const 维护队列 = (sched && sched.维护队列) || [];
   const ag = agentsScoped(agRaw, all); // 与在途页同一道项目闸，百分比才对得上号
   const byId = Object.fromEntries(all.map((t) => [t.id, t]));
   const pById = Object.fromEntries((pls.管线 || []).map((p) => [p.id, p]));
@@ -498,6 +521,10 @@ async function viewFlow() {
   const lane = (k) => (lanes[k] = lanes[k] || { key: k, items: [] });
   for (const t of all) lane(pipeOf(t) || MISC).items.push(t);
   for (const p of (pls.管线 || [])) if (p.状态 !== '封存') lane(p.id); // 注册即有行：新开的线空着也要占位（不然看不见"该派活了"）
+  // 只有计划粒、还没有任何工单的管线也要占一行（施工令-041 §一，本令渲染冒烟实测抓到）：
+  // 行由「有单」或「已注册」生成的话，一条刚排上计划、单还没起的线整条隐身——
+  // 而那恰恰是最需要被看见的状态：接下来要干的活，一张单都还没开。
+  for (const k of Object.keys(计划行)) lane(k);
   const laneKeys = Object.keys(lanes).sort((a, b) => {
     if ((a === MISC) !== (b === MISC)) return a === MISC ? 1 : -1; // 散单垫底
     const na = Number(String(a).slice(2)), nb = Number(String(b).slice(2));
@@ -531,6 +558,8 @@ async function viewFlow() {
   // 这种同一事实两种说法的抖动（2026-08-08 实机抓到：首屏 阶段名 优先级压过了无会话判据）。
   const 活体 = (r, fallbackState) => ({
     百分比: (r && r.进度 && r.进度.百分比 != null) ? r.进度.百分比 : (STPCT[fallbackState] ?? null),
+    // 出处随行（施工令-041 §四）：与在途页同一句话——两页的这个数同源，连解释都不许各写各的
+    提示: (r && r.进度) ? pctTitle(r.进度) : `按状态锚点估算（${fallbackState || '—'}，无执行会话数据）`,
     // 无会话优先：单还挂在在途/质检但没有执行会话 = 卡住，这时报阶段名等于替它掩护
     阶段名: (r && r.有会话 === false) ? '无执行会话' : ((r && r.进度 && r.进度.阶段名) || fallbackState),
     无会话: !!(r && r.有会话 === false),
@@ -542,7 +571,7 @@ async function viewFlow() {
   const doingBar = (t) => {
     const p = pctOfLive(t);
     return bar(t, 'doing' + (p.无会话 ? ' nosess' : ''),
-      `<span class="pp" id="fgp-${esc(t.id)}" title="${esc(p.阶段名)}">${p.百分比 == null ? '—' : p.百分比}<small>%</small></span><span class="st" id="fgs-${esc(t.id)}">${esc(p.阶段名)}</span>`);
+      `<span class="pp" id="fgp-${esc(t.id)}" title="${esc(p.提示)}">${p.百分比 == null ? '—' : p.百分比}<small>%</small></span><span class="st" id="fgs-${esc(t.id)}">${esc(p.阶段名)}</span>`);
   };
   const signBar = (t) => {
     const 保留 = t.验收方式 === '保留';
@@ -563,10 +592,21 @@ async function viewFlow() {
     const cls = 'queue' + (断.length ? ' blocked' : (就绪 ? ' ready' : ''));
     return bar(t, cls, `<span class="st">${esc(st)}</span>`, depTag);
   };
+  // 计划粒条（施工令-041 §一）：第六型。虚框与排队条同族（都是"还没开始"），但更淡且不带单号——
+  // 它还没有工单，点它跳详情会 404。点/悬浮给的是制作人真正会问的两件事：这条哪来的、要多久。
+  const 计划点击 = (c) => `planTip('${qesc(c.粒ID || '')}')`; // 全局 window.planTip，见本视图末
+  const planBar = (c) => `<div class="fgbar queue plan" onclick="${计划点击(c)}" tabindex="0" role="button"
+      onkeydown="if(event.key==='Enter'){${计划点击(c)}}" title="${esc(c.提示)}"
+      aria-label="计划粒 ${esc(c.题)}（尚未成单）">
+      <span class="id">${esc(c.批)}${c.序 ? '·' + c.序 : ''}</span><span class="t">${esc(c.题)}</span>
+      <span class="plb">${esc(c.徽章)}</span>
+      <span class="st">${c.预估单元 != null ? esc(c.预估单元 + ' 单元') : '无预估'}</span></div>`;
+  window._fgPlan = {};
+  for (const c of [...Object.values(计划行).flat(), ...维护队列]) window._fgPlan[c.粒ID] = c;
 
   // ---- 逐行装配 ----
   const sed = {}; // 沉淀数据（抽屉懒渲染用），只带展示要的几个字段
-  let 总在做 = 0, 总签字 = 0, 总接下来 = 0, 闲置数 = 0;
+  let 总在做 = 0, 总签字 = 0, 总接下来 = 0, 总计划 = 0, 闲置数 = 0;
   const laneHtml = laneKeys.map((k) => {
     const L = lanes[k];
     const P = pById[k];
@@ -584,6 +624,9 @@ async function viewFlow() {
     // 「等你签字」只数真停人闸的（待验收·保留/候引擎实证 + 无会话的待定夺）——委托待验收在等判官，不算你的活
     总签字 += nextSign.filter(人闸).length + now.filter((t) => !liveOf(t) && t.state === '待定夺').length;
     总接下来 += nextQ.length;
+    // 本管线的计划粒（施工令-041 §一）：续在已建单队列之后，同一条「接下来」里排到底
+    const plans = 计划行[k] || [];
+    总计划 += plans.length;
     // 沉淀四类
     const cats = { done: [], susp: [], drop: [], over: [] };
     for (const t of L.items) { const c = fgCat(t); if (c) cats[c].push(t); }
@@ -601,23 +644,35 @@ async function viewFlow() {
     }, 0);
     const 闲置天 = 最近 ? Math.floor((Date.now() - 最近) / 86400000) : null;
     if (!now.length) 闲置数++;
-    const nowInner = now.length
-      ? now.map((t) => ((liveOf(t) || FG_DOING.has(t.state)) ? doingBar(t) : t.state === '待定夺' ? signBar(t) : stuckBar(t))).join('')
-      : `<div class="fgidle">— 本管线现在无在做（${最近 ? `闲置 ${闲置天} 天` : '暂无活动记录'}）—</div>`;
     const foldInner = 沉淀数
       ? `<div class="fgfold"><span class="fgfk">▸ 沉淀</span>${FG_CATS.filter(([c]) => cats[c].length)
         .map(([c, n]) => `<button class="fgcat ${c}" data-fglane="${esc(k)}" data-fgcat="${c}" onclick="fgDrawer('${qesc(k)}','${c}')" title="点开只看这一类">${esc(n)} <b>${cats[c].length}</b></button>`)
         .join('<i class="fgdot">·</i>')}</div>`
       : '';
-    const nextInner = (nextSign.map((t) => (人闸(t) ? signBar(t) : waitBar(t))).join('') + nextQ.map(queueBar).join(''))
-      || '<div class="fgidle q">— 接下来没有排队的单 —</div>';
-    return `<div class="fglane">
-      <div class="fgrow">
-        <div class="fghead">
+    const 头 = `<div class="fghead">
           <b>${esc(名称)}</b>${P && P.状态 === '封存' ? '<span class="lst lag">已封存</span>' : ''}
           <div class="sub">${k === MISC ? '无管线归属的活动单' : `${专项数 ? 专项数 + ' 个专项 · ' : ''}阶段 ${esc((P && P.阶段) || '—')}`}</div>
           <div class="pct">■ 落袋 ${落袋}/${叶.length}</div>
-        </div>
+        </div>`;
+    // 空态收敛（施工令-041 §一 · 巡礼 F6）：整条管线既无在做也无排队也无计划时，
+    // 旧样两格各说一句「现在无在做」「接下来没有排队的单」——同一件事在同一行说两遍，
+    // 十几条闲置管线铺下来就是二十几行废话。收成横跨两格的一行。
+    const 空行 = !now.length && !nextSign.length && !nextQ.length && !plans.length;
+    if (空行) {
+      return `<div class="fglane">
+      <div class="fgrow">${头}
+        <div class="fgzone empty">${`<div class="fgidle">— 本管线无在做 · 无排队 · 无计划（${最近 ? `闲置 ${闲置天} 天` : '暂无活动记录'}）—</div>`}${foldInner}</div>
+      </div>
+      <div class="fgdrawer" id="fgd-${esc(k)}"></div></div>`;
+    }
+    const nowInner = now.length
+      ? now.map((t) => ((liveOf(t) || FG_DOING.has(t.state)) ? doingBar(t) : t.state === '待定夺' ? signBar(t) : stuckBar(t))).join('')
+      : `<div class="fgidle">— 本管线现在无在做（${最近 ? `闲置 ${闲置天} 天` : '暂无活动记录'}）—</div>`;
+    const nextInner = (nextSign.map((t) => (人闸(t) ? signBar(t) : waitBar(t))).join('') + nextQ.map(queueBar).join('')
+      + plans.map(planBar).join(''))
+      || '<div class="fgidle q">— 接下来没有排队的单 —</div>';
+    return `<div class="fglane">
+      <div class="fgrow">${头}
         <div class="fgzone now">${nowInner}${foldInner}</div>
         <div class="fgzone next">${nextInner}</div>
       </div>
@@ -637,28 +692,49 @@ async function viewFlow() {
     if (sig(nd) !== sig0) { route(); return; } // 派发/收工 = 条位要换，整页重排
     for (const r of (nd.在跑 || [])) {
       const v = 活体(r, r.state);
-      const pe = $('fgp-' + r.id); if (pe) { pe.innerHTML = `${v.百分比 == null ? '—' : v.百分比}<small>%</small>`; pe.title = v.阶段名; }
+      const pe = $('fgp-' + r.id); if (pe) { pe.innerHTML = `${v.百分比 == null ? '—' : v.百分比}<small>%</small>`; pe.title = v.提示; }
       const se = $('fgs-' + r.id); if (se) se.textContent = v.阶段名;
       // 会话起来了就把「卡住」形态撤掉（同在途页 noagent 的处理）——只改类，不重画条
       const be = pe && pe.closest('.fgbar'); if (be) be.classList.toggle('nosess', v.无会话);
     }
   });
 
+  // 监制台维护队列（施工令-041 §一）：批字段无管线的 Q 队列粒——监制台自己的活。
+  // 不塞进任何一条产品管线（那会让那条线的「接下来」凭空多出不属于它的活），但也不能不显示：
+  // 制作人要的「看得到后续队列工作」本来就包含这一类。空则整行不出。
+  const 维护Html = 维护队列.length ? `<div class="fglane qlane">
+      <div class="fgrow">
+        <div class="fghead">
+          <b>监制台维护队列</b>
+          <div class="sub">无管线归属的计划粒（Q 队列）</div>
+          <div class="pct">◇ 计划 ${维护队列.length}</div>
+        </div>
+        <div class="fgzone now"><div class="fgidle">— 未成单，不占执行位 —</div></div>
+        <div class="fgzone next">${维护队列.map(planBar).join('')}</div>
+      </div></div>` : '';
+
   const top = `<div class="fgtop">
-      <span class="subnote">一条现在线切三段：沉淀（折叠）｜<b class="nowh">现在</b>｜接下来（依赖序）· 行=管线 · 点任何条进详情</span>
+      <span class="subnote">一条现在线切三段：沉淀（折叠）｜<b class="nowh">现在</b>｜接下来（依赖序 → 计划粒）· 行=管线 · 点任何条进详情</span>
       <span class="sp"></span>
-      <span class="fgsum">在做 <b>${总在做}</b> · 等你签字 <b class="s">${总签字}</b> · 排队 <b>${总接下来}</b>${闲置数 ? ` · 闲置管线 <b>${闲置数}</b>` : ''}</span></div>`;
+      <span class="fgsum">在做 <b>${总在做}</b> · 等你签字 <b class="s">${总签字}</b> · 排队 <b>${总接下来}</b> · 计划 <b>${总计划 + 维护队列.length}</b>${闲置数 ? ` · 闲置管线 <b>${闲置数}</b>` : ''}</span></div>`;
   const legend = `<div class="fglegend">
       <span><i class="lg-doing"></i>实心=在做（有活跃会话即在做，含判官环节；百分比接执行进度卡口径）</span>
       <span><i class="lg-queue"></i>虚框=排队（依赖序，←标依赖）· 待判官接手=判官会话还没起</span>
       <span><i class="lg-sign"></i>绿框=等你签字/拍板（无会话且真停人闸）</span>
       <span><i class="lg-stuck"></i>红=卡住（待定夺/执行失败）</span>
+      <span><i class="lg-plan"></i>淡虚框+「计划」=排程台账里还没成单的计划粒（点看来源与预估）</span>
       <span class="nowh">◉ 橙区=现在（管线闲置直书「闲置 N 天」）</span>
       <span>⚑=里程碑 · ❄=挂起 · 沉淀默认全折</span></div>`;
   return top + `<div class="fgboard" id="fg-board">
-      <div class="fgcols"><div>管线</div><div class="nowh">◉ 现在在做</div><div>→ 接下来（依赖序）</div></div>
-      ${laneHtml}</div>` + legend;
+      <div class="fgcols"><div>管线</div><div class="nowh">◉ 现在在做</div><div>→ 接下来（依赖序 → 计划）</div></div>
+      ${laneHtml}${维护Html}</div>` + legend;
 }
+// 计划粒点开：它还没有工单，跳详情只会 404——如实把「来源与预估」摊在面上（悬浮同文，见 title）。
+window.planTip = (id) => {
+  const c = (window._fgPlan || {})[id];
+  if (!c) return toast('这条计划粒已不在现态（可能刚成单或被撤销）');
+  toast(c.提示.replace(/\n/g, ' · '));
+};
 // 沉淀抽屉：点某一类只展开该类（置灰列表，点条进详情）；再点同一类收起。
 // 不走 route() 重画——整页重取四个接口只为展一个抽屉太贵，且会把 15s 活体轮询打断重挂。
 window.fgDrawer = (key, cat) => {
@@ -758,13 +834,23 @@ function segbarHtml(p, id) {
   return `<div class="segbar"${id ? ` id="${esc(id)}"` : ''}>${((p && p.段) || []).map((s) => `<div class="seg ${s.态}${s.态 === 'cur' && cls ? ' ' + cls : ''}">
       <i>${s.态 === 'cur' ? `<em style="--fill:${Math.round((s.填充 || 0) * 100)}%"></em>` : ''}</i><span>${esc(s.名)}</span></div>`).join('')}</div>`;
 }
-// 计时：判官阶段报「本步 · 全程」，执行阶段报「已跑 / 预估」（超时转红，一眼可捞）
+// 计时：判官阶段报「本步 · 全程」，执行阶段报「已跑 · 预估」（超时转红，一眼可捞）
+// 施工令-041 §四：这一行是**时长**，不是进度。原样式写「已跑 24分 / 预估 50分」，那道斜杠
+// 被当成分数读（巡礼 F2：同一张单头上 28%、这行读出 49%），改成「·」分隔并直书「时长」二字，
+// 页面上关于进度的百分比从此只有卡头那一个数。
 function 计时Html(p, 环节起时, 领单时间) {
   const tm = (iso, over) => iso && !Number.isNaN(Date.parse(iso))
     ? `<span class="tm${over ? ' over' : ''}" data-since="${esc(iso)}">${fmtElapsed(Date.now() - Date.parse(iso))}</span>` : '<span>--:--</span>';
   if (p && p.判官) return `${tm(环节起时)} 本步${领单时间 ? ` · ${tm(领单时间)} 全程` : ''}`;
   const est = p && p.预估分钟 ? fmtElapsed(p.预估分钟 * 60000) : null;
-  return `${tm(环节起时 || 领单时间, !!(p && p.超时))}${est ? ` / 预估 ${est}` : ' · 无预估（阶段内不插值）'}`;
+  return `已跑 ${tm(环节起时 || 领单时间, !!(p && p.超时))}${est ? ` · 预估 ${est}<span class="tmnote">（时长）</span>` : '<span class="tmnote">（无预估）</span>'}`;
+}
+// 百分比的出处（施工令-041 §四）：打点 → 「打点 3/7」；无打点 → 「阶段锚点（无打点）」。
+// 悬浮说得出这个数怎么来的，才谈得上信任；两页共用这一句，口径不许各说各话。
+function pctTitle(p) {
+  const q = p || {};
+  if (q.打点) return `会话打点 ${q.打点.k}/${q.打点.n} · ${q.阶段名 || ''}`;
+  return `${q.阶段名 || ''} · 阶段锚点${q.锚点 != null ? ' ' + q.锚点 + '%' : ''}（本阶段无会话打点，不按耗时折算）`;
 }
 // 无会话已等时长（建设性①）：基准取「进本状态的时刻」= 更新时间，回落领单时间。
 // 用更新时间而非领单时间，是因为质检态无会话时领单时间早已过期，报出来的分钟数会失真。
@@ -779,11 +865,11 @@ function pctHtml(r) {
   // 「衔接中」，制作人得逐张读小字才分得出。无会话态改成一眼自证：阶段名直说、计时行直写已等多久。
   if (r.有会话 === false) {
     const n = 无会话分钟(r);
-    return `<div class="pct">${p.百分比 != null ? p.百分比 : '—'}<small>%</small></div>
+    return `<div class="pct" title="${esc(pctTitle(p))}">${p.百分比 != null ? p.百分比 : '—'}<small>%</small></div>
       <div class="ar-stage nosess"><span class="dot"></span>无执行会话</div>
       <div class="ar-timer nosess">${n == null ? '未起会话' : `已等 ${n} 分钟未起会话`}</div>`;
   }
-  return `<div class="pct">${p.百分比 != null ? p.百分比 : '—'}<small>%</small></div>
+  return `<div class="pct" title="${esc(pctTitle(p))}">${p.百分比 != null ? p.百分比 : '—'}<small>%</small></div>
     <div class="ar-stage ${进度态(p)}"><span class="dot"></span>${esc(p.阶段名 || (r.环节 ? r.环节 + '中' : '衔接中'))}</div>
     <div class="ar-timer">${计时Html(p, r.环节起时, r.领单时间)}</div>`;
 }
