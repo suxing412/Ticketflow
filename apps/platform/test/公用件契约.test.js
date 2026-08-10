@@ -15,7 +15,11 @@ let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); 
 console.log('公用件契约测试（消费面）');
 
 t('公用件解析：仓根的 packages/（一仓拓扑），TICKETFLOW_PACKAGES 可覆盖', () => {
-  assert.equal(path.basename(公用件.仓根), 'Ticketflow');
+  // 按**长相**认仓根，不按目录名认。此前这里断言 basename === 'Ticketflow'，
+  // 于是把仓 clone 成任何别的目录名（或在 worktree 里跑）测试就无故变红——
+  // 那是测试自己的毛病，不是被测代码的问题。
+  assert.ok(fs.existsSync(path.join(公用件.仓根, 'apps', 'platform')),
+    '仓根应含 apps/platform（一仓拓扑）：' + 公用件.仓根);
   assert.ok(fs.existsSync(公用件.PACKAGES), '公用件目录必须存在：' + 公用件.PACKAGES);
   assert.ok(公用件.解析('providers', 'registry.js').endsWith(path.join('packages', 'providers', 'registry.js')));
 });
@@ -47,6 +51,40 @@ t('依赖面只有 providers 与 watchtower 两个包（变宽必须是显式决
   };
   扫(path.resolve(__dirname, '..'));
   for (const 包 of 命中) assert.ok(允许.has(包), `新增了对公用件 ${包} 的依赖——请确认这是显式决定并更新本测试`);
+});
+
+// ---- 消费点收敛：解析算法只准存在一份 ----
+// 补 2026-08-09 漏掉的那个洞：上面那条只清点「依赖了哪些包」，不管各消费点是不是
+// 真的走 lib/公用件。于是 server.js 与 scripts/watchtower.js 各自抄了一份「往上找
+// 兄弟仓」的解析，一仓合并时漏改，瞭望塔整条线全废，而测试照样全绿。
+// 断言换个问法：除了正本自己，谁都不准出现解析算法的特征。
+t('公用件解析只有 lib/公用件 一份（自抄一份即红）', () => {
+  // 例外只有两处，各有物理原因：
+  //   lib/公用件.js  解析正本自己
+  //   main.js        打包态 __dirname 在 asar 内、上溯三级不成立，必须赶在
+  //                  require('./server.js') 之前把 TICKETFLOW_PACKAGES 顶上
+  const 例外 = new Set([path.join('lib', '公用件.js'), 'main.js']);
+  const 特征 = [
+    [/TICKETFLOW_HOME/, '用了已作废的 TICKETFLOW_HOME（一仓后没人读它）'],
+    [/['"]\.\.['"]\s*,\s*['"]Ticketflow['"]/, '还在往上找兄弟仓 Ticketflow（一仓后解析成 <仓根>/apps/Ticketflow）'],
+    [/(?:require|path\.(?:join|resolve))\s*\([^)]*['"]packages['"]/, '自己拼 packages/ 路径，请改走 公用件.解析()/载入()'],
+  ];
+  const 平台根 = path.resolve(__dirname, '..');
+  const 违规 = [];
+  const 扫 = (dir) => {
+    for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (d.name === 'node_modules' || d.name === '.git' || d.name === 'test') continue;
+      const p = path.join(dir, d.name);
+      if (d.isDirectory()) { 扫(p); continue; }
+      if (!d.name.endsWith('.js')) continue;
+      const 相对 = path.relative(平台根, p);
+      if (例外.has(相对)) continue;
+      const src = fs.readFileSync(p, 'utf8');
+      for (const [re, 说法] of 特征) if (re.test(src)) 违规.push(`  ${相对}：${说法}`);
+    }
+  };
+  扫(平台根);
+  assert.deepEqual(违规, [], '以下文件自抄了公用件解析，请改走 lib/公用件：\n' + 违规.join('\n'));
 });
 
 // ---- providers 消费面：router.js 只用 registry.list(cfg) ----

@@ -1,6 +1,6 @@
 // routing/router.js — 角色与 Provider 解耦的动态路由。
 // 先按能力/启用状态做硬过滤，再结合配置评分与近期成功率排序；不负责启动进程。
-// 公用件消费统一走 lib/公用件（并排克隆约定 + TICKETFLOW_HOME 覆盖）。
+// 公用件消费统一走 lib/公用件（仓根 packages/，TICKETFLOW_PACKAGES 可覆盖）。
 // 原样搬家留下的 `../../../../packages/providers/registry` 从本仓 lib/routing
 // 上溯四级已跑出盘符，必然 MODULE_NOT_FOUND——交壳清单里标为「留白」的就是这处。
 const registry = require('../公用件').载入('providers', 'registry.js');
