@@ -166,5 +166,49 @@ t('巡一轮把四类合起来', () => {
   assert.ok(类.includes('在途超时') && 类.includes('零派发') && 类.includes('预算冻结'));
 });
 
+// ---- 质检 ----
+const 质检 = require(path.join(平台根, 'lib', '质检.js'));
+
+t('默认要质检——跳过必须是显式决定', () => {
+  // 反过来（默认不检、要检才配）会让「没配 = 没人验收」，那是最危险的默认。
+  assert.equal(质检.需质检({}, { id: 'T', fm: { role: 'backend' } }).要, true, '缺配置必须是「要检」');
+  assert.equal(质检.需质检({ 质检: { 启用: false } }, { id: 'T', fm: {} }).要, false, '全局关闭');
+  assert.equal(质检.需质检({}, { id: 'T', fm: { QA: '关' } }).要, false, '工单显式声明免检');
+  assert.equal(质检.需质检({ 质检: { 免检角色: ['integrator'] } }, { id: 'T', fm: { role: 'integrator' } }).要, false);
+});
+
+t('reviewer 的产出不再送检（判官判判官会无限递归）', () => {
+  const r = 质检.需质检({}, { id: 'T', fm: { role: 'reviewer' } });
+  assert.equal(r.要, false);
+  assert.ok(/递归/.test(r.因), r.因);
+});
+
+t('质检提示词给客观材料，不喂执行方的自述', () => {
+  const p = 质检.质检提示词({ id: 'T-9', fm: { title: '加个函数' }, body: '## 验收标准\n- [ ] 有导出' }, ['index.js']);
+  assert.ok(p.includes('T-9') && p.includes('加个函数'));
+  assert.ok(p.includes('- index.js'), '要列出实际改动的文件');
+  assert.ok(p.includes('结论：通过'), '要规定输出格式，否则解析不出结论');
+  assert.ok(/不要修改任何文件/.test(p), '判官只该读和判');
+});
+
+t('判定：通过→完成，不过→回待投（不是失败终态）', () => {
+  const 通 = 质检.判定(0, '结论：通过\n\n## 阻断问题\n无\n');
+  assert.equal(通.结论, '通过');
+  assert.equal(通.下一步, '完成');
+
+  const 否 = 质检.判定(0, '结论：不过\n\n## 阻断问题\n- 没有导出\n- 漏了测试\n');
+  assert.equal(否.结论, '不过');
+  assert.equal(否.下一步, '待投', '判不过回待投重做，同一张单可以再跑');
+  assert.ok(否.意见.问题.length >= 2, '要把阻断问题归一出来：' + JSON.stringify(否.意见.问题));
+});
+
+t('判官失败不打整单——工单维持原状待重判', () => {
+  for (const [码, 出] of [[1, '崩了'], [0, ''], [0, '一堆没有结论的废话']]) {
+    const r = 质检.判定(码, 出);
+    assert.equal(r.结论, '判官失败', `退出码 ${码} 输出「${出.slice(0, 6)}」应判判官失败`);
+    assert.equal(r.下一步, null, '判官自己挂了不该改变工单状态——那不是被评审方的错');
+  }
+});
+
 fs.rmSync(沙盒, { recursive: true, force: true });
 console.log(`全部通过：${passed} 项`);

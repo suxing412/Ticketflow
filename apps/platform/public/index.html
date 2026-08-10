@@ -32,7 +32,8 @@
   .级常 { color: var(--灰); margin-right: 6px; }
   .态 { display: inline-block; font-size: 12px; padding: 0 8px; border-radius: 10px; border: 1px solid var(--线); }
   .态.草稿 { color: var(--灰); } .态.待投 { color: var(--蓝); border-color: var(--蓝); }
-  .态.在途 { color: var(--黄); border-color: var(--黄); } .态.完成 { color: var(--绿); border-color: var(--绿); }
+  .态.在途 { color: var(--黄); border-color: var(--黄); } .态.质检 { color: var(--蓝); border-color: var(--蓝); font-weight: 600; }
+  .态.完成 { color: var(--绿); border-color: var(--绿); }
   .列 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
   @media (max-width: 820px) { .列 { grid-template-columns: 1fr; } }
   .卡 { border: 1px solid var(--线); border-radius: 8px; padding: 12px 14px; }
@@ -52,7 +53,7 @@
 <h2>工单看板<span class="右 淡" id="工单来源"></span></h2>
 <div class="栏">
   <span class="淡">按状态：</span>
-  <select id="滤状态"><option value="">全部</option><option>草稿</option><option>待投</option><option>在途</option><option>完成</option></select>
+  <select id="滤状态"><option value="">全部</option><option>草稿</option><option>待投</option><option>在途</option><option>质检</option><option>完成</option></select>
   <button onclick="刷工单()">刷新</button>
   <button onclick="开建单()">＋ 新建工单</button>
 </div>
@@ -166,11 +167,12 @@ async function 刷工单() {
     }
     $('工单来源').textContent = j.根目录 || '';
     if (!j.工单 || !j.工单.length) { $('工单体').innerHTML = '<tr><td colspan="7" class="淡">还没有工单</td></tr>'; return; }
-    const 序 = { 草稿: 0, 待投: 1, 在途: 2, 完成: 3 };
+    const 序 = { 草稿: 0, 待投: 1, 在途: 2, 质检: 3, 完成: 4 };
     j.工单.sort((a, b) => (序[a.state] - 序[b.state]) || a.id.localeCompare(b.id));
     $('工单体').innerHTML = j.工单.map((t) => {
       const f = t.fm || {};
       const 可派 = t.state === '待投';
+      const 可判 = t.state === '质检';
       const 可投 = t.state === '草稿';
       return '<tr><td><code>' + 转义(t.id) + '</code></td>'
         + '<td><span class="态 ' + 转义(t.state) + '">' + 转义(t.state) + '</span></td>'
@@ -182,6 +184,8 @@ async function 刷工单() {
         + (可投 ? '<button onclick="迁移(\'' + 转义(t.id) + '\',\'待投\')">投出</button> ' : '')
         + (可派 ? '<button onclick="跑(\'' + 转义(t.id) + '\',true)">干跑</button> '
                 + '<button class="危" onclick="跑(\'' + 转义(t.id) + '\',false)">真跑（花钱）</button>' : '')
+        + (可判 ? '<button onclick="判(\'' + 转义(t.id) + '\',true)">试判</button> '
+                + '<button class="危" onclick="判(\'' + 转义(t.id) + '\',false)">真判（花钱）</button>' : '')
         + '</td></tr>';
     }).join('');
   } catch (e) { $('工单体').innerHTML = '<tr><td colspan="7" class="级急">工单接口不可达</td></tr>'; }
@@ -208,6 +212,21 @@ async function 跑(id, 干跑) {
     $('运行').textContent = JSON.stringify(j, null, 2);
   } catch (e) { $('运行').textContent = '调用失败：' + e.message; }
   刷工单(); 刷战绩(); 刷排名(); 刷调度();
+}
+
+async function 判(id, 干跑) {
+  if (!干跑 && !confirm('真判会调用另一个 AI CLI 做质检、产生费用。
+
+工单：' + id + '
+
+确定继续？')) return;
+  $('运行区').style.display = '';
+  $('运行').textContent = (干跑 ? '试判' : '真判') + '中…';
+  try {
+    const { 体: j } = await 取JSON('/api/exec/qa/' + encodeURIComponent(id), { method: 'POST', body: JSON.stringify({ 干跑 }) });
+    $('运行').textContent = JSON.stringify(j, null, 2);
+  } catch (e) { $('运行').textContent = '调用失败：' + e.message; }
+  刷工单(); 刷战绩(); 刷调度();
 }
 
 function 开建单() {

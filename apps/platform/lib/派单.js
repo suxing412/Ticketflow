@@ -41,8 +41,14 @@ function 冻结情况(公用件, 配置, 账本根) {
 }
 
 // 选人：排名 → 过冻结 → 候选链降级（留痕）
-function 选派(仓根, 配置, { 角色, 类别 = '执行', 公用件, 账本根 }) {
-  const 排名 = 路由器.rankProviders(仓根, 配置, { role: 角色, kind: 类别 });
+// 工单要递进去：router 的 crossProviderReview 靠 task.fm.执行池 知道「原执行方是谁」，
+// 才能在评审时优先挑**别家**（同源盲区是真的——同一个模型往往看不出自己的错）。
+// 不递的话它拿不到 original，跨厂避让整个失效，而且**不会报错**，只会安静地挑回同一家。
+function 选派(仓根, 配置, { 角色, 类别 = '执行', 公用件, 账本根, 工单 = null }) {
+  const 排名 = 路由器.rankProviders(仓根, 配置, {
+    role: 角色, kind: 类别,
+    task: 工单 ? { fm: 工单.fm || {} } : null,
+  });
   if (!排名.length) return { ok: false, error: '无候选 Provider：检查是否启用、能力是否匹配' };
 
   const 冻 = 冻结情况(公用件, 配置, 账本根 || 仓根);

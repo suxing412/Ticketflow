@@ -28,6 +28,7 @@ const 工单库 = require(path.join(平台根, 'lib', '工单库.js'));
 const 路由历史 = require(path.join(平台根, 'lib', 'routing', 'history.js'));
 const 调度 = require(path.join(平台根, 'lib', '调度.js'));
 const 巡检 = require(path.join(平台根, 'lib', '巡检.js'));
+const 质检 = require(path.join(平台根, 'lib', '质检.js'));
 
 function 读JSON(p, 缺省) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return 缺省; }
@@ -204,6 +205,84 @@ const 服务 = http.createServer((req, res) => {
   const 拒 = 门禁.校验(req, { 令牌, 端口, 路径: '/api/执行器' });
   if (拒) return 发JSON(res, 拒.码, { ok: false, error: 拒.错误 });
 
+  // ——— 质检（协-004）：由另一个 Provider 判一次 ———
+  // 独立接口而不是塞进 /run 的尾巴：质检是一次**独立的付费调用**，
+  // 应该能被单独触发、单独看回执、单独失败重来。混在 /run 里，
+  // 「执行成功但质检挂了」会变成一个说不清的复合结果。
+  const q = 路径.match(/^\/qa\/([^/]+)$/);
+  if (q && req.method === 'POST') {
+    if (!registry) return 发JSON(res, 503, { ok: false, error: 'providers 注册表加载失败' });
+    if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
+    const id = decodeURIComponent(q[1]);
+
+    return 收体(req, 64 * 1024, (体) => {
+      const 干跑 = !(体 && (体.干跑 === false || 体.dry_run === false));
+      const t = 工单库.find(工单根.根, id);
+      if (!t) return 发JSON(res, 404, { ok: false, error: `工单不存在：${id}` });
+      if (t.state !== '质检') {
+        return 发JSON(res, 409, { ok: false, error: `只有「质检」态的工单可以判，当前是「${t.state}」` });
+      }
+
+      // 判官走「评审」类别：router 的 crossProviderReview 会优先挑**别家**，
+      // 降低同源盲区——自己判自己是最没有价值的一种评审。
+      const 派 = 派单.选派(平台根, 配置, { 角色: 'reviewer', 类别: '评审', 公用件, 账本根, 工单: t });
+      if (!派.ok) return 发JSON(res, 409, { ok: false, ...派 });
+
+      let 调用;
+      try {
+        const adapter = registry.create(配置, 派.选中);
+        调用 = adapter.buildInvocation({});
+        // 判官一律受限：它只该读和判，不该改任何文件。
+        const 受限 = 派单.权限参数(配置, 'reviewer');
+        调用 = { ...调用, args: [...调用.args.filter((a) => !/^--dangerously-/.test(a)), ...(受限.参数 || [])] };
+      } catch (e) { return 发JSON(res, 400, { ok: false, error: e.message }); }
+
+      const 提示 = 质检.质检提示词(t, (体 && 体.变更文件) || []);
+      const 共同 = { ok: true, 工单: id, 判官: 派.选中, 跨厂: 派.选中 !== t.fm.执行池, 调用 };
+
+      if (干跑) {
+        return 发JSON(res, 200, {
+          ...共同, 干跑: true, 提示词预览: 提示.slice(0, 400),
+          说明: '干跑：未拉起判官，零计费。真判需 {"干跑": false} 且满足真跑三闸。',
+        });
+      }
+
+      const 许 = 真跑许可(派.选中);
+      if (!许.准) return 发JSON(res, 许.码, { ...共同, ok: false, error: 许.错 });
+
+      const 工作 = 取工作目录();
+      if (!工作.ok) return 发JSON(res, 403, { ...共同, ok: false, error: 工作.错 });
+
+      拉起(调用, 提示, 工作.目录, (r) => {
+        const 判 = 质检.判定(r.退出码, r.输出);
+        记战绩({
+          provider: 派.选中, role: 'reviewer', ticket: id,
+          ok: 判.结论 !== '判官失败', dry: false, durationMs: r.耗时毫秒,
+          qualityPassed: 判.结论 === '通过', _输出: r.输出,
+        });
+
+        let 流转 = null;
+        if (判.下一步) {
+          const m = 工单库.move(工单根.根, id, '质检', 判.下一步, (fm) => {
+            fm.质检结论 = 判.结论;
+            fm.质检意见 = 判.意见;
+            fm.质检时间 = new Date().toISOString();
+            fm.质检判官 = 派.选中;
+            if (判.下一步 === '完成') fm.完成时间 = new Date().toISOString();
+          });
+          流转 = m.ok ? 判.下一步 : `流转失败：${m.error}`;
+        }
+
+        return 发JSON(res, 200, {
+          ...共同, 干跑: false, 结论: 判.结论, 说明: 判.说明,
+          意见: 判.意见, 工单状态: 流转 || '质检（判官失败，维持原状待重判）',
+          耗时毫秒: r.耗时毫秒,
+          ...(r.验尸 ? { 验尸: r.验尸, 活尾巴: r.活尾巴 } : {}),
+        });
+      });
+    });
+  }
+
   // ——— 调度一轮（协-004）：算出这一轮该派谁，顺带巡检 ———
   // GET 只算不派，POST 才真派。分开是因为「看看会派什么」是个高频且无害的动作，
   // 而它和「真的派出去」只差一个 HTTP 方法时，人迟早会点错。
@@ -349,8 +428,13 @@ const 服务 = http.createServer((req, res) => {
             const pb = await 工作区请求('/write/publish', { 项目: 项目名, 工作区 });
             发布 = pb.体;
             if (pb.码 === 200 && pb.体.ok) {
-              const m = 工单库.move(工单根.根, id, '在途', '完成', (fm) => {
-                fm.完成时间 = new Date().toISOString();
+              // 干完了不等于做对了。默认送质检，由**另一个 Provider** 判一次；
+              // 跳过质检必须是显式决定（配置关掉、工单 QA:关、或角色免检）。
+              // 反过来会让「没配 = 没人验收」，那是最危险的默认。
+              const 检 = 质检.需质检(配置, t);
+              const 目标 = 检.要 ? '质检' : '完成';
+              const m = 工单库.move(工单根.根, id, '在途', 目标, (fm) => {
+                if (!检.要) { fm.完成时间 = new Date().toISOString(); fm.免检原因 = 检.因; }
                 fm.检查点 = c.体.commit;
                 fm.发布提交 = pb.体.commit;
                 // 回填 commit：下游依赖单靠 fm.workspace.commit 把本单的产出合进去。
@@ -358,7 +442,8 @@ const 服务 = http.createServer((req, res) => {
                 // 「没有可集成的检查点」而 **静默跳过**——DAG 就断在这里。
                 fm.workspace = Object.assign({}, fm.workspace, { commit: c.体.commit });
               });
-              完成 = m.ok ? '完成' : `流转失败：${m.error}`;
+              完成 = m.ok ? 目标 : `流转失败：${m.error}`;
+              if (m.ok && 检.要) 完成 += '（待质检：POST /qa/' + id + '）';
             }
           }
         }
