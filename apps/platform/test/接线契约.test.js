@@ -49,6 +49,25 @@ t('桩模式物理保证：server.js 的依赖闭包里没有 child_process', ()
   assert.deepEqual(违规, [], '桩模式已被破坏——server.js 现在能起真实进程了：\n' + 违规.join('\n'));
 });
 
+// ---- 隔离是否成立 ----
+// 接 worktree 的方案不是「给断言开例外」，而是把 git 能力挪出 server 的进程。
+// 所以上面那条断言一个字都没改，依旧要求 server.js 闭包零 child_process。
+// 这两条守的是隔离本身：worktree 必须只被隔离进程持有，且隔离进程必须真的隔离。
+t('worktree 只被隔离进程持有，server.js 碰不到它', () => {
+  assert.ok(!/require\([^)]*workspace\/worktree/.test(源.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n')),
+    'server.js 不得直接 require worktree——它引 child_process，读 git 状态一样要 spawn，'
+    + '「只接只读函数」绕不开这条。走 http 转发给 scripts/工作区服务.js。');
+  const 服务源 = fs.readFileSync(path.join(平台根, 'scripts', '工作区服务.js'), 'utf8');
+  assert.ok(/workspace['\\/]+worktree/.test(服务源), '隔离进程应当是持有 worktree 的那一个');
+});
+
+t('隔离进程自己要有门禁与路径闸（它是唯一能起 git 的地方）', () => {
+  const 服务源 = fs.readFileSync(path.join(平台根, 'scripts', '工作区服务.js'), 'utf8');
+  assert.ok(/门禁\.校验/.test(服务源), '隔离进程必须自己校验令牌——不能靠「只有 server 会调它」这种假设');
+  assert.ok(/路径越界/.test(服务源), '必须有路径闸：否则带令牌的调用方可以拿 dir 把本机 git 仓库探个遍');
+  assert.ok(/允许写/.test(服务源), '写操作必须有独立开关，不随服务启动一起获得');
+});
+
 t('lib/ 下的模块要么被接线，要么在 server.js 里写明为何不接', () => {
   const 模块 = [];
   const 扫 = (dir) => {
@@ -63,11 +82,16 @@ t('lib/ 下的模块要么被接线，要么在 server.js 里写明为何不接'
   const 漏网 = [];
   for (const m of 模块) {
     const 无后缀 = m.replace(/\.js$/, '');
+    const 短名 = 无后缀.split('/').pop();
     const 接线了 = 源.includes(`./lib/${无后缀}`);
-    // 未接线的必须在 server.js 头部被点名交代原因，否则就是"忘了"而不是"决定不接"
-    const 交代了 = new RegExp(`${无后缀.split('/').pop()}[^\\n]*不接`).test(源)
-      || new RegExp(`${无后缀}[^\\n]*不接`).test(源);
-    if (!接线了 && !交代了) 漏网.push(`  lib/${m}`);
+    // 没直接接线的，必须是下面两种**正当状态**之一，否则就是"忘了"而不是"决定"：
+    //   · 在 server.js 头部被点名交代为何不接
+    //   · 被挪进隔离进程持有（worktree 走的就是这条：它引 child_process，
+    //     只能靠进程隔离，不能靠给断言开例外）
+    const 交代了 = new RegExp(`(${短名}|${无后缀})[^\\n]*不接`).test(源);
+    const 隔离了 = new RegExp(`(${短名}|${无后缀})[^\\n]*(独立进程|隔离)`).test(源)
+      && fs.readFileSync(path.join(平台根, 'scripts', '工作区服务.js'), 'utf8').includes(短名);
+    if (!接线了 && !交代了 && !隔离了) 漏网.push(`  lib/${m}`);
   }
   assert.deepEqual(漏网, [], '这些模块既没接线，也没写明为何不接（孤儿模块不会报错，只会安静地不存在）：\n' + 漏网.join('\n'));
 });
@@ -265,6 +289,19 @@ const 取 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
     t('令牌文件被 gitignore 挡住（不能入库）', () => {
       const 忽略 = fs.readFileSync(path.join(平台根, '.gitignore'), 'utf8');
       assert.ok(/\*\.local\.json/.test(忽略), '.gitignore 必须挡住 *.local.json，否则令牌会进版本库');
+    });
+
+    await ta('工作区未拉起时优雅降级，且说明可操作', async () => {
+      // 测试环境不起隔离进程，所以这里必然是转发失败那条路——正好验降级。
+      const r = await 取(port, '/api/workspace/worktrees?repository=.');
+      assert.equal(r.码, 503, '转发失败应是 503（依赖的服务不在），不是 500');
+      assert.ok(/npm run workspace/.test(r.体.error), '要告诉人怎么拉起来：' + r.体.error);
+      assert.ok(/child_process/.test(r.体.error), '要交代清楚为什么它是独立进程：' + r.体.error);
+    });
+
+    await ta('工作区转发同样受门禁保护', async () => {
+      const r = await 取(port, '/api/workspace/worktrees?repository=.', { 免令牌: true });
+      assert.equal(r.码, 401, '转发路径不能绕过门禁');
     });
 
     await ta('查询串解析不影响未知 API 的 404', async () => {

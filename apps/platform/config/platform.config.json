@@ -33,6 +33,13 @@
     "roles": {}
   },
   "watchtower": { "outDir": "watchtower-out", "freshMs": 45000, "unreadLimit": 50 },
+  "_工作区说明": [
+    "工作区服务是唯一被允许起 git 进程的地方（scripts/工作区服务.js，npm run workspace 手动拉）。",
+    "server.js 只经 http 转发过去，自己从头到尾不碰 child_process——桩模式的物理保证因此不受影响。",
+    "允许写默认 false。开成 true 意味着带令牌的调用方可以在本仓建分支、提交、合并；",
+    "这是一项独立的授权决定，不该由「服务起来了」顺带获得，所以单列开关而不是跟着端口走。"
+  ],
+  "workspace": { "port": 4371, "允许写": false },
   "providers": {
     "codex": { "adapter": "codex-cli", "enabled": true, "roles": [], "说明": "Codex CLI（无头 exec，提示词走 stdin）" },
     "claude": { "adapter": "claude-cli", "enabled": true, "roles": [], "说明": "Claude Code CLI（无头 -p，提示词走 stdin）" },

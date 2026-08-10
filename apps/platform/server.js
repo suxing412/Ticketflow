@@ -10,9 +10,10 @@
 // 2026-08-10 接线：lib/ 下六个模块此前一个都没接到接口上（写好了、测过了，但没有任何
 // 代码路径走得到）。本轮接了其中四个——判据是**不破坏上面那条物理保证**：
 //   routing/router + routing/history + toolchain + review-opinion   零 child_process，已接
-//   workspace/worktree                                              引 child_process，不接
-//   orchestration/plan                                              跨界引 studio 内部模块，不接
-// 两处未接的原因写在 docs/接线说明.md，不是遗漏。
+//   orchestration/plan                                              纯计算那半已接（store 改注入）
+//   workspace/worktree   引 child_process，**不进本文件的依赖闭包**——它住独立进程
+//                        scripts/工作区服务.js，本文件只用 http 转发过去。
+// 全部台账见 docs/接线说明.md 第四、六节。
 //
 // providers 消费走仓根 packages/providers（@papercrew/providers），
 // 换布局时用环境变量 TICKETFLOW_PACKAGES 指向 packages/。
@@ -48,6 +49,7 @@ const 配置 = 读JSON(path.join(仓根, 'config', 'platform.config.json'), {});
 const 包 = 读JSON(path.join(仓根, 'package.json'), {});
 const 端口 = Number(process.env.PORT || (配置.server && 配置.server.port) || 4370);
 const { 令牌, 文件: 令牌路径, 新建: 令牌新建 } = 门禁.取令牌(仓根);
+const 工作区端口 = Number(process.env.WORKSPACE_PORT || (配置.workspace && 配置.workspace.port) || 4371);
 const 平台名 = 配置.名称 || 包.name || 'AI-DevPlatform';
 const 版本 = 配置.版本 || 包.version || '0.0.0';
 
@@ -305,6 +307,34 @@ const 服务 = http.createServer((req, res) => {
         return 发JSON(res, 200, { ok: true, 合规: false, 原因: e.message });
       }
     });
+  }
+
+  // ——— 工作区：转发给隔离进程，本文件绝不自己起 git ———
+  // worktree.js 引 child_process，**读 git 状态也要 spawn**（rev-parse/diff 一样起进程），
+  // 所以「只接只读函数」绕不开那条保证。唯一出路是进程隔离：git 能力全住
+  // scripts/工作区服务.js，这里只用 http 转发。于是 server.js 的依赖闭包依旧干净，
+  // 那条传递闭包断言一个字都不用改。
+  if (url路径.startsWith('/api/workspace/')) {
+    const 尾 = url路径.slice('/api/workspace'.length);
+    const 代理 = http.request({
+      host: '127.0.0.1', port: 工作区端口, method: req.method,
+      path: 尾 + (请求URL.search || ''),
+      headers: { Authorization: `Bearer ${令牌}`, 'Content-Type': 'application/json' },
+    }, (上游) => {
+      let s = '';
+      上游.on('data', (d) => s += d);
+      上游.on('end', () => {
+        try { return 发JSON(res, 上游.statusCode, JSON.parse(s)); }
+        catch { return 发JSON(res, 502, { ok: false, error: '工作区服务返回了非 JSON 内容' }); }
+      });
+    });
+    代理.on('error', () => 发JSON(res, 503, {
+      ok: false,
+      error: `工作区服务未在 127.0.0.1:${工作区端口} 应答。它默认不随本服务启动——`
+        + '手动拉起：npm run workspace。它是唯一被允许起 git 进程的地方，本服务自己不碰 child_process。',
+    }));
+    代理.end();
+    return;
   }
 
   if (url路径.startsWith('/api/')) return 发JSON(res, 404, { ok: false, error: '未知 API：' + url路径 });

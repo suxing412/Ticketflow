@@ -11,8 +11,9 @@
     "watchtower": "node scripts/watchtower.js",
     "watchtower:install": "node scripts/watchtower.js --install",
     "watchtower:status": "node scripts/watchtower.js --status",
-    "check": "node --check server.js && node --check scripts/watchtower.js && node --check lib/toolchain.js && node --check lib/review-opinion.js && node --check lib/routing/router.js && node --check lib/routing/history.js && node --check lib/orchestration/plan.js && node --check lib/workspace/worktree.js",
-    "test": "node test/公用件契约.test.js && node test/接线契约.test.js"
+    "check": "node --check server.js && node --check scripts/watchtower.js && node --check lib/toolchain.js && node --check lib/review-opinion.js && node --check lib/routing/router.js && node --check lib/routing/history.js && node --check lib/orchestration/plan.js && node --check lib/workspace/worktree.js && node --check scripts/工作区服务.js && node --check lib/门禁.js",
+    "test": "node test/公用件契约.test.js && node test/接线契约.test.js",
+    "workspace": "node scripts/工作区服务.js"
   },
   "author": "robinwang2",
   "license": "UNLICENSED",
