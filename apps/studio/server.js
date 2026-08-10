@@ -22,6 +22,52 @@ let cfg = null; let initError = null;
 if (!ROOT) initError = '未找到监制台仓库（缺 studio.config.json）。';
 else { try { cfg = config.load(ROOT); store.ensureDirs(ROOT); } catch (e) { initError = '读配置失败：' + e.message; } }
 
+/* ---- 官方桩闸 STUDIO_STUB=1（施工令-039，案源 037 首启真派发 40s 事故 · 021 同族第二案）----
+   工程队起桩台此前各自手搓空转钩（037 手搓 Module._load、038 手搓改写导出 + 越界计数器），
+   两起事故全因**手搓漏面**：漏的从来不是自己写的那几个调用点，是没想到的那一个（server 自身
+   的开工调用、巡检定时器、向导重挂）。根治办法不是让每个桩台作者更小心，是把闸做进服务本身。
+
+   硬关口径 = 直接空转 runner 模块的**派发导出**。模块对象在 require 缓存里只有一份，于是
+   任何调用方（路由 / 巡检 setInterval / 向导就地重挂 / 今后新增的任何一处）拿到的都是哑函数，
+   不靠调用点自觉、不随代码演进漏面。外呼面（额度真调 / 连通探测）同理停用——桩台既不派发也不计费。
+   不置位时本块整体不执行，行为逐位不变。 */
+const STUB = process.env.STUDIO_STUB === '1';
+// 空转记录：哪些派发/外呼入口被调过又被拦下。随 /api/runner 下发，桩台作者一眼看清
+// 「这台确实被调了、也确实什么都没干」——037 的事故正是没人看得见这一层才烧了 40 秒。
+const 桩台拦截 = [];
+if (STUB) {
+  const r = require('./lib/runner');
+  // 生命周期面（服务开工/停手必调）：空转即可，被调是正常的
+  for (const k of ['start', 'stop', 'stopLoop']) r[k] = function 桩台空转() { 桩台拦截.push(k); };
+  // 真派发面：拉起会话 / 掐会话 / 排调度循环——哑掉，且返回值取"什么都没发生"的形状
+  r.startLoop = function 桩台空转() { 桩台拦截.push('startLoop'); };
+  r.tick = async function 桩台空转() { 桩台拦截.push('tick'); return { skipped: true, reason: '桩台模式：派发面已硬关' }; };
+  r.startWork = async function 桩台空转() { 桩台拦截.push('startWork'); return false; };
+  r.killTicket = function 桩台空转() { 桩台拦截.push('killTicket'); return false; };
+  // 外呼面：额度查询会真调 CLI/HTTP（计费+限流），连通探测会真发请求
+  const q = require('./lib/quota');
+  q.getRateLimits = async () => null; q.queryRateLimits = async () => null;
+  q.getClaudeUsage = async () => null; q.queryClaudeUsage = async () => null;
+  q.eagerRefresh = () => {};
+  // 额度闸从严：桩台一律不放行（真派发面已哑，这里是第二道）
+  q.checkGate = async () => ({ allowed: false, threshold: 0, reason: '桩台模式：额度查询停用，一律不放行' });
+  const np = require('./lib/netprobe');
+  np.httpProbe = async () => null;
+  np.探 = async () => ({ 直连: null, 经代理: null });
+  // 项管脑（H49）：五个入口每个都 spawn 一次 claude CLI，是全站最大的一笔计费外呼。
+  // 「零计费」离了这一面就是空话——起草/切单/收口/答疑/代裁一律哑掉，回调按「桩台不作业」回。
+  const brain = require('./lib/pm/brain');
+  for (const k of ['draftTicket', 'cut', 'closeout', 'answer', 'adjudicateReferral']) {
+    brain[k] = function 桩台空转(...args) {
+      桩台拦截.push('brain.' + k);
+      const cb = args[args.length - 1];
+      if (typeof cb === 'function') cb({ ok: false, error: '桩台模式：项管脑外呼已停用' });
+    };
+  }
+}
+// /api/runner 的桩台印：桩台模式下「运行」恒 false，且带 桩台:true 让调用方一眼看出这台不是实弹台
+const 桩台印 = (st) => (STUB ? { ...st, 桩台: true, 运行: false, 桩台拦截: [...桩台拦截] } : st);
+
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 // ---- 远程访问（0.17.10）：默认只听 127.0.0.1；config.网络.远程.开 = true 时听 0.0.0.0，
@@ -99,25 +145,56 @@ const 登录命令 = (厂商) => {
   if (厂商 === 'codex') return 'codex login';
   return `"${runner.resolveCli('claude').cmd}" auth login`;
 };
-app.get('/api/creds', (req, res) => {
+// 登录命令的可执行体在不在（施工令-027「不可用的按钮不许摆着」）：
+// 不在就不给按钮——点了只会弹一个报 not recognized 的黑窗，那不叫功能。
+// 命令被 config.执行器.登录命令 覆盖过的，视为用户自己知道在干什么，一律放行。
+const 登录可用 = (厂商) => new Promise((resolve) => {
+  if ((((cfg || {}).执行器 || {}).登录命令 || {})[厂商]) return resolve(true);
+  const cmd = 厂商 === 'codex' ? 'codex' : runner.resolveCli('claude').cmd;
+  if (/[\\/:]/.test(cmd)) return resolve(fs.existsSync(cmd)); // 绝对路径：直接看文件在不在
+  require('child_process').execFile('where', [cmd], { timeout: 5000, windowsHide: true }, (e) => resolve(!e));
+});
+// 订阅态四档（施工令-027 圆点语义统一）：可用=绿 / 受限=黄（能自愈，无需人管）/ 失效=红（要人重登）/ 未知=灰（探不到，别假绿也别乱报红）。
+// note **不含厂商名**——名字由前端的 <b>厂商</b> 出，两边都写就是 08-09 巡检抓到的「codex codex …」叠字。
+app.get('/api/creds', async (req, res) => {
   if (!ready(res)) return;
   const os2 = require('os');
-  // 订阅态：claude 读凭据文件、codex 问 app-server——app 不存它们的任何东西
-  let claude订阅 = { 已登录: false, note: '未登录（点登录按钮）' };
+  // 订阅态：claude 读凭据文件、codex 问 app-server（本地零 token）——app 不存它们的任何东西
+  let claude订阅;
   try {
     const c = JSON.parse(fs.readFileSync(path.join(os2.homedir(), '.claude', '.credentials.json'), 'utf8')).claudeAiOauth;
-    if (c && c.accessToken) {
-      claude订阅 = c.expiresAt > Date.now()
-        ? { 已登录: true, note: 'token 有效至 ' + new Date(c.expiresAt).toTimeString().slice(0, 5) }
-        : { 已登录: !!c.refreshToken, note: c.refreshToken ? 'token 过期，将自动续期' : 'token 过期且无 refresh，需重登' };
-    }
-  } catch { /* 无凭据文件 = 未登录 */ }
-  res.json({
-    订阅: { claude: claude订阅, codex: { note: 'codex 登录态见环境探针（app-server 探测）' } },
-    托管: creds.list(ROOT),
-    可加密: creds.可加密(),
-    登录命令: { claude: 登录命令('claude'), codex: 登录命令('codex') },
-  });
+    if (!c || !c.accessToken) claude订阅 = { 态: '失效', 已登录: false, note: '凭据文件里没有 token，需重新登录' };
+    else if (c.expiresAt > Date.now()) claude订阅 = { 态: '可用', 已登录: true, note: 'token 有效至 ' + new Date(c.expiresAt).toTimeString().slice(0, 5) };
+    else if (c.refreshToken) claude订阅 = { 态: '受限', 已登录: true, note: 'token 已过期，下次调用凭 refresh 自动续期' };
+    else claude订阅 = { 态: '失效', 已登录: false, note: 'token 过期且无 refresh，需重新登录' };
+  } catch (e) {
+    claude订阅 = (e && e.code === 'ENOENT')
+      ? { 态: '失效', 已登录: false, note: '本机没有凭据文件（未登录）' }
+      : { 态: '未知', 已登录: false, note: '凭据文件读不动：' + String(e && e.message).slice(0, 40) };
+  }
+  // codex 没有可读的凭据文件，只能问 app-server：无响应时「未装 / 未登录 / 服务没起」三者分不清，
+  // 那就是**未知**（灰），不是失效（红）——按施工令-027 的圆点语义如实呈。
+  const rl = await require('./lib/quota').getRateLimits(cfg).catch(() => null);
+  const w0 = rl ? (require('./lib/quota').windowsOf(rl)[0] || null) : null;
+  const codex订阅 = rl
+    ? { 态: '可用', 已登录: true, note: 'app-server 应答' + (w0 ? ` · ${w0.label}已用 ${w0.pct}%` : '') }
+    : { 态: '未知', 已登录: false, note: 'app-server 无响应——未装 / 未登录 / 服务没起，探不出是哪种（额度盲飞）' };
+  // 本处理器改成 async 之后多了一条纪律：express 4 不接管 async 抛出的异常，
+  // 漏抛一次这个请求就永远不回，凭据卡在"读取中…"上转到天荒地老。整体兜底，宁可如实报错。
+  try {
+    const [claude可登, codex可登] = await Promise.all([登录可用('claude'), 登录可用('codex')]);
+    res.json({
+      订阅: {
+        claude: { ...claude订阅, 可登录: claude可登, 命令: 登录命令('claude') },
+        codex: { ...codex订阅, 可登录: codex可登, 命令: 登录命令('codex') },
+      },
+      托管: creds.list(ROOT),
+      可加密: creds.可加密(),
+      登录命令: { claude: 登录命令('claude'), codex: 登录命令('codex') },
+    });
+  } catch (e) {
+    res.status(500).json({ error: '凭据探测失败：' + String(e && e.message).slice(0, 120) });
+  }
 });
 app.post('/api/auth/login', (req, res) => {
   if (!ready(res)) return;
@@ -171,6 +248,15 @@ app.get('/api/board', (req, res) => {
     父单: t.fm.父单 || null, 依赖: t.fm.依赖 || null, 管线: t.fm.管线 || null, // H51 管线章
     父单类型: t.fm.父单类型 || null,
     领单时间: t.fm.领单时间 || null, 交付时间: t.fm.交付时间 || null, 滞留告警: !!t.fm.滞留告警,
+    挂起: t.fm.挂起 || null, // 施工令-021：工单池卡/树形行/流程节点/在途四处的 ❄ 置灰都读这一个字段
+    // 施工令-022 流程视图（现在线管线甘特）两个必需字段：
+    //   更新时间 = 本单最近一次事件，管线「闲置 N 天」直书取它算时间差；
+    //   归档原因 = 沉淀抽屉四分类的判据（废弃 / 返工替代 / 推翻替代）——没有它，已归档区里
+    //              「主动废掉的」和「被新单顶替的」在页面上长一个样，制作人分不出哪些是自己拍的板。
+    更新时间: t.fm.更新时间 || null, 归档原因: t.fm.归档原因 || null,
+    // 施工令-038：候引擎实证印（施工令-032② / H97）是 待验收 之下的**停人闸**子态，
+    // 流程页「等你签字」绿框判据要它才分得清「等你直收」与「等判官接手」——只下发有无，不下发印文。
+    待引擎实证: !!t.fm.待引擎实证,
   }));
   res.json({ states: store.STATES, board: out, 隐藏数 });
 });
@@ -197,7 +283,9 @@ app.post('/api/pm/draft', (req, res) => {
   const name = (cfg.项目 && cfg.项目.默认) || '';
   const projPath = name && reg[name] && reg[name].路径;
   journal.append(ROOT, '派单委托受理（H57）：' + 需求.slice(0, 60));
-  try { require('./lib/ledger').event(ROOT, '派单委托', { 需求: 需求.slice(0, 200) }); } catch { /**/ }
+  // 这条事件是关键汇报链「委托事由」的唯一来源（chain.js 按 30 分钟窗与随后的 单张待审 配对）——
+  // 它没落盘，起草站就只能显示「项管单张起草」这句套话，制作人问的「为什么起这张单」永远没答案。
+  记事件('派单委托', { 需求: 需求.slice(0, 200) });
   require('./lib/pm/brain').draftTicket(ROOT, cfg, 需求, projPath, (r) => {
     journal.append(ROOT, r.ok ? '项管起草完成：' + r.单 + '（草稿待审）' : '项管起草失败：' + (r.error || ''));
   });
@@ -356,18 +444,18 @@ function runnerStatus() {
     let t = null; try { t = store.find(ROOT, e.id); } catch { /* 单已挪走：按无单算 */ }
     return { ...e, 进度: 进度Of(t, e) };
   });
-  return st;
+  return 桩台印(st);
 }
 app.get('/api/runner', (req, res) => { if (!ready(res)) return; res.json(runnerStatus()); });
 app.post('/api/runner/start', (req, res) => {
   if (!ready(res)) return;
-  runner.start(ROOT, () => cfg);
-  res.json({ ok: true, ...runner.status(ROOT, cfg) });
+  runner.start(ROOT, () => cfg); // 桩台模式下这是哑函数：点了也起不来，且下面照报 运行:false
+  res.json({ ok: true, ...桩台印(runner.status(ROOT, cfg)) });
 });
 app.post('/api/runner/stop', (req, res) => {
   if (!ready(res)) return;
   runner.stop(ROOT);
-  res.json({ ok: true, ...runner.status(ROOT, cfg) });
+  res.json({ ok: true, ...桩台印(runner.status(ROOT, cfg)) });
 });
 // /api/runner/mode（试跑↔实弹）已随 H81 常开单闸制拆除：运行即实弹，停手闸是暂停总闸
 // ---- 全量配置入 UI（2026-07-11 用户指示）：以下均为白名单化分区写回 ----
@@ -595,11 +683,15 @@ app.get('/api/env', async (req, res) => {
 
   // 组4 协议资产与配置完整性
   const 协议配置 = [];
-  const charters = ['通用', '策划', '程序', '美术', 'QA', '装配'];
+  // 章程清单活读 cfg.职能（施工令-027）：写死六份的年代，新增职能（技术策划）注册后自检照报"齐全"，
+  // 缺的那份章程要等 agent 开工才发现。通用是所有职能共读的底章，永远算一份。
+  const charters = ['通用', ...(cfg.职能 || []).map(String)].filter((n, i, a) => n && a.indexOf(n) === i);
   const missing = charters.filter((n) => !fs.existsSync(path.join(ROOT, '岗位协议', n + '.md')));
-  协议配置.push(missing.length ? item('岗位协议', '黄', '缺：' + missing.join('、')) : item('岗位协议', '绿', charters.length + ' 份齐全'));
+  协议配置.push(missing.length ? item('岗位协议', '黄', `缺：${missing.join('、')}（应有 ${charters.length} 份：通用 + ${(cfg.职能 || []).length} 职能）`)
+    : item('岗位协议', '绿', charters.length + ' 份齐全'));
   const lint = [];
-  for (const fn of cfg.职能 || []) if (!pool.poolFor(cfg, fn)) lint.push(`职能「${fn}」无执行池归属（领单会失败）`);
+  // 池归属走编制口径（施工令-027）：poolFor 已委托 cfg.编制 池序，老映射 执行池.<池>.职能 仅兜底
+  for (const fn of cfg.职能 || []) if (!pool.poolFor(cfg, fn)) lint.push(`职能「${fn}」无执行池归属（编制表未挂池序、老映射也没有——领单/派发会失败）`);
   for (const r of roster.read(cfg)) {
     if (!(cfg.职能 || []).includes(r.职能)) lint.push(`编制行「${r.职能}」的职能不在职能表`);
     for (const p of r.池序) if (!(cfg.执行池 || {})[p.池]) lint.push(`编制行「${r.职能}」池序里的 ${p.池} 池未注册`);
@@ -757,6 +849,21 @@ app.post('/api/config/remote', (req, res) => {
 // ---- H49 双域：想法池 + 项管 ----
 const ideas = require('./lib/pm/ideas');
 const pmLedger = require('./lib/pm/ledger');
+/* 台账事件唯一出口（施工令-039，案源 037 勘察实锤）。
+   旧样：派单委托 / 定稿放行 两处写 require('./lib/ledger').event(...)——**指错了模块**。
+   lib/ledger 只有 commitStudio（git 记账），事件属主是 lib/pm/ledger。于是每次调用都抛
+   TypeError，又被 `catch { }` 空吞，两类事件一个月零落盘无人发现（现网 事件.jsonl 570 行零命中）。
+   吞异常是帮凶：错的是 require，瞒下来的是空 catch。此后事件一律走这道口子——
+   属主唯一（pmLedger），失败必留痕（console 保底 + journal 落盘，双保险各自独立 try）。
+   语义边界：event() 只 append 事件.jsonl（急件类型另投信箱），**不改状态机、零调度语义影响**。
+   函数声明有提升，模块内任何位置（含本行之上的 /api/pm/draft）运行期都调得到。 */
+function 记事件(类型, data) {
+  try { return pmLedger.event(ROOT, 类型, data); } catch (e) {
+    console.error(`台账事件落盘失败（${类型}）：${e.message}`);
+    try { journal.append(ROOT, `台账事件落盘失败（${类型}）：${e.message}`); } catch { /* 留痕失败不阻塞主流程 */ }
+    return null;
+  }
+}
 app.get('/api/ideas', (req, res) => {
   if (!ready(res)) return;
   res.json({ 想法: ideas.list(ROOT).filter((x) => req.query.全部 === '1' || x.状态 === '在池') });
@@ -775,6 +882,17 @@ app.post('/api/ideas', (req, res) => {
 app.get('/api/pm/ledger', (req, res) => {
   if (!ready(res)) return;
   res.json({ 台账: pmLedger.read(ROOT), 事件: pmLedger.events(ROOT, Number(req.query.limit) || 80) });
+});
+// 关键汇报事件链（施工令-037）：台账事件流水 + 工单 frontmatter 结构位按单号归组，一单一链。
+// **纯读聚合**——零新事件源、零调度语义改动、零写盘；业务全在 lib/pm/chain（可单测），此处只做路由。
+// 15s 活体轮询打的就是这个口子，所以它必须便宜：只读 jsonl 尾 N 条 + 活单目录，不碰 LLM 不碰网络。
+app.get('/api/pm/chains', (req, res) => {
+  if (!ready(res)) return;
+  res.json(require('./lib/pm/chain').汇总(ROOT, {
+    limit: Number(req.query.limit) || 12,
+    事件窗: Number(req.query.事件窗) || 300,
+    含隐藏: req.query.含隐藏 === '1',
+  }));
 });
 app.post('/api/pm/cut', (req, res) => {
   if (!ready(res)) return;
@@ -861,8 +979,10 @@ app.post('/api/open', (req, res) => {
 // ---- 决策台（P4）：待验收 + 待定夺 ----
 app.get('/api/decisions', (req, res) => {
   if (!ready(res)) return;
-  const accept = store.list(ROOT, '待验收').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 验收方式: t.fm.验收方式, QA: t.fm.QA, 项目: t.fm.项目 }));
-  const escal = store.list(ROOT, '待定夺').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 自修次数: t.fm.自修次数 || 0, 项目: t.fm.项目 }));
+  // 挂起字段随行（施工令-021）：决策台要据此置灰并给出解挂按钮——不带这一栏，制作人在签字位上
+  // 看到的就是一张「看着能签、点下去被拦」的单。
+  const accept = store.list(ROOT, '待验收').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 验收方式: t.fm.验收方式, QA: t.fm.QA, 项目: t.fm.项目, 挂起: t.fm.挂起 || null, 父单类型: t.fm.父单类型 || null }));
+  const escal = store.list(ROOT, '待定夺').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 自修次数: t.fm.自修次数 || 0, 项目: t.fm.项目, 挂起: t.fm.挂起 || null, 父单类型: t.fm.父单类型 || null }));
   res.json({ 待验收: accept, 待定夺: escal, 积压闸: (cfg.闸值 || {}).待验收积压闸, 积压: accept.length });
 });
 
@@ -936,9 +1056,21 @@ const ACTIONS = {
   验收: (b) => life.验收(ROOT, b.id, !!b.通过),
   失败分诊: (b) => life.失败分诊(ROOT, b.id, b.决定), // D31：重投/上呈（废弃走通用废弃）
   解除复核: (b) => life.解除待复核(ROOT, b.id, b.说明), // D36：核对新版后解除
-  返修: (b) => life.返修(ROOT, b.id, b.说明), // H65：同活同号——执行失败/待验收回草稿改写，计数保留
+  返修: (b) => life.返修(ROOT, b.id, b.说明), // H65：同活同号——执行失败/待验收回草稿改写，计数保留（掐在飞审检会话已内置在 life.返修，施工令-032①，别在这层重复掐）
+  实证放行: (b) => life.实证放行(ROOT, b.id, b.操作者, b.说明), // 施工令-032② H97：门禁单核查过后候检，总监确认引擎证据入回执 → 转完成
   推翻: (b) => life.推翻(ROOT, b.id, b.理由), // 制作人翻案：完成/已归档 → 自动编号返工草稿
   隐藏: (b) => life.隐藏(ROOT, b.id, b.值), // 隐藏归档：默认视图湮灭，纸面可考
+  // 施工令-021 制作人裁决权：挂起=原位冻结（单不挪窝，全链路跳过），解挂=原位复活。
+  // 掐会话与废弃/收回同款——在途单被冻结时进程还在跑，等于没冻。
+  挂起: (b) => {
+    // 先掐后冻：反过来的话，冻结与掐会话之间那一小段里会话可能刚好收线，
+    // 交产出虽被 life 层的挂起守卫挡住，却会白白走一趟失败路径（回执已落盘、状态没动）。
+    runner.killTicket(ROOT, b.id);
+    if (!b.全树) return life.挂起(ROOT, b.id, b.操作者, b.理由);
+    for (const c of life.子孙(ROOT, b.id)) runner.killTicket(ROOT, c.id);
+    return life.挂起树(ROOT, b.id, b.操作者, b.理由);
+  },
+  解挂: (b) => (b.全树 ? life.解挂树(ROOT, b.id, b.操作者) : life.解挂(ROOT, b.id, b.操作者)),
   放行: (b) => { // H49 派发制：待投单标放行（依赖就绪即被派发引擎拉起）
     const t = store.find(ROOT, b.id);
     if (!t) return { ok: false, error: '不存在' };
@@ -962,15 +1094,15 @@ ACTIONS.定稿 = (b) => {
     journal.append(ROOT, `定稿预检拦截 ${b.id}：${errs.length} 条（H62）`);
     return { ok: false, error: '预检不过：' + errs.join('；') };
   }
-  const warns = preflightWarn(t0); // 短题制警示：只提醒不拦截，老单在途单照过
-  if (warns.length) journal.append(ROOT, `定稿预检警示 ${b.id}：${warns.join('；')}（H83 短题制，未拦截）`);
+  const warns = preflightWarn(t0, ROOT); // 短题制 + 管线归属警示：只提醒不拦截，老单在途单照过（传 ROOT 才能沿父链判继承）
+  if (warns.length) journal.append(ROOT, `定稿预检警示 ${b.id}：${warns.join('；')}（未拦截）`);
   if (t0 && !['战役', '专项'].includes(t0.fm.父单类型)) {
     store.update(ROOT, b.id, (fm) => { fm.审批人 = '总监'; fm.审批时间 = new Date().toISOString(); }); // H62 归因记账：放行章落单
   }
   const r = legacy定稿(b);
   if (r.ok && warns.length) r.警示 = warns; // 随结果回前端提示，动作照常完成
   // H57 透明化：定稿是 Claude 审批放行动作，入台账事件供项管视图可见
-  if (r.ok) { try { require('./lib/ledger').event(ROOT, '定稿放行', { 单: b.id }); } catch { /**/ } }
+  if (r.ok) 记事件('定稿放行', { 单: b.id });
   if (r.ok && cfg.执行器 && cfg.执行器.派发制) {
     const t = store.find(ROOT, b.id);
     if (t && ['战役','专项'].includes(t.fm.父单类型)) {
@@ -1039,7 +1171,15 @@ app.get('/api/config', (req, res) => {
   if (!ready(res)) return;
   // 兼容池密钥脱敏（0.22.1）：config 会流向远程客户端，密钥只留尾四位指纹
   const pools = JSON.parse(JSON.stringify(cfg.执行池 || {}));
-  for (const p of Object.values(pools)) if (p.兼容 && p.兼容.key) p.兼容.key = '●●●●' + String(p.兼容.key).slice(-4);
+  // 托管标记（施工令-029）：key 迁进 DPAPI 托管后 config 明文字段是空的，
+  // 界面若照旧渲染「密钥 未设」会像掉了配置——如实标出「已托管」，兜底字段还在就一并说明。
+  let 托管池 = new Set();
+  try { 托管池 = new Set(creds.list(ROOT).map((r) => r.池)); } catch { /* 托管库读不动不影响参数页 */ }
+  for (const [n, p] of Object.entries(pools)) {
+    if (!p.兼容) continue;
+    if (p.兼容.key) p.兼容.key = '●●●●' + String(p.兼容.key).slice(-4);
+    if (托管池.has(n)) p.兼容.托管 = true;
+  }
   res.json({ 闸值: cfg.闸值, 执行池: pools, 编制: cfg.编制 || roster.read(cfg), 职能: cfg.职能, 推荐: cfg.推荐 || {}, 项目: cfg.项目 || {}, 模型: cfg.模型 || {}, 执行器: cfg.执行器 || {}, quota: cfg.quota || {}, server: cfg.server || {} });
 });
 app.get('/api/quota', async (req, res) => {
@@ -1202,6 +1342,8 @@ function start() {
     const bindAddr = REMOTE().开 ? '0.0.0.0' : '127.0.0.1'; // 远程开=全接口监听（令牌把门）
     const srv = app.listen(port, bindAddr, () => {
       console.log(initError ? `监制台启动但未就绪：${initError}` : `监制台已启动：http://127.0.0.1:${port}${bindAddr === '0.0.0.0' ? '（远程监听已开，令牌把门）' : ''}`);
+      // 醒目一行：桩台与实弹台长得一模一样，唯一区别就是这行日志——起错台是 037 事故的第一步
+      if (STUB) console.log('★★ 桩台模式（STUDIO_STUB=1）：零派发零计费 —— 执行器派发面已硬关，额度查询与连通探测已停用 ★★');
       巡检();
       if (!initError) setInterval(巡检, 30 * 60000).unref();
       // 自动记账（D35）：定期把工单流转/回执/journal git commit 落袋，间隔读 config（0=关）

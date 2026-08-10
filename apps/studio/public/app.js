@@ -5,14 +5,16 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': 
 const qesc = (s) => esc(String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
 const api = async (p, opt) => (await fetch(p, opt)).json();
 const post = (p, body) => api(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
-const FN = { 策划: 'var(--fn-plan)', 程序: 'var(--fn-code)', 美术: 'var(--fn-art)', QA: 'var(--fn-qa)', 装配: 'var(--fn-asm)' };
+// 技术策划入三表（施工令-028 范围 5 / 027 报备件）：H88 加了这个职能，色表却没跟上，
+// 它的胶囊在流程/工单/在途各处一直是无色的（走 fnPill 的默认分支）。
+const FN = { 策划: 'var(--fn-plan)', 技术策划: 'var(--fn-tplan)', 程序: 'var(--fn-code)', 美术: 'var(--fn-art)', QA: 'var(--fn-qa)', 装配: 'var(--fn-asm)' };
 // 职能色走 CSS 变量：主题切换（暖纸/玻璃）时内联色自动跟随令牌，不写死 hex
-const FNHEX = { 策划: 'var(--fn-plan)', 程序: 'var(--fn-code)', 美术: 'var(--fn-art)', QA: 'var(--fn-qa)', 装配: 'var(--fn-asm)' };
-const FNCLS = { 策划: 'fn-plan', 程序: 'fn-code', 美术: 'fn-art', QA: 'fn-qa', 装配: 'fn-asm' };
+const FNHEX = { 策划: 'var(--fn-plan)', 技术策划: 'var(--fn-tplan)', 程序: 'var(--fn-code)', 美术: 'var(--fn-art)', QA: 'var(--fn-qa)', 装配: 'var(--fn-asm)' };
+const FNCLS = { 策划: 'fn-plan', 技术策划: 'fn-tplan', 程序: 'fn-code', 美术: 'fn-art', QA: 'fn-qa', 装配: 'fn-asm' };
 const STCLS = { 在途: 'st-doing', 质检: 'st-review', 待验收: 'st-accept', 完成: 'st-done', 待定夺: 'st-escal', 执行失败: 'st-escal', 草稿: 'mut', 已归档: 'mut', 待投: '', 池: '' };
 const STPCT = { 草稿: 0, 待投: 0, 池: 0, 在途: 60, 质检: 85, 待定夺: 70, 执行失败: 60, 待验收: 90, 完成: 100, 已归档: 0 };
 // 施工令-015：wiki 升格唯一知识入口（施工令-020 起五分区），风格库导航退役——美术标杆并入 Wiki 页签
-const NAV = [['总览', ''], ['想法', 'ideas'], ['工单', 'board'], ['流程', 'flow'], ['树形', 'tree'], ['在途', 'agents'], ['决策台', 'decisions'], ['Wiki', 'wiki'], ['项管', 'relay'], ['报表', 'report']]; // 参数入口只走 ⚙
+const NAV = [['总览', ''], ['想法', 'ideas'], ['工单', 'board'], ['流程', 'flow'], ['在途', 'agents'], ['决策台', 'decisions'], ['Wiki', 'wiki'], ['项管', 'relay'], ['报表', 'report']]; // 参数入口只走 ⚙；树形页签随施工令-028 退役
 function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1900); }
 // 数值跳字确认（步进器改完后调用）：重触发 animation
 function bump(el) { if (!el) return; el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
@@ -51,6 +53,15 @@ function fmtElapsed(ms) {
 }
 const fnPill = (fn) => fn ? `<span class="pill sm fn ${FNCLS[fn] || ''}">${esc(fn)}</span>` : '';
 const stPill = (st) => `<span class="pill ${STCLS[st] || ''}">${esc(st)}</span>`;
+/* ===== 挂起可视三件套（施工令-021）=====
+   三处渲染（工单池卡 / 流程节点 / 在途时间轴段）共用同一组：置灰靠 .susp 类，
+   ❄ 徽标靠 snowB()，鼠标悬停的解释靠 suspTip()。新视图挂上同样三件即自动同款——
+   各视图各画一套是「同一个事实在五个地方长得不一样」的开端。
+   取值一律 t.挂起（/api/board 与 /api/decisions 已随行透出），缺字段=未挂（老单零迁移）。 */
+const suspOf = (t) => (t && t.挂起) || null;
+const suspCls = (t) => (suspOf(t) ? ' susp' : '');
+const suspTip = (t) => { const s = suspOf(t); return s ? `已挂起 · ${s.操作者 || '制作人'} · ${String(s.时间 || '').slice(0, 16).replace('T', ' ')}${s.理由 ? '\n' + s.理由 : ''}${s.连带自 ? '\n（随父单 ' + s.连带自 + ' 全树挂起）' : ''}` : ''; };
+const snowB = (t) => (suspOf(t) ? `<span class="snowb" title="${esc(suspTip(t))}">❄</span>` : '');
 
 /* ===== 多项目视界（v0.12 = D42）=====
    启动页选项目 → 进入该项目的驾驶舱，全部视图按项目过滤。
@@ -387,8 +398,8 @@ async function viewBoard() {
         : s === '已归档' && (window._hiddenCnt || window._showHidden)
           ? `<h4>${s}<span class="cnt">${items.length}</span><button class="newdraft" title="隐藏归档：制作人湮灭的废案，默认不渲染" onclick="window._showHidden=!window._showHidden;route()">${window._showHidden ? '藏起' : `显隐藏 ${window._hiddenCnt}`}</button></h4>`
           : `<h4>${s}<span class="cnt">${items.length}</span></h4>`;
-    const cards = items.map((t) => `<div class="bcard2" data-tid="${esc(t.id)}" onclick="location.hash='#/t/${t.id}'">
-        <span class="cid">${esc(t.id)}</span>
+    const cards = items.map((t) => `<div class="bcard2${suspCls(t)}" data-tid="${esc(t.id)}" onclick="location.hash='#/t/${t.id}'"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}>
+        <span class="cid">${snowB(t)}${esc(t.id)}</span>
         <span class="cpri ${t.优先级 === 'P0' ? 'p0' : ''}">${esc(t.优先级 || '')}</span>
         <div class="ct clamp2" title="${esc(t.title)}">${esc(t.title)}</div>${fnPill(t.职能)}</div>`).join('');
     return `<div class="bcol2 ${widths[s] || ''} ${hot ? 'hot' : ''}">${head}${cards}</div>`;
@@ -425,316 +436,256 @@ async function viewBoard() {
     <div class="hsync" id="hsync"><div id="hsync-w" style="height:1px"></div></div>`;
 }
 
-/* ===== P12 流程（D43）：横轴=阶段 · 阶段内拓扑子列 · 泳道=系统（根祖先）· 红=关键路径 =====
-   兼任投池前排版台：草稿/待投也显示。父单（组织容器）不出节点，只当泳道。 */
+/* ===== P12 流程（施工令-022 重构）：现在线 · 管线甘特 =====
+   魂：一条「现在线」把每条管线横切成 沉淀｜现在｜接下来 三段——制作人 3 秒回答
+   「在做什么、接下来什么、卡在哪」。行=管线（/api/pipelines 注册）+「散单」特殊行（无管线归属的活动单）。
+   D43 的阶段横轴 / 泳道甘特 / 关键路径 / 显示历史机制整体退役；施工令-006 的签字位常驻语义并入本结构。
+   进度口径不另立一套：吃服务端随 /api/agents 下发的 进度 字段（lib/progress.js 算好，与 /api/runner 同源），
+   15s 活体刷新复用在途页那条 pollLoop。挂起（施工令-021）不进现在/接下来两段，直接落沉淀抽屉的 ❄ 类。 */
+const FG_DOING = new Set(['在途', '质检']);       // 现在区：实心条 + 实时百分比
+const FG_STUCK = new Set(['待定夺', '执行失败']); // 现在区：卡住的也算「现在」（三问之一就是「卡在哪」）
+const FG_QUEUE = new Set(['待投', '池', '草稿']); // 接下来区：按依赖拓扑排
+const FG_DONE = new Set(['完成', '已归档']);
+const FG_SIGN = new Set(['待验收', '待定夺']);    // 等制作人落笔的两态（006 签字位）
+// 沉淀四分类（制作人追加重点）：完成 / ❄挂起 / 废弃 / 推翻——计数分开列，点哪类只展哪类
+const FG_CATS = [['done', '完成'], ['susp', '❄挂起'], ['drop', '废弃'], ['over', '推翻']];
+// 分类判据：挂起优先（原位冻结，状态还停在原处，不是终态）；已归档按 归档原因 分流。
+// 归档原因缺失的老单归「废弃」——已归档且没有成功记录，按丢弃计比冒充完成诚实。
+const fgCat = (t) => {
+  if (suspOf(t)) return 'susp';
+  if (t.state === '完成') return 'done';
+  if (t.state !== '已归档') return null;
+  const why = String(t.归档原因 || '');
+  if (why.includes('推翻') || why.includes('返工')) return 'over';
+  return 'drop';
+};
+let fgOpen = {}; // 沉淀抽屉展开态：laneKey -> 类别 key。空 = 全折——**默认全折叠，页面上只活人说话**
 async function viewFlow() {
-  const [{ all }, stg, pls] = await Promise.all([loadBoard(), api('/api/stages?项目=' + encodeURIComponent(curProj())).catch(() => ({ 阶段: [], 标准: {} })), api('/api/pipelines').catch(() => ({ 管线: [] }))]);
-  const STG = (stg.阶段 && stg.阶段.length) ? stg.阶段 : [{ 代号: 'L0', 名称: '原型' }, { 代号: 'L1', 名称: '正式化' }, { 代号: 'L2', 名称: '打磨' }];
+  const [{ all }, pls, agRaw] = await Promise.all([
+    loadBoard(),
+    api('/api/pipelines').catch(() => ({ 管线: [] })),
+    api('/api/agents').catch(() => ({ 在跑: [] })),
+  ]);
+  const ag = agentsScoped(agRaw, all); // 与在途页同一道项目闸，百分比才对得上号
   const byId = Object.fromEntries(all.map((t) => [t.id, t]));
   const pById = Object.fromEntries((pls.管线 || []).map((p) => [p.id, p]));
   const hasKids = new Set(all.filter((t) => t.父单 && byId[t.父单]).map((t) => t.父单));
-  const depsOf = (t) => t.依赖 ? (Array.isArray(t.依赖) ? t.依赖 : String(t.依赖).split(/[，,\s]+/)).filter((d) => byId[d]) : [];
-  const rootOf = (t) => { let c = t, g = 0; while (c.父单 && byId[c.父单] && g++ < 10) c = byId[c.父单]; return c; };
-  // H51 管线章解析：显式字段优先，否则沿父链上溯（子单继承专项父单的线）
+  // 组织容器（专项/战役父单）不占普通条位——只在它自己等签字时以里程碑旗出场
+  const isBox = (t) => hasKids.has(t.id) || ['战役', '专项'].includes(t.父单类型) || ['战役', '专项'].includes(t.主办);
+  const depsOf = (t) => (t.依赖 ? (Array.isArray(t.依赖) ? t.依赖.map(String) : String(t.依赖).split(/[，,、\s]+/)) : []).filter((d) => byId[d]);
+  // H51 管线章：显式字段优先，否则沿父链上溯（子单继承专项父单的线）
   const pipeOf = (t) => { let c = t, g = 0; while (c && g++ < 10) { if (c.管线 && pById[c.管线]) return c.管线; c = c.父单 ? byId[c.父单] : null; } return null; };
-  const DONE = new Set(['完成', '已归档']);
-  // 节点=非容器单；无阶段章的旧单归第一阶段
-  // 泳道两级分组（0.23.4，用户裁定「管线下按父单分组」）：管线 → 专项子泳道；散单归「散单」道
-  let nsAll = all.filter((t) => !hasKids.has(t.id)).map((t) => {
-    const pid = pipeOf(t);
-    const spec = rootOf(t);
-    const laneKey = pid
-      ? `${pid}::${spec.id !== t.id ? spec.id : '_misc'}`
-      : (spec.id === t.id ? '::未归属' : `::${spec.id}`);
-    const laneTitle = pid
-      ? (spec.id !== t.id ? `${spec.id} ${String(spec.title || '').replace(/^专项：|^战役：/, '').slice(0, 24)}` : '散单')
-      : (spec.id === t.id ? '未归属' : (spec.title || spec.id));
-    return {
-      t, id: t.id, deps: depsOf(t), stg: STG.some((s) => s.代号 === t.阶段) ? t.阶段 : STG[0].代号,
-      h: parseFloat(t.预计时间) || 1, pid, lane: laneKey, laneTitle,
-    };
-  });
-  // 历史折叠进布局（不再 display:none 留空白）：全完成的子泳道整体不排，头行计数提示
-  const foldHist = (() => { try { return (localStorage.getItem('fl_fold') || 'on') !== 'off'; } catch { return true; } })();
-  // 签字位常驻（施工令-006）：折叠判据 = 组内**全部**为 完成/已归档，且要连容器单一起数。
-  // 旧判据只数叶子节点，而专项/阶段父单不出节点——「子单全完成、专项父单还挂在待验收」
-  // 的组于是被整道折进历史，制作人的签字队列凭空消失（2026-08-06 实拍病灶）。
-  const SIGN = new Set(['待验收', '待定夺']); // 等制作人落笔的两态
-  // 容器单归到它当家的那条道：根专项归自己那道，中间层父单归其根专项那道（与叶子的 laneKey 同构）
-  const laneKeyOfBox = (t) => { const pid = pipeOf(t); const spec = rootOf(t); return pid ? `${pid}::${spec.id}` : `::${spec.id}`; };
-  const laneBoxes = {};
-  for (const t of all) if (hasKids.has(t.id)) { const k = laneKeyOfBox(t); (laneBoxes[k] = laneBoxes[k] || []).push(t); }
-  const laneDone = {};
-  for (const n of nsAll) { (laneDone[n.lane] = laneDone[n.lane] || []).push(DONE.has(n.t.state)); }
-  const laneSign = {}; // 泳道 → 等签字的单（叶子 + 容器一起收）
-  const pushSign = (k, t) => { if (SIGN.has(t.state)) (laneSign[k] = laneSign[k] || []).push(t); };
-  for (const n of nsAll) pushSign(n.lane, n.t);
-  for (const k in laneBoxes) for (const t of laneBoxes[k]) pushSign(k, t);
-  const laneAllDone = (k) => (laneDone[k] || []).every(Boolean) && (laneBoxes[k] || []).every((t) => DONE.has(t.state));
-  const foldedLanes = new Set(Object.keys(laneDone).filter(laneAllDone));
-  const foldedByPipe = {};
-  if (foldHist) for (const k of foldedLanes) { const pid = k.split('::')[0]; foldedByPipe[pid] = (foldedByPipe[pid] || 0) + 1; }
-  const ns = foldHist ? nsAll.filter((n) => !foldedLanes.has(n.lane)) : nsAll;
-  if (!ns.length) {
-    const fN = foldHist ? foldedLanes.size : 0;
-    // 死胡同修复：文案让点「显示历史」，按钮本体就得在卡里——空态时主工具条整条不渲染，
-    // 光有文案没有钮 = 指路指到墙上（2026-08-06 实拍病灶）。
-    return `<div class="emptycard" style="margin-top:30px"><h5>流程空${fN ? `（${fN} 组已完成的历史被折叠）` : ''}</h5>
-      <p>起草工单（选阶段、填依赖/父单）后，这里按 管线×专项 铺出项目流动。${fN ? '待验收/待定夺的组不会被折——签字位常驻。' : ''}</p>
-      ${fN ? `<div class="emptyact"><button class="btn h32 on" id="fl-fold-btn" onclick="flFold(this)">显示历史（${fN} 组）</button></div>` : ''}</div>`;
-  }
-  const nById = Object.fromEntries(ns.map((n) => [n.id, n]));
-  ns.forEach((n) => { n.deps = n.deps.filter((d) => nById[d]); });
-  const SIDX = Object.fromEntries(STG.map((s, i) => [s.代号, i]));
-  // 环检测
-  ns.forEach((n) => { n.cyc = false; });
-  { const st2 = {};
-    const visit = (id, stack) => {
-      if (st2[id] === 2) return false;
-      if (stack.has(id)) return true;
-      stack.add(id); let inC = false;
-      for (const d of nById[id].deps) if (visit(d, stack)) inC = true;
-      stack.delete(id); st2[id] = 2;
-      if (inC) nById[id].cyc = true;
-      return inC;
-    };
-    ns.forEach((n) => visit(n.id, new Set())); }
-  // 阶段内拓扑子深度（全阶段统一：同阶段依赖只向右，跨泳道不倒退）
-  ns.forEach((n) => { n.sub = 0; });
-  { let chg = true, g = 0;
-    while (chg && g++ < 120) { chg = false;
-      for (const n of ns) { if (n.cyc) continue;
-        const w = Math.max(0, ...n.deps.map((d) => nById[d]).filter((u) => u.stg === n.stg && !u.cyc).map((u) => u.sub + 1));
-        if (w !== n.sub) { n.sub = w; chg = true; } } } }
-  // 关键路径：未完成 · 预计时间加权
-  const memo = {};
-  const longest = (id) => {
-    if (memo[id]) return memo[id];
-    const n = nById[id];
-    if (!n || DONE.has(n.t.state) || n.cyc) return memo[id] = { len: 0, path: [] };
-    let best = { len: 0, path: [] };
-    for (const d of n.deps) { const r = longest(d); if (r.len > best.len) best = r; }
-    return memo[id] = { len: best.len + n.h, path: [...best.path, id] };
-  };
-  let cp = { len: 0, path: [] };
-  ns.forEach((n) => { const r = longest(n.id); if (r.len > cp.len) cp = r; });
-  const crit = new Set(cp.path);
-  const flCls = (n) => {
-    if (n.cyc) return 'cyc';
-    if (DONE.has(n.t.state)) return 'done';
-    if (n.t.state === '在途') return 'doing';
-    if (n.t.state === '质检') return 'review';
-    if (n.t.state === '待验收') return 'accept';
-    if (n.t.state === '执行失败') return 'failed';
-    if (n.t.state === '草稿' || n.t.state === '待投') return 'pre';
-    return n.deps.some((d) => !DONE.has(nById[d].t.state)) ? 'blocked' : 'ready';
-  };
-  // 主阶段 / 泳道阶段
-  const actCnt = {};
-  ns.forEach((n) => { if (!DONE.has(n.t.state)) actCnt[n.stg] = (actCnt[n.stg] || 0) + 1; });
-  const mainStage = (Object.entries(actCnt).sort((a, b) => b[1] - a[1])[0] || [STG[0].代号])[0];
-  // 布局
-  const NW = 146, NHh = 54, VG = 12, HGap = 22, X0 = 110, CELLPAD = 26;
-  const subMax = STG.map((s) => Math.max(0, ...ns.filter((n) => n.stg === s.代号).map((n) => n.sub)) + 1);
-  const stageX = []; let xa = X0;
-  STG.forEach((s, i) => { stageX[i] = xa; xa += CELLPAD + subMax[i] * (NW + HGap); });
-  // 泳道排序：按管线聚簇（有活单的专项在前，散单垫底，无线组殿后）；组首插管线头行
-  const laneAct = {};
-  for (const n of ns) if (!DONE.has(n.t.state)) laneAct[n.lane] = (laneAct[n.lane] || 0) + 1;
-  const laneNames = [...new Set(ns.map((n) => n.lane))].sort((a, b) => {
-    const [pa, sa] = a.split('::'), [pb, sb] = b.split('::');
-    if (pa !== pb) return (pa === '') - (pb === '') || String(pa).localeCompare(String(pb));
-    if ((sa === '_misc') !== (sb === '_misc')) return (sa === '_misc') - (sb === '_misc');
-    return (laneAct[b] || 0) - (laneAct[a] || 0) || String(sb).localeCompare(String(sa));
-  });
-  let yy = 30; const lanes = {}; const pipeHeads = []; let lastPipe = null;
-  for (const ln of laneNames) {
-    const pid = ln.split('::')[0];
-    if (pid && pid !== lastPipe) { // 管线头行（区块标题，占 34px）
-      pipeHeads.push({ top: yy, pid, 名称: (pById[pid] || {}).名称 || pid, folded: foldedByPipe[pid] || 0 });
-      yy += 34; lastPipe = pid;
-    }
-    const mine = ns.filter((n) => n.lane === ln);
-    const stacks = {}; let depth = 0;
-    for (const n of mine) { const k = n.stg + '/' + n.sub; stacks[k] = stacks[k] || 0; n.row = stacks[k]++; depth = Math.max(depth, stacks[k]); }
-    lanes[ln] = { top: yy, mine }; yy += 42 + depth * (NHh + VG);
-  }
-  ns.forEach((n) => { n.x = stageX[SIDX[n.stg]] + n.sub * (NW + HGap); n.y = lanes[n.lane].top + 36 + n.row * (NHh + VG); });
-  const laneStage = (mine) => {
-    const act = mine.filter((n) => !DONE.has(n.t.state));
-    if (act.length) return act.reduce((m, n) => SIDX[n.stg] < SIDX[m] ? n.stg : m, act[0].stg);
-    return mine.reduce((m, n) => SIDX[n.stg] > SIDX[m] ? n.stg : m, mine[0].stg);
-  };
-  // 边：扇形锚点
-  const inE = {}, outE = {};
-  ns.forEach((n) => n.deps.forEach((d) => { (inE[n.id] = inE[n.id] || []).push(d); (outE[d] = outE[d] || []).push(n.id); }));
-  for (const k in inE) inE[k].sort((a, b) => nById[a].y - nById[b].y);
-  for (const k in outE) outE[k].sort((a, b) => nById[a].y - nById[b].y);
-  const aY = (n, list, o) => n.y + NHh * ((list.indexOf(o) + 1) / (list.length + 1));
-  // 连线保持贝塞尔（用户裁定：横穿无妨，曲线更好看）；已满足依赖退淡影
-  let paths = '';
-  ns.forEach((n) => n.deps.forEach((d) => {
-    const u = nById[d];
-    const x1 = u.x + NW, y1 = aY(u, outE[u.id], n.id), x2 = n.x, y2 = aY(n, inE[n.id], u.id);
-    const dseg = x2 > x1
-      ? `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`
-      : `M ${x1} ${y1} C ${x1 + 30} ${Math.max(u.y, n.y) + NHh + 16}, ${x2 - 30} ${Math.max(u.y, n.y) + NHh + 16}, ${x2} ${y2}`;
-    const faded = DONE.has(u.t.state) && !(crit.has(n.id) && crit.has(u.id));
-    paths += `<path class="fl-e${u.stg !== n.stg ? ' up' : ''}${crit.has(n.id) && crit.has(u.id) ? ' crit' : ''}${faded ? ' faded' : ''}" data-f="${esc(u.id)}" data-t="${esc(n.id)}" d="${dseg}"/>`;
-  }));
-  const heads = STG.map((s, i) => `<div class="fl-head" style="left:${stageX[i]}px;width:${subMax[i] * (NW + HGap)}px" title="阶段验收标准（${esc(s.代号)} ${esc(s.名称)}）&#10;${esc(Object.entries(stg.标准[s.代号] || {}).map(([f, v]) => f + '：' + v).join('\n'))}">
-      <b>${esc(s.代号)} ${esc(s.名称)}</b><span class="sn">${s.代号 === mainStage ? '项目主阶段 · ' : ''}悬停看验收标准 ⓘ</span></div>`
-    + (i ? `<div class="fl-col" style="left:${stageX[i] - CELLPAD / 2}px"></div>` : '')).join('');
-  const pipeHeadHtml = pipeHeads.map((h) => `<div class="fl-pipehead" style="top:${h.top}px">
-      <span class="lst" style="background:var(--accentbg);color:var(--accent-ink);border-color:transparent">管线</span>
-      <b>${esc(h.名称)}</b>${(pById[h.pid] || {}).状态 === '封存' ? '<span class="lst lag">已封存</span>' : ''}
-      ${h.folded ? `<span class="dim" style="font-size:11px">· ${h.folded} 个已完成专项已折叠</span>` : ''}</div>`).join('');
-  const laneHtml = laneNames.map((ln) => {
-    const L = lanes[ln]; const ls = laneStage(L.mine); const misc = ln === '::未归属';
-    const title = (L.mine[0] || {}).laneTitle || ln.split('::')[1] || ln;
-    const lag = !misc && SIDX[ls] < SIDX[mainStage] && L.mine.some((n) => !DONE.has(n.t.state));
-    const lead = !misc && SIDX[ls] > SIDX[mainStage];
-    // 签字标记：叶子 + 容器单一起数（专项父单挂待验收也算这道在等你落笔）
-    const signs = laneSign[ln] || [];
-    const signTip = signs.map((t) => `${t.id} ${t.state}${t.验收方式 === '保留' ? '（保留 · 只你能签）' : ''}`).join('\n');
-    const allDone = laneAllDone(ln);
-    return `<div class="fl-lane" style="top:${L.top}px"></div>
-      <div class="fl-lab" style="top:${L.top}px">${esc(title)}${allDone ? '<span class="lst" style="opacity:.6">已完成</span>' : `<span class="lst ${lag ? 'lag' : lead ? 'lead' : ''}">${esc(ls)}${lag ? ' 滞后' : lead ? ' 超前' : ''}</span>`}${signs.length ? `<span class="lst sign" title="${esc(signTip)}">✍ 等制作人签字${signs.length > 1 ? ' ×' + signs.length : ''}</span>` : ''}</div>`;
-  }).join('');
-  const nodeHtml = ns.map((n) => `<div class="fl-node ${flCls(n)}${crit.has(n.id) ? ' crit' : ''}" id="fl-${esc(n.id)}"
-      style="left:${n.x}px;top:${n.y}px;--fn:${FNHEX[n.t.职能] || 'var(--ink3)'}" data-nid="${esc(n.id)}"
-      onclick="location.hash='#/t/${encodeURIComponent(n.id)}'" onmouseenter="flChain('${esc(n.id)}')" onmouseleave="flChain(null)">
-      <span class="nid">${esc(n.id)}</span><span class="nst">${n.cyc ? '⚠环' : esc(n.t.state)}</span>
-      <div class="nt">${esc(n.t.title)}</div><span class="nh">${n.h}h</span></div>`).join('');
-  window._flData = { ns: ns.map((n) => ({ id: n.id, deps: n.deps })), done: ns.filter((n) => DONE.has(n.t.state)).map((n) => n.id) };
-  // 现在/接下来摘要条（2026-08-06 制作人用例：「主要看现在在做什么、后面还有什么」——答案端上面，不用进图里找）
-  // 节点是包装对象（真单在 .t）——2026-08-06 02:49 制作人实拍抓包：曾拿包装层查 state 双误报「无」
-  const doing = nsAll.filter((n) => ['在途', '质检'].includes(n.t.state));
-  const ready2 = nsAll.filter((n) => n.t.state === '待投' && n.deps.every((d) => DONE.has((byId[d] || {}).state)));
-  const blocked2 = nsAll.filter((n) => n.t.state === '待投' && !n.deps.every((d) => DONE.has((byId[d] || {}).state)));
-  const chipRow = (arr, cap) => arr.slice(0, 6).map((n) => `<a class="pill sm mono" href="#/t/${esc(n.id)}" title="${esc(n.t.title)}">${esc(n.id)}</a>`).join(' ') + (arr.length > 6 ? `<span class="dim"> +${arr.length - 6}</span>` : '') || `<span class="dim">${cap}</span>`;
-  const nowNext = `<div class="card r14" style="padding:12px 18px;margin-bottom:12px;display:flex;gap:26px;flex-wrap:wrap;align-items:baseline">
-      <span><b style="font-size:12.5px">现在在做</b> ${chipRow(doing, '无')}</span>
-      <span><b style="font-size:12.5px">下一步（就绪）</b> ${chipRow(ready2, '无')}</span>
-      <span class="dim" style="font-size:12px">还压着 ${blocked2.length} 张等前置</span></div>`;
-  return nowNext + `<div class="fl-bar">
-      <span class="subnote">横轴=阶段 · 泳道=系统 · 红=关键路径（预计时间加权）· 虚线=升阶链 · 点卡进详情</span>
-      <span class="sp"></span>
-      ${cp.len ? `<span class="fl-cp">关键路径 ${Math.round(cp.len * 10) / 10}h · ${cp.path.length} 单</span>` : ''}
-      <button class="btn h32 ${foldHist ? 'on' : ''}" id="fl-fold-btn" onclick="flFold(this)">${foldHist ? `显示历史${foldedLanes.size ? `（${foldedLanes.size} 组）` : ''}` : '折叠已完成'}</button></div>
-    <div class="fl-wrap"><div class="fl-stage" style="width:${xa + 20}px;height:${yy + 16}px">
-      <svg class="fl-svg" width="${xa + 20}" height="${yy + 16}">${paths}</svg>
-      ${heads}${pipeHeadHtml}${laneHtml}${nodeHtml}</div></div>`;
-}
-window.flChain = (id) => {
-  const d = window._flData; if (!d) return;
-  let rel = null;
-  if (id) {
-    const upM = {}, dnM = {};
-    d.ns.forEach((n) => n.deps.forEach((x) => { (upM[n.id] = upM[n.id] || []).push(x); (dnM[x] = dnM[x] || []).push(n.id); }));
-    rel = new Set([id]);
-    const walk = (m, i) => (m[i] || []).forEach((x) => { if (!rel.has(x)) { rel.add(x); walk(m, x); } });
-    walk(upM, id); walk(dnM, id);
-  }
-  // 高亮类名 onchain：不准叫 chain——详情页追溯链的通用 .chain{margin-top:18px} 会把绝对定位卡片顶下沉 18px（0.17.3 连环误诊的真凶）
-  d.ns.forEach((n) => { const el = $('fl-' + n.id); if (!el) return;
-    el.classList.toggle('dimmed', !!rel && !rel.has(n.id));
-    el.classList.toggle('onchain', !!rel && rel.has(n.id) && n.id !== id); });
-  document.querySelectorAll('path.fl-e').forEach((p) => {
-    const on = rel && rel.has(p.dataset.f) && rel.has(p.dataset.t);
-    p.classList.toggle('dimmed', !!rel && !on);
-    p.classList.toggle('onchain', !!on && !p.classList.contains('crit')); });
-};
-window.flFold = (btn) => {
-  // 0.23.4：折叠进布局——切偏好后整页重排，完成组整泳道退出排版（旧 display:none 留空白已废）
-  const fold = !btn.classList.contains('on');
-  try { localStorage.setItem('fl_fold', fold ? 'on' : 'off'); } catch { /* 无痕模式不阻塞 */ }
-  route();
-};
-// 默认折叠历史（用户裁定：三代同堂淹没活单）——偏好跨会话保持，显式点开才看历史
-window.flAutoFold = () => { /* 0.23.4：折叠进布局，此钩子退役 */ };
+  const 进度By = Object.fromEntries((ag.在跑 || []).map((r) => [r.id, r]));
 
-/* ===== P10 树形 ===== */
-let tState = { collapsed: new Set(JSON.parse(localStorage.getItem('studio.tree.collapsed') || '[]')), fn: '', st: 'active', expandAll: false };
-function saveCollapsed() { localStorage.setItem('studio.tree.collapsed', JSON.stringify([...tState.collapsed])); }
-async function viewTree() {
-  const [{ all }, pls] = await Promise.all([loadBoard(), api('/api/pipelines').catch(() => ({ 管线: [] }))]);
-  const { byId, kids, parents, topLeaves } = buildTree(all);
-  const pById = Object.fromEntries((pls.管线 || []).map((p) => [p.id, p]));
-  const pipeOf = (t) => { let c = t, g = 0; while (c && g++ < 10) { if (c.管线 && pById[c.管线]) return c.管线; c = c.父单 ? byId[c.父单] : null; } return null; };
-  const parentSet = new Set(parents.map((p) => p.id));
-  const stOk = (t) => tState.st === 'active' ? !['完成', '已归档'].includes(t.state) : true;
-  const fnOk = (t) => !tState.fn || t.职能 === tState.fn;
-  // D43 三层结构（总单→阶段父单→碎单）：树递归渲染，父单进度=后代叶子均值（逐层聚合，不再被容器子单拉成 0%）
-  const pctOf = (t) => { const ch = kids[t.id]; if (!ch || !ch.length) return STPCT[t.state] ?? 0;
-    return Math.round(ch.reduce((a, c) => a + pctOf(c), 0) / ch.length); };
-  const anyVisible = (t) => (kids[t.id] || []).some((c) => parentSet.has(c.id) ? anyVisible(c) : (stOk(c) && fnOk(c)));
-  const rowHtml = (t, lv, isParent, chn) => {
-    const pct = isParent ? pctOf(t) : (STPCT[t.state] ?? 0);
-    const acceptN = isParent ? chn.filter((c) => c.state === '待验收').length : 0;
-    const collapsed = tState.collapsed.has(t.id);
-    const twist = isParent ? `<span class="twist2" onclick="event.stopPropagation();tToggle('${esc(t.id)}')">${collapsed ? '▸' : '▾'}</span>`
-      : '<span class="twist2 none">·</span>'; // 叶子一律「·」——▸ 只留给真能开合的父行（2026-08-06 交互全测：同形箭头误导可点）
-    return `<div class="trow2 ${isParent ? 'parent' : 'leaf'} ${lv ? 'lv' + Math.min(lv, 3) : ''} ${acceptN ? 'hasaccept' : ''}" onclick="location.hash='#/t/${t.id}'">
-      ${twist}<span class="tid2">${esc(t.id)}</span><span class="tt2 clamp2" title="${esc(t.title)}">${esc(t.title)}</span>
-      ${isParent ? `<span class="kids">${chn.length} 子单${t.阶段 ? ' · ' + esc(t.阶段) : ''}</span>` : ''}
-      <span class="mid">${isParent ? '' : fnPill(t.职能)}${stPill(t.state)}${isParent && t.state === '待验收' ? `<span class="pill signq" title="${esc(t.验收方式 === '保留' ? '保留 · 只你能签' : '委托 · 核查可代签，仍在你队列')}">✍ 等你签字</span>` : ''}</span>
-      <div class="prog"><span class="bar"><i style="width:${pct}%"></i></span><span class="pv">${pct}%</span></div>
-      ${acceptN ? `<button class="accept-mini" onclick="event.stopPropagation();tAcceptAll('${esc(t.id)}')">✓ 验收子单×${acceptN}</button>` : ''}
-      ${!isParent ? `<div class="acts"><a class="mini3" href="#/t/${t.id}" onclick="event.stopPropagation()">详情</a><a class="mini3" href="#/draft?parent=${t.id}" onclick="event.stopPropagation()">＋ 子单</a></div>` : ''}
-    </div>`;
+  // ---- 依赖深度（拓扑序）：先占位再回填，天然断环，不会因为一条环边把整页算死 ----
+  const 深 = {};
+  const deep = (id, g) => {
+    if (深[id] != null) return 深[id];
+    深[id] = 0;
+    const t = byId[id];
+    if (!t || g > 30) return 0;
+    const ds = depsOf(t);
+    深[id] = ds.length ? Math.max(0, ...ds.map((d) => deep(d, g + 1) + 1)) : 0;
+    return 深[id];
   };
-  let html = ''; let count = 0, treeN = 0;
-  const renderSub = (p, lv) => {
-    const chAll = kids[p.id] || [];
-    count++;
-    html += rowHtml(p, lv, true, chAll);
-    if (tState.collapsed.has(p.id)) return;
-    for (const c of chAll) {
-      if (parentSet.has(c.id)) { if (anyVisible(c) || stOk(c)) renderSub(c, lv + 1); }
-      else if (stOk(c) && fnOk(c)) { count++; html += rowHtml(c, lv + 1, false, []); }
-    }
-  };
-  // 只有根父单（自己没有在场父亲的）开树；中间层父单在递归里渲染——D42 前的单层写法曾把 TK-15 重复画成两棵树
-  // H51 管线分区：根与散单按管线章分组渲染，管线是区块头不是工单卡（实体分立律 H52）
-  const roots = parents.filter((p) => !(p.父单 && byId[p.父单]));
-  const leaves = topLeaves.filter((t) => stOk(t) && fnOk(t));
-  const pipeHead = (p) => `<div class="trow2 parent" style="background:var(--accentbg);border-radius:8px">
-    <span class="twist2 none">⛓</span><span class="tid2">${esc(p.id)}</span><span class="tt2"><b>${esc(p.名称)}</b>（管线）</span>
-    <span class="kids">${esc(p.阶段 || '')}${p.状态 === '封存' ? ' · 已封存' : ''}</span></div>`;
-  const grouped = new Set();
-  for (const p of (pls.管线 || [])) {
-    const myRoots = roots.filter((r) => pipeOf(r) === p.id);
-    const myLeaves = leaves.filter((t) => pipeOf(t) === p.id);
-    if (!myRoots.length && !myLeaves.length) continue;
-    html += pipeHead(p);
-    myRoots.forEach((r) => { grouped.add(r.id); if (!anyVisible(r) && !stOk(r)) return; treeN++; renderSub(r, 1); });
-    myLeaves.forEach((t) => { grouped.add(t.id); count++; html += rowHtml(t, 1, false, []); });
-  }
-  roots.filter((r) => !grouped.has(r.id)).forEach((p) => {
-    if (!anyVisible(p) && !stOk(p)) return;
-    treeN++; renderSub(p, 0);
+  all.forEach((t) => deep(t.id, 0));
+  // 死结：依赖挂在一张被冻结/已归档的单上——这就是「卡在哪」的答案，红字直说
+  const 死结 = (t) => depsOf(t).filter((d) => suspOf(byId[d]) || byId[d].state === '已归档');
+
+  // ---- 分行：注册管线 + 散单特殊行 ----
+  const MISC = '_misc';
+  const lanes = {};
+  const lane = (k) => (lanes[k] = lanes[k] || { key: k, items: [] });
+  for (const t of all) lane(pipeOf(t) || MISC).items.push(t);
+  for (const p of (pls.管线 || [])) if (p.状态 !== '封存') lane(p.id); // 注册即有行：新开的线空着也要占位（不然看不见"该派活了"）
+  const laneKeys = Object.keys(lanes).sort((a, b) => {
+    if ((a === MISC) !== (b === MISC)) return a === MISC ? 1 : -1; // 散单垫底
+    const na = Number(String(a).slice(2)), nb = Number(String(b).slice(2));
+    return (Number.isNaN(na) || Number.isNaN(nb)) ? String(a).localeCompare(String(b)) : na - nb;
   });
-  leaves.filter((t) => !grouped.has(t.id)).forEach((t) => { count++; html += rowHtml(t, 0, false, []); });
-  const fns = ['', '策划', '程序', '美术', 'QA'];
-  return `<div class="ttools">
-      <button class="btn h32" onclick="tExpandAll()">${tState.collapsed.size ? '⌄ 全部展开' : '⌃ 全部折叠'}</button>
-      <select class="btn h32" style="padding:0 12px" onchange="tState.fn=this.value;route()">${fns.map((f) => `<option value="${f}" ${tState.fn === f ? 'selected' : ''}>${f ? '职能：' + f : '筛选：全部职能'}</option>`).join('')}</select>
-      <select class="btn h32" style="padding:0 12px" onchange="tState.st=this.value;route()">
-        <option value="active" ${tState.st === 'active' ? 'selected' : ''}>状态：进行中的</option>
-        <option value="all" ${tState.st === 'all' ? 'selected' : ''}>状态：全部</option></select>
-      <span class="cnt">${count} 单 · ${treeN} 棵树</span></div>
-    <div class="tree2">${html || '<p class="dim">没有匹配的工单</p>'}</div>
-    <div class="tree-note">▾/▸ 折叠状态跨会话保持 · 父单进度=子单均值 · 父单不进池（组织容器）· 「✓ 验收子单」批量通过该父下全部待验收</div>`;
+  if (!laneKeys.length) {
+    return `<div class="emptycard" style="margin-top:30px"><h5>还没有管线，也没有工单</h5>
+      <p>先在 <a href="#/params" style="color:var(--accent-ink)">⚙ 参数</a> 开一条管线（H51 人闸），或直接 <a href="#/draft" style="color:var(--accent-ink)">起草工单</a>——
+      有单之后这里按「沉淀｜现在｜接下来」三段铺出每条管线的现在线。</p></div>`;
+  }
+
+  // ---- 分段判据（施工令-038）：现在区认**现场**，不认目录状态 ----
+  // 案源：TK-117 挂着核查会话（在途页 82% · 核查中·深检），流程页却按「状态=待验收」把它塞进
+  // 「接下来·等你签字」绿框——旧判据 FG_DOING 只收 在途/质检 两态，审检/质检/仲裁这类判官会话
+  // 一律漏判。凡 /api/agents 报了活跃会话（执行/初检/核查（深检）/质检（QA）/仲裁 任一 kind），
+  // 这单就是**现在正在被处理**，一律入现在区，阶段标签走既有进度口径（含 kind，如「核查中 · 深检」）。
+  const liveOf = (t) => { const r = 进度By[t.id]; return (r && r.有会话) ? r : null; };
+  // 真停人闸的三种（绿框唯一出场条件，且必须**无任何活跃会话**）：
+  //   待定夺 = 等你拍板；待验收·保留 = 你亲验；待验收·候引擎实证 = H97 门禁停闸（等实证或你直收）。
+  // 委托待验收而判官会话没起 → 是「判官还没接手」，不是「等你签字」——给它绿框等于把判官的活挂你名下。
+  const 人闸 = (t) => t.state === '待定夺'
+    || (t.state === '待验收' && (t.验收方式 === '保留' || !!t.待引擎实证));
+
+  // ---- 单条渲染：五型（doing 实心带百分比 / sign 绿框 / stuck 红 / queue 虚框 / wait 待判官接手）----
+  const go = (id) => `location.hash='#/t/${encodeURIComponent(id)}'`;
+  const idShort = (dep, self) => {
+    const a = String(dep).match(/^(.+)-(\d+)$/), b = String(self).match(/^(.+)-(\d+)$/);
+    return (a && b && a[1] === b[1]) ? a[2] : dep;
+  };
+  // 首屏与 15s 轮询必须同一个口径函数，否则会出现「刚进页面写 质检中，15 秒后自己改口 无执行会话」
+  // 这种同一事实两种说法的抖动（2026-08-08 实机抓到：首屏 阶段名 优先级压过了无会话判据）。
+  const 活体 = (r, fallbackState) => ({
+    百分比: (r && r.进度 && r.进度.百分比 != null) ? r.进度.百分比 : (STPCT[fallbackState] ?? null),
+    // 无会话优先：单还挂在在途/质检但没有执行会话 = 卡住，这时报阶段名等于替它掩护
+    阶段名: (r && r.有会话 === false) ? '无执行会话' : ((r && r.进度 && r.进度.阶段名) || fallbackState),
+    无会话: !!(r && r.有会话 === false),
+  });
+  const pctOfLive = (t) => 活体(进度By[t.id], t.state);
+  const bar = (t, cls, right, extra) => `<div class="fgbar ${cls}" onclick="${go(t.id)}" tabindex="0" role="button"
+      onkeydown="if(event.key==='Enter'){${go(t.id)}}" title="${esc(t.id + ' · ' + (t.title || '') + (t.职能 ? ' · ' + t.职能 : ''))}">
+      <span class="id">${esc(t.id)}</span><span class="t">${esc(t.title || '')}</span>${extra || ''}${right}</div>`;
+  const doingBar = (t) => {
+    const p = pctOfLive(t);
+    return bar(t, 'doing' + (p.无会话 ? ' nosess' : ''),
+      `<span class="pp" id="fgp-${esc(t.id)}" title="${esc(p.阶段名)}">${p.百分比 == null ? '—' : p.百分比}<small>%</small></span><span class="st" id="fgs-${esc(t.id)}">${esc(p.阶段名)}</span>`);
+  };
+  const signBar = (t) => {
+    const 保留 = t.验收方式 === '保留';
+    const 里程碑 = isBox(t); // 专项/战役终审 = 里程碑旗
+    const 词 = t.state === '待定夺' ? '待你拍板' : (t.待引擎实证 ? '候引擎实证' : (保留 ? '你（保留）' : '你'));
+    return bar(t, 'sign', `<span class="st">✍ ${esc(词)}</span>${里程碑 ? '<span class="mile">⚑ 里程碑</span>' : ''}`);
+  };
+  // 委托待验收、判官会话还没起：如实说「待判官接手」——不冒充等你签字，也不假装在做。
+  // 用闸门色的 .st（与 doing.nosess 同源语义：会话没起来），虚框表明它在排队等判官。
+  const waitBar = (t) => bar(t, 'queue wait', '<span class="st">待判官接手</span>');
+  const stuckBar = (t) => bar(t, 'stuck', `<span class="st">${esc(t.state)}${t.自修次数 ? ' ×' + t.自修次数 : ''}</span>`);
+  const queueBar = (t) => {
+    const ds = depsOf(t);
+    const 断 = 死结(t);
+    const 就绪 = !断.length && ds.every((d) => FG_DONE.has(byId[d].state)) && t.state !== '草稿';
+    const depTag = ds.length ? `<span class="deps" title="${esc('依赖：' + ds.join('、'))}">←${ds.map((d) => esc(idShort(d, t.id))).join('·')}</span>` : '';
+    const st = 断.length ? `依赖冻结 ←${esc(idShort(断[0], t.id))}` : (就绪 ? '就绪' : t.state);
+    const cls = 'queue' + (断.length ? ' blocked' : (就绪 ? ' ready' : ''));
+    return bar(t, cls, `<span class="st">${esc(st)}</span>`, depTag);
+  };
+
+  // ---- 逐行装配 ----
+  const sed = {}; // 沉淀数据（抽屉懒渲染用），只带展示要的几个字段
+  let 总在做 = 0, 总签字 = 0, 总接下来 = 0, 闲置数 = 0;
+  const laneHtml = laneKeys.map((k) => {
+    const L = lanes[k];
+    const P = pById[k];
+    const 名称 = k === MISC ? '散单' : `${k} ${(P && P.名称) || ''}`.trim();
+    const 活 = L.items.filter((t) => !suspOf(t) && !FG_DONE.has(t.state));
+    const 可见 = (t) => !isBox(t) || FG_SIGN.has(t.state);
+    // 现在区：有活跃会话（任一 kind）一律入；目录态在做/卡住的照旧入（会话没起也要看得见「卡在哪」）
+    const now = 活.filter((t) => 可见(t) && (liveOf(t) || FG_DOING.has(t.state) || FG_STUCK.has(t.state)));
+    // 接下来·签字位：会话在跑的已被现在区收走，这里只剩没会话的待验收（排序口径不动）
+    const nextSign = 活.filter((t) => 可见(t) && !liveOf(t) && t.state === '待验收')
+      .sort((a, b) => (b.验收方式 === '保留') - (a.验收方式 === '保留') || String(a.id).localeCompare(String(b.id)));
+    const nextQ = 活.filter((t) => 可见(t) && FG_QUEUE.has(t.state))
+      .sort((a, b) => (深[a.id] - 深[b.id]) || String(a.id).localeCompare(String(b.id)));
+    总在做 += now.filter((t) => liveOf(t) || FG_DOING.has(t.state)).length;
+    // 「等你签字」只数真停人闸的（待验收·保留/候引擎实证 + 无会话的待定夺）——委托待验收在等判官，不算你的活
+    总签字 += nextSign.filter(人闸).length + now.filter((t) => !liveOf(t) && t.state === '待定夺').length;
+    总接下来 += nextQ.length;
+    // 沉淀四类
+    const cats = { done: [], susp: [], drop: [], over: [] };
+    for (const t of L.items) { const c = fgCat(t); if (c) cats[c].push(t); }
+    for (const c in cats) cats[c].sort((a, b) => String(b.更新时间 || '').localeCompare(String(a.更新时间 || '')));
+    sed[k] = {}; for (const c in cats) sed[k][c] = cats[c].map((t) => ({ id: t.id, title: t.title, state: t.state, why: String(t.归档原因 || ''), susp: suspTip(t) }));
+    const 沉淀数 = Object.values(cats).reduce((a, x) => a + x.length, 0);
+    // 管线头：落袋读数（容器单不计——它是组织单位，不是活）
+    const 叶 = L.items.filter((t) => !isBox(t));
+    const 落袋 = 叶.filter((t) => t.state === '完成').length;
+    const 专项数 = L.items.filter((t) => isBox(t)).length;
+    // 闲置直书：现在区空 → 取本管线最近一次事件时间差
+    const 最近 = L.items.reduce((m, t) => {
+      const cs = [t.更新时间, t.交付时间, t.领单时间].map((x) => Date.parse(x || '')).filter((x) => !Number.isNaN(x));
+      return cs.length ? Math.max(m, ...cs) : m;
+    }, 0);
+    const 闲置天 = 最近 ? Math.floor((Date.now() - 最近) / 86400000) : null;
+    if (!now.length) 闲置数++;
+    const nowInner = now.length
+      ? now.map((t) => ((liveOf(t) || FG_DOING.has(t.state)) ? doingBar(t) : t.state === '待定夺' ? signBar(t) : stuckBar(t))).join('')
+      : `<div class="fgidle">— 本管线现在无在做（${最近 ? `闲置 ${闲置天} 天` : '暂无活动记录'}）—</div>`;
+    const foldInner = 沉淀数
+      ? `<div class="fgfold"><span class="fgfk">▸ 沉淀</span>${FG_CATS.filter(([c]) => cats[c].length)
+        .map(([c, n]) => `<button class="fgcat ${c}" data-fglane="${esc(k)}" data-fgcat="${c}" onclick="fgDrawer('${qesc(k)}','${c}')" title="点开只看这一类">${esc(n)} <b>${cats[c].length}</b></button>`)
+        .join('<i class="fgdot">·</i>')}</div>`
+      : '';
+    const nextInner = (nextSign.map((t) => (人闸(t) ? signBar(t) : waitBar(t))).join('') + nextQ.map(queueBar).join(''))
+      || '<div class="fgidle q">— 接下来没有排队的单 —</div>';
+    return `<div class="fglane">
+      <div class="fgrow">
+        <div class="fghead">
+          <b>${esc(名称)}</b>${P && P.状态 === '封存' ? '<span class="lst lag">已封存</span>' : ''}
+          <div class="sub">${k === MISC ? '无管线归属的活动单' : `${专项数 ? 专项数 + ' 个专项 · ' : ''}阶段 ${esc((P && P.阶段) || '—')}`}</div>
+          <div class="pct">■ 落袋 ${落袋}/${叶.length}</div>
+        </div>
+        <div class="fgzone now">${nowInner}${foldInner}</div>
+        <div class="fgzone next">${nextInner}</div>
+      </div>
+      <div class="fgdrawer" id="fgd-${esc(k)}"></div></div>`;
+  }).join('');
+  window._fgSed = sed;
+  fgOpen = {}; // 每次进视图回到全折（制作人追加：默认全折叠）
+
+  // ---- 15s 活体：只换百分比与阶段名，不整页重画；在跑名册变了才 route（同在途页口径）----
+  // 签名带上「有没有会话」（施工令-038）：分段判据改吃现场后，起/收一条判官会话就要换段——
+  // 光比 id:state 看不出来（核查会话起落时单一直停在 待验收，状态一个字没变，条却该从绿框迁进现在区）。
+  // 参照 022 的 nosess 同步先例：首屏与轮询同一口径，谁都不许自己改口。
+  const sig = (d) => (d.在跑 || []).map((r) => r.id + ':' + r.state + ':' + (r.有会话 ? 1 : 0)).sort().join(',');
+  const sig0 = sig(ag);
+  pollLoop('fg-board', 15000, async () => {
+    const nd = agentsScoped(await api('/api/agents'), all);
+    if (sig(nd) !== sig0) { route(); return; } // 派发/收工 = 条位要换，整页重排
+    for (const r of (nd.在跑 || [])) {
+      const v = 活体(r, r.state);
+      const pe = $('fgp-' + r.id); if (pe) { pe.innerHTML = `${v.百分比 == null ? '—' : v.百分比}<small>%</small>`; pe.title = v.阶段名; }
+      const se = $('fgs-' + r.id); if (se) se.textContent = v.阶段名;
+      // 会话起来了就把「卡住」形态撤掉（同在途页 noagent 的处理）——只改类，不重画条
+      const be = pe && pe.closest('.fgbar'); if (be) be.classList.toggle('nosess', v.无会话);
+    }
+  });
+
+  const top = `<div class="fgtop">
+      <span class="subnote">一条现在线切三段：沉淀（折叠）｜<b class="nowh">现在</b>｜接下来（依赖序）· 行=管线 · 点任何条进详情</span>
+      <span class="sp"></span>
+      <span class="fgsum">在做 <b>${总在做}</b> · 等你签字 <b class="s">${总签字}</b> · 排队 <b>${总接下来}</b>${闲置数 ? ` · 闲置管线 <b>${闲置数}</b>` : ''}</span></div>`;
+  const legend = `<div class="fglegend">
+      <span><i class="lg-doing"></i>实心=在做（有活跃会话即在做，含判官环节；百分比接执行进度卡口径）</span>
+      <span><i class="lg-queue"></i>虚框=排队（依赖序，←标依赖）· 待判官接手=判官会话还没起</span>
+      <span><i class="lg-sign"></i>绿框=等你签字/拍板（无会话且真停人闸）</span>
+      <span><i class="lg-stuck"></i>红=卡住（待定夺/执行失败）</span>
+      <span class="nowh">◉ 橙区=现在（管线闲置直书「闲置 N 天」）</span>
+      <span>⚑=里程碑 · ❄=挂起 · 沉淀默认全折</span></div>`;
+  return top + `<div class="fgboard" id="fg-board">
+      <div class="fgcols"><div>管线</div><div class="nowh">◉ 现在在做</div><div>→ 接下来（依赖序）</div></div>
+      ${laneHtml}</div>` + legend;
 }
-window.tToggle = (id) => { if (tState.collapsed.has(id)) tState.collapsed.delete(id); else tState.collapsed.add(id); saveCollapsed(); route(); };
-window.tExpandAll = () => { if (tState.collapsed.size) tState.collapsed.clear(); else { loadBoard().then(({ all }) => { buildTree(all).parents.forEach((p) => tState.collapsed.add(p.id)); saveCollapsed(); route(); }); return; } saveCollapsed(); route(); };
-window.tAcceptAll = async (pid) => {
-  const { all } = await loadBoard(); const ch = all.filter((t) => t.父单 === pid && t.state === '待验收');
-  if (!await ask(`批量验收 ${pid} 下 ${ch.length} 张待验收子单？`)) return;
-  for (const c of ch) await post('/api/act/验收', { id: c.id, 通过: true });
-  toast(`已验收 ${ch.length} 张`); route();
+// 沉淀抽屉：点某一类只展开该类（置灰列表，点条进详情）；再点同一类收起。
+// 不走 route() 重画——整页重取四个接口只为展一个抽屉太贵，且会把 15s 活体轮询打断重挂。
+window.fgDrawer = (key, cat) => {
+  const box = $('fgd-' + key); if (!box) return;
+  const cur = fgOpen[key] === cat ? null : cat;
+  fgOpen[key] = cur;
+  document.querySelectorAll(`.fgcat[data-fglane="${CSS.escape(key)}"]`).forEach((el) => el.classList.toggle('on', el.dataset.fgcat === cur));
+  if (!cur) { box.innerHTML = ''; box.className = 'fgdrawer'; return; }
+  const list = ((window._fgSed || {})[key] || {})[cur] || [];
+  const 名 = (FG_CATS.find(([c]) => c === cur) || [, cur])[1];
+  const rows = list.slice(0, 60).map((t) => `<a class="fgsi ${cur}" href="#/t/${encodeURIComponent(t.id)}" title="${esc(t.susp || (t.why ? '归档原因：' + t.why : t.state))}">
+      <span class="id">${cur === 'susp' ? '❄' : ''}${esc(t.id)}</span><span class="t">${esc(t.title || '')}</span>
+      <span class="why">${esc(cur === 'susp' ? '挂起 · 原位冻结' : (t.why || t.state))}</span></a>`).join('')
+    + (list.length > 60 ? `<span class="dim" style="font-size:11px;padding:4px 10px">…还有 ${list.length - 60} 单</span>` : '');
+  box.className = 'fgdrawer open ' + cur;
+  box.innerHTML = `<div class="fgdh">${esc(名)} · ${list.length} 单${cur === 'susp' ? '（挂起=原位冻结，全链路跳过；解挂在详情页/决策台）' : ''}</div><div class="fgdl">${rows}</div>`;
 };
+
+/* ===== P10 树形 · 已退役（施工令-028，制作人 2026-08-09 03:00 裁决）=====
+   层级只有两层，树状铺陈形式大于信息。两项不可替代能力已迁走，整族（viewTree / tState /
+   saveCollapsed / tToggle / tExpandAll / tAcceptAll / 专属 CSS / 折叠存储键）随之删除：
+     · 批量验收子单 → 父单详情页 ops 区「✓ 批量验收子单」（window.acceptKids）
+     · 子单层级一览 → 父单详情页子单表格（进度口径由 lib/trace 服务端算，与本页原口径同尺）
+   旧书签 #/tree 在 route() 里转向流程页，不留死链。 */
+// 折叠存储键随视图一起退场：不清的话每台已用过树形的机器，localStorage 里会永远躺着一份
+// 没有任何代码会读的 studio.tree.collapsed。开机清一次即可，幂等。
+try { localStorage.removeItem('studio.tree.collapsed'); } catch { /* 隐私模式拿不到就算了 */ }
 
 /* ===== P3 在途 · 时间轴（甘特并入：回放真实执行，无计划日期）===== */
 function timelineHtml(agents, all, opts) {
@@ -743,9 +694,12 @@ function timelineHtml(agents, all, opts) {
   const online = byFn ? [] : agents.filter((a) => a.上线 !== false).map((a) => a.id);
   const withSegs = all.filter((t) => t.主办 && t.领单时间);
   const laneOf = (t) => byFn ? (t.职能 || '其他') : t.主办;
-  const FN_ORDER = ['策划', '程序', '美术', '装配', 'QA', '其他'];
+  // 泳道 = 数据里真实出现的职能（施工令-027）：FN_ORDER 只当"排序偏好"，不当"白名单"——
+  // 写死六项的年代，新增职能（技术策划）的在途单泳道会被 filter 直接滤掉，人在时间轴上凭空消失。
+  const FN_ORDER = ['策划', '技术策划', '程序', '美术', '装配', 'QA', '其他'];
+  const 出现的职能 = [...new Set(withSegs.map((t) => t.职能 || '其他'))];
   const ids = byFn
-    ? FN_ORDER.filter((fn) => withSegs.some((t) => (t.职能 || '其他') === fn))
+    ? [...FN_ORDER.filter((fn) => 出现的职能.includes(fn)), ...出现的职能.filter((fn) => !FN_ORDER.includes(fn)).sort()]
     : [...new Set([...online, ...withSegs.map((t) => t.主办)])];
   const segs = {}; let any = false;
   for (const t of withSegs) {
@@ -784,7 +738,8 @@ function timelineHtml(agents, all, opts) {
     const x = (g.s - t0) / 3600000 * pxh; const w = Math.max(6, (g.e - g.s) / 3600000 * pxh);
     const c = FNHEX[g.t.职能] || 'var(--ink3)';
     const label = byFn && w >= 44 ? `<i class="tlseglb">${esc(g.t.id.replace(/^TK-/, ''))}</i>` : '';
-    return `<span class="tlseg ${g.inflight ? 'on' : ''}" style="--i:${si++};left:${x}px;width:${w}px;background:${c}${byFn ? `;top:${3 + (g.lv || 0) * 30}px` : ''}" title="${esc(g.t.id)} ${esc(g.t.title)}（${g.inflight ? '进行中' : '已交付'}）" onclick="location.hash='#/t/${esc(g.t.id)}'">${label}</span>`;
+    // 在途 ❄（施工令-021）：冻结段既不是「进行中」也不是「已交付」，标题里如实说第三种
+    return `<span class="tlseg ${g.inflight ? 'on' : ''}${suspCls(g.t)}" style="--i:${si++};left:${x}px;width:${w}px;background:${c}${byFn ? `;top:${3 + (g.lv || 0) * 30}px` : ''}" title="${esc(g.t.id)} ${esc(g.t.title)}（${suspOf(g.t) ? '已挂起' : g.inflight ? '进行中' : '已交付'}）${suspOf(g.t) ? '\n' + esc(suspTip(g.t)) : ''}" onclick="location.hash='#/t/${esc(g.t.id)}'">${suspOf(g.t) ? '<i class="tlseglb snowb">❄</i>' : label}</span>`;
   }).join('')}</div>`).join('');
   const colH = ids.reduce((a, id) => a + rowH(id), 0);
   setTimeout(() => { const el = $('tlscroll'); if (el) el.scrollLeft = el.scrollWidth; }, 0);
@@ -915,6 +870,12 @@ async function viewAgents() {
 
 /* ===== P4 决策台 ===== */
 let dTab = 'accept';
+/* 决策台裁决权按钮（施工令-021）：签字位上除了「通过 / 打回」，制作人还得有「先停下」和「不要了」。
+   案源正是这两个在决策台压根没有——总监的土法是往文件里手写搁置令，机器读不到。
+   专项/父单一视同仁：有子单就给全树选项，不因为它是容器就少一排按钮。 */
+const dJudgeBtns = (cur, 有子) => `
+  <button class="btn h36" onclick="suspAsk('${esc(cur.id)}',${cur.挂起 ? 'false' : 'true'},${有子 ? 'true' : 'false'})" title="${cur.挂起 ? '原位复活，重新进入调度' : '原位冻结：单不挪窝，全链路跳过'}">${cur.挂起 ? '❄ 解挂' : '❄ 挂起'}</button>
+  <button class="btn danger-o h36" onclick="askAct2('废弃','${esc(cur.id)}','废弃并归档 ${esc(cur.id)}？此单进已归档不可逆，返工需另开新单。')" title="终态判决：进已归档不可逆">废弃</button>`;
 async function viewDecisions() {
   const d = await api('/api/decisions');
   // D42：决策台按当前项目过滤（积压计数是全局闸，保持全局读数）
@@ -922,7 +883,7 @@ async function viewDecisions() {
   if (p) { await loadCfg(); d.待验收 = d.待验收.filter((t) => projOf(t) === p); d.待定夺 = d.待定夺.filter((t) => projOf(t) === p); }
   const cur = dTab === 'accept' ? (d.待验收[0] || null) : (d.待定夺[0] || null);
   let main = `<div class="dmain card r16"><p class="dim">没有待你处理的签字项——一切安好。</p>
-    <p class="subnote" style="margin-top:8px">要开新活：<a href="#/ideas" style="color:var(--accent-ink)">想法池拍板</a> · 要放行：<a href="#/board" style="color:var(--accent-ink)">工单池待投区</a> · 要验收 Unity：先关上面的编辑器锁</p></div>`;
+    <p class="subnote" style="margin-top:8px">要开新活：<a class="glink" href="#/ideas">想法池拍板</a> · 要放行：<a class="glink" href="#/board">工单池待投区</a> · 要验收 Unity：先关上面的编辑器锁</p></div>`;
   if (cur) {
     const tk = await api('/api/ticket?id=' + encodeURIComponent(cur.id));
     const preview = tk.回执 ? tk.回执.raw : tk.body || '';
@@ -931,21 +892,29 @@ async function viewDecisions() {
     const std = (tk.body || '').split(/^## /m).find((s) => s.startsWith('验收标准')) || '';
     const stdLines = std.split('\n').slice(1).filter((l) => l.trim()).slice(0, 6).map((l) => `<div class="doc-line">${esc(l)}</div>`).join('') || '<div class="doc-line dim">（工单未写验收标准）</div>';
     const isKeep = cur.验收方式 === '保留';
-    main = `<div class="dmain card r16"><h2>${esc(cur.id)} · ${esc(cur.title)}</h2>
-      <div class="chipsrow">${fnPill(cur.职能)}<span class="pill mut">${esc(cur.验收方式 || '保留')}${isKeep ? ' · 只你能签' : ''}</span>${cur.自修次数 ? `<span class="pill red">QA 未过 · 自修 ${cur.自修次数}</span>` : ''}</div>
+    // 挂起横幅进决策台（施工令-021）：签字位上摆一张冻结单而不说明，制作人只会点下去撞一鼻子灰
+    const 有子 = ((tk.链 && tk.链.父子 && tk.链.父子.子) || []).length;
+    const suspBar = cur.挂起 ? `<div class="suspbar" style="margin:12px 0 0">
+        <span class="snowb" style="font-size:16px">❄</span><b>已挂起 · 原位冻结</b>
+        <span class="sbwho">${esc(cur.挂起.操作者 || '制作人')} · ${esc(String(cur.挂起.时间 || '').slice(0, 16).replace('T', ' '))}</span>
+        <span class="sp"></span>
+        <button class="btn accent h32" onclick="suspAsk('${esc(cur.id)}',false,${有子 ? 'true' : 'false'})">解挂</button>
+        ${cur.挂起.理由 ? `<span class="sbwhy">理由：${esc(cur.挂起.理由)}</span>` : ''}</div>` : '';
+    main = `<div class="dmain card r16"><h2>${snowB(cur)}${esc(cur.id)} · ${esc(cur.title)}</h2>
+      <div class="chipsrow">${fnPill(cur.职能)}<span class="pill mut">${esc(cur.验收方式 || '保留')}${isKeep ? ' · 只你能签' : ''}</span>${cur.自修次数 ? `<span class="pill red">QA 未过 · 自修 ${cur.自修次数}</span>` : ''}${cur.挂起 ? `<span class="pill susp-p" title="${esc(suspTip(cur))}">❄ 已挂起</span>` : ''}</div>${suspBar}
       <div class="dpanes"><div class="dpane"><div class="ph">${tk.回执 ? '产出预览 · 回执' : '工单正文'}</div>${pvLines || '<div class="doc-line dim">（空）</div>'}</div>
       <div class="dpane"><div class="ph">${dTab === 'accept' ? '验收标准（委托核查范围）' : '四件套'}</div>${dTab === 'accept' ? stdLines
         : `<div class="doc-line">结论：QA 未通过（自修 ${cur.自修次数 || 0} 轮）</div><div class="doc-line">问题/原因/解法：见回执异议与 QA 章节</div>`}
         ${isKeep && dTab === 'accept' ? '<div class="taste">待你品味：产出对不对味，只有你能签。</div>' : ''}</div></div>
       ${dTab === 'accept' ? `<div class="dsign"><span>${isKeep ? '保留单 · 品味终审' : '委托单 · 可核项由核查代签'}</span>
         <div class="btns"><button class="btn primary h36" onclick="dAct('验收','${esc(cur.id)}',true)">通过入库</button>
-        <button class="btn h36" onclick="dReject('${esc(cur.id)}')">打回</button></div></div>`
+        <button class="btn h36" onclick="dReject('${esc(cur.id)}')">打回</button>${dJudgeBtns(cur, 有子)}</div></div>`
       : `<div class="dsign"><span>QA 修不好 · 呈你我裁决</span><div class="btns">
         <button class="btn h36" onclick="dAct('定夺','${esc(cur.id)}',null,'接受')">接受</button>
         <button class="btn h36" onclick="dAct('定夺','${esc(cur.id)}',null,'给方向')">给方向</button>
-        <button class="btn danger-o h36" onclick="dAct('定夺','${esc(cur.id)}',null,'打回')">打回</button></div></div>`}</div>`;
+        <button class="btn danger-o h36" onclick="dAct('定夺','${esc(cur.id)}',null,'打回')">打回</button>${dJudgeBtns(cur, 有子)}</div></div>`}</div>`;
   }
-  const q1 = d.待验收.map((t) => `<div class="qitem" onclick="dTab='accept';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · ${esc(t.验收方式 || '保留')}</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>';
+  const q1 = d.待验收.map((t) => `<div class="qitem${suspCls(t)}" onclick="dTab='accept';route()"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}><span class="qi mono">${snowB(t)}${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · ${esc(t.验收方式 || '保留')}</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>';
   // H64 编辑器锁（2026-08-05 制作人指正：锁属验收流程，落决策台不落首页）——数据后到原地填
   setTimeout(async () => { try {
     const run = await api('/api/runner');
@@ -962,7 +931,7 @@ async function viewDecisions() {
       <span class="backlog2">待验收积压 ${d.积压} / ${d.积压闸}</span></div>
     <div class="dgrid">${main}<div><div class="dside card r16"><h3>待验收队列</h3>${q1}</div>
       <div class="dside card r16"><h3 class="${d.待定夺.length ? 'err' : ''}">待定夺 · ${d.待定夺.length}</h3>
-        ${d.待定夺.map((t) => `<div class="qitem" onclick="dTab='escal';route()"><span class="qi mono">${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · QA 未过</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>'}</div></div></div>`;
+        ${d.待定夺.map((t) => `<div class="qitem${suspCls(t)}" onclick="dTab='escal';route()"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}><span class="qi mono">${snowB(t)}${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · QA 未过</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>'}</div></div></div>`;
 }
 window.dAct = async (name, id, 通过, 决定) => { const r = await post('/api/act/' + name, { id, 通过, 决定 }); toast(r.ok ? '已处理' : (r.error || '失败')); route(); };
 window.dReject = async (id) => { if (await ask('打回将归档旧单，需另开新单重走流程。确认？')) dAct('验收', id, false); };
@@ -1078,7 +1047,7 @@ async function viewReport() {
         ${gtable('按项目', d.按项目)}</div>
     </div>
     <div class="rp-card card r14" style="margin-top:20px"><h4>工单明细${p ? `<span class="subnote" style="margin-left:10px">项目 ${esc(p)}</span>` : ''}</h4>
-      <table class="rp-t"><tr><th>编号</th><th>职能</th><th>阶段</th><th>预计</th><th>实际</th><th>偏差</th><th>自修</th><th>agent 自报消耗</th></tr>${detail || '<tr><td colspan="8" class="dim">无数据</td></tr>'}</table>
+      <div class="rp-scroll"><table class="rp-t"><tr><th>编号</th><th>职能</th><th>阶段</th><th>预计</th><th>实际</th><th>偏差</th><th>自修</th><th>agent 自报消耗</th></tr>${detail || '<tr><td colspan="8" class="dim">无数据</td></tr>'}</table></div>
       <p class="subnote" style="margin-top:10px">实际=交付-领单的墙钟时长 · token 为 agent 回执自报（参考值）· 点行进详情</p></div>`;
 }
 
@@ -1164,7 +1133,7 @@ async function viewParams() {
   // 兼容池（0.22.1）：Anthropic 兼容厂商——异厂对抗第三池的密钥与模型管理（仅本机可改）
   const compatPools = Object.entries(c.执行池 || {}).filter(([, v]) => v.兼容);
   const compatCards = compatPools.map(([name, v]) => `<div class="paramcard card"><h4>兼容池 · ${esc(name)}</h4>
-      <p class="pmeta mono" style="word-break:break-all">${esc(v.兼容.base || '')}<br/>模型 ${esc(v.兼容.模型 || 'CLI 默认')} · 密钥 ${esc(v.兼容.key || '未设')} · 职能 ${(v.职能 || []).join('/') || '（评测中·单张盖章）'}</p>
+      <p class="pmeta mono" style="word-break:break-all">${esc(v.兼容.base || '')}<br/>模型 ${esc(v.兼容.模型 || 'CLI 默认')} · 密钥 ${v.兼容.托管 ? ('已迁 DPAPI 托管' + (v.兼容.key ? ' · config 兜底 ' + esc(v.兼容.key) : '')) : esc(v.兼容.key || '未设')} · 职能 ${(v.职能 || []).join('/') || '（评测中·单张盖章）'}</p>
       <div class="runbtn"><button class="btn h32" onclick="compatEdit('${esc(name)}')">更新密钥/模型</button></div></div>`).join('')
     + `<div class="paramcard card"><h4>＋ 新增兼容池</h4><p class="pmeta">任何 Anthropic 兼容厂商（Kimi/GLM/MiniMax…）：池名+端点+密钥即接入 · 密钥只存本机 config，界面与远程只显尾四位</p>
       <div class="runbtn"><button class="btn h32 accent" onclick="compatEdit('')">配置</button></div></div>`;
@@ -1232,7 +1201,7 @@ async function viewParams() {
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">参数闸值</h3><span class="subnote">监制台可调</span></div>${params}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">模型档</h3><span class="subnote">贵裁判 · 贱体力（D38）</span></div>${modelCards}${compatCards}</div>
     <div><div class="sec-h"><h3 class="h17">环境探针</h3><span class="subnote">实弹前置检查</span></div>${envCard}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">凭据</h3><span class="subnote">订阅归 CLI · key 归 app（DPAPI 密文）</span></div><div id="creds-card" class="card"><p class="dim">读取中…</p></div>
+      <div class="sec-h" style="margin-top:26px"><h3 class="h17">凭据</h3></div><div id="creds-card" class="card credcard"><p class="dim">读取中…</p></div>
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">项目注册</h3><span class="subnote">执行 agent 的目标仓库（D32）</span></div>${projCard}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">执行池阈值</h3><span class="subnote">额度锁的杆（D26）</span></div>${poolCards}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">额度双池</h3></div>
@@ -1477,14 +1446,23 @@ function engJobPill(j) {
   if (!j) return '';
   return `<span class="pill sm ${j.停滞 ? 'red' : 'ok'}" title="引擎作业持锁 pid ${esc(j.pid)}${j.log秒 == null ? '（未见测试日志）' : ` · log ${j.log秒} 秒前更新`}">引擎${j.停滞 ? '停更' : '在跑'}</span>`;
 }
-// 回执最新一轮：多轮回执按「## 第 N 轮回执」或「# 完工报告」切，取最后一段（旧单单轮原样返回）
-function 回执最新轮(raw) {
+// 回执分轮（施工令-034）：多轮回执按「## 第 N 轮回执」或「# 完工报告」切成**全部**段落。
+// 返回 [{ 段, 轮, 签 }, …]，末项恒为最新一轮；单轮回执返回长度 1 且 轮/签 为空——
+// 调用方据此决定「出不出页签」，单轮单因此一个像素都不变。
+//
+// 轮号一律按**段序**数，不认标题里自称的号：TK-114 真数据里两个小节都写着「## 第 2 轮回执」
+// （返修时照抄了上一轮的标题），信标题就会出现两个「第 2 轮」页签、点了不知道点中哪个。
+// 段序是文件里的物理先后，永远唯一、永远单调，这是这里唯一可信的排序依据。
+function 回执分轮(raw) {
   const s = String(raw || '');
-  const rounds = s.split(/^(?=##\s*第\s*\d+\s*轮回执)/m).filter((x) => x.trim());
-  if (rounds.length > 1) return { 段: rounds[rounds.length - 1], 轮: `第 ${rounds.length} 轮（最新）` };
-  const reports = s.split(/^(?=#\s+完工报告)/m).filter((x) => x.trim());
-  if (reports.length > 1) return { 段: reports[reports.length - 1], 轮: `最新一份（共 ${reports.length} 份）` };
-  return { 段: s, 轮: '' };
+  const 切 = (re, 名) => {
+    const 段s = s.split(re).filter((x) => x.trim());
+    if (段s.length <= 1) return null;
+    return 段s.map((段, i) => ({ 段, 轮: `${名(i + 1, 段s.length)}`, 签: i === 段s.length - 1 ? '最新' : `第 ${i + 1} 轮` }));
+  };
+  return 切(/^(?=##\s*第\s*\d+\s*轮回执)/m, (i, n) => (i === n ? `第 ${i} 轮（最新）` : `第 ${i} 轮`))
+    || 切(/^(?=#\s+完工报告)/m, (i, n) => (i === n ? `第 ${i} 份（最新，共 ${n} 份）` : `第 ${i} 份`))
+    || [{ 段: s, 轮: '', 签: '' }];
 }
 // 正文/回执中最后一个 QA 章的结论摘要（≤10 行）：优先结论/不过项行，无则取章首几行
 function 最新QA摘要(raw, body) {
@@ -1589,30 +1567,77 @@ async function viewDetail(id) {
   }
   const chainRow = (k, v, cls) => `<div class="crow"><span class="ck">${k}</span><span class="cv ${cls || ''}">${v || '—'}</span></div>`;
   const kidsTxt = (c.父子.子 || []).map((x) => `<a href="#/t/${x.id}" style="color:var(--accent-ink)">${esc(x.id)}</a>(${esc(x.state)})`).join('、');
+  // ---- 子单层级一览（施工令-028：树形退役，这张表是它唯一不可替代的那半）----
+  // 进度列由 lib/trace 服务端算，口径与退役前树形逐字同一把尺（叶子取状态完成度、父单取子单均值）。
+  const 子单 = c.父子.子 || [];
+  const 待验收数 = (c.父子.待验收 || []).length;
+  const kidsTable = 子单.length ? `<div class="p8main card r16"><b style="font-size:13px">子单 ${子单.length}</b>
+      <span class="subnote" style="margin-left:8px">点行进详情 · 进度=叶子按状态、父单按子单均值${待验收数 ? ` · ${待验收数} 张等你签` : ''}</span>
+      <div class="kidtbl-wrap"><table class="kidtbl"><thead><tr>
+        <th>子单号</th><th>标题</th><th>状态</th><th>进度</th><th>池</th></tr></thead><tbody>
+        ${子单.map((x) => `<tr onclick="location.hash='#/t/${encodeURIComponent(x.id)}'" title="${esc(x.title || '')}">
+          <td class="mono kid-id">${esc(x.id)}${x.子数 ? `<span class="pill sm mut" style="margin-left:6px">${x.子数} 子</span>` : ''}</td>
+          <td class="kid-t">${esc(x.title || '')}</td>
+          <td>${stPill(x.state)}</td>
+          <td class="kid-p"><span class="bar"><i style="width:${Number(x.进度) || 0}%"></i></span><span class="pv">${Number(x.进度) || 0}%</span></td>
+          <td class="mono kid-pool">${esc(x.执行池 || '—')}</td></tr>`).join('')}
+      </tbody></table></div></div>` : '';
   let rsecs = '';
   if (d.回执) {
-    // 多轮回执只解析最新一轮（返修/自修追加在同一文件里，旧轮章节会盖住新轮）
-    const { 段, 轮 } = 回执最新轮(d.回执.raw);
-    const secs = { 验收步骤: '', 做了什么: '', 'QA 章节': '', 实际消耗: '', 异议: '' };
-    const SECLN = { 验收步骤: 8, 做了什么: 4 }; // 验收步骤给足行数——制作人按此动手（用户定稿）
-    段.split(/^## /m).forEach((p) => { const nl = p.indexOf('\n'); const h = p.slice(0, nl < 0 ? undefined : nl).trim();
-      for (const k of Object.keys(secs)) if (h.startsWith(k) || (k === 'QA 章节' && /QA/.test(h))) secs[k] = (nl < 0 ? '' : p.slice(nl + 1)).trim().split('\n').slice(0, SECLN[k] || 1).join('\n'); });
-    if (!secs.验收步骤) delete secs.验收步骤; // 委托单免写，不占位
-    // 判「标准回执」以 做了什么 为准：这章都没有的，四件套摆出来就是一排「—」的空壳（TK-97 案），
-    // 一律补末尾 8 行原文——宁可给制作人原文，也不给他一屏破折号。
-    const 标准 = !!(secs.做了什么 && secs.做了什么.trim());
-    const 有货 = Object.entries(secs).filter(([, v]) => v && v.trim());
-    const 章节Html = (list) => list.map(([k, v]) => `<div class="rsec"><div class="rl">${k}</div><div class="rv" style="white-space:pre-line">${esc(v || '—')}</div></div>`).join('');
-    if (标准) {
-      rsecs = (轮 ? `<div class="subnote" style="margin:8px 0 2px">${esc(轮)}</div>` : '') + 章节Html(Object.entries(secs));
-    } else {
+    // 一轮回执 → 一屏四件套。解析口径与改版前一字未动，只是从「只解析最新一轮」
+    // 改成「每轮各解析一份」，好让下面按轮出页签。
+    const 轮Html = ({ 段, 轮 }) => {
+      const secs = { 验收步骤: '', 做了什么: '', 'QA 章节': '', 实际消耗: '', 异议: '' };
+      const SECLN = { 验收步骤: 8, 做了什么: 4 }; // 验收步骤给足行数——制作人按此动手（用户定稿）
+      段.split(/^## /m).forEach((p) => { const nl = p.indexOf('\n'); const h = p.slice(0, nl < 0 ? undefined : nl).trim();
+        for (const k of Object.keys(secs)) if (h.startsWith(k) || (k === 'QA 章节' && /QA/.test(h))) secs[k] = (nl < 0 ? '' : p.slice(nl + 1)).trim().split('\n').slice(0, SECLN[k] || 1).join('\n'); });
+      if (!secs.验收步骤) delete secs.验收步骤; // 委托单免写，不占位
+      // 判「标准回执」以 做了什么 为准：这章都没有的，四件套摆出来就是一排「—」的空壳（TK-97 案），
+      // 一律补末尾 8 行原文——宁可给制作人原文，也不给他一屏破折号。
+      const 标准 = !!(secs.做了什么 && secs.做了什么.trim());
+      const 有货 = Object.entries(secs).filter(([, v]) => v && v.trim());
+      const 章节Html = (list) => list.map(([k, v]) => `<div class="rsec"><div class="rl">${k}</div><div class="rv" style="white-space:pre-line">${esc(v || '—')}</div></div>`).join('');
+      if (标准) return (轮 ? `<div class="subnote" style="margin:8px 0 2px">${esc(轮)}</div>` : '') + 章节Html(Object.entries(secs));
       const tail = 段.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-8).join('\n');
-      rsecs = `<div class="subnote" style="margin:8px 0 2px">非标回执（未见「做了什么」章）${轮 ? ' · ' + esc(轮) : ''} · 附末尾 8 行原文</div>
+      return `<div class="subnote" style="margin:8px 0 2px">非标回执（未见「做了什么」章）${轮 ? ' · ' + esc(轮) : ''} · 附末尾 8 行原文</div>
         ${章节Html(有货)}
         <div class="rsec"><div class="rl">回执原文</div><div class="rv mono" style="white-space:pre-line">${esc(tail || '（回执为空文件）')}</div></div>`;
+    };
+    const 轮s = 回执分轮(d.回执.raw);
+    if (轮s.length <= 1) {
+      rsecs = 轮Html(轮s[0]); // 单轮回执：无页签、无容器，与改版前逐字节一致
+    } else {
+      // 多轮：页签 + 每轮一个 pane。全部轮次一次性渲染进 DOM，切换只改 class——
+      // 详情页是整页字符串渲染的，若切页签要走 route() 重渲染，就会把滚动位置和展开态一起丢掉。
+      const 默认 = 轮s.length - 1; // 默认落最新一轮
+      const tabs = 轮s.map((r, i) => `<button class="rtab${i === 默认 ? ' on' : ''}" data-rtab="${i}"
+        onclick="rcvRound(this,${i})">${esc(r.签)}</button>`).join('');
+      const panes = 轮s.map((r, i) => `<div class="rtab-pane${i === 默认 ? ' on' : ''}" data-rpane="${i}">${轮Html(r)}</div>`).join('');
+      rsecs = `<div class="rtabs" role="tablist">${tabs}</div>${panes}`;
     }
   }
+  // ---- 已挂起横幅（施工令-021）：顶在最上层，挂起人/时间/理由/解挂按钮一屏交代完 ----
+  // 放在 engHtml/liveHtml 之前——制作人打开一张冻结单，第一眼要看到的是「它被你按停了」，
+  // 而不是一条还在走表的进度条。
+  let suspHtml = '';
+  if (fm.挂起) {
+    const s = fm.挂起;
+    const 子挂 = (c.父子.子 || []).length; // 有子单的父单：解挂时问一句要不要连子单一起放
+    suspHtml = `<div class="suspbar" id="suspbar">
+      <span class="snowb" style="font-size:16px">❄</span><b>已挂起 · 原位冻结</b>
+      <span class="sbwho">${esc(s.操作者 || '制作人')} · ${esc(String(s.时间 || '').slice(0, 16).replace('T', ' '))}${s.挂起时状态 ? ' · 挂起于「' + esc(s.挂起时状态) + '」' : ''}${s.连带自 ? ' · 随父单 ' + esc(s.连带自) + ' 全树挂起' : ''}</span>
+      <span class="sp"></span>
+      <button class="btn accent h32" onclick="suspAsk('${esc(id)}',false,${子挂 ? 'true' : 'false'})">解挂 · 原位复活</button>
+      <span class="sbwhy">派发 / 领单 / 质检 / 初检 / 核查 / 仲裁 / 巡检告警全部跳过本单；解挂后回到「${esc(d.state)}」原位继续被调度。${s.理由 ? '<br>理由：' + esc(s.理由) : ''}</span></div>`;
+  }
   const ops = [];
+  // 挂起/解挂（施工令-021）：非终态皆可挂，**专项/父单同样渲染**——案源正是父单详情页无按钮可用。
+  // 位置放在操作栏最前：这是「先停下」的闸，它比任何往前推的动作都优先。
+  if (!['完成', '已归档'].includes(d.state)) {
+    const 有子 = (c.父子.子 || []).length;
+    if (fm.挂起) ops.push(['解挂', `原位复活回「${esc(d.state)}」，重新可被调度${有子 ? '（可连带子单）' : ''}`, `suspAsk('${id}',false,${有子 ? 'true' : 'false'})`]);
+    else ops.push(['挂起', `原位冻结：单不挪窝，全链路跳过${有子 ? `（可连带 ${有子} 张子单全树挂起）` : ''}`, `suspAsk('${id}',true,${有子 ? 'true' : 'false'})`]);
+  }
   if (['池', '待投'].includes(d.state)) ops.push(['撤回', '回草稿（仅在池 / 待投）', `act2('撤回','${id}')`]);
   if (d.state === '在途') ops.push(['收回', '从执行方取回在途单', `act2('收回','${id}')`]);
   if (fm.待复核) ops.push(['解除复核', `上游 ${esc(fm.待复核.锚号 || '')} 已核对新版`, `act2('解除复核','${id}')`]); // D36
@@ -1635,12 +1660,16 @@ async function viewDetail(id) {
     if (fm.职能 === '策划') ops.push(['入标杆', '提炼进设计公理（审批点④）', `axModal('${id}')`]);
     if (fm.职能 === '美术' || fm.职能 === '装配') ops.push(['入美术库', '产出精选进风格库（审批点④）', `artModal('${id}')`]);
   }
+  // 批量验收子单（施工令-028 从树形迁入）：只在真有待验收子单时出按钮——与退役前
+  // 「acceptN ? 出按钮 : 不出」同款条件，不给一个点了没反应的钮。带确认门，行为不扩权。
+  if (待验收数) ops.push([`✓ 批量验收子单 ×${待验收数}`, `该父单下 ${待验收数} 张待验收子单一次性通过（只动待验收态，孙单不连带）`, `acceptKids('${id}')`]);
   if (['完成', '已归档'].includes(d.state)) ops.push(['推翻重做', '翻案：归档旧单+自动开返工草稿（须写理由）', `overturnModal('${id}')`]);
   if (d.state === '已归档') ops.push([fm.隐藏 ? '取消隐藏' : '隐藏归档', fm.隐藏 ? '重新出现在归档列表' : '从一切默认视图湮灭（纸面仍可考）', `toggleHide('${id}',${fm.隐藏 ? 'false' : 'true'})`]);
-  return `${engHtml}${liveHtml}<div class="p8grid"><div>
+  return `${suspHtml}${engHtml}${liveHtml}<div class="p8grid"><div>
       <div class="p8main card r16"><h2>${esc(id)} · ${esc(fm.title)}</h2>
         <div class="chipsrow">${fnPill(fm.职能)}<span class="pill mut">${esc(fm.产出物类型 || '')}</span>
           <span class="pill ${fm.验收方式 === '委托' ? 'mut' : 'ok'}">${esc(fm.验收方式 || '保留')}</span><span class="pill mut">${esc(fm.规模 || '')}</span>
+          ${fm.挂起 ? `<span class="pill susp-p" title="${esc(suspTip({ 挂起: fm.挂起 }))}">❄ 已挂起</span>` : ''}
           ${fm.待复核 ? `<span class="pill red" title="${esc(fm.待复核.说明 || '')}">待复核 · ${esc(fm.待复核.锚号 || '')}</span>` : ''}
           ${fm.代核 ? `<span class="pill ${fm.代核.结论 === '通过' ? 'ok' : 'red'}">核查${esc(fm.代核.结论)}</span>` : ''}</div>
         <div class="chain"><div class="clbl">追溯链</div>
@@ -1649,6 +1678,7 @@ async function viewDetail(id) {
           ${chainRow('返工自', c.返工自 ? esc(c.返工自) : null)}
           ${chainRow('依据', c.依据 ? `<span style="color:var(--accent-ink)">${esc(c.依据)}</span>` : null)}
           ${chainRow('依赖', (c.依赖 || []).map((x) => `${esc(x.id)}(${esc(x.state)})`).join('、'), 'okc')}</div></div>
+      ${kidsTable}
       ${escalHtml}
       ${d.产出 && d.产出.产出.length ? `<div class="p8main card r16"><b style="font-size:13px">产出速览</b>
         <span class="subnote" style="margin-left:8px">${d.产出.来源 === '结构化' ? '回执产出章节' : '从回执正文解析'} · 点击调起本机查看</span>
@@ -1665,8 +1695,35 @@ async function viewDetail(id) {
         ${ops.map(([b, s, fn]) => `<button class="oprow2" onclick="${fn}"><b>${b}</b><span>${s}</span></button>`).join('')}
         <div class="subnote" style="margin-top:14px">预计 ${esc(fm.预计时间 || '—')} · ${esc(fm.预计token || '—')} · 状态 ${esc(d.state)}</div></div></div></div>`;
 }
+// 回执轮页签切换（施工令-034）：纯 DOM class 开关，不重渲染、不重取数——
+// 详情页整页是字符串拼出来的，走 route() 会连滚动位置一起丢。作用域锁在本卡片内，
+// 一页上若将来出现第二处轮页签也互不干扰。
+window.rcvRound = (btn, i) => {
+  const card = btn.closest('.rside') || document;
+  card.querySelectorAll('[data-rtab]').forEach((b) => b.classList.toggle('on', Number(b.dataset.rtab) === i));
+  card.querySelectorAll('[data-rpane]').forEach((p) => p.classList.toggle('on', Number(p.dataset.rpane) === i));
+};
 // 预检警示（H83 短题制）：动作照常完成，只把提醒端到眼前
 window.act2 = async (name, id) => { const r = await post('/api/act/' + name, { id }); toast(r.ok ? (r.警示 ? '完成 · 警示：' + r.警示[0] : '完成') : (r.error || '失败')); route(); };
+// 批量验收子单（施工令-028：原树形 tAcceptAll 迁入父单详情页）。
+// 与原实现的差别只有两处，都是为了更稳，不是为了更强：
+//   ① 射程清单**开火前重取**（/api/ticket 的 链.父子.待验收，规则在 lib/trace 一处定义）——
+//      详情页可能开着好一会儿，拿渲染时的旧名单去批量改状态是在赌；
+//   ② 重取后为空时只吐一句提示、一个请求都不发（原实现会弹一个「批量验收 0 张？」的确认门）。
+// 过滤条件本身一字未动：只动该父单**直系**子单里状态为「待验收」的那些，孙单不连带。
+window.acceptKids = async (pid) => {
+  const d = await api('/api/ticket?id=' + encodeURIComponent(pid)).catch(() => null);
+  const ids = (d && d.链 && d.链.父子 && d.链.父子.待验收) || [];
+  if (!ids.length) return toast('没有待验收子单（可能刚被验收过）');
+  if (!await ask(`批量验收 ${pid} 下 ${ids.length} 张待验收子单？`)) return;
+  let ok = 0; const 失败 = [];
+  for (const cid of ids) {
+    const r = await post('/api/act/验收', { id: cid, 通过: true });
+    if (r && r.ok) ok++; else 失败.push(cid);
+  }
+  toast(失败.length ? `已验收 ${ok} 张，${失败.length} 张失败：${失败.slice(0, 3).join('、')}` : `已验收 ${ok} 张`);
+  route();
+};
 window.overturnModal = (id) => showModal(`<h3>推翻重做 ${esc(id)}</h3>
   <p class="subnote" style="margin-top:6px">归档旧单 + 自动编号开返工草稿（带返工链），下游依赖自动接续。理由必填，进新单正文与流水。</p>
   <textarea id="ov-r" style="width:100%;height:90px;margin-top:12px" placeholder="为什么翻案：哪里完全不行、新的要求方向是什么"></textarea>
@@ -1775,6 +1832,38 @@ window.doGiveDir = async (id, btn) => {
   if (!r.ok) { btn.disabled = false; return toast(r.error || '失败'); }
   btn.closest('.mwrap').remove();
   toast('已给方向 → 回在途重做');
+  route();
+};
+
+/* ===== 挂起 / 解挂弹窗（施工令-021 · 制作人裁决权）=====
+   带确认是硬要求：挂起会让一张单从全链路里消失，无声按下去和无声跑起来一样危险。
+   父单（有子单的单）额外给「仅父单 / 全树」两选——只冻父单而子单照跑，是把专项冻了个寂寞。 */
+window.suspAsk = (id, 挂, 有子) => {
+  const 动 = 挂 ? '挂起' : '解挂';
+  const 树注 = 挂
+    ? '全树挂起 = 连带本单全部子孙一起冻结（终态子单与已单独挂起的子单跳过）。'
+    : '全树解挂 = 连带「随本单全树挂起」的子孙一起放行；单独挂过的子单保持挂起，不代你改主意。';
+  showModal(`<h3>${动} ${esc(id)}</h3>
+    <p class="subnote" style="margin-top:6px">${挂
+    ? '挂起 = <b>原位冻结</b>：单一步不挪，仍在当前状态目录里，但派发 / 领单 / 质检 / 初检 / 核查 / 仲裁 / 巡检告警全部跳过它，在途会话会被掐掉。这不是废弃——随时可解挂原位复活。'
+    : '解挂 = <b>原位复活</b>：回到它挂起时所在的状态继续被正常调度。'}</p>
+    ${挂 ? `<textarea id="susp-r" style="width:100%;height:80px;margin-top:12px" placeholder="为什么冻它（选填，进 frontmatter 与流水，事后回答得出「当时为什么停」）"></textarea>` : ''}
+    ${有子 ? `<label class="subnote" style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+      <input type="checkbox" id="susp-tree" checked> 全树${动}（连带子单）</label>
+      <p class="subnote" style="margin-top:6px">${树注}</p>` : ''}
+    <div class="p7foot" style="margin-top:14px"><button class="btn h32" onclick="this.closest('.mwrap').remove()">取消</button>
+    <button class="btn accent h32" onclick="doSusp('${esc(id)}',${挂},this)">确认${动}</button></div>`);
+};
+window.doSusp = async (id, 挂, btn) => {
+  const box = $('susp-tree');
+  const body = { id, 操作者: '制作人', 全树: !!(box && box.checked) };
+  if (挂) { const r0 = $('susp-r'); if (r0 && r0.value.trim()) body.理由 = r0.value.trim(); }
+  btn.disabled = true;
+  const r = await post('/api/act/' + (挂 ? '挂起' : '解挂'), body);
+  if (!r.ok) { btn.disabled = false; return toast(r.error || '失败'); }
+  btn.closest('.mwrap').remove();
+  const n = ((挂 ? r.挂起 : r.解挂) || []).length;
+  toast(挂 ? `已挂起${n > 1 ? ` · 连带 ${n - 1} 张子单` : ''}` : `已解挂${n > 1 ? ` · 连带 ${n - 1} 张子单` : ''}`);
   route();
 };
 
@@ -2191,7 +2280,7 @@ async function wkGraph(proj) {
 }
 
 // 施工令-015：stylelib 路由退役（内容并入 wiki 美术标杆页签），旧书签在 route() 里转向
-const ROUTES = { '': viewOverview, ideas: viewIdeas, board: viewBoard, flow: viewFlow, tree: viewTree, agents: viewAgents, decisions: viewDecisions, wiki: viewWiki, relay: viewRelay, report: viewReport };
+const ROUTES = { '': viewOverview, ideas: viewIdeas, board: viewBoard, flow: viewFlow, agents: viewAgents, decisions: viewDecisions, wiki: viewWiki, relay: viewRelay, report: viewReport };
 const WK_ALIAS = ['style', 'stylelib', '风格库']; // 旧书签不死：一律落 wiki 美术标杆
 
 /* ===== P14 想法池（H49 双域·制作人层域）===== */
@@ -2226,14 +2315,18 @@ window.ideaAct = async (动作, id) => {
 };
 
 /* ===== P13 项管信道（0.18.6，前身遥控传令板）：制作人 ↔ 项管问答 + 汇报流 ===== */
-function pmEventLine(e) {
-  // e.t 是 UTC ISO 串，必须转本地时区再显示（用户实测：00:16 曾显示成 16:16）
-  // 当日事件只显 HH:MM（跨日才带月-日，窄列不折行——2026-08-06 UI 评审项管页）
-  const d0 = new Date(e.t); const p2 = (n) => String(n).padStart(2, '0');
-  const sameDay = !isNaN(d0) && d0.toDateString() === new Date().toDateString();
-  const t = isNaN(d0) ? String(e.t || '').slice(5, 16).replace('T', ' ')
-    : sameDay ? `${p2(d0.getHours())}:${p2(d0.getMinutes())}`
+// 台账时刻 → 本地时钟串。ISO 是 UTC，必须转本地时区再显示（用户实测：00:16 曾显示成 16:16）；
+// 当日只显 HH:MM，跨日才带月-日（窄列不折行——2026-08-06 UI 评审项管页）。
+// 施工令-037：事件链每一行的时间戳与流水共用这一把尺，两处显示不许各算各的。
+function locHM(iso) {
+  const d0 = new Date(iso); const p2 = (n) => String(n).padStart(2, '0');
+  if (isNaN(d0)) return String(iso || '').slice(5, 16).replace('T', ' ');
+  const sameDay = d0.toDateString() === new Date().toDateString();
+  return sameDay ? `${p2(d0.getHours())}:${p2(d0.getMinutes())}`
     : `${p2(d0.getMonth() + 1)}-${p2(d0.getDate())} ${p2(d0.getHours())}:${p2(d0.getMinutes())}`;
+}
+function pmEventLine(e) {
+  const t = locHM(e.t);
   if (e.类型 === '待审') return { t, txt: e.单 ? `受托起草：${e.单}（草稿待总监审）` : `拆单完成：${e.父单} → ${(e.子单 || []).join('、')}，简报呈 Claude 审批`, hot: true };
   if (e.类型 === '切单启动') return { t, txt: `开始拆单：${e.父单}（仓况盘点中）`, hot: true };
   if (e.类型 === '派发') return { t, txt: `派发 ${e.id} → ${e.池} 池` };
@@ -2273,14 +2366,65 @@ function rosterSnapHtml(编制) {
       <span class="stpill pill sm ${cls}">${esc(r.态 || '')}</span></div>`;
   }).join('');
 }
+/* ===== 关键汇报 · 一单一链（施工令-037，制作人 2026-08-09 18:34 批准设计稿）=====
+   案源：平铺事件行每条都是断头账。制作人点名——「每一项都应该有回应：什么时候被委托起草/
+   切单/送审/审过/派发、为什么派发、后续等待什么、状态怎么样」。
+   数据全部由服务端 lib/pm/chain 算好下发（口径唯一、可单测），前端只画不判：
+   徽章三档与「现在等什么」都读 c.档 / c.等，**绝不在这里另立一套状态推断**。 */
+const KOPEN = 'studio.kchain.open'; // 展开态跨刷新保持：只存「制作人手动改过的那些单」
+function kOpenMap() { try { return JSON.parse(localStorage.getItem(KOPEN) || '{}') || {}; } catch { return {}; } }
+function kOpenSave(m) { try { localStorage.setItem(KOPEN, JSON.stringify(m)); } catch { /* 隐私模式拿不到就算了 */ } }
+// 默认：活单展开、完成单折叠（设计稿定案）；手动改过的以 localStorage 为准。
+const kIsOpen = (c, m) => (Object.prototype.hasOwnProperty.call(m, c.id) ? !!m[c.id] : !!c.活);
+window.kToggle = (id) => {
+  const el = document.querySelector(`.kitem[data-kid="${CSS.escape(id)}"]`);
+  if (!el) return;
+  const now = !el.classList.contains('open');
+  el.classList.toggle('open', now);
+  const arrow = el.querySelector('.karrow'); if (arrow) arrow.textContent = now ? '▾' : '▸';
+  const m = kOpenMap(); m[id] = now; kOpenSave(m);
+};
+function kChainHtml(链) {
+  if (!链 || !链.length) return '<p class="dim">暂无关键汇报。</p>';
+  const m = kOpenMap();
+  // 顺手剪枝：只留还在当前卡片里的键，不然这个 map 会永远长下去
+  const 活键 = {}; for (const c of 链) if (Object.prototype.hasOwnProperty.call(m, c.id)) 活键[c.id] = m[c.id];
+  if (JSON.stringify(活键) !== JSON.stringify(m)) kOpenSave(活键);
+  return 链.map((c) => {
+    const open = kIsOpen(c, 活键);
+    const steps = (c.链 || []).map((s) => `<div class="kstep">
+        <span class="kt">${esc(s.t ? locHM(s.t) : '·')}</span><span class="kx">${esc(s.文)}</span>${s.因 ? `<span class="kwhy"> · ${esc(s.因)}</span>` : ''}</div>`).join('')
+      || '<div class="kstep kmiss"><span class="kt">·</span><span class="kx">台账窗内无该单事件、工单也没留下时间戳——缺站不补造</span></div>';
+    // 尾端恒有一行：活单答「现在停在哪」+「在等谁」，终态单答「怎么收的」。
+    const 尾 = c.等
+      ? `<div class="kstep now"><span class="kt">现在</span><span class="kx">停在「${esc(c.态)}」${c.返修轮 ? ` · 第 ${c.返修轮 + 1} 轮` : ''}</span></div>`
+      : `<div class="kstep fin"><span class="kt">终</span><span class="kx">${esc(c.徽)}</span></div>`;
+    const foot = c.等
+      ? `<div class="kfoot ${c.等.闸 === '人' ? 'human' : 'mach'}">⏳ 现在等：${esc(c.等.什么)}<b> —— 等${esc(c.等.谁)}</b></div>`
+      : '';
+    return `<div class="kitem${open ? ' open' : ''}" data-kid="${esc(c.id)}">
+      <div class="khead" onclick="kToggle('${qesc(c.id)}')" title="点头行展开/收起（展开态跨刷新保持）">
+        <span class="karrow">${open ? '▾' : '▸'}</span>
+        <a class="kid" href="#/t/${encodeURIComponent(c.id)}" onclick="event.stopPropagation()">${esc(c.id)}</a>
+        <span class="ktitle">${esc(c.title || '')}</span>
+        ${c.职能 ? fnPill(c.职能) : ''}
+        <span class="kst ${c.档}">${esc(c.徽)}</span>
+      </div>
+      <div class="kbody"><div class="kline">${steps}${尾}</div>${foot}</div>
+    </div>`;
+  }).join('');
+}
+const kSig = (链) => (链 || []).map((c) => `${c.id}|${c.态}|${c.徽}|${(c.链 || []).length}`).join(',');
 async function viewRelay() {
   // 0.23.9 信息架构定案（用户裁定）：只留三项——状态 / 关键汇报 / 详细流水。
   // 台账与对话区退出 UI（机制层 API 保留：制作人层通道走 /api/relay，台账走 /api/pm/ledger）。
   // H85 追加第四项：编制快照（只读）——用工权归项管后，编制现况在项管页看。
-  const [d, pl, rs] = await Promise.all([
+  // 施工令-037：关键汇报由平铺事件行改为一单一链事件链卡（/api/pm/chains 纯读聚合）。
+  const [d, pl, rs, kc] = await Promise.all([
     api('/api/relay').catch(() => ({ 消息: [] })),
     api('/api/pm/ledger').catch(() => ({ 事件: [], 台账: {} })),
     api('/api/pm/roster').catch(() => ({ 编制: [] })),
+    api('/api/pm/chains').catch(() => ({ 链: [] })),
   ]);
   const 模型档 = (_cfg && _cfg.模型 && _cfg.模型.项管) || '—';
   const L = pl.台账 || {};
@@ -2289,8 +2433,7 @@ async function viewRelay() {
   const line = (e) => { const v = pmEventLine(e);
     if (!v) return ''; // null=不占流水（无异常巡检心跳）
     return `<div class="logrow"><time>${esc(v.t)}</time><span${v.hot ? ' style="color:var(--accent-ink);font-weight:600"' : ''}>${esc(v.txt)}</span></div>`; };
-  const feedKey = evAll.filter((e) => KEY.has(e.类型)).slice(-12).reverse().map(line).join('')
-    || '<p class="dim">暂无关键事件。</p>';
+  // 关键事件不再平铺进「关键汇报」（施工令-037 起改事件链卡），KEY 只剩一个职责：把它们从详细流水里滤掉。
   const feedFlow = evAll.filter((e) => !KEY.has(e.类型)).slice(-50).reverse().map(line).join('')
     || '<p class="dim">暂无流水。</p>';
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -2301,6 +2444,18 @@ async function viewRelay() {
   const on = !!d.值守;
   const stateColor = working ? 'var(--warn)' : (on ? 'var(--ok)' : 'var(--ink3)');
   const stateText = working ? `作业中 · ${esc(working.用途)}${working.对象 ? ' ' + esc(working.对象) : ''}` : (on ? '在线值守' : '离线（执行器停）');
+  // 15s 活体（与在途页/流程页同一口径）：只在「卡片构成或态/徽/链长度变了」时重画关键汇报区，
+  // 平稳期一个字都不动——每 15s 无脑重刷 innerHTML 会把文本选择和展开动画打断。
+  // 展开态不受重画影响：它的事实源是 localStorage，不是 DOM。
+  let sig0 = kSig(kc.链);
+  pollLoop('kchain', 15000, async () => {
+    const nd = await api('/api/pm/chains');
+    const s = kSig(nd.链);
+    if (s === sig0) return;
+    sig0 = s;
+    const box = $('kchain'); if (box) box.innerHTML = kChainHtml(nd.链);
+  });
+
   return `<div style="max-width:860px;margin:24px auto 0">
     <div class="card r16" style="padding:18px 22px;display:flex;align-items:center;gap:14px;margin-bottom:16px">
       <span style="width:12px;height:12px;border-radius:50%;background:${stateColor};${on && !working ? 'animation:breathe 2.4s var(--ease-out) infinite;' : ''}${working ? 'animation:breathe-warn 1.6s var(--ease-out) infinite;' : ''}"></span>
@@ -2311,8 +2466,8 @@ async function viewRelay() {
       <span class="subnote" style="margin-left:8px">每职能一行 · 池序即路由优先级 · 只读（调整走 /api/pm/roster）</span>
       <div style="margin-top:12px">${rosterSnapHtml(rs.编制)}</div></div>
     <div class="logcard card r14" style="margin-bottom:16px"><b style="font-size:13px">关键汇报</b>
-      <span class="subnote" style="margin-left:8px">拆单 / 待审 / 收口 / 上呈 / 报警</span>
-      <div style="margin-top:12px">${feedKey}</div></div>
+      <span class="subnote" style="margin-left:8px">一单一链 · 点头行展开 · 尾端永远回答「现在等什么」</span>
+      <div class="kchain" id="kchain">${kChainHtml(kc.链)}</div></div>
     <div class="logcard card r14"><b style="font-size:13px">详细流水</b>
       <span class="subnote" style="margin-left:8px">近 50 条 · 它都做了什么</span>
       <div style="margin-top:12px;max-height:46vh;overflow-y:auto">${feedFlow}</div></div>
@@ -2383,6 +2538,9 @@ async function route() {
     if (!projMulti()) setProj(projNames()[0] || '');
     // 风格库退役（施工令-015）：#/style · #/stylelib 旧书签 301 到 wiki 美术标杆页签
     if (WK_ALIAS.includes(decodeURIComponent(h))) { wkState.tab = '美术标杆'; wkState.doc = ''; location.replace('#/wiki'); return; }
+    // 树形退役（施工令-028）：#/tree 旧书签转向流程页。用 replace 不用 assign——
+    // 否则退役页会占一格历史，用户按返回又被弹回来一次（同 WK_ALIAS 的处理）。
+    if (h === 'tree') { location.replace('#/flow'); return; }
     if (h === 'hub') { app.innerHTML = await viewHub(); markIn('hub'); return; }
     if (h === 'params') { app.innerHTML = bshell('参数与额度', '<span class="pill sm mut">全局配置</span>', await viewParams(), '#/hub'); markIn('params'); return; }
     if (h === 'proj-new') { app.innerHTML = bshell('注册新项目', '<span class="pill sm mut">全局 · 项目注册</span>', viewProjNew(), '#/hub'); markIn('proj-new'); return; }
@@ -2418,7 +2576,6 @@ async function route() {
       document.querySelectorAll('.bcard2[data-tid]').forEach((el) => { flipOld[el.dataset.tid] = el.getBoundingClientRect(); });
     }
     app.innerHTML = shell(key, inner);
-    if (key === 'flow') flAutoFold(); // 默认折叠历史（偏好跨会话）
     if (Object.keys(flipOld).length) {
       requestAnimationFrame(() => {
         document.querySelectorAll('.bcard2[data-tid]').forEach((el) => {
@@ -2508,25 +2665,59 @@ window.compatEdit = async (name) => {
    授权流程全程第一方，厂商改登录页与我们无关。key 才由 app 保管（DPAPI 密文）。 */
 window.credsLoad = async () => {
   const el = $('creds-card'); if (!el) return;
-  let d; try { d = await api('/api/creds'); } catch { el.innerHTML = '<p class="dim">凭据读取失败</p>'; return; }
+  // no-store 是「重新检测」这个按钮的全部意义（施工令-027 自测抓到）：走默认缓存时
+  // 浏览器会把上一次 /api/creds 原样端回来，登录完回来点它，卡片纹丝不动，按钮看着像坏的。
+  let d; try { d = await api('/api/creds', { cache: 'no-store' }); } catch { el.innerHTML = '<p class="dim">凭据读取失败</p>'; return; }
   if (d.error) { el.innerHTML = `<p class="dim">${esc(d.error)}</p>`; return; }
-  const 灯 = (ok) => `<span class="dot ${ok ? 'on' : 'off'}"></span>`;
-  const 订阅行 = (厂商, s) => `<p class="rowline">${灯(s.已登录)}<b>${厂商}</b> <span class="dim">${esc(s.note || '')}</span>
-    <button class="btn xs" onclick="credsLogin('${厂商}')">${s.已登录 ? '重新登录' : '登录'}</button></p>`;
-  const 托管行 = (r) => `<p class="rowline"><span class="pill sm">${esc(r.池)}</span>
-    <code>${esc(r.指纹)}</code>${r.base ? ` <span class="dim">${esc(r.base)}</span>` : ''}${r.模型 ? ` <span class="dim">· ${esc(r.模型)}</span>` : ''}
-    <button class="btn xs" onclick="credsDel('${qesc(r.池)}')">删除</button></p>`;
+  // 圆点四档（施工令-027），与 /api/creds 的 态 一一对应，两个厂商同一把尺：
+  //   绿=可用（登录态实测有效）/ 黄=受限（过期但能自愈，不用人管）/ 红=失效（要人重登）/ 灰=未知（探不到，不假绿也不乱报红）
+  // 旧样 codex 那一行是**写死**的 灯(false)+写死文案，灰点纯属巧合正确；claude 绿点则只看"有没有 token"。
+  const 灯类 = { 可用: 'dot on', 受限: 'dot warn', 失效: 'dot err', 未知: 'dot' };
+  // 三行一个体例（施工令-034 设计稿）：点 · 名 · 类型胶囊 · 状态一句话(+次要小字) · 右侧动作组。
+  // 订阅行与托管行此前长相不同（一个粗名+说明、一个池名胶囊+等宽指纹），同一张卡里像两张表。
+  const 行 = (态, 名, 类型, 状态Html, 动作Html) =>
+    `<p class="credrow"><span class="${灯类[态] || 'dot'}"></span><span class="cr-name">${esc(名)}</span>
+      <span class="cr-kind">${esc(类型)}</span><span class="cr-stat">${状态Html}</span>
+      <span class="cr-act">${动作Html}</span></p>`;
+  // 名称由 cr-name 出、状态由 note 出，两边都写厂商名就是 08-09 巡检抓到的「codex codex 登录态…」叠字。
+  const 订阅行 = (厂商, s) => {
+    const 态 = 灯类[s.态] ? s.态 : '未知';
+    const 动作 = s.可登录
+      ? `<button class="btn xs" title="${esc('拉起可见终端执行：' + (s.命令 || '') + '（授权在浏览器里由厂商完成，app 只等它退出后重探）')}"
+          onclick="credsLogin('${厂商}')">${s.已登录 ? '重新登录' : '登录'}</button>`
+      : `<span class="dim" title="${esc((s.命令 || '') + '：可执行体不在 PATH，按钮点了只会弹一个报错黑窗')}">CLI 未装</span>`;
+    return 行(态, 厂商, '订阅', esc(s.note || ''), 动作);
+  };
+  // 托管行的圆点只敢说它敢说的：/api/creds 的脱敏清单不验证密文能不能解开（那要动数据面），
+  // 所以「记录完好（有真指纹）」才给绿，指纹是占位符 ●●●●???? 的记录判未知（灰），
+  // DPAPI 整体不可用时全部降未知——宁可说探不到，也不假绿。口径与订阅行的四档同一把尺。
+  const 托管行 = (r) => {
+    const 态 = !d.可加密 ? '未知' : (r.指纹 && !/\?{4}/.test(r.指纹) ? '可用' : '未知');
+    const 迁入 = r.更新时间 ? String(r.更新时间).slice(5, 10).replace('-', '-') + ' 迁入' : '';
+    const 小字 = [r.base, r.模型, 迁入].filter(Boolean).map(esc).join(' · ');
+    const 状态 = `${esc(r.指纹 || '')}${小字 ? ` <small>· ${小字}</small>` : ''}`;
+    // 「更换」= 复用添加流程、池名/端点/模型预填，存成功即覆写同名托管条目（轮换 key 一步到位，不必先删再加）
+    return 行(态, r.池, 'key·托管', 状态,
+      `<button class="btn xs" title="轮换这个池的 key：走添加流程、池名已预填，存成功即覆写当前条目"
+         onclick="credsAdd('${qesc(r.池)}')">更换</button>
+       <button class="btn xs" onclick="credsDel('${qesc(r.池)}')">删除</button>`);
+  };
+  // 「更换」要把旧端点/模型预填回去，而 askInput 是异步的、期间卡片可能已重渲染——
+  // 存一份最近清单（脱敏，无 key）供 credsAdd 读，比从 DOM 里抠字符串可靠。
+  window.__creds托管 = d.托管 || [];
+  el.className = 'card credcard';
   el.innerHTML = `
-    <p class="subnote">订阅（凭据归 CLI，app 不保存）</p>
+    <p class="cred-sub">订阅登录归各 CLI 保管 · API key 由监制台加密托管，绝不入配置文件</p>
     ${订阅行('claude', d.订阅.claude)}
-    <p class="rowline">${灯(false)}<b>codex</b> <span class="dim">${esc(d.订阅.codex.note)}</span>
-      <button class="btn xs" onclick="credsLogin('codex')">登录</button></p>
-    <p class="subnote" style="margin-top:14px">API key（app 保管 · DPAPI 密文 · 不入 studio.config.json）</p>
-    ${d.托管.length ? d.托管.map(托管行).join('') : '<p class="dim">尚未托管任何 key</p>'}
-    <p style="margin-top:10px">
+    ${订阅行('codex', d.订阅.codex)}
+    ${d.托管.length ? d.托管.map(托管行).join('') : '<p class="cred-empty">尚未托管任何 key</p>'}
+    <p class="cred-foot">
       <button class="btn xs" onclick="credsAdd()">＋ 添加 key</button>
       <button class="btn xs" onclick="credsLoad()">重新检测</button>
-      ${d.可加密 ? '' : '<span class="dim" style="color:var(--bad)">DPAPI 不可用，无法保存 key</span>'}
+      ${d.可加密 ? '' : '<span class="err" style="font-size:12px">DPAPI 不可用，无法保存 key</span>'}
+      <span class="grow"></span>
+      <span class="credleg" tabindex="0"><span class="dot" style="width:7px;height:7px;margin-right:5px"></span>状态图例<span class="credtip"
+        ><i class="lg-ok"></i>可用<br><i class="lg-warn"></i>受限 · 自愈中<br><i class="lg-err"></i>失效 · 需重登<br><i class="lg-unk"></i>未知 · 探不到</span></span>
     </p>`;
 };
 window.credsLogin = async (厂商) => {
@@ -2539,20 +2730,27 @@ window.credsDel = async (池) => {
   toast(r.ok ? '已删除' : (r.error || '失败'));
   if (r.ok) window.credsLoad();
 };
-window.credsAdd = async () => {
-  const 池 = await askInput('池名（如 deepseek / claude-key）', '', { note: '与 studio.config.json 的 执行池 键名一致' });
+// 添加 / 更换 同一条流程（施工令-034）：带 预填池 就是「更换」——池名与端点/模型照抄现有条目、
+// 只让人重敲那一把新 key，存成功即覆写同名条目（POST /api/creds 本就是覆写语义，不新开后端）。
+// 不带参数就是原来的「添加」，四问式一字未动。
+window.credsAdd = async (预填池) => {
+  const 换 = !!预填池;
+  const 旧 = 换 ? ((window.__creds托管 || []).find((x) => x.池 === 预填池) || {}) : {};
+  const 池 = await askInput(换 ? `更换「${预填池}」的 key` : '池名（如 deepseek / claude-key）', 预填池 || '',
+    { note: 换 ? '池名保持不变即为轮换；改名则会另存为一个新池' : '与 studio.config.json 的 执行池 键名一致' });
   if (池 === null || !池.trim()) return;
-  const key = await askInput(`${池.trim()} 的 API key`, '', { password: true, note: '只在本机以 DPAPI 密文落盘，明文不入配置文件；输入框按密码处理' });
+  const key = await askInput(`${池.trim()} 的${换 ? '新 ' : ' '}API key`, '',
+    { password: true, note: '只在本机以 DPAPI 密文落盘，明文不入配置文件；输入框按密码处理' + (换 ? '。存成功即覆盖旧 key，旧值不可找回' : '') });
   if (key === null || !key.trim()) return;
-  const base = await askInput('兼容端点 base（官方端点留空）', '', { note: '第三方兼容端点填 https://…；原生厂商留空' });
+  const base = await askInput('兼容端点 base（官方端点留空）', 旧.base || '', { note: '第三方兼容端点填 https://…；原生厂商留空' });
   if (base === null) return;
-  const 模型 = await askInput('模型名（留空=CLI 默认）', '');
+  const 模型 = await askInput('模型名（留空=CLI 默认）', 旧.模型 || '');
   if (模型 === null) return;
   const body = { 池: 池.trim(), key: key.trim() };
   if (base.trim()) body.base = base.trim();
   if (模型.trim()) body.模型 = 模型.trim();
   const r = await post('/api/creds', body);
-  toast(r.ok ? `已托管 ${r.池}（${r.指纹}）` : (r.error || '失败'));
+  toast(r.ok ? `${换 && r.池 === 预填池 ? '已更换' : '已托管'} ${r.池}（${r.指纹}）` : (r.error || '失败'));
   if (r.ok) window.credsLoad();
 };
 

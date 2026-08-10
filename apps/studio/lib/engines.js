@@ -1,5 +1,5 @@
 // engines.js — 引擎档案自检（探针组3 用）
-// 发现契约与 套件/enginectl 一致：env > 默认路径；Unity 版本纪律同源
+// 发现契约与 packages/enginectl 一致：env > 默认路径；Unity 版本纪律同源
 // （batchmode 打开版本不匹配工程会静默升级——探针提前亮黄，别等实弹炸）。
 const fs = require('fs');
 const path = require('path');
@@ -57,7 +57,7 @@ function checkProject(reg, env) {
 }
 
 // 引擎作业状态（2026-08-06 TK-97 案：会话前台等 Unity 测试，界面看不出「在跑」还是「僵死」）。
-// 口径与 套件/enginectl 一致：.enginectl-lock/pid 存在=作业持锁；enginectl-test.log mtime=心跳。
+// 口径与 packages/enginectl 一致：.enginectl-lock/pid 存在=作业持锁；enginectl-test.log mtime=心跳。
 // 任何文件缺失一律静默：没锁就是没作业，没日志就是没心跳，不报错不出灯。
 const 停更告警秒 = 7 * 60;
 function jobStatus(projPath, now) {

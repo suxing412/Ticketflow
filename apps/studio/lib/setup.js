@@ -7,8 +7,8 @@
 //
 // 纪律：
 //   · 已存在的 studio.config.json **绝不覆盖**（升级模式，同 部署.bat 的行为）；
-//   · 岗位协议优先从 套件/岗位协议模板 拷（源码布局），拷不到就落内置最小章程——
-//     打包后的 exe 里没有 套件/ 目录，不能因为拷不到模板就让向导失败；
+//   · 岗位协议优先从 packages/role-protocol-templates 拷（源码布局，施工令-024 自 套件/ 迁入），
+//     拷不到就落内置最小章程——打包后的 exe 里没有 packages/，不能因为拷不到模板就让向导失败；
 //   · 只建目录不删东西：向导是新手第一次见到的东西，它不该有任何破坏性动作。
 
 const fs = require('fs');
@@ -81,11 +81,12 @@ const 内置章程 = {
   装配: '# 装配 agent 章程\n\n把件拼成能跑的组装体。**拼接面是你的独占写区**。\n只拼不造：逻辑有问题写异议让程序修。拼完必须冒烟，新增红灯不许交单。\n',
 };
 
-// 找套件里的岗位协议模板（源码布局才有；打包后没有，返回 null 走内置）
+// 找包里的岗位协议模板（源码布局才有；打包后没有，返回 null 走内置）
+// 施工令-024：模板已从 套件/岗位协议模板 迁入 packages/role-protocol-templates
 function 模板目录() {
   const 候选 = [
-    path.resolve(__dirname, '..', '..', '..', '套件', '岗位协议模板'), // apps/studio/lib → 仓库根
-    path.resolve(__dirname, '..', '套件', '岗位协议模板'),
+    path.resolve(__dirname, '..', '..', '..', 'packages', 'role-protocol-templates'), // apps/studio/lib → 仓库根
+    path.resolve(__dirname, '..', 'packages', 'role-protocol-templates'),
   ];
   return 候选.find((p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } }) || null;
 }
@@ -113,7 +114,10 @@ function 建工作区(目录) {
   fs.mkdirSync(章程目录, { recursive: true });
   const src = 模板目录();
   const 落章程 = [];
-  for (const 名 of ['通用', '策划', '程序', '美术', 'QA', '装配']) {
+  // 铺哪几份 = 内置章程有哪几份（施工令-027 去重复清单）：这里是**新建**工作区，
+  // 没有 cfg 可活读，而"能落地的章程"上限本来就由 内置章程 决定——列第二遍只会漂。
+  // 升级模式下新增职能（如 技术策划）的章程由 /api/env 的「岗位协议」项按 cfg.职能 报缺，不在这里补。
+  for (const 名 of Object.keys(内置章程)) {
     const dst = path.join(章程目录, `${名}.md`);
     if (fs.existsSync(dst)) continue;
     let 内容 = 内置章程[名];

@@ -5,7 +5,9 @@
 //
 // 纪律：端到端一律在系统临时目录里造【假部署区】（journal/ 呼叫/ 齐备），
 //      真部署区 D:\GitHub\AI-GameStudio\监制台 一个字节都不碰；
-//      通知走 WATCHTOWER_TOAST_FILE_ONLY=1 落文件，不刷屏。
+//      通知走 WATCHTOWER_TOAST_FILE_ONLY=1 落文件，不刷屏；
+//      远端（E5，施工令-023）一律拿【本地 bare 仓】当假 origin，真远端不碰、更无写操作，
+//      其余各例的 远端.启用 一律 false（内置默认仓清单指着真仓，不许误触）。
 'use strict';
 
 const fs = require('fs');
@@ -141,6 +143,76 @@ function 单元() {
   ok('通知脚本单引号已转义', /''/.test(ps));
   ok('通知脚本三档回落齐全', /BurntToast/.test(ps) && /NotifyIcon/.test(ps) && /msg \*/.test(ps));
 
+  章('U10 远端 refs 解析 / 信道文书判定（施工令-023）');
+  const A = 'a'.repeat(40); const B = 'b'.repeat(40); const C = 'c'.repeat(40);
+  eq('for-each-ref 输出解析成 { ref: sha }',
+    W.解析远端refs(`${A} refs/remotes/origin/main\n${B} refs/remotes/origin/feat/x\n`),
+    { 'refs/remotes/origin/main': A, 'refs/remotes/origin/feat/x': B });
+  eq('origin/HEAD 是符号引用，不当分支',
+    Object.keys(W.解析远端refs(`${A} refs/remotes/origin/main\n${A} refs/remotes/origin/HEAD\n`)), ['refs/remotes/origin/main']);
+  eq('杂行/空行跳过不炸', W.解析远端refs('warning: 一句提示\n\n垃圾'), {});
+  eq('远端短名剥前缀', W.远端短名('refs/remotes/origin/feat/x'), 'origin/feat/x');
+  ok('信道文书：docs 下带「交接」的 md', W.是信道文书('docs/交接-2026-08-08.md'));
+  ok('信道文书：docs 子目录名带「回执」也算', W.是信道文书('docs/回执/TK-104.md'));
+  ok('信道文书：带「信道」', W.是信道文书('工程队/docs/信道说明.md'));
+  ok('非 docs 下的同名 md 不算', !W.是信道文书('工程队/交接-x.md'));
+  ok('docs 下的普通 md 不算', !W.是信道文书('docs/设计稿.md'));
+  ok('docs 下的非 md 不算', !W.是信道文书('docs/交接.txt'));
+  ok('反斜杠路径同样认', W.是信道文书('docs\\交接\\a.md'));
+
+  章('U11 远端快照比对 / 事件文本');
+  const 差 = W.比对远端(
+    { 'refs/remotes/origin/main': A, 'refs/remotes/origin/老': C },
+    { 'refs/remotes/origin/main': B, 'refs/remotes/origin/新': C });
+  eq('改了 sha 的算新提交', 差.新提交.map((x) => x.ref), ['refs/remotes/origin/main']);
+  eq('只在新快照里的算新分支', 差.新分支.map((x) => x.ref), ['refs/remotes/origin/新']);
+  eq('只在旧快照里的算删分支', 差.删分支.map((x) => x.ref), ['refs/remotes/origin/老']);
+  eq('无变化 = 三类全空', W.比对远端({ x: A }, { x: A }), { 新提交: [], 新分支: [], 删分支: [] });
+  eq('普通新提交文本',
+    W.远端事件('Ticketflow', W.比对远端({ 'refs/remotes/origin/main': A }, { 'refs/remotes/origin/main': B }), { 'refs/remotes/origin/main': ['apps/a.js'] }),
+    [{ 种类: '新提交', ref: 'refs/remotes/origin/main', 文本: `新提交 Ticketflow origin/main ${'a'.repeat(7)}..${'b'.repeat(7)}` }]);
+  const 文书事件 = W.远端事件('Ticketflow',
+    W.比对远端({ 'refs/remotes/origin/main': A }, { 'refs/remotes/origin/main': B }),
+    { 'refs/remotes/origin/main': ['apps/a.js', 'docs/交接-x.md'] });
+  eq('触及信道文书 → 整条升格为「信道文书」，不再另发一条新提交', 文书事件.map((e) => e.种类), ['信道文书']);
+  ok('信道文书事件文本点名文件', /触及 docs\/交接-x\.md/.test(文书事件[0].文本), 文书事件[0].文本);
+  eq('新分支文本',
+    W.远端事件('T', W.比对远端({}, { 'refs/remotes/origin/feat': B }), {}).map((e) => e.文本),
+    [`新分支 T origin/feat（${'b'.repeat(7)}）`]);
+  eq('删分支文本',
+    W.远端事件('T', W.比对远端({ 'refs/remotes/origin/feat': B }, {}), {}).map((e) => e.文本),
+    [`删分支 T origin/feat（原 ${'b'.repeat(7)}）`]);
+
+  章('U12 远端默认规则分档');
+  const 表远 = W.默认规则表.规则;
+  const 中 = (t) => W.匹配规则(表远, '远端', t);
+  eq('信道文书 → 急 + 弹通知', [中('信道文书 T origin/main a..b 触及 docs/交接.md').名, 中('信道文书 T origin/main a..b 触及 docs/交接.md').级别, 中('信道文书 T origin/main a..b 触及 docs/交接.md').动作.includes('弹通知')], ['远端信道文书', '急', true]);
+  eq('新提交 → 常 + 记未读不弹', [中('新提交 T origin/main a..b').名, 中('新提交 T origin/main a..b').级别, 中('新提交 T origin/main a..b').动作], ['远端新提交', '常', ['记流水', '记未读']]);
+  eq('新分支 → 常 + 记未读不弹', [中('新分支 T origin/feat（bbbbbbb）').名, 中('新分支 T origin/feat（bbbbbbb）').动作], ['远端分支变动', ['记流水', '记未读']]);
+  eq('删分支 → 走分支变动', 中('删分支 T origin/feat（原 bbbbbbb）').名, '远端分支变动');
+  eq('远端三条不串到别的信源', W.匹配规则(表远, '流水', '新提交 something').名, '兜底');
+  eq('远端段默认值', [W.默认远端.启用, W.默认远端.间隔毫秒, Array.isArray(W.默认远端.仓清单)], [true, 300000, true]);
+
+  章('U13 心跳戳（施工令-024）：覆盖写一行 ISO / 读回带毫秒龄');
+  const 戳巢 = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-hb-'));
+  const 戳 = path.join(戳巢, '心跳.txt');
+  eq('文件不存在读回 null', W.读心跳戳(戳), null);
+  ok('写入成功返回 true', W.写心跳戳(戳, new Date('2026-08-09T01:02:03.456Z')));
+  eq('内容 = 一行 ISO 时刻，无换行', fs.readFileSync(戳, 'utf8'), '2026-08-09T01:02:03.456Z');
+  const 读1 = W.读心跳戳(戳);
+  ok('读回有效且时刻一致', !!读1 && 读1.有效 === true && 读1.时刻 === '2026-08-09T01:02:03.456Z', JSON.stringify(读1));
+  W.写心跳戳(戳, new Date(Date.now() - 5000));                      // 拿 5s 前的真实刻算龄，别拿写死的未来时刻
+  const 读龄 = W.读心跳戳(戳);
+  ok('毫秒龄为数且非负、量级对', !!读龄 && Number.isFinite(读龄.毫秒龄) && 读龄.毫秒龄 >= 4000 && 读龄.毫秒龄 < 60000, String(读龄 && 读龄.毫秒龄));
+  ok('覆盖写不追加', (W.写心跳戳(戳, new Date('2026-08-09T02:00:00.000Z')), fs.readFileSync(戳, 'utf8') === '2026-08-09T02:00:00.000Z'));
+  const 新读 = W.读心跳戳(戳);
+  ok('第二戳读回新时刻', !!新读 && 新读.时刻 === '2026-08-09T02:00:00.000Z');
+  fs.writeFileSync(戳, '不是时间戳', 'utf8');
+  const 脏读 = W.读心跳戳(戳);
+  ok('脏内容判无效不炸', !!脏读 && 脏读.有效 === false, JSON.stringify(脏读));
+  eq('默认间隔 30s', W.默认心跳戳间隔, 30000);
+  try { fs.rmSync(戳巢, { recursive: true, force: true }); } catch { /* 留着无妨 */ }
+
   try { fs.rmSync(巢, { recursive: true, force: true }); } catch { /* 留着无妨 */ }
 }
 
@@ -162,6 +234,8 @@ function 造假部署区(标) {
     账本: path.join(根, '瞭望塔', '未读账本.jsonl'),
     回落: path.join(根, '瞭望塔', '通知回落.log'),
     pid: path.join(根, '瞭望塔', 'watchtower.pid'),
+    远端游标: path.join(根, '瞭望塔', '远端游标.json'),
+    心跳: path.join(根, '瞭望塔', '心跳.txt'),
   };
 }
 const 读文本 = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
@@ -182,9 +256,12 @@ async function 等到(判, 上限ms, 步长) {
   const 止 = Date.now() + 上限ms;
   for (;;) { if (判()) return true; if (Date.now() > 止) return false; await 睡(步长 || 250); }
 }
+// 注意 远端.启用 默认 false：内置默认的仓清单指着真仓 D:\GitHub\Ticketflow，
+// 除 E5 自己搭的假 origin 外，任何一例都不许摸真远端。
 const 基础规则 = (改) => Object.assign({
   轮询毫秒: 300,
   心跳: { 地址: 'http://127.0.0.1:1/api/board', 间隔毫秒: 3600000, 超时毫秒: 800, 连续失败阈值: 2 },
+  远端: { 启用: false, 间隔毫秒: 3600000, 超时毫秒: 5000, 仓清单: [] },
   规则: W.默认规则表.规则,
   时钟: [],
 }, 改 || {});
@@ -339,6 +416,184 @@ async function E4() {
   return 区;
 }
 
+// ════════════════════════════ E5 远端信道（施工令-023）════════════════════════════
+// 纪律：假 origin 一律是【本地 bare 仓】，跑在系统临时目录里；
+//      真远端 github.com/suxing412/* 一次都不碰，更没有任何写操作（本信源只 fetch）。
+function git(仓) {
+  const 参数 = Array.prototype.slice.call(arguments, 1);
+  const r = spawnSync('git', ['-C', 仓].concat(参数), {
+    encoding: 'utf8', windowsHide: true,
+    env: Object.assign({}, process.env, { GIT_TERMINAL_PROMPT: '0' }),
+  });
+  if (r.status !== 0) throw new Error(`git ${参数.join(' ')} @ ${仓} 失败：${String(r.stderr || r.stdout || '').trim()}`);
+  return String(r.stdout || '');
+}
+function 定身份(仓) {
+  git(仓, 'config', 'user.email', 'watchtower-test@local');
+  git(仓, 'config', 'user.name', '瞭望塔自测');
+  git(仓, 'config', 'commit.gpgsign', 'false');
+}
+function 提交推送(仓, 相对路径, 内容, 讯息, 分支) {
+  const p = path.join(仓, 相对路径);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, 内容 + '\n', 'utf8');
+  git(仓, 'add', '-A');
+  git(仓, 'commit', '-m', 讯息);
+  git(仓, 'push', '-u', 'origin', 分支);
+}
+function 造假远端() {
+  const 巢 = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-git-'));
+  const origin = path.join(巢, 'origin.git');          // 假 origin：本地 bare 仓
+  const 工 = path.join(巢, '工作仓');                   // 往假 origin 推东西的那一侧
+  const 侦 = path.join(巢, '侦察仓');                   // 瞭望塔盯的那一侧（只 fetch）
+  const r0 = spawnSync('git', ['init', '--bare', '-b', 'main', origin], { encoding: 'utf8', windowsHide: true });
+  if (r0.status !== 0) throw new Error('假 origin 建不出来：' + String(r0.stderr || r0.stdout));
+  fs.mkdirSync(工, { recursive: true });
+  const r1 = spawnSync('git', ['init', '-b', 'main', 工], { encoding: 'utf8', windowsHide: true });
+  if (r1.status !== 0) throw new Error('工作仓建不出来：' + String(r1.stderr || r1.stdout));
+  定身份(工);
+  git(工, 'remote', 'add', 'origin', origin);
+  提交推送(工, 'README.md', '# 假仓', 'chore: 初始提交', 'main');
+  const r2 = spawnSync('git', ['clone', origin, 侦], { encoding: 'utf8', windowsHide: true });
+  if (r2.status !== 0) throw new Error('侦察仓克隆不出来：' + String(r2.stderr || r2.stdout));
+  定身份(侦);
+  return { 巢, origin, 工, 侦 };
+}
+async function E5() {
+  章('E5 远端：本地 bare 仓当假 origin —— 新提交 / 新分支 / 删分支 / 信道文书 / 断网容错 / 游标幂等');
+  const 区 = 造假部署区('远端');
+  let g = null;
+  try { g = 造假远端(); }
+  catch (e) { ok('假远端搭建（git 可用）', false, String(e && e.message)); return 区; }
+  ok('假远端搭建（bare origin + 工作仓 + 侦察仓）', true);
+
+  fs.writeFileSync(区.规则, JSON.stringify(基础规则({
+    远端: { 启用: true, 间隔毫秒: 700, 超时毫秒: 25000, 仓清单: [g.侦] },
+  }), null, 2), 'utf8');
+  const c = 起守护(区);
+  ok('守护起来了', await 等到(() => /瞭望塔上岗/.test(读文本(区.流水)), 12000));
+  ok('上岗行播报远端在编', /远端 1 仓/.test(读文本(区.流水)), 读文本(区.流水).split('\n')[0]);
+
+  const 计 = (re) => (读文本(区.流水).match(re) || []).length;
+  const 远端行 = /\[远端\]/g;
+
+  // —— 首轮只立基线：满仓分支不该被当成「新分支」报一遍 ——
+  ok('首见该仓只立基线', await 等到(() => /远端建基线/.test(读文本(区.流水)), 20000), 读文本(区.流水).slice(-500));
+  await 睡(1500);
+  ok('立基线阶段零远端事件', 计(远端行) === 0, `已产 ${计(远端行)} 条`);
+  ok('远端游标已落盘', fs.existsSync(区.远端游标));
+  const 游 = JSON.parse(读文本(区.远端游标) || '{}');
+  ok('游标按仓存 refs 快照', !!(游['仓'] && 游['仓'][path.resolve(g.侦)] && 游['仓'][path.resolve(g.侦)].refs['refs/remotes/origin/main']), 读文本(区.远端游标).slice(0, 300));
+  ok('origin/HEAD 不进快照（符号引用不算分支）', !Object.keys(游['仓'][path.resolve(g.侦)].refs).some((k) => /\/HEAD$/.test(k)));
+
+  // —— ① main 新提交（不带信道文书）——
+  提交推送(g.工, 'apps/a.txt', '普通改动', 'chore: 普通提交', 'main');
+  ok('main 新提交进流水', await 等到(() => /\[远端\] 常 远端新提交 \| 新提交 .*origin\/main/.test(读文本(区.流水)), 20000), 读文本(区.流水).slice(-500));
+  ok('新提交进未读账本', W.读账本(区.账本).some((e) => e.信源 === '远端' && /新提交/.test(e.文本)));
+  ok('新提交不弹通知', !/新提交/.test(读文本(区.回落)), 读文本(区.回落));
+
+  // —— ② 新分支 ——
+  git(g.工, 'checkout', '-b', 'feat/x');
+  提交推送(g.工, 'apps/b.txt', '分支改动', 'chore: 分支提交', 'feat/x');
+  ok('新分支进流水', await 等到(() => /\[远端\] 常 远端分支变动 \| 新分支 .*origin\/feat\/x/.test(读文本(区.流水)), 20000), 读文本(区.流水).slice(-500));
+  ok('新分支进未读账本', W.读账本(区.账本).some((e) => e.信源 === '远端' && /新分支/.test(e.文本)));
+  ok('新分支不弹通知', !/新分支/.test(读文本(区.回落)));
+
+  // —— ③ 信道文书（docs/ 下的交接类 md）——
+  git(g.工, 'checkout', 'main');
+  提交推送(g.工, 'docs/交接-E5.md', '# 有信来了', 'docs: 交接文书一份', 'main');
+  ok('信道文书事件进流水且级别为急', await 等到(() => /\[远端\] 急 远端信道文书 \| 信道文书 .*docs\/交接-E5\.md/.test(读文本(区.流水)), 20000), 读文本(区.流水).slice(-500));
+  ok('信道文书弹了通知（这是「有信来了」）', await 等到(() => /信道文书/.test(读文本(区.回落)), 10000), 读文本(区.回落));
+  ok('信道文书进未读账本且级别为急', W.读账本(区.账本).some((e) => e.信源 === '远端' && e.级别 === '急' && /信道文书/.test(e.文本)));
+  ok('同一次推送不重复再发一条新提交', 计(/远端新提交 \| 新提交 .*origin\/main/g) === 1, `新提交行 ${计(/远端新提交 \| 新提交 .*origin\/main/g)} 条`);
+
+  // —— ④ 删分支 ——
+  git(g.工, 'push', 'origin', '--delete', 'feat/x');
+  ok('删分支进流水', await 等到(() => /\[远端\] 常 远端分支变动 \| 删分支 .*origin\/feat\/x/.test(读文本(区.流水)), 20000), 读文本(区.流水).slice(-500));
+  ok('删分支不弹通知', !/删分支/.test(读文本(区.回落)));
+
+  // —— ⑤ 断网容错：把 origin 指到不存在的仓，等价于「拉不通」——
+  const 断前事件 = 计(远端行);
+  git(g.侦, 'remote', 'set-url', 'origin', path.join(g.巢, '并不存在.git'));
+  ok('拉不通只留一行「远端暂歇」', await 等到(() => /远端暂歇/.test(读文本(区.流水)), 20000), 读文本(区.流水).slice(-500));
+  await 睡(3000);
+  ok('不通期间不刷屏（暂歇只报一次）', 计(/远端暂歇/g) === 1, `报了 ${计(/远端暂歇/g)} 次`);
+  ok('不通期间零新增远端事件（不当错误报）', 计(远端行) === 断前事件, `断前 ${断前事件} → 现 ${计(远端行)}`);
+  fs.appendFileSync(区.月日志, '[2026-08-08 02:00] 断网期间守护仍在读流水\n', 'utf8');
+  ok('拉不通不拖垮守护，其余信源照跑', await 等到(() => /断网期间守护仍在读流水/.test(读文本(区.流水)), 8000));
+
+  // —— ⑥ 恢复即续 ——
+  git(g.侦, 'remote', 'set-url', 'origin', g.origin);
+  提交推送(g.工, 'apps/c.txt', '恢复后', 'chore: 恢复后的提交', 'main');
+  ok('恢复后留一行「远端复通」', await 等到(() => /远端复通/.test(读文本(区.流水)), 20000), 读文本(区.流水).slice(-500));
+  ok('恢复后续报新提交（断网期间的改动不丢）', await 等到(() => 计(/远端新提交 \| 新提交 .*origin\/main/g) === 2, 20000), `新提交行 ${计(/远端新提交 \| 新提交 .*origin\/main/g)} 条`);
+
+  // —— ⑦ 只侦察不合并 / 工作区零改动 ——
+  const 本地main = git(g.侦, 'rev-parse', 'main').trim();
+  const 远端main = git(g.侦, 'rev-parse', 'refs/remotes/origin/main').trim();
+  ok('只 fetch 不 pull/merge：本地 main 仍停在旧点', 本地main !== 远端main, `本地 ${本地main.slice(0, 7)} / 远端 ${远端main.slice(0, 7)}`);
+  ok('侦察仓工作区零改动（fetch 只动 refs）', git(g.侦, 'status', '--porcelain').trim() === '', git(g.侦, 'status', '--porcelain'));
+
+  // —— ⑧ 游标幂等：重启不重报 ——
+  停守护(c);
+  await 睡(1200);
+  const 重启前 = 计(远端行);
+  const c2 = 起守护(区);
+  ok('守护重启起来了', await 等到(() => 计(/瞭望塔上岗/g) === 2, 12000));
+  await 睡(4000);
+  ok('游标幂等：重启不回放旧的远端事件', 计(远端行) === 重启前, `重启前 ${重启前} → 现 ${计(远端行)}`);
+  ok('重启后不再建基线（游标已在盘）', 计(/远端建基线/g) === 1, `建基线 ${计(/远端建基线/g)} 次`);
+  提交推送(g.工, 'apps/d.txt', '重启后', 'chore: 重启后的提交', 'main');
+  ok('重启后新事件照报（游标续得上）', await 等到(() => 计(/远端新提交 \| 新提交 .*origin\/main/g) === 3, 20000), `新提交行 ${计(/远端新提交 \| 新提交 .*origin\/main/g)} 条`);
+  停守护(c2);
+  await 睡(800);
+
+  // —— ⑨ 关掉整路 ——
+  const 区2 = 造假部署区('远端停用');
+  fs.writeFileSync(区2.规则, JSON.stringify(基础规则(), null, 2), 'utf8');
+  const c3 = 起守护(区2);
+  ok('启用=false 时上岗行播报「远端 停用」', await 等到(() => /远端 停用/.test(读文本(区2.流水)), 12000), 读文本(区2.流水).split('\n')[0]);
+  await 睡(1500);
+  ok('停用时不起 git、零远端痕迹', !/\[远端\]|远端建基线|远端暂歇/.test(读文本(区2.流水)));
+  ok('停用时不写远端游标', !fs.existsSync(区2.远端游标));
+  停守护(c3);
+  await 睡(600);
+
+  try { fs.rmSync(g.巢, { recursive: true, force: true }); } catch { /* 临时目录留着无害 */ }
+  try { fs.rmSync(区2.根, { recursive: true, force: true }); } catch { /* 同上 */ }
+  return 区;
+}
+
+// ════════════════════════════ E6 心跳戳（施工令-024）════════════════════════════
+// 实测用 --config 把间隔压到 500ms（生产默认 30s，验收另跑真间隔）；隔离假部署区，不碰现网。
+async function E6() {
+  章('E6 心跳戳：开机即戳 → 周期刷新 → --status 心跳段 → 下岗即断更');
+  const 区 = 造假部署区('心跳戳');
+  fs.writeFileSync(区.规则, JSON.stringify(基础规则(), null, 2), 'utf8');
+  const 配置路径 = path.join(区.根, '瞭望塔.config.json');
+  fs.writeFileSync(配置路径, JSON.stringify({ 心跳戳间隔毫秒: 500 }, null, 2), 'utf8');
+  const c = 起守护(区, null, ['--config', 配置路径]);
+  ok('守护起来了', await 等到(() => /瞭望塔上岗/.test(读文本(区.流水)), 12000));
+  const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  ok('心跳文件出现', await 等到(() => fs.existsSync(区.心跳), 6000), 区.心跳);
+  const 戳A = 读文本(区.心跳);
+  ok('内容是一行 ISO 时刻（无换行）', ISO.test(戳A), JSON.stringify(戳A));
+  ok('周期内刷新（覆盖写出新时刻）', await 等到(() => {
+    const s = 读文本(区.心跳);
+    return ISO.test(s) && s !== 戳A && s > 戳A;
+  }, 8000), `A=${戳A} 现=${读文本(区.心跳)}`);
+  const st2 = spawnSync(process.execPath, [守护, '--root', 区.根, '--rules', 区.规则, '--config', 配置路径, '--status'], { encoding: 'utf8', windowsHide: true });
+  let sj2 = null; try { sj2 = JSON.parse(String(st2.stdout).trim().split('\n').pop()); } catch { /* 下面判空 */ }
+  ok('--status 带心跳段', !!(sj2 && sj2.ok && sj2['心跳戳'] && sj2['心跳戳']['存在'] === true), String(st2.stdout).trim().slice(0, 300));
+  ok('心跳段报秒龄且在跳', !!sj2 && Number.isFinite(sj2['心跳戳']['秒龄']) && sj2['心跳戳']['在跳'] === true, JSON.stringify(sj2 && sj2['心跳戳']));
+  停守护(c);
+  await 睡(1500);
+  const 戳B = 读文本(区.心跳);
+  await 睡(1500);
+  ok('守护下岗后心跳断更（文件留最后一戳）', 读文本(区.心跳) === 戳B && ISO.test(戳B), `B=${戳B}`);
+  return 区;
+}
+
 // ════════════════════════════ 跑 ════════════════════════════
 (async () => {
   process.stdout.write('瞭望塔自测（假部署区，真部署区只读）\n');
@@ -349,6 +604,8 @@ async function E4() {
     区们.push(await E2());
     区们.push(await E3());
     区们.push(await E4());
+    区们.push(await E5());
+    区们.push(await E6());
   } catch (e) {
     挂.push('测试自身炸了：' + (e && e.stack || e));
     process.stdout.write(`\n!! ${e && e.stack || e}\n`);

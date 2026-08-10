@@ -1,8 +1,8 @@
-// preflight.test.js — 定稿预检（H62 拦截项）+ 短题制警示（H83，施工令-002）
+// preflight.test.js — 定稿预检（H62 拦截项）+ 短题制警示（H83，施工令-002）+ 管线归属警示（TK-106~116 案）
 // 短题制铁律：标题超长/含枚举符只警示，绝不进 errs——老单与在途单不能被新纪律锁死。
 const assert = require('node:assert');
 const store = require('../lib/core/store');
-const { preflight, warnings, titleWarnings, 职能表, 基础职能 } = require('../lib/preflight');
+const { preflight, warnings, titleWarnings, 管线Warnings, 职能表, 基础职能 } = require('../lib/preflight');
 const { makeRoot, seed } = require('./helper');
 
 let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
@@ -14,7 +14,7 @@ t('标题 >24 字 → 警示（不进拦截项）', () => {
   const root = makeRoot();
   const 长题 = '监制台工单卡片标题短题制与工程队状态卡兜底改造施工';
   assert.ok([...长题].length > 24, '样例标题确实超 24 字');
-  seed(root, '草稿', { id: 'W-1', title: 长题, 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', body: 正文 });
+  seed(root, '草稿', { id: 'W-1', title: 长题, 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 管线: 'P-1', body: 正文 });
   const tk = store.find(root, 'W-1');
   const w = warnings(tk);
   assert.equal(w.length, 1, '产生一条警示');
@@ -24,7 +24,7 @@ t('标题 >24 字 → 警示（不进拦截项）', () => {
 
 t('标题含 ①② 类枚举符 → 警示（不进拦截项）', () => {
   const root = makeRoot();
-  seed(root, '草稿', { id: 'W-2', title: '短题制①源头②预检', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', body: 正文 });
+  seed(root, '草稿', { id: 'W-2', title: '短题制①源头②预检', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 管线: 'P-1', body: 正文 });
   const tk = store.find(root, 'W-2');
   const w = warnings(tk);
   assert.equal(w.length, 1);
@@ -34,7 +34,7 @@ t('标题含 ①② 类枚举符 → 警示（不进拦截项）', () => {
 
 t('两条同时命中 → 两条警示，仍不拦截', () => {
   const root = makeRoot();
-  seed(root, '草稿', { id: 'W-3', title: '监制台工单卡片标题①短题制与②工程队状态卡兜底改造', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', body: 正文 });
+  seed(root, '草稿', { id: 'W-3', title: '监制台工单卡片标题①短题制与②工程队状态卡兜底改造', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 管线: 'P-1', body: 正文 });
   const tk = store.find(root, 'W-3');
   assert.equal(warnings(tk).length, 2);
   assert.deepEqual(preflight(root, tk, CFG), []);
@@ -48,10 +48,52 @@ t('合规短标题 → 零警示', () => {
 
 t('短题制警示适用全部单型：专项父单不预检但照样出警示', () => {
   const root = makeRoot();
-  seed(root, '草稿', { id: 'W-4', title: '监制台工单卡片标题短题制与工程队状态卡兜底改造施工', 父单类型: '专项', 职能: '无此职能', body: '' });
+  seed(root, '草稿', { id: 'W-4', title: '监制台工单卡片标题短题制与工程队状态卡兜底改造施工', 父单类型: '专项', 职能: '无此职能', 管线: 'P-1', body: '' });
   const tk = store.find(root, 'W-4');
   assert.deepEqual(preflight(root, tk, CFG), [], '专项父单不预检（既有行为不变）');
   assert.equal(warnings(tk).length, 1, '短题制不放过父单');
+});
+
+// ---- 管线归属警示（TK-106~116 漏章案，2026-08-09）----
+// 铁律同短题制：只警示不拦截；归属可从父链继承，继承到了就不该报。
+t('无管线且无父单 → 缺管线归属警示（不进拦截项）', () => {
+  const root = makeRoot();
+  seed(root, '草稿', { id: 'W-10', title: '海岸线钉零', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', body: 正文 });
+  const tk = store.find(root, 'W-10');
+  const w = warnings(tk, root);
+  assert.equal(w.length, 1, '只该出管线一条，实得：' + w.join('｜'));
+  assert.ok(/管线/.test(w[0]) && /TK-106/.test(w[0]), '警示点名管线归属与案源：' + w[0]);
+  assert.deepEqual(preflight(root, tk, CFG), [], '不拦截：拦截项为空');
+});
+
+t('本单写了管线 → 零警示', () => {
+  const root = makeRoot();
+  seed(root, '草稿', { id: 'W-11', title: '海岸线钉零', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 管线: 'P-3', body: 正文 });
+  assert.deepEqual(warnings(store.find(root, 'W-11'), root), []);
+});
+
+t('本单没写但父单有章 → 继承算有归属，零警示', () => {
+  const root = makeRoot();
+  seed(root, '草稿', { id: 'W-12', title: '地图施工专项', 父单类型: '专项', 管线: 'P-3', body: '' });
+  seed(root, '草稿', { id: 'W-13', title: '海岸线钉零', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 父单: 'W-12', body: 正文 });
+  assert.deepEqual(warnings(store.find(root, 'W-13'), root), [], '父链有章就不该报');
+});
+
+t('父链整条都无章 → 照报（TK-106~116 的原样）', () => {
+  const root = makeRoot();
+  seed(root, '草稿', { id: 'W-14', title: '地图施工专项', 父单类型: '专项', body: '' });
+  seed(root, '草稿', { id: 'W-15', title: '海岸线钉零', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 父单: 'W-14', body: 正文 });
+  const w = warnings(store.find(root, 'W-15'), root);
+  assert.equal(w.length, 1, '父链无章 → 一条警示，实得：' + w.join('｜'));
+  assert.deepEqual(preflight(root, store.find(root, 'W-15'), CFG), [], '仍不拦截');
+});
+
+t('管线Warnings 单测：空单/断链兜底不炸', () => {
+  assert.deepEqual(管线Warnings({ fm: { 管线: 'P-1' } }), [], '本单有章，无 root 也认');
+  assert.equal(管线Warnings({ fm: {} }).length, 1, '无 root 时只查本单');
+  const root = makeRoot();
+  seed(root, '草稿', { id: 'W-16', title: '悬空父链', 职能: '程序', 父单: 'W-404', body: 正文 });
+  assert.equal(管线Warnings(store.find(root, 'W-16'), root).length, 1, '父单不存在 → 按无归属报，不抛');
 });
 
 t('H62 拦截项未被改动：非标字段照旧拦截', () => {

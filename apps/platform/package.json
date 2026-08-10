@@ -1,0 +1,43 @@
+{
+  "name": "ai-devplatform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "通用软件开发平台 · 交钥匙壳（施工令-025 出厂）。零第三方依赖，node 内置模块 only。",
+  "main": "main.js",
+  "scripts": {
+    "start": "node server.js",
+    "desktop": "electron .",
+    "dist": "electron-builder --win portable",
+    "watchtower": "node scripts/watchtower.js",
+    "watchtower:install": "node scripts/watchtower.js --install",
+    "watchtower:status": "node scripts/watchtower.js --status",
+    "check": "node --check server.js && node --check scripts/watchtower.js && node --check lib/toolchain.js && node --check lib/review-opinion.js && node --check lib/routing/router.js && node --check lib/routing/history.js && node --check lib/orchestration/plan.js && node --check lib/workspace/worktree.js && node --check scripts/工作区服务.js && node --check lib/门禁.js && node --check lib/工单库.js",
+    "test": "node test/公用件契约.test.js && node test/接线契约.test.js && node test/工单库契约.test.js",
+    "workspace": "node scripts/工作区服务.js"
+  },
+  "author": "robinwang2",
+  "license": "UNLICENSED",
+  "build": {
+    "appId": "local.aidevplatform",
+    "productName": "AI-DevPlatform",
+    "electronVersion": "30.5.1",
+    "files": [
+      "main.js",
+      "server.js",
+      "public/**",
+      "lib/**",
+      "config/**",
+      "角色协议模板/**",
+      "docs/**",
+      "scripts/**"
+    ],
+    "win": {
+      "target": "portable",
+      "signAndEditExecutable": false
+    }
+  },
+  "devDependencies": {
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
+  }
+}

@@ -32,8 +32,12 @@ function isSim(opts) { return opts && opts.durMs != null; }
 // ---- 池凭据解析（2026-08-08 凭据托管，路 B）----
 // 顺序：托管库（<root>/凭据.json，DPAPI 密文）> config 内联 兼容 段（旧路径，保兼容）。
 // 订阅池永远返回 null——它们的凭据归 CLI 自己管，app 一个字节都不存（路 B 的核心红利）。
+// 施工令-029 补章：兜底做到**字段粒度**，不是整块二选一。
+// 迁移只搬 key（base/模型 仍留在 config 兼容段）时，旧写法会把 base 一并置空，
+// 而「base 缺省 = 走 Anthropic 官方端点」——结果是拿 deepseek 的 key 去敲官方的门：
+// 必然 401，且等于把第三方密钥递给了错误的收件人。端点因此单独兜底。
 function 凭据Of(root, cfg, poolName) {
-  // codex 实测定谳（2026-08-08，施工令-021 收尾验证）：codex CLI **完全无视**
+  // codex 实测定谳（2026-08-08，协-003 收尾验证）：codex CLI **完全无视**
   // ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN——注入垃圾令牌 + 非法 base 后
   // `codex exec` 仍退出 0 正常作答，走的是它自己的 ~/.codex 登录态。
   // 若这里为 codex 池返回凭据，runner 会照常注入、codex 照常忽略，后果是双重错误且完全静默：
@@ -43,17 +47,23 @@ function 凭据Of(root, cfg, poolName) {
   // 注：池名 'codex-key' 不走这条——resolveCli 只把**恰好叫 codex** 的池路由到 codex CLI，
   // 别的名字一律走 claude CLI（命名陷阱，改 resolveCli 前先读这段）。
   if (poolName === 'codex') return null;
+  const c = (cfg.执行池 && cfg.执行池[poolName] && cfg.执行池[poolName].兼容) || null;
   try {
     const creds = require('./creds');
     if (creds.has(root, poolName)) {
       const k = creds.getKey(root, poolName);
       if (k) {
         const m = creds.meta(root, poolName) || {};
-        return { key: k, base: m.base || null, 模型: m.模型 || null, 来源: '托管' };
+        const 端点自config = !m.base && !!(c && c.base);
+        return {
+          key: k,
+          base: m.base || (c && c.base) || null,
+          模型: m.模型 || (c && c.模型) || null,
+          来源: 端点自config ? '托管(key)+config(端点)' : '托管',
+        };
       }
     }
   } catch { /* 托管库不可用（DPAPI 挂了等）→ 回落内联，不阻塞派发 */ }
-  const c = cfg.执行池 && cfg.执行池[poolName] && cfg.执行池[poolName].兼容;
   if (c && c.key) return { key: c.key, base: c.base || null, 模型: c.模型 || null, 来源: '内联' };
   return null;
 }
@@ -410,12 +420,19 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       if (!cur || cur.state !== '待验收') return;
       let v = {}; try { v = JSON.parse(note); } catch { /* finishOk 已保证可解析 */ }
       const 缺 = (v.缺项 || []).slice(0, 10);
+      // 判源（施工令-031）：机判 = 进程内 precheck.js；否则是二线 LLM 的模型名。
+      // 流水/回执文案照旧，只在括号里标注判源——口径不变，来源可溯。
+      const 判源 = v.判源 || (cfg.执行器 && cfg.执行器.两检 && cfg.执行器.两检.模型) || 'deepseek-v4-flash';
+      const 机判 = 判源 === '机判';
       const rp0 = path.join(root, '回执', `${t.id}.md`);
-      try { fs.appendFileSync(rp0, `\n\n## 两检初检（${(cfg.执行器 && cfg.执行器.两检 && cfg.执行器.两检.模型) || 'deepseek-v4-flash'}）\n结论：${v.初检}${缺.length ? '\n缺项：' + 缺.join('；') : ''}\n`, 'utf8'); } catch { /* 不阻塞 */ }
-      store.update(root, t.id, (fm) => { fm.初检 = { 结论: v.初检, ...(缺.length ? { 缺项: 缺 } : {}), 时间: new Date().toISOString() }; delete fm.初检失败次数; });
-      if (verdict) journal.append(root, `两检初检过 ${t.id} → 进深检（opus 内容质量）`);
+      try {
+        fs.appendFileSync(rp0, `\n\n## 两检初检（${判源}）\n结论：${v.初检}${缺.length ? '\n缺项：' + 缺.join('；') : ''}`
+          + `${v.备注 ? '\n备注：\n' + v.备注 : ''}\n`, 'utf8');
+      } catch { /* 不阻塞 */ }
+      store.update(root, t.id, (fm) => { fm.初检 = { 结论: v.初检, ...(v.备注 ? { 备注: v.备注 } : {}), ...(缺.length ? { 缺项: 缺 } : {}), 判源, 时间: new Date().toISOString() }; delete fm.初检失败次数; });
+      if (verdict) journal.append(root, `两检初检过 ${t.id}${机判 ? '（机判）' : ''} → 进深检（opus 内容质量）`);
       else {
-        journal.append(root, `两检初检不过 ${t.id}：${缺.join('；').slice(0, 120)}——留待验收（返修或人工裁），未烧深检`);
+        journal.append(root, `两检初检不过 ${t.id}${机判 ? '（机判）' : ''}：${缺.join('；').slice(0, 120)}——留待验收（返修或人工裁），未烧深检`);
         inbox.post(root, '常', '初检不过', `${t.id} 格式规范缺项：${缺.join('；').slice(0, 150)}`, { 单号: t.id });
       }
     } else if (kind === '代核') {
@@ -429,8 +446,15 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
         if (mq) { try { require('./pm/ledger').score(root, { 线: '审检评执行', 席: '核查', 单: t.id, 职能: t.fm.职能, 池: t.fm.执行池 || 'claude', 模型: model || '', 分: Number(mq[1]) }); } catch { /* 不阻塞 */ } }
       }
       if (verdict) {
-        const r = lifecycle.验收(root, t.id, true);
-        if (r.ok) journal.append(root, `核查通过 ${t.id} → 验收完成（Claude 代劳，D11/D34）`);
+        // 施工令-032②（H97）引擎门禁停闸：验收标准点名 enginectl/unity-test 这类引擎实测的单，
+        // 判官读的只是回执文字——引擎到底跑没跑它看不出来。核查过了也只盖候检印停在待验收，
+        // 等总监确认实测证据真入回执后走「实证放行」。非门禁单一个字不变，照旧直转完成。
+        const 门 = lifecycle.引擎门禁命中(cfg, cur);
+        if (门) lifecycle.候引擎实证(root, t.id, 门, '核查');
+        else {
+          const r = lifecycle.验收(root, t.id, true);
+          if (r.ok) journal.append(root, `核查通过 ${t.id} → 验收完成（Claude 代劳，D11/D34）`);
+        }
       } else {
         journal.append(root, `核查不过 ${t.id}：留在待验收，附核验报告等你裁（不自动打回）`);
         inbox.post(root, '急', '代核不过', `${t.id} 核验报告待裁（返工草稿已备）`, { 单号: t.id });
@@ -509,6 +533,22 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
 
   if (opts.failWith) { failLocal(opts.failWith); return true; } // 测试注入
 
+  // ---- 初检机判（施工令-031 / H96）：schema 校验是纯代码的活，进程内一次函数调用判完 ----
+  // 零 token、零会话、结果可复现。放在 isSim 之前——机判本来就不烧额度，测试与生产同一条路，
+  // 免得又出「测试走假路、生产走真路」的两套行为。二线LLM 开关打开才回落到下方 flash CLI。
+  if (kind === '初检' && !require('./precheck').用二线LLM(cfg)) {
+    let v;
+    try {
+      v = require('./precheck').run(root, t, cfg);
+    } catch (e) {
+      // 机判自己炸了不能盖章（同判官失败口径：计数重试，不动单）
+      failLocal('机判初检异常：' + String(e.message).slice(0, 100));
+      return true;
+    }
+    finishOk(JSON.stringify({ 初检: v.初检, 缺项: v.缺项, 备注: v.备注, 判源: v.判源 }), v.初检 === '过');
+    return true;
+  }
+
   if (isSim(opts)) { // 测试内部钩子：模拟收线，零 CLI 调用
     const durMs = opts.durMs;
     const sec = Math.round(durMs / 1000);
@@ -568,7 +608,9 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   } catch (e) { failLocal('CLI 启动失败：' + e.message); return true; }
   entry.child = child;
   const cliPool = kind === '执行' ? poolName : 'claude'; // 质检/代核实际走 claude，流水如实记
-  journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name} · 超时闸 ${rc.执行超时分钟 ?? 30}m 派发时快照）`); // 夜班推演 #3：热改超时不作用于在跑会话，快照值写明防误判
+  // 凭据来源入流水（施工令-029）：迁移后要看得见「这一发到底是从托管取的还是从 config 兜底取的」。
+  // 只记来源三个字，key/指纹一律不进流水。
+  journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name} · 超时闸 ${rc.执行超时分钟 ?? 30}m 派发时快照${compat ? ' · 凭据' + compat.来源 : ''}）`); // 夜班推演 #3：热改超时不作用于在跑会话，快照值写明防误判
   let out = '', errout = '';
   child.stdout.on('data', (d) => { out += d; if (out.length > 800000) out = out.slice(-400000);
     entry.收字节 = (entry.收字节 || 0) + d.length; // 活性字节（施工令-010）：零输出看门狗的判据 = stdout∪stderr
@@ -649,6 +691,7 @@ async function tick(root, cfg, opts = {}) {
     if (!t.fm.主办 || busyTickets().has(t.id)) continue;
     if (['战役','专项'].includes(t.fm.父单类型) || ['战役','专项'].includes(t.fm.主办)) continue; // H53：父单在途=战役开打的状态章，是组织容器，永不起执行（0.19.1 事故：TK-41 被当断线单续跑）
     if (t.fm.待复核) { result.拒因.push(`${t.id} 待复核未解除，不起执行`); continue; }
+    if (t.fm.挂起) { result.拒因.push(`${t.id} 已挂起（制作人原位冻结），不起执行`); continue; } // 施工令-021①：断点续跑这条路是挂起单最容易漏堵的一条
     if (!dispatchMode && !agents.some((a) => a.id === t.fm.主办)) continue; // 拉取制：退役待归者不起新执行；派发制：一次性主办直接续跑
     if (await startWork(root, cfg, t, t.fm.主办, '执行', opts)) result.执行.push(t.id);
   }
@@ -741,6 +784,7 @@ async function tick(root, cfg, opts = {}) {
   if (roster.has(cfg, 'QA') && !running.has('QA')) {
     for (const t of store.list(root, '质检')) {
       if (busyTickets().has(t.id)) continue;
+      if (t.fm.挂起) continue; // 施工令-021③：挂起单不开质检会话
       if (await startWork(root, cfg, t, 'QA', '质检', opts)) { result.质检.push(t.id); break; }
     }
   }
@@ -775,21 +819,26 @@ async function tick(root, cfg, opts = {}) {
   // ④a 两检制·初检（H67，2026-08-05 用户拍板）：便宜模型先核格式与规范（回执契约/禁语/报数存在性），
   // 不过直接打回不烧 opus；过了才进 ④b 深检。开关与池在 config.执行器.两检。
   const 两检 = (cfg.执行器 || {}).两检 || {};
-  const 两检开 = 两检.开 !== false && (cfg.执行池 || {})[两检.池 || 'deepseek'];
+  // 施工令-031：机判初检零池零凭据——「有没有 deepseek 池」不再是初检开不开的前提条件。
+  // 只有回落二线 LLM（config.执行器.两检.初检.二线LLM=true）时才仍要求池在册。
+  const 二线 = require('./precheck').用二线LLM(cfg);
+  const 两检开 = 两检.开 !== false && (!二线 || (cfg.执行池 || {})[两检.池 || 'deepseek']);
   if (两检开) {
     await 开审检('初检', '两检初检', '初检', () => store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !['战役', '专项'].includes(x.fm.父单类型) && !x.fm.初检 && !x.fm.代核
+      && !x.fm.挂起 // 施工令-021④a
       && (Number(x.fm.初检失败次数) || 0) < 判官上限 && !busyTickets().has(x.id)));
   }
 
   // ④b 核查（D34 / H67 深检）：初检过（或两检关）的委托单，opus 核内容质量（配额内逐张）
   await 开审检('代核', '核查', '代核', () => store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !x.fm.代核
+    && !x.fm.挂起 // 施工令-021④b
     && (!两检开 || (x.fm.初检 && x.fm.初检.结论 === '过'))
     && (Number(x.fm.代核失败次数) || 0) < 判官上限 && !busyTickets().has(x.id)));
 
   // ⑤ 仲裁（D43③）：待定夺且未裁过的单，裁判档裁「给方向/上呈」（配额内逐张）；
   // 打回级判断永远留给用户；执行器.代裁=false 可整体关闭
   if ((cfg.执行器 || {}).代裁 !== false) {
-    await 开审检('代裁', '仲裁', '代裁', () => store.list(root, '待定夺').find((x) => !x.fm.代裁
+    await 开审检('代裁', '仲裁', '代裁', () => store.list(root, '待定夺').find((x) => !x.fm.代裁 && !x.fm.挂起 // 施工令-021⑤
       && (Number(x.fm.代裁失败次数) || 0) < 判官上限 && !busyTickets().has(x.id)));
   }
 
@@ -847,13 +896,14 @@ function engineJobs(cfg) {
   return out;
 }
 
-// 按单终止（2026-08-05 推演补漏）：收回/废弃在途单时同步掐掉执行会话——此前文件挪走、进程仍在跑
-function killTicket(root, id) {
+// 按单终止（2026-08-05 推演补漏）：收回/废弃在途单时同步掐掉执行会话——此前文件挪走、进程仍在跑。
+// 施工令-032① 起 返修 也走这条路（掐在飞审检），因 参数带上因由——流水不能再一律写「收回/废弃」。
+function killTicket(root, id, 因) {
   for (const [agentId, e] of running.entries()) {
     if (e.id !== id) continue;
     try { if (e.child && e.child.pid) spawn('taskkill', ['/pid', String(e.child.pid), '/T', '/F'], { windowsHide: true }); } catch { /* 尽力 */ }
     running.delete(agentId);
-    journal.append(root, `终止会话 ${id}（${agentId}）：单被收回/废弃`);
+    journal.append(root, `终止会话 ${id}（${agentId}）：${String(因 || '单被收回/废弃').slice(0, 40)}`);
     return true;
   }
   return false;

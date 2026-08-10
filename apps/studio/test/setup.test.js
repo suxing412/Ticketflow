@@ -84,6 +84,13 @@ t('兜底：拿不到套件模板目录时用内置章程，向导照样成功',
   assert.equal(typeof 原, 'function');
 });
 
+t('章程清单不许再列第二遍：铺哪几份 = 内置章程有哪几份（施工令-027）', () => {
+  const d = 新目录();
+  const r = setup.建工作区(d);
+  assert.deepEqual(r.落章程, Object.keys(setup.内置章程),
+    '写死的第二份职能清单一旦回归，新增职能的章程就会漏铺，而自检要到 agent 开工才发现');
+});
+
 t('.gitignore 覆盖凭据文件（DPAPI 密文也没有进 git 的道理）', () => {
   const d = 新目录();
   setup.建工作区(d);

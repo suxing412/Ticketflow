@@ -1,0 +1,11 @@
+{
+  "name": "@ticketflow/review-panel",
+  "version": "0.2.0",
+  "private": true,
+  "description": "异厂评审台：多厂模型红队评审（H88/H91）。评审团自动发现（codex CLI + config 兼容池条目），三张立场卷（可行性/不变量/成本）按席序轮换派发，击杀制，缺席如实记录。密钥全出口净化。",
+  "main": "review.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "author": "suxing412"
+}

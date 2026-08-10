@@ -1,0 +1,48 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>设计稿-037 关键汇报事件链</title><style>
+:root{--bg:#0D1117;--card:rgba(255,255,255,.05);--line:rgba(255,255,255,.07);--ink:#E8EAF0;--sub:#76808F;--ok:#2FD6A0;--now:#FF9D4D;--wait:#9D93FF;--chip:rgba(255,255,255,.08)}
+body{background:var(--bg);color:var(--ink);font:14px/1.6 "Segoe UI",system-ui;margin:0;padding:40px;display:flex;justify-content:center}
+.card{width:780px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 24px}
+h3{margin:0 0 2px;font-size:15px}.sub{color:var(--sub);font-size:12px;margin-bottom:12px}
+.item{border-top:1px solid var(--line);padding:10px 2px}
+.head{display:flex;align-items:center;gap:10px;cursor:pointer}
+.id{font-weight:600}.title{color:var(--ink);opacity:.85;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st{font-size:11px;border-radius:99px;padding:1px 10px;flex:none}
+.st.done{background:rgba(47,214,160,.12);color:var(--ok)}
+.st.doing{background:rgba(255,157,77,.14);color:var(--now)}
+.st.wait{background:rgba(157,147,255,.14);color:var(--wait)}
+.arrow{color:var(--sub);font-size:11px}
+.chain{margin:8px 0 4px 6px;padding-left:14px;border-left:2px solid var(--line)}
+.step{position:relative;padding:2px 0 2px 10px;font-size:12.5px;color:var(--ink)}
+.step::before{content:"";position:absolute;left:-19px;top:9px;width:8px;height:8px;border-radius:50%;background:var(--ok)}
+.step.now::before{background:var(--now);box-shadow:0 0 0 3px rgba(255,157,77,.18)}
+.step .t{color:var(--sub);font-family:Consolas,monospace;margin-right:8px}
+.step .why{color:var(--sub)}
+.step.now{color:var(--now)}
+.foot{font-size:12px;color:var(--wait);padding:4px 0 2px 10px}
+</style></head><body>
+<div class="card">
+  <h3>关键汇报</h3><div class="sub">一单一链 · 点头行展开 · 尾端永远回答「现在等什么」</div>
+
+  <div class="item">
+    <div class="head"><span class="arrow">▾</span><span class="id">TK-116</span><span class="title">长江黄河远景常显</span><span class="st wait">待制作人远景复拍</span></div>
+    <div class="chain">
+      <div class="step"><span class="t">17:19</span>受托起草 <span class="why">· 制作人实拍裁定「最远档必须双河在场」</span></div>
+      <div class="step"><span class="t">17:23</span>项管切单完成 → 呈总监审</div>
+      <div class="step"><span class="t">17:24</span>总监审定稿 <span class="why">· 六件套过、H98 职能=程序</span></div>
+      <div class="step"><span class="t">17:24</span>放行 → 派发引擎拉起 <span class="why">· claude/opus</span></div>
+      <div class="step"><span class="t">17:33</span>执行完工交产出（9 分钟）</div>
+      <div class="step"><span class="t">18:04</span>总监代跑：编译 0 错 · 净室在途</div>
+      <div class="step now"><span class="t">现在</span>待净室出口 → 待制作人远景复拍（保留单终闸）</div>
+    </div>
+    <div class="foot">⏳ 下一步在等：引擎净室（总监）→ 你的远景实拍签字</div>
+  </div>
+
+  <div class="item">
+    <div class="head"><span class="arrow">▸</span><span class="id">TK-115</span><span class="title">汉代地图数据路线调研</span><span class="st done">完成 · 17:50 落库</span></div>
+  </div>
+
+  <div class="item">
+    <div class="head"><span class="arrow">▸</span><span class="id">TK-114</span><span class="title">栅格管线总装与建构径切换</span><span class="st done">完成 · 17:19 制作人签字</span></div>
+  </div>
+</div>
+</body></html>

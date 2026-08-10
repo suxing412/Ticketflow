@@ -1,0 +1,10 @@
+{
+  "name": "@ticketflow/role-protocol-templates",
+  "version": "0.1.0",
+  "private": true,
+  "description": "岗位协议模板（机制模板）：通用/策划/程序/美术/QA/装配 六份起步章程。只留机制条款，协议正本在各部署方私域。",
+  "scripts": {
+    "test": "node -e \"const fs=require('fs'),p=require('path');['通用','策划','程序','美术','QA','装配'].forEach(n=>{if(!fs.statSync(p.join(__dirname,n+'.md')).size)throw new Error(n+'.md 空文件')});console.log('纯文档包：六份章程模板在位非空（无可执行逻辑，无更多测试）')\""
+  },
+  "author": "suxing412"
+}

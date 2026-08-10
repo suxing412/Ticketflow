@@ -496,5 +496,320 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.equal(patrol.零输出(root, CFG, { 执行中: [死] }).告警.length, 1, '真零输出照报');
   });
 
+  /* ===== 挂起单全环节跳过（施工令-021）=====
+     一个环节一条：漏堵任何一条，制作人按下的冻结就是假的。 */
+
+  await t('挂起①：在途单不起执行（断点续跑这条路最容易漏堵）', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '在途', { id: 'H-01', 职能: '策划', 主办: '策划-A' });
+    life.挂起(root, 'H-01', '制作人', '方向不对');
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok(!(r.执行 || []).includes('H-01'), '不许起执行');
+    assert.ok((r.拒因 || []).some((x) => x.includes('H-01') && x.includes('挂起')), '拒因要说人话');
+    assert.equal(store.find(root, 'H-01').state, '在途', '原位不动');
+    // 解挂即复活：同一把 tick，什么都不改，单就该被捡起来
+    life.解挂(root, 'H-01', '制作人');
+    const r2 = await runner.tick(root, CFG, UN);
+    assert.ok((r2.执行 || []).includes('H-01'), '解挂后原位复活可被正常调度');
+  });
+
+  await t('挂起②：领单（拉取制 claim）跳过池里的挂起单', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '池', { id: 'H-02', 职能: '策划' });
+    life.挂起(root, 'H-02', '制作人');
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok(!(r.领单 || []).includes('H-02'));
+    assert.equal(store.find(root, 'H-02').state, '池', '没被谁捞走');
+    life.解挂(root, 'H-02');
+    assert.ok(((await runner.tick(root, CFG, UN)).领单 || []).includes('H-02'), '解挂后可领');
+  });
+
+  await t('挂起②′：派发制就绪队列不含挂起单（零派发计数亦据此不误报）', async () => {
+    const root = makeRoot(); on(root);
+    const cfg = { ...CFG, 执行器: { 派发制: true } };
+    seed(root, '待投', { id: 'H-03', 职能: '策划', 放行: true });
+    seed(root, '待投', { id: 'H-04', 职能: '程序', 放行: true });
+    life.挂起(root, 'H-03', '制作人');
+    const ready = require('../lib/pm/dispatch').readySet(root, new Set());
+    assert.deepEqual(ready.map((x) => x.id), ['H-04'], '就绪盘点直接过滤');
+    const r = await runner.tick(root, cfg, { ...UN, noBrain: true });
+    assert.ok(!(r.领单 || []).includes('H-03'), '不派发');
+    assert.equal(store.find(root, 'H-03').state, '待投');
+  });
+
+  await t('挂起③：质检不开会话', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '质检', { id: 'H-05', 职能: '策划' });
+    life.挂起(root, 'H-05', '制作人');
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok(!(r.质检 || []).includes('H-05'));
+    assert.equal(store.find(root, 'H-05').state, '质检');
+  });
+
+  await t('挂起④a/④b：初检与核查都跳过（对照组同轮照常被核）', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    for (const id of ['H-06', 'H-07']) fs.writeFileSync(path.join(root, '回执', `${id}.md`), `# 完工报告 ${id}\n`, 'utf8');
+    seed(root, '待验收', { id: 'H-06', 职能: '程序', 验收方式: '委托' });
+    seed(root, '待验收', { id: 'H-07', 职能: '程序', 验收方式: '委托' });
+    life.挂起(root, 'H-06', '制作人');
+    const r = await runner.tick(root, CFG, UN); // 基础 CFG 显式关两检（helper）→ 直接走 ④b 代核
+    assert.ok(!(r.代核 || []).includes('H-06'), '挂起单不核');
+    assert.ok((r.代核 || []).includes('H-07'), '对照组照核——证明是挂起在拦，不是环节整个没跑');
+    assert.equal(store.find(root, 'H-06').state, '待验收', '原位不动');
+    // 初检：开两检后同样跳过
+    const root2 = makeRoot(); on(root2);
+    const cfg2 = { ...CFG, 执行池: { ...CFG.执行池, deepseek: { 职能: [], 阈值: 70 } }, 执行器: { 两检: { 开: true, 池: 'deepseek' } } };
+    seed(root2, '待验收', { id: 'H-08', 职能: '程序', 验收方式: '委托' });
+    life.挂起(root2, 'H-08', '制作人');
+    const r2 = await runner.tick(root2, cfg2, UN);
+    assert.ok(!(r2.初检 || []).length, '初检不挑挂起单');
+    assert.ok(!store.find(root2, 'H-08').fm.初检, '不盖初检章');
+  });
+
+  await t('挂起⑤：仲裁不裁（对照组同轮照常被裁）', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '待定夺', { id: 'H-09', 职能: '程序', 主办: '程序-A' });
+    seed(root, '待定夺', { id: 'H-10', 职能: '程序', 主办: '程序-A' });
+    life.挂起(root, 'H-09', '制作人');
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok(!(r.代裁 || []).includes('H-09'), '挂起单不裁');
+    assert.ok((r.代裁 || []).includes('H-10'), '对照组照裁');
+    assert.equal(store.find(root, 'H-09').state, '待定夺');
+    assert.ok(!store.find(root, 'H-09').fm.代裁, '不盖代裁章');
+  });
+
+  await t('挂起 · 巡检告警：零派发/打点停滞/零输出三只狗全不叫', async () => {
+    const patrol = require('../lib/pm/patrol');
+    const root = makeRoot(); patrol.重置(root);
+    // 零派发狗：唯一的就绪单被挂起 → 队列空 → 连续零不累计（否则冻结本身会被当成故障刷屏）
+    seed(root, '待投', { id: 'H-11', 职能: '策划', 放行: true });
+    life.挂起(root, 'H-11', '制作人');
+    for (let i = 0; i < 4; i++) {
+      const z = patrol.零派发告警(root, CFG, { 执行中: 0, 派发累计: 0 });
+      assert.deepEqual(z.就绪, [], '挂起单不进就绪');
+      assert.equal(z.连续零, 0, '零派发计数不因冻结单而累计');
+      assert.equal(z.告警, null);
+    }
+    // 打点停滞狗 + 零输出狗：残留会话也不该让制作人收到「它卡住了」
+    seed(root, '在途', { id: 'H-12', 职能: '策划', 主办: '策划-A' });
+    life.挂起(root, 'H-12', '制作人');
+    const 久 = Date.now() - 45 * 60000;
+    const 停 = { id: 'H-12', kind: '执行', 池: 'claude', startedAt: new Date(久).toISOString(), tail: '[进度 1/3 起步]', 收字节: 10 };
+    patrol.打点停滞(root, CFG, { 执行中: [停], now: 久 });
+    assert.equal(patrol.打点停滞(root, CFG, { 执行中: [停], now: Date.now() }).告警.length, 0, '冻结单不报打点停滞');
+    const 哑 = { id: 'H-12', kind: '执行', 池: 'codex', startedAt: new Date(久).toISOString(), tail: '', 收字节: 0 };
+    assert.equal(patrol.零输出(root, CFG, { 执行中: [哑] }).告警.length, 0, '冻结单不报零输出');
+    // 对照组：换一张没挂起的单，两只狗照叫——证明是挂起在拦，不是狗被打死了
+    seed(root, '在途', { id: 'H-13', 职能: '策划', 主办: '策划-A' });
+    const 哑2 = { ...哑, id: 'H-13' };
+    assert.equal(patrol.零输出(root, CFG, { 执行中: [哑2] }).告警.length, 1, '未挂起的真零输出照报');
+  });
+
+  /* ===== 凭据解析三态（施工令-029：deepseek key 迁 DPAPI 托管）=====
+     夹具里的 key 全是明摆着的假串（sk-FAKE-*），真 key 永远不进版本库。
+     不碰真 DPAPI：直接换掉 require.cache 里的 creds 导出——三态由夹具决定，不由本机加密链路决定。*/
+  const credsPath = require.resolve('../lib/creds');
+  const 真creds = require('../lib/creds');
+  const 装creds = (fake) => { require.cache[credsPath].exports = fake; };
+  const 还原creds = () => { require.cache[credsPath].exports = 真creds; };
+  const DS = (兼容) => ({ 执行池: { deepseek: 兼容 ? { 兼容 } : {} } });
+
+  await t('凭据三态①托管命中：key 走托管，config 明文可以是空的', async () => {
+    装creds({ has: () => true, getKey: () => 'sk-FAKE-hosted-0001',
+      meta: () => ({ base: 'https://api.example.com', 模型: 'ds-flash' }) });
+    const r = runner.凭据Of('/x', DS({ base: '', key: '', 模型: '' }), 'deepseek');
+    assert.equal(r.key, 'sk-FAKE-hosted-0001');
+    assert.equal(r.base, 'https://api.example.com');
+    assert.equal(r.来源, '托管');
+    还原creds();
+  });
+
+  await t('凭据三态②托管缺失：逐字回落 config 兼容段（迁移失败可回退）', async () => {
+    装creds({ has: () => false, getKey: () => null, meta: () => null });
+    const r = runner.凭据Of('/x', DS({ base: 'https://api.example.com', key: 'sk-FAKE-inline-0002', 模型: 'ds-pro' }), 'deepseek');
+    assert.equal(r.key, 'sk-FAKE-inline-0002');
+    assert.equal(r.来源, '内联');
+    还原creds();
+  });
+
+  await t('凭据三态③两处皆无：返回 null（不编一个空 key 送进 env）', async () => {
+    装creds({ has: () => false, getKey: () => null, meta: () => null });
+    assert.equal(runner.凭据Of('/x', DS({ base: 'https://api.example.com', key: '', 模型: 'ds-pro' }), 'deepseek'), null);
+    assert.equal(runner.凭据Of('/x', DS(null), 'deepseek'), null);
+    assert.equal(runner.凭据Of('/x', {}, 'deepseek'), null);
+    还原creds();
+  });
+
+  await t('凭据兜底做到字段粒度：托管只有 key 时 base 回落 config（否则 deepseek 的 key 会被送去官方端点）', async () => {
+    装creds({ has: () => true, getKey: () => 'sk-FAKE-hosted-0003', meta: () => ({ base: null, 模型: null }) });
+    const r = runner.凭据Of('/x', DS({ base: 'https://api.example.com', key: '', 模型: 'ds-pro' }), 'deepseek');
+    assert.equal(r.key, 'sk-FAKE-hosted-0003');
+    assert.equal(r.base, 'https://api.example.com', 'base 丢了就等于把第三方 key 发给 Anthropic 官方');
+    assert.equal(r.模型, 'ds-pro');
+    assert.equal(r.来源, '托管(key)+config(端点)');
+    还原creds();
+  });
+
+  await t('托管在册但解不开（DPAPI 挂了）：不硬撑，回落 config 兜底', async () => {
+    装creds({ has: () => true, getKey: () => null, meta: () => ({}) });
+    const r = runner.凭据Of('/x', DS({ base: 'https://api.example.com', key: 'sk-FAKE-inline-0004', 模型: 'ds-pro' }), 'deepseek');
+    assert.equal(r.key, 'sk-FAKE-inline-0004');
+    assert.equal(r.来源, '内联');
+    还原creds();
+  });
+
+  await t('订阅池不碰托管：claude/codex 恒 null（凭据归 CLI，app 一个字节不存）', async () => {
+    装creds({ has: () => false, getKey: () => null, meta: () => null });
+    assert.equal(runner.凭据Of('/x', CFG, 'claude'), null);
+    assert.equal(runner.凭据Of('/x', CFG, 'codex'), null);
+    还原creds();
+  });
+
+  // ---- 施工令-032①（H97）：返修先掐在飞审检（竞态修补，案源 TK-113）----
+  await t('竞态：在飞审检时返修 → 会话被掐、状态迁移干净、无孤儿判词落 fm', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'K-01.md'), '# 完工报告 K-01\n', 'utf8');
+    seed(root, '待验收', { id: 'K-01', 职能: '程序', 验收方式: '委托' });
+    // 悬挂会话 = 在飞审检（durMs 大，收线遥遥无期）
+    await runner.startWork(root, CFG, store.find(root, 'K-01'), '核查', '代核', { durMs: 600000 });
+    assert.ok(runner.running.has('核查'), '前置：核查会话确实在飞');
+    assert.ok(runner.status(root, CFG).执行中.some((x) => x.id === 'K-01'));
+
+    const r = life.返修(root, 'K-01', '证据不合格，重跑');
+    assert.ok(r.ok, r.error);
+    assert.ok(!runner.running.has('核查'), '返修把在飞审检会话掐了');
+    assert.ok(!runner.status(root, CFG).执行中.some((x) => x.id === 'K-01'), '在跑表里不留残影');
+    const cur = store.find(root, 'K-01');
+    assert.equal(cur.state, '草稿', '状态迁移干净');
+    assert.equal(cur.fm.返修轮, 1);
+    assert.equal(cur.fm.放行, false);
+    for (const k of ['核查', '代核', '初检', '主办', '交付时间', '待引擎实证']) assert.ok(!cur.fm[k], `无孤儿判词/残留字段：${k}`);
+    const 流水 = fs.readFileSync(path.join(root, 'journal', fs.readdirSync(path.join(root, 'journal'))[0]), 'utf8');
+    assert.ok(/终止会话 K-01（核查）：单被返修/.test(流水), '掐会话留痕且因由如实（不再一律写「收回/废弃」）：' + 流水);
+    assert.ok(/返修 K-01.*已掐在飞审检会话/.test(流水), '返修流水标注已掐：' + 流水);
+    runner.running.clear();
+  });
+
+  await t('竞态：无在飞会话时返修一切照旧（掐是无副作用的，不改流水口径）', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '执行失败', { id: 'K-02', 职能: '程序', 验收方式: '委托', 失败次数: 2 });
+    const r = life.返修(root, 'K-02', '换思路');
+    assert.ok(r.ok);
+    assert.equal(store.find(root, 'K-02').state, '草稿');
+    assert.equal(store.find(root, 'K-02').fm.失败次数, 2, 'H65 计数保留');
+    const 流水 = fs.readFileSync(path.join(root, 'journal', fs.readdirSync(path.join(root, 'journal'))[0]), 'utf8');
+    assert.ok(!/已掐在飞审检会话/.test(流水), '没掐到就不写掐（流水不撒谎）');
+  });
+
+  await t('竞态：掐在移单之前——被掐会话即便随后收线也进不了 settleClose', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'K-03.md'), '# 完工报告 K-03\n', 'utf8');
+    seed(root, '待验收', { id: 'K-03', 职能: '程序', 验收方式: '委托' });
+    await runner.startWork(root, CFG, store.find(root, 'K-03'), '核查', '代核', { durMs: 600000 });
+    life.返修(root, 'K-03', 'x');
+    // 模拟迟到收线：running 里已无该席位 —— 这正是 child.on('close') 的守卫判据
+    assert.ok(!runner.running.has('核查'));
+    const 回执 = fs.readFileSync(path.join(root, '回执', 'K-03.md'), 'utf8');
+    assert.ok(!/##\s*核查/.test(回执), '回执不被迟到判词污染');
+    assert.equal(store.find(root, 'K-03').state, '草稿');
+    runner.running.clear();
+  });
+
+  // ---- 施工令-032②（H97）：引擎门禁停闸三态 ----
+  const 门禁正文 = '## 验收标准\n\n1. 编译零错误\n2. 四类测试全绿：`node tools/enginectl.js unity-test --project D:/GitHub/TK`\n';
+  const 普通正文 = '## 验收标准\n\n1. 文档落盘\n2. 术语表齐备\n';
+
+  await t('停闸：门禁单核查通过 → 不转完成，停待验收盖候检印 + 流水记「核查过·候引擎实证」', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'E-01.md'), '# 完工报告 E-01\n', 'utf8');
+    seed(root, '待验收', { id: 'E-01', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok((r.代核 || []).includes('E-01'), '核查照常开会话');
+    const cur = store.find(root, 'E-01');
+    assert.equal(cur.state, '待验收', '停闸：不转完成');
+    assert.equal(cur.fm.核查.结论, '通过', '核查章照旧盖');
+    assert.equal(cur.fm.待引擎实证.命中, 'enginectl');
+    assert.ok(fs.readFileSync(path.join(root, '回执', 'E-01.md'), 'utf8').includes('## 核查'), '核验报告照旧入回执');
+    const 流水 = fs.readFileSync(path.join(root, 'journal', fs.readdirSync(path.join(root, 'journal'))[0]), 'utf8');
+    assert.ok(/核查过·候引擎实证 E-01/.test(流水), 流水);
+    assert.ok(!/验收 E-01/.test(流水), '没有偷偷验收');
+    assert.ok(require('../lib/inbox').list(root).some((x) => x.类型 === '候引擎实证' && x.单号 === 'E-01'), '呼叫信箱有候检条目');
+  });
+
+  await t('放行：候检单走「实证放行」转完成；停闸期间不被再次核查', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'E-02.md'), '# 完工报告 E-02\n', 'utf8');
+    seed(root, '待验收', { id: 'E-02', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
+    await runner.tick(root, CFG, UN);
+    const r2 = await runner.tick(root, CFG, UN);
+    assert.ok(!(r2.代核 || []).includes('E-02'), '候检期间不重复开核查会话（代核章已盖）');
+    assert.equal(store.find(root, 'E-02').state, '待验收');
+    const r3 = life.实证放行(root, 'E-02', '总监', '137/137 全绿已入回执');
+    assert.ok(r3.ok);
+    assert.equal(store.find(root, 'E-02').state, '完成');
+    assert.equal(store.find(root, 'E-02').fm.实证放行.操作者, '总监');
+  });
+
+  await t('直通：非门禁单核查通过 → 照旧直转完成（本补丁零影响）', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'E-03.md'), '# 完工报告 E-03\n', 'utf8');
+    seed(root, '待验收', { id: 'E-03', 职能: '程序', 验收方式: '委托', body: 普通正文 });
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok((r.代核 || []).includes('E-03'));
+    const cur = store.find(root, 'E-03');
+    assert.equal(cur.state, '完成');
+    assert.ok(!cur.fm.待引擎实证);
+    const 流水 = fs.readFileSync(path.join(root, 'journal', fs.readdirSync(path.join(root, 'journal'))[0]), 'utf8');
+    assert.ok(/核查通过 E-03 → 验收完成/.test(流水), '既有文案一字不改：' + 流水);
+  });
+
+  await t('停闸可关：config 关掉引擎门禁后，门禁单也直转完成（回滚路）', async () => {
+    const root = makeRoot(); on(root);
+    const cfg = { ...CFG, 执行器: { ...CFG.执行器, 引擎门禁: { 开: false } } };
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'E-04.md'), '# 完工报告 E-04\n', 'utf8');
+    seed(root, '待验收', { id: 'E-04', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
+    await runner.tick(root, cfg, UN);
+    assert.equal(store.find(root, 'E-04').state, '完成');
+  });
+
+  await t('031+032 串起来：门禁单机判初检过 → 同轮核查过 → 停闸候检 → 实证放行落袋', async () => {
+    const root = makeRoot(); on(root);
+    const cfg = { ...CFG, 执行器: { 两检: { 开: true } } }; // 机判初检零池
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'E-06.md'), `# 完工报告 E-06
+
+## 自测结果
+
+| # | 验收标准 | 结论 | 证据 |
+|---|---|---|---|
+| 1 | 编译零错误 | ✓ | 退出码 0 |
+| 2 | 四类测试全绿 | ✓ | 137/137 |
+
+## 实际消耗
+40 分钟 / 90000 token
+
+## 异议
+无
+`, 'utf8');
+    seed(root, '待验收', { id: 'E-06', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
+    const r = await runner.tick(root, cfg, UN);
+    assert.deepEqual(r.初检, ['E-06'], '机判初检');
+    assert.ok((r.代核 || []).includes('E-06'), '同轮进深检');
+    const cur = store.find(root, 'E-06');
+    assert.equal(cur.fm.初检.判源, '机判');
+    assert.equal(cur.fm.核查.结论, '通过');
+    assert.equal(cur.state, '待验收', '门禁停闸兜住了「初检过+核查过」的自动落袋');
+    assert.equal(cur.fm.待引擎实证.命中, 'enginectl');
+    assert.ok(life.实证放行(root, 'E-06', '总监').ok);
+    assert.equal(store.find(root, 'E-06').state, '完成');
+  });
+
   console.log(`全部通过：${passed} 项`);
 })().catch((e) => { console.error('  ✗ ' + e.message); process.exit(1); });

@@ -1,0 +1,12 @@
+{
+  "name": "@papercrew/budget",
+  "version": "0.1.0",
+  "private": true,
+  "description": "预算闸：额度锁的按量计费孪生。订阅池按 5h/周窗口刹车，按量池没有那个窗口——本包补上。保险丝，不是财务系统。",
+  "main": "budget.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "author": "robinwang2",
+  "license": "UNLICENSED"
+}

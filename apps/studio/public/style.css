@@ -6,9 +6,22 @@
   --line:#E4E2DC; --ok:#0D7A5F; --okbg:#EBF7F1; --okln:#B9E0D2; --danger:#B4231F;
   --dangerbg:#FBEAE9; --accent:#4F46E5; --sect:#F0EFEA; --chip:#E3E2DD; --we:#F5F4F0;
   --inbg:#FCFCFB; --gatebg:#FDF3E3; --gateln:#E8CFA0; --gatetx:#7A5A1E;
+  /* 警示档语义令牌（施工令-034）：此前全站只有 --ok / --danger 两档，"黄"一直借闸门色 --gatetx 用，
+     语义上说不通（闸门是闸门，受限是受限），且新代码写 warn 时没有令牌可指、极易退回裸色值。
+     取值与闸门同一族琥珀（日间 #7A5A1E 对暖纸实测 5.66:1，过 AA），像素零变化，只是把名字摆正。 */
+  --warn:#7A5A1E; --warnbg:#FDF3E3; --warnln:#E8CFA0;
   --accent-ink:#4F46E5; /* 靛蓝当"文字"用的档：日间同 accent，夜间提亮保 ≥4.5:1 */
+  /* 「现在」橙（施工令-022 流程视图现在线）：全站唯一表示"此刻正在发生"的色，不与职能色/状态色重号。
+     日间取暖纸面上的琥珀橙，--nowtint 是它 7% 的底纹，只做橙区背景。
+     色值定在 #9E5412 而非设计稿那档亮橙：橙字全是 10–11px 小字，AA 要 4.5:1，而在日间纸上
+     实测 #B5651D=4.19、#A85A15 对列头底/橙区底=4.41/4.44 都差一口气；这档三处实测 5.39/4.89/4.89 全过。
+     夜间直接用设计稿定稿的 #FF9D4D（对 #0B0D10 实测 9.43:1）。
+     --accenttint 是在做条的实心底（原代码里写的 --accentbg 从未定义过，一直静默回落成透明）。 */
+  --now:#9E5412; --nowtint:rgba(158,84,18,.07); --accenttint:rgba(79,70,229,.10);
   --mono:"Roboto Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
-  --fn-plan:#4F46E5; --fn-code:#0D7A5F; --fn-art:#A16207; --fn-qa:#4B5563; --fn-asm:#0E7490;
+  /* 技术策划（施工令-028 范围 5 / 027 报备件）：李子紫——与策划的靛蓝同族异色（是策划的技术分支），
+     避开程序绿与装配青。对暖纸 #FAFAF8 实测 6.13:1，与策划 6.02 同档。 */
+  --fn-plan:#4F46E5; --fn-tplan:#9333A8; --fn-code:#0D7A5F; --fn-art:#A16207; --fn-qa:#4B5563; --fn-asm:#0E7490;
   --pool-claude:#6B5BC7; --pool-codex:#2E7D5B;
   --on-accent:#fff; --st-review-bg:#4B5563; --st-done-bg:#EAE9E4;
   --mask:rgba(26,29,33,.28); --mask-strong:rgba(58,60,64,.5);
@@ -35,9 +48,11 @@ html[data-theme="glass"] {
   --paper:#0B0D10; --card:rgba(255,255,255,.05); --ink:#F2F4F8; --ink2:#B9C1CD; --ink3:#76808F;
   --line:rgba(255,255,255,.10); --ok:#2FD6A0; --okbg:rgba(47,214,160,.12); --okln:rgba(47,214,160,.32);
   --danger:#FF5D57; --dangerbg:rgba(255,93,87,.13); --accent:#6E63FF; --accent-ink:#9D93FF;
+  --now:#FF9D4D; --nowtint:rgba(255,157,77,.08); --accenttint:rgba(110,99,255,.12); /* 夜间取设计稿定稿值 */
   --sect:rgba(255,255,255,.04); --chip:rgba(255,255,255,.09); --we:rgba(255,255,255,.06);
   --inbg:rgba(255,255,255,.05); --gatebg:rgba(232,180,90,.12); --gateln:rgba(232,180,90,.35); --gatetx:#E8B45A;
-  --fn-plan:#8F84FF; --fn-code:#2FD6A0; --fn-art:#E8B45A; --fn-qa:#9BA6B5; --fn-asm:#4CC3E0;
+  --warn:#E8B45A; --warnbg:rgba(232,180,90,.12); --warnln:rgba(232,180,90,.35); /* 夜间琥珀对 #0B0D10 实测 10.4:1 */
+  --fn-plan:#8F84FF; --fn-tplan:#D08BE8; --fn-code:#2FD6A0; --fn-art:#E8B45A; --fn-qa:#9BA6B5; --fn-asm:#4CC3E0; /* 技术策划夜值对 #0B0D10 实测 7.91:1 */
   --pool-claude:#9D8FFF; --pool-codex:#3ED6A8;
   --on-accent:#fff; --st-review-bg:#8A93A5; --st-done-bg:rgba(255,255,255,.08);
   --mask:rgba(0,0,0,.5); --mask-strong:rgba(0,0,0,.65);
@@ -110,7 +125,17 @@ input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outlin
 /* 项目注册卡（全量配置 UI） */
 .prow { display:flex; align-items:center; gap:10px; padding:8px 0; font-size:12.5px; border-bottom:1px solid var(--sect); }
 .prow:last-of-type { border-bottom:none; }
-.prow .pv { flex:1; font-family:var(--mono); font-size:11px; color:var(--ink3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+/* ===== width:0 的由来（施工令-035，全站同病统一修法；首次落地见 034 的 .credrow .cr-stat）=====
+   病症：`flex:1` + `white-space:nowrap` + `overflow:hidden;text-overflow:ellipsis` 只配 `min-width:0`。
+   `min-width:0` 管的是**自动最小尺寸**（元素自己在确定宽度里肯不肯缩），管不住 nowrap 的**固有
+   min-content 贡献**——当祖先是靠内容定宽的 flex/grid（如 .p6grid 的 fr 列）时，整串文字的宽度会
+   一路顶穿 flex 容器传到列宽上。实测：#/params 注册 147 字符路径 → p6grid 列宽 100px+1322px、
+   文档宽 1503 而视口 790，全页横滚。
+   修法：显式 `width:0` 配 `flex:1 1 0` 把固有贡献真正归零，flex-grow 照常把它撑回可用宽度，
+   省略号不受影响。**只对「自己就是 flex 项」的元素这么写**；若 nowrap 落在 flex 项的**块级子元素**
+   上（如 .arow2 .at），width:0 要加在**父 flex 项**上——加在文字元素自己身上会把它压成 0 宽、
+   文字整条消失（实测：标题可见宽 728 → 0）。 */
+.prow .pv { flex:1 1 0; width:0; font-family:var(--mono); font-size:11px; color:var(--ink3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
 .prow .pn { font-size:11px; color:var(--ink2); flex-shrink:0; }
 .paddrow { display:flex; gap:8px; margin-top:12px; align-items:center; }
 .paddrow input { height:32px; padding:0 10px; font-size:11.5px; border-radius:8px; min-width:0; }
@@ -127,13 +152,19 @@ input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outlin
 .bhead .bc2 { font-size:18px; font-weight:700; }
 
 /* ===== 通用组件（几何=Figma） ===== */
-.card { background:var(--card); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow-sm); }
+/* 卡片基类。padding 是**兜底**不是定制（施工令-034 案源：制作人报凭据卡"顶着四个边"，
+   DOM 实测 padding 0/0/0/0——因为 .card 从来就没有 padding 规则，内边距全靠伴生类
+   (.paramcard/.envcard/.poolcard…) 或内联 style 现给，谁忘了写谁就贴边。
+   本规则给全站裸卡一个下限；所有伴生类都定义在本行之后，同特异度后来居上，
+   它们的既有 padding 一律照旧生效（改前后 28 张卡逐张 DOM 复测，仅裸卡一张变化）。 */
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow-sm);
+  padding:18px 22px; }
 .card.r14 { border-radius:14px; } .card.r16 { border-radius:16px; }
 .pill { display:inline-flex; align-items:center; justify-content:center; height:25px; padding:0 12px;
   border-radius:999px; font-size:11.5px; font-weight:500; background:var(--chip); color:var(--ink); white-space:nowrap; }
 .pill.sm { height:24px; font-size:11px; padding:0 10px; }
 .pill.fn { background:var(--sect); }
-.pill.fn-plan { color:var(--fn-plan);} .pill.fn-code { color:var(--fn-code);}
+.pill.fn-plan { color:var(--fn-plan);} .pill.fn-tplan { color:var(--fn-tplan);} .pill.fn-code { color:var(--fn-code);}
 .pill.fn-art { color:var(--fn-art);} .pill.fn-qa { color:var(--fn-qa);} .pill.fn-asm { color:var(--fn-asm);}
 .pill.st-doing { background:var(--ink); color:var(--paper); }
 .pill.st-review { background:var(--st-review-bg); color:var(--paper); }
@@ -179,11 +210,10 @@ input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outlin
 .paramcard .stepper button { transition:border-color 150ms var(--ease-out), color 150ms var(--ease-out), transform 100ms var(--ease-out); }
 .paramcard .stepper button:active { transform:scale(.9); }
 /* 可点卡片：悬停轻抬 2px + 浅影——"这块能进去"的物理暗示 */
-.bcard2, .inbox-row, .trow2 { transition:transform 150ms var(--ease-out), border-color 150ms var(--ease-out),
+.bcard2, .inbox-row { transition:transform 150ms var(--ease-out), border-color 150ms var(--ease-out),
   box-shadow 150ms var(--ease-out), background 150ms var(--ease-out); }
 .bcard2:hover, .inbox-row:hover { transform:translateY(-2px); box-shadow:var(--shadow-md); }
 .bcard2:active, .inbox-row:active { transform:translateY(0); box-shadow:none; }
-.trow2:hover { background:var(--we); }
 
 /* ===== 状态层 ===== */
 /* 视图切换：仅路由变化时 180ms 淡入上移一次（脉冲刷新不闪） */
@@ -231,7 +261,7 @@ input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outlin
 @media (prefers-reduced-motion: reduce) {
   .vin, .gsr, .modal2, .bump, #run-dot.on, #run-dot.on.live, .ghosting, .tlseg, .dot.breathe-warn, .dot.breathe-err { animation:none; }
   .bcard2:hover, .inbox-row:hover, .hubcard:hover, .gear:active, .backbtn:active, .paramcard .stepper button:active { transform:none; }
-  .snav a, .btn, .gear, .backbtn, .paramcard .egbtn, .paramcard .stepper button, .bcard2, .inbox-row, .trow2, .hubcard, .searchbox input { transition-duration:.01s; }
+  .snav a, .btn, .gear, .backbtn, .paramcard .egbtn, .paramcard .stepper button, .bcard2, .inbox-row, .hubcard, .searchbox input { transition-duration:.01s; }
 }
 
 /* ===== P0 项目启动页（D42 多项目视界）===== */
@@ -254,7 +284,14 @@ a.gear { text-decoration:none; }
 .hubcard.add:hover { border-color:var(--accent-ink); }
 
 /* ===== P1 总览 ===== */
-.stat-strip { height:84px; border-radius:14px; display:flex; align-items:center; padding:0 32px; margin-top:24px; }
+/* 统计横条（W32 补巡 · 施工令-030）：原先 height 写死 84px + 默认 nowrap，折行规则却只写在
+   @media(max-width:680px) 里——860 断点根本吃不到。实数据七格（完成 79 / 归档 21 /
+   实际工时 107.2h / 实耗预估 77% / 自修轮次 60 / 核查过不过 …）把这一行顶到 941px，
+   整页跟着横向滚动；桩数据数字短，压根造不出这个宽度。
+   所以这条不靠"试出来"保，靠"结构上不可能溢出"保：**默认就允许折行**，高度改由内容定。
+   min-height 顶住原来的视觉高度——宽屏排得下一行时，渲染与改前逐像素相同。 */
+.stat-strip { min-height:84px; border-radius:14px; display:flex; flex-wrap:wrap; align-items:center;
+  row-gap:10px; padding:14px 32px; margin-top:24px; }
 .stat-strip .grp { display:flex; flex-direction:column; justify-content:center; }
 .stat-strip .grp .lbl { font-size:12px; color:var(--ink3); font-weight:500; }
 .stat-strip .grp .num { font-family:var(--mono); font-size:22px; font-weight:500; line-height:1.3; }
@@ -355,61 +392,124 @@ a.gear { text-decoration:none; }
 .tlseg.on { outline:1.5px solid var(--ink); }
 .tlnow { position:absolute; top:0; width:0; border-left:1.5px dashed var(--danger); pointer-events:none; }
 
-/* ===== P12 流程（D43）：阶段横轴 · 拓扑子列 · 泳道=系统 ===== */
-.fl-bar { display:flex; align-items:center; gap:14px; margin-top:22px; }
-.fl-bar .sp { flex:1; }
-.fl-cp { font-size:12px; background:var(--dangerbg); color:var(--danger); border-radius:999px; padding:5px 14px; font-weight:500; }
-.fl-wrap { overflow-x:auto; margin-top:12px; padding-bottom:8px; }
-.fl-stage { position:relative; }
-.fl-svg { position:absolute; inset:0; pointer-events:none; }
-.fl-col { position:absolute; top:0; bottom:0; border-left:1px dashed var(--line); }
-.fl-head { position:absolute; top:0; text-align:center; cursor:help; }
-.fl-head b { font-size:13px; }
-.fl-head .sn { display:block; font-size:10.5px; color:var(--ink3); font-weight:400; }
-.fl-lane { position:absolute; left:0; right:0; border-top:1px solid var(--line); }
-.fl-lab { position:absolute; left:0; font-size:11px; font-weight:700; color:var(--ink2); background:var(--sect);
-  padding:3px 10px; border-radius:8px; transform:translateY(8px); display:flex; gap:8px; align-items:center; z-index:3; }
-.fl-lab .lst { font-family:var(--mono); font-size:10px; font-weight:500; padding:1px 7px; border-radius:999px; background:var(--chip); color:var(--ink2); }
-.fl-lab .lst.lag { background:var(--gatebg); color:var(--gatetx); border:1px solid var(--gateln); }
-.fl-lab .lst.lead { background:var(--okbg); color:var(--ok); }
-/* 签字位标记（施工令-006）：制作人的落笔队列——实心 ok 底，文字取 --paper 保两主题对比度 */
-.fl-lab .lst.sign { background:var(--ok); color:var(--paper); font-weight:700; border:none; cursor:help; }
-.fl-node { position:absolute; width:146px; height:54px; background:var(--card); border:1px solid var(--line); border-radius:10px;
-  padding:7px 10px 6px 16px; cursor:pointer; box-shadow:var(--shadow-sm); z-index:2;
-  transition:box-shadow 150ms var(--ease-out), transform 150ms var(--ease-out), opacity 200ms var(--ease-out); }
-/* 职能书脊：内浮胶囊条（缩进卡内、上下留距、自带圆角）——贴边直角条会顶在卡片 10px 圆角上，悬停描边一亮就露馅 */
-.fl-node::before { content:''; position:absolute; left:5px; top:7px; bottom:7px; width:4px; border-radius:2px; background:var(--fn, var(--ink3)); }
-.fl-node .nid { font-family:var(--mono); font-size:10px; color:var(--ink3); line-height:1.3; }
-/* 标题右缘给工时角标留安全区（padding-right），省略号在撞上角标前截断；行高收紧防纵向溢出 */
-.fl-node .nt { font-size:11.5px; font-weight:500; line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; padding-right:26px; }
-.fl-node .nst { position:absolute; top:6px; right:8px; font-size:10px; padding:1px 7px; border-radius:999px; background:var(--chip); color:var(--ink2); }
-.fl-node .nh { position:absolute; bottom:5px; right:9px; font-family:var(--mono); font-size:10px; color:var(--ink3); }
-.fl-node:hover { box-shadow:var(--shadow-md); border-color:var(--ink3); z-index:5; } /* 不上浮：卡动线不动=连线对不上（用户裁定） */
-.fl-node.done { opacity:.35; }
-.fl-node.doing { border-color:var(--accent); }
-.fl-node.doing .nst { background:var(--ink); color:var(--paper); }
-.fl-node.review .nst { background:var(--st-review-bg); color:var(--paper); }
-.fl-node.accept .nst { background:var(--okbg); color:var(--ok); }
-.fl-node.pre .nst { background:var(--sect); color:var(--ink3); } /* 草稿/待投：排版台阶段 */
-.fl-node.pre { border-style:dashed; }
-.fl-node.blocked { background:var(--sect); opacity:.75; }
-.fl-node.blocked .nst { background:var(--chip); color:var(--ink3); }
-.fl-node.ready { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-glow), var(--shadow-sm); }
-.fl-node.ready .nst { background:var(--accent); color:var(--on-accent); }
-.fl-node.failed { border-color:var(--danger); }
-.fl-node.failed .nst { background:var(--dangerbg); color:var(--danger); }
-.fl-node.cyc { border-color:var(--gateln); background:var(--gatebg); }
-.fl-node.crit { border-color:var(--danger); }
-.fl-node.crit::before { background:var(--danger); }
-.fl-node.dimmed { opacity:.15; }
-.fl-node.onchain { box-shadow:0 0 0 3px var(--mask), var(--shadow-md); z-index:6; }
-path.fl-e { fill:none; stroke:var(--ink3); stroke-width:1.25; opacity:.45; }
-path.fl-e.up { stroke-dasharray:5 4; }
-path.fl-e.faded { opacity:.14; } /* 已满足的依赖：历史退场，别跟活边抢眼 */
-path.fl-e.crit { stroke:var(--danger); stroke-width:2; stroke-dasharray:none; opacity:.9; }
-path.fl-e.onchain { stroke:var(--ink2); stroke-width:2; opacity:1; }
-path.fl-e.dimmed { opacity:.08; }
-@media (prefers-reduced-motion: reduce) { .fl-node { transition-duration:.01s; } .fl-node:hover { transform:none; } }
+/* ===== P12 流程（施工令-022）：现在线 · 管线甘特 =====
+   D43 的绝对定位阶段画布（.fl-node/.fl-e/.fl-lane…）整体退役，换成三列网格：管线 ｜ 现在（橙区）｜ 接下来。
+   全部颜色走语义令牌（新增 --now/--nowtint 双主题），860px 断点整行竖排，永不横向溢出。 */
+.fgtop { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-top:22px; }
+.fgtop .sp { flex:1; min-width:0; }
+.nowh { color:var(--now); font-weight:700; }
+.fgsum { font-size:12px; color:var(--ink3); white-space:nowrap; }
+.fgsum b { font-family:var(--mono); color:var(--ink); font-size:12.5px; }
+.fgsum b.s { color:var(--ok); }
+.fgboard { position:relative; margin-top:12px; border:1px solid var(--line); border-radius:14px;
+  background:var(--card); box-shadow:var(--shadow-sm); overflow:hidden; }
+.fgcols { display:grid; grid-template-columns:200px 1fr 1.1fr; border-bottom:1px solid var(--line);
+  color:var(--ink3); font-size:11px; letter-spacing:.06em; background:var(--sect); }
+.fgcols > div { padding:8px 14px; min-width:0; }
+.fglane { border-bottom:1px solid var(--line); }
+.fglane:last-child { border-bottom:none; }
+.fgrow { display:grid; grid-template-columns:200px 1fr 1.1fr; align-items:stretch; }
+/* ---- 管线头 ---- */
+.fghead { padding:12px 14px; border-right:1px solid var(--line); min-width:0; }
+.fghead b { font-size:13.5px; }
+.fghead .sub { color:var(--ink3); font-size:11px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; }
+.fghead .pct { font-family:var(--mono); color:var(--ok); font-size:12px; margin-top:6px; }
+.fghead .lst { font-family:var(--mono); font-size:10px; font-weight:500; padding:1px 7px; margin-left:6px;
+  border-radius:999px; background:var(--chip); color:var(--ink2); }
+.fghead .lst.lag { background:var(--gatebg); color:var(--gatetx); border:1px solid var(--gateln); }
+/* ---- 两个区：现在（橙）｜接下来 ---- */
+.fgzone { padding:10px 12px; position:relative; min-width:0; }
+.fgzone.now { background:var(--nowtint); border-left:2px solid var(--now); border-right:1px dashed var(--line); }
+.fgidle { color:var(--ink3); font-size:11.5px; padding:14px 2px; text-align:center; }
+.fgidle.q { text-align:left; padding:10px 2px; }
+/* ---- 条：四型 ---- */
+/* 过渡只给 box-shadow，**不给 border-color**：条的边色全是 var(--ok/--danger/--accent) 令牌，
+   而带 transition 的属性在自定义属性被换掉（=切主题）时不重算，夜间会留着日间的绿边红边不放
+   （2026-08-08 实机抓到：--ok 已是 #2FD6A0，.fgbar.sign 的边还钉在 #0D7A5F）。
+   悬停反馈靠 box-shadow + 边色瞬时切换，观感不损，令牌正确性优先。 */
+.fgbar { display:flex; align-items:center; gap:8px; margin:4px 0; padding:5px 10px; border-radius:7px;
+  background:var(--chip); border:1px solid var(--line); cursor:pointer; min-width:0;
+  transition:box-shadow .16s var(--ease-out); }
+.fgbar:hover, .fgbar:focus-visible { border-color:var(--accent); box-shadow:var(--shadow-sm); outline:none; }
+.fgbar .id { font-family:var(--mono); font-size:11px; color:var(--accent-ink); white-space:nowrap; }
+.fgbar .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 1 0; width:0; min-width:0; font-size:12.5px; } /* width:0 同病同修，见 .prow .pv 上方注释 */
+.fgbar .st { font-size:10px; padding:1px 7px; border-radius:999px; white-space:nowrap; color:var(--ink2); background:var(--we); }
+.fgbar .deps { font-family:var(--mono); font-size:10px; color:var(--ink3); white-space:nowrap; }
+.fgbar .mile { font-size:10px; color:var(--now); white-space:nowrap; font-weight:600; }
+/* 在做：实心 + 百分比（百分比是本视图唯一的实时数，给它 mono 与最强字重） */
+.fgbar.doing { border-color:var(--accent); background:var(--accenttint); }
+.fgbar.doing .pp { font-family:var(--mono); color:var(--ink); font-size:12.5px; font-weight:700; white-space:nowrap; }
+/* 字号地板 10px（W32 补巡 · 施工令-030）：这个 % 号原是 9px，860 下已经糊成一团灰点。
+   只抬到地板值，不动它在 .pp 里的从属关系（主角还是数字本身）。 */
+.fgbar.doing .pp small { font-size:10px; font-weight:500; color:var(--ink3); margin-left:1px; }
+.fgbar.doing .st { color:var(--accent-ink); background:transparent; border:1px solid var(--accent-ink); }
+.fgbar.doing.nosess { border-style:dashed; }
+.fgbar.doing.nosess .st { color:var(--gatetx); border-color:var(--gateln); background:var(--gatebg); }
+/* 排队：虚框 */
+.fgbar.queue { background:transparent; border-style:dashed; }
+.fgbar.queue .st { color:var(--ink3); background:transparent; border:1px solid var(--line); }
+.fgbar.queue.ready { border-style:solid; border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-glow); }
+.fgbar.queue.ready .st { color:var(--accent-ink); border-color:var(--accent-ink); }
+.fgbar.blocked .st { color:var(--danger); border-color:var(--danger); background:var(--dangerbg); }
+/* 待判官接手（施工令-038）：委托待验收但判官会话还没起——闸门色，与 .doing.nosess 同源语义
+   （"会话没起来"），虚框表明在排队。三个令牌两主题各有一份（:root 暖纸 / html[data-theme="glass"] 玻璃），
+   实测 paper #7A5A1E on #FDF3E3、glass #E8B45A on 半透明琥珀，不写死色值。 */
+.fgbar.queue.wait .st { color:var(--gatetx); border-color:var(--gateln); background:var(--gatebg); }
+/* 签字位：绿框常驻——制作人的活永远不许被别的条盖过去 */
+.fgbar.sign { border-color:var(--ok); background:var(--okbg); }
+.fgbar.sign .st { color:var(--ok); border:1px solid var(--okln); background:transparent; font-weight:700; }
+/* 卡住：红 */
+.fgbar.stuck { border-color:var(--danger); background:var(--dangerbg); }
+.fgbar.stuck .st { color:var(--danger); border:1px solid var(--danger); background:transparent; font-weight:600; }
+/* ---- 沉淀抽屉：折叠条（四类分计数）+ 展开列表 ---- */
+.fgfold { display:flex; align-items:center; gap:4px; flex-wrap:wrap; margin-top:6px; padding-top:6px;
+  border-top:1px dashed var(--line); font-size:11px; }
+.fgfold .fgfk { color:var(--ink3); margin-right:2px; }
+.fgfold .fgdot { color:var(--ink3); font-style:normal; opacity:.6; }
+.fgcat { font:inherit; font-size:11px; color:var(--ink3); background:transparent; border:1px solid transparent;
+  border-radius:999px; padding:1px 8px; cursor:pointer; min-height:22px; }
+.fgcat b { font-family:var(--mono); font-weight:700; }
+.fgcat:hover { color:var(--ink2); border-color:var(--line); }
+.fgcat.on { color:var(--ink); border-color:var(--ink3); background:var(--we); }
+.fgcat.susp.on { color:var(--gatetx); border-color:var(--gateln); background:var(--gatebg); }
+.fgcat.drop.on, .fgcat.over.on { color:var(--danger); border-color:var(--danger); background:var(--dangerbg); }
+.fgdrawer { display:none; }
+.fgdrawer.open { display:block; border-top:1px dashed var(--line); background:var(--sect); padding:8px 14px 12px; }
+.fgdh { font-size:11px; color:var(--ink3); margin-bottom:6px; }
+.fgdl { display:flex; flex-direction:column; gap:2px; }
+/* 沉淀条一律置灰：它们已经不说话了，别跟活单抢注意力 */
+.fgsi { display:flex; align-items:center; gap:10px; padding:3px 10px; border-radius:6px; text-decoration:none;
+  color:var(--ink2); opacity:.62; filter:grayscale(.5); min-width:0; }
+.fgsi:hover { opacity:1; filter:none; background:var(--we); }
+.fgsi .id { font-family:var(--mono); font-size:10.5px; color:var(--ink3); white-space:nowrap; }
+.fgsi .t { flex:1 1 0; width:0; min-width:0; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } /* width:0 同病同修，见 .prow .pv 上方注释 */
+.fgsi .why { font-size:10px; color:var(--ink3); white-space:nowrap; }
+.fgsi.susp .id { color:var(--gatetx); }
+.fgsi.drop .why, .fgsi.over .why { color:var(--danger); }
+/* ---- 图例 ---- */
+.fglegend { display:flex; gap:18px; color:var(--ink3); font-size:11px; margin-top:14px; flex-wrap:wrap; }
+.fglegend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+.fglegend i.lg-doing { background:var(--accent); }
+.fglegend i.lg-queue { border:1px dashed var(--ink3); }
+.fglegend i.lg-sign { background:var(--ok); }
+.fglegend i.lg-stuck { background:var(--danger); }
+/* 860px 以下：三列拆成竖排，每段自带小标题——横向滚动条一根都不许出现 */
+@media (max-width:860px) {
+  /* 折行后竖分隔线可能落在行首，成一根无所指的孤线——窄屏一律不出（原在 680 块，随折行上提到 860） */
+  .stat-strip .vdiv { display:none; }
+  /* 竖线一撤就得有别的东西替它分格，否则七格数字挤成一片 */
+  .stat-strip { column-gap:22px; padding:14px 20px; }
+  .fgcols { display:none; }
+  .fgrow { grid-template-columns:1fr; }
+  .fghead { border-right:none; border-bottom:1px solid var(--line); }
+  .fgzone { border-right:none; }
+  .fgzone::before { display:block; font-size:10px; letter-spacing:.06em; color:var(--ink3); margin-bottom:4px; }
+  .fgzone.now::before { content:'◉ 现在在做'; color:var(--now); font-weight:700; }
+  .fgzone.next::before { content:'→ 接下来（依赖序）'; }
+  .fgzone.now { border-left:2px solid var(--now); }
+  .fgsum { white-space:normal; }
+}
+@media (prefers-reduced-motion: reduce) { .fgbar, .fgsi { transition-duration:.01s; } }
 
 /* ===== 在途细粒度进度（详情页顶卡）===== */
 .livecard { margin-top:24px; padding:16px 20px 14px; }
@@ -430,50 +530,32 @@ path.fl-e.dimmed { opacity:.08; }
 @keyframes lvpulse { 50% { opacity:.4; } }
 @media (prefers-reduced-motion: reduce) { .lv-seg i { animation:none !important; } }
 
-/* ===== P10 树形 ===== */
-.ttools { display:flex; gap:12px; align-items:center; margin-top:24px; }
-/* 工具条下拉：药丸化，向胶囊导航看齐；弹出层用份内令牌入夜（原生弹层不吃 html 级 color-scheme 的兜底） */
-.ttools select { height:32px; border-radius:999px; padding:0 14px; font-size:12px; font-weight:500;
-  background:var(--chip); border:1px solid transparent; cursor:pointer; }
-.ttools select:hover { border-color:var(--ink3); }
+/* ===== P10 树形 · 已退役（施工令-028）=====
+   .ttools / .tree2 / .trow2 族 / .twist2 / .tid2 / .tt2 / .kids / .mid / .prog / .acts /
+   .mini3 / .accept-mini / .tree-note 全部随视图删除。下面三条 select 规则**不是树形的**——
+   它们是全站原生下拉的暗色兜底（起草页职能/产出物/规模、模型选择器等 10 处仍在用），
+   当年只是碰巧写在这一段里，退役时留下。 */
 select { color-scheme:light; }
 html[data-theme="glass"] select { color-scheme:dark; }
 select option, select optgroup { background:var(--paper); color:var(--ink); }
-.ttools .cnt { margin-left:auto; font-family:var(--mono); font-size:12px; color:var(--ink3); font-weight:500; }
-.tree2 { margin-top:20px; }
-/* 施工令-012 / 巡礼 P2-4：行内原先固定像素混排（.mid left:520px、.prog right:150px、
-   .accept-mini right:20px）与流式的 .twist2+.tid2+.tt2+.kids 无任何互斥保证——860px（Electron
-   minWidth）实测 21 行全中、.mid×.prog 重叠 94px，不透明胶囊直接盖住进度条。
-   改流式：左段（折叠钮/单号/标题/子单数）可压缩，右段（胶囊/进度/操作）靠 .mid 的 margin-left:auto
-   顶到右缘，标题 flex-basis:0 优先让位——窄窗只截标题，永不重叠。改列宽也不用再同步三处常量。 */
-.trow2 { display:flex; align-items:center; gap:10px; border-radius:12px; margin-bottom:10px; padding:0 20px; }
-.trow2.parent { background:var(--sect); height:60px; }
-.trow2.leaf { background:var(--card); border:1px solid var(--line); height:56px; }
-.trow2.lv1 { margin-left:48px; }
-.trow2.lv2 { margin-left:96px; } /* D43 三层：总单→阶段父单→碎单 */
-.trow2.lv3 { margin-left:144px; }
-.trow2 .twist2 { width:24px; color:var(--ink3); cursor:pointer; user-select:none; font-size:13px; flex-shrink:0; }
-.trow2 .twist2.none { color:var(--line); cursor:default; }
-.trow2 .tid2 { font-family:var(--mono); font-size:11.5px; color:var(--ink3); width:64px; flex-shrink:0; }
-.trow2 .tt2 { font-size:14px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  flex:1 1 0; min-width:0; max-width:300px; }
-.trow2.parent .tt2 { font-size:15px; font-weight:700; }
-.trow2 .kids { font-family:var(--mono); font-size:11px; color:var(--ink3); flex:none; white-space:nowrap; }
-.trow2 .mid { margin-left:auto; display:flex; align-items:center; gap:8px; flex:none; }
-.trow2 .prog { display:flex; align-items:center; gap:12px; flex:none; }
-.trow2 .prog .bar { width:90px; height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
-.trow2.leaf .prog .bar { background:var(--sect); }
-.trow2 .prog .bar i { display:block; height:100%; background:var(--ok); }
-.trow2 .prog .pv { font-family:var(--mono); font-size:11px; color:var(--ink2); font-weight:500; width:36px; }
-/* 悬停操作区留在流内（opacity 切换而非 display）：位置常驻＝右缘不抖，也不再需要给它手工预留 150px */
-.trow2 .acts { display:flex; gap:8px; flex:none; opacity:0; transition:opacity .12s; }
-.trow2:hover .acts { opacity:1; }
-.mini3 { display:inline-flex; align-items:center; height:26px; padding:0 10px;
-  border-radius:13px; font-size:11px; font-weight:500; background:var(--card); border:1px solid var(--line); color:var(--ink2); }
-.mini3:hover { border-color:var(--ink3); color:var(--ink); }
-.accept-mini { display:inline-flex; flex:none; white-space:nowrap; align-items:center; height:26px; padding:0 10px;
-  border-radius:13px; font-size:11px; font-weight:500; background:var(--okbg); border:1px solid var(--okln); color:var(--ok); }
-.tree-note { font-size:11px; color:var(--ink3); margin-top:14px; }
+
+/* ===== 子单表格（施工令-028：树形的「子单层级一览」迁入父单详情页）=====
+   体例跟随详情页现有 .p8main 卡：整行可点、悬停有底、窄窗横向滚动而不是撑破页面。 */
+.kidtbl-wrap { margin-top:10px; overflow-x:auto; }
+.kidtbl { width:100%; border-collapse:collapse; font-size:12.5px; }
+.kidtbl th { text-align:left; font-size:11px; font-weight:500; color:var(--ink3); padding:0 10px 6px 0; white-space:nowrap; border-bottom:1px solid var(--sect); }
+.kidtbl td { padding:8px 10px 8px 0; border-bottom:1px solid var(--sect); vertical-align:middle; }
+.kidtbl tbody tr { cursor:pointer; }
+.kidtbl tbody tr:hover td { background:var(--sect); }
+.kidtbl tbody tr:last-child td { border-bottom:none; }
+.kidtbl .kid-id { font-size:11.5px; color:var(--ink3); white-space:nowrap; }
+.kidtbl .kid-t { font-weight:500; max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.kidtbl .kid-pool { font-size:11px; color:var(--ink3); white-space:nowrap; }
+.kidtbl .kid-p { white-space:nowrap; }
+.kidtbl .kid-p .bar { display:inline-block; width:72px; height:6px; background:var(--sect); border-radius:3px; overflow:hidden; vertical-align:middle; }
+.kidtbl .kid-p .bar i { display:block; height:100%; background:var(--ok); }
+.kidtbl .kid-p .pv { font-family:var(--mono); font-size:11px; color:var(--ink2); font-weight:500; margin-left:8px; }
+@media (max-width:860px) { .kidtbl .kid-t { max-width:150px; } .kidtbl .kid-p .bar { width:44px; } }
 
 /* ===== P3 在途 · 在跑卡（施工令-004 设计稿定稿）=====
    制作人 14:57 裁决：不点详情就要看见执行进度与百分比。百分比是这张卡的主角，
@@ -482,7 +564,10 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .arow2 .ar-row { display:flex; align-items:center; gap:16px; }
 .arow2 .av { width:44px; height:44px; border-radius:10px; flex:none;
   display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; }
-.arow2 .ar-id { min-width:0; flex:1; }
+/* width:0 加在这个**父 flex 项**上，不是加在带 nowrap 的 .at 上——.at 是块级子元素，
+   给它 width:0 会把标题压成 0 宽整条消失（实测 728→0）；加在这里则 flex-grow 照常撑回。
+   同病同修，原理见 .prow .pv 上方注释。 */
+.arow2 .ar-id { min-width:0; flex:1 1 0; width:0; }
 .arow2 .ar-idline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .arow2 .aid { font-family:var(--mono); font-size:12px; color:var(--accent-ink); }
 .arow2 .ar-who { font-size:11px; color:var(--ink3); }
@@ -512,7 +597,7 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 @keyframes arpulse { 0% { opacity:1; } 50% { opacity:.35; } 100% { opacity:1; } }
 /* 阶段分段条：填满=已过 · 当前=段内进度条（右缘扫光示意「活着」）· 未到=灰槽 */
 .segbar { display:flex; gap:6px; margin-top:14px; }
-.segbar .seg { flex:1; min-width:0; }
+.segbar .seg { flex:1 1 0; width:0; min-width:0; } /* width:0 加在父 flex 项：阶段名 span 是块级子元素带 nowrap，同 .arow2 .ar-id 的处理 */
 .segbar .seg i { display:block; height:5px; border-radius:99px; background:var(--chip); position:relative; overflow:hidden; }
 .segbar .seg.done i { background:var(--ok); }
 .segbar .seg.cur i em { position:absolute; inset:0; width:var(--fill,0%); border-radius:99px;
@@ -538,8 +623,8 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
   border-bottom:1px solid var(--line); }
 .ovrun-row:last-child { border-bottom:0; }
 .ovrun-row .rid { font-size:11px; color:var(--ink3); flex:none; }
-.ovrun-row .rt { font-size:12.5px; color:var(--ink2); flex:1; min-width:0;
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ovrun-row .rt { font-size:12.5px; color:var(--ink2); flex:1 1 0; width:0; min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } /* width:0 同病同修，见 .prow .pv 上方注释 */
 .ovrun-row .pct { font-size:14px; font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums; }
 .ovrun-row .pct.over { color:var(--danger); }
 .ovrun-row .st { font-size:11px; color:var(--ink3); flex:none; }
@@ -612,6 +697,10 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 
 /* ===== P13 消耗报表 ===== */
 .rp-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-top:20px; align-items:start; }
+/* grid 子项默认 min-width:auto —— 轨道会被"最宽的那个不可断内容"顶开，于是两列网格
+   在 860 下把整页撑出横向滚动条（W32 补巡 · 施工令-030）。min-width:0 把这条地板拆掉，
+   宽内容改由各自的 .rp-scroll 在容器内滚，页面文档宽恒等于视口宽。 */
+.rp-grid > * { min-width:0; }
 .rp-card { padding:18px 24px; margin-bottom:16px; }
 .rp-card h4 { margin:0 0 12px; font-size:14px; }
 .rp-t { width:100%; border-collapse:collapse; font-size:12px; }
@@ -620,7 +709,11 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .rp-t td:first-child { color:var(--ink2); }
 .rp-t tr:last-child td { border-bottom:none; }
 .rp-t tr:hover td { background:var(--we); }
-.rp-days { display:flex; gap:8px; align-items:flex-end; min-height:80px; padding-top:6px; }
+/* 宽表横滚（W32 补巡 · 施工令-030）：工单明细 8 列在 860 下把**页面**撑出横向滚动条，
+   整个视图跟着左右晃。改成让表格在自己的容器里滚——页面文档宽恒等于视口宽。
+   min-width:0 是 flex/grid 子项里 overflow 生效的前提（不给的话子项按内容撑，照样溢出）。 */
+.rp-scroll { overflow-x:auto; min-width:0; }
+.rp-days { display:flex; gap:8px; align-items:flex-end; min-height:80px; padding-top:6px; overflow-x:auto; }
 .rp-day { display:flex; flex-direction:column; align-items:center; gap:4px; }
 .rp-day i { display:block; width:18px; border-radius:4px 4px 0 0; background:linear-gradient(180deg, var(--bar-to), var(--bar-from)); }
 .rp-day span { font-family:var(--mono); font-size:10px; color:var(--ink3); }
@@ -654,9 +747,76 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .dot { display:inline-block; width:10px; height:10px; border-radius:5px; margin-right:8px; background:var(--ink3); vertical-align:baseline; }
 .dot.on { background:var(--ok); }
 .dot.err { background:var(--danger); }
-.dot.warn { background:var(--gatetx); } /* 黄=能力受限（降级） */
-.warnc { color:var(--gatetx); }
-.pill.warn { background:var(--gatebg); color:var(--gatetx); }
+.dot.warn { background:var(--warn); } /* 黄=能力受限（降级）；施工令-034 起指语义令牌 --warn，不再借闸门色 */
+/* 卡片内单行（凭据卡 / 向导候选目录）——施工令-027：
+   此前 .rowline 全站没有一条 CSS 规则，是裸 <p>：行距随浏览器默认走、按钮吊在文字基线上、
+   两行之间没有分隔。现按 .envcard .envrow 的同款体例收拾——一行 flex、竖直居中、
+   说明吃掉剩余宽度把按钮顶到右缘，行与行之间一条细线。 */
+.rowline { display:flex; align-items:center; gap:10px; margin:0; padding:8px 0; font-size:13px;
+  border-bottom:1px solid var(--sect); }
+.rowline:last-of-type { border-bottom:none; }
+.rowline .dot { margin-right:0; flex-shrink:0; }
+.rowline .rl-name { font-weight:500; min-width:60px; flex-shrink:0; }
+.rowline .rl-note { color:var(--ink3); flex:1; min-width:0; }
+.rowline .btn, .rowline code, .rowline .pill { flex-shrink:0; }
+/* 窄幅（<860）说明会换行到第二行，第一行只剩 圆点+名称+按钮——不推一把按钮就吊在名字屁股后面 */
+.rowline .rl-push { margin-left:auto; }
+.rowline code { flex:1 1 0; width:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } /* width:0 同病同修（向导候选目录是长路径重灾区），见 .prow .pv 上方注释 */
+.dotlegend { display:flex; align-items:center; flex-wrap:wrap; gap:4px 14px; }
+.dotlegend .dot { margin-right:4px; }
+@media (max-width:860px) {
+  .rowline { flex-wrap:wrap; }
+  .rowline .rl-note { flex:1 0 100%; order:3; }
+}
+.warnc { color:var(--warn); }
+.pill.warn { background:var(--warnbg); color:var(--warn); }
+
+/* ===== 凭据卡（施工令-034 设计稿定稿）=====
+   三行一个体例：状态点 · 名称(定宽列) · 类型胶囊 · 状态一句话(带次要小字) · 右侧动作组。
+   订阅行与托管行此前是两套长相（一个 圆点+粗名+说明，一个 池名胶囊+等宽指纹），
+   同一张卡里读起来像两张表；现在共用 .credrow，差别只剩胶囊里那两个字。
+   边距按施工令硬指标：卡内边距 ≥20px、行纵向 padding ≥10px、分隔线不贴边（left/right 各留 2px）。 */
+.credcard { padding:20px 24px; }
+.credcard .cred-sub { margin:0 0 14px; font-size:12px; color:var(--ink3); line-height:1.55; }
+.credrow { display:flex; align-items:center; gap:12px; margin:0; padding:11px 2px; font-size:13px;
+  border-top:1px solid var(--line); }
+.credrow:first-of-type { border-top:none; }
+.credrow .dot { width:8px; height:8px; border-radius:50%; margin-right:0; flex:none; }
+/* 名称定宽 86px：三行的类型胶囊因此对齐成一列，眼睛一趟扫下来不用重新找基准 */
+.credrow .cr-name { font-weight:600; width:86px; flex:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.credrow .cr-kind { font-size:11px; color:var(--ink3); background:var(--chip); border-radius:99px;
+  padding:1px 8px; flex:none; white-space:nowrap; }
+/* width:0 不是笔误，是这一条的命门（自测抓到）：状态句要单行省略号就得 white-space:nowrap，
+   而 nowrap 让这个 flex-grow 项的 min-content 等于整句话的长度，再顺着 flex 容器一路顶到
+   .p6grid 的列宽上——参数页右列被撑到 807px，整页横向出滚动条。min-width:0 挡不住这条路
+   （它管的是自动最小尺寸），显式 width:0 才能把内在贡献真正归零；flex-grow 照常把它撑回可用宽度。
+   实测：卡片 min-content 807px → 413px，栅格回到 259/490，省略号照常工作。 */
+.credrow .cr-stat { color:var(--ink); opacity:.85; flex:1 1 0; width:0; min-width:0;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.credrow .cr-stat small { color:var(--ink3); }
+.credrow .cr-act { display:flex; align-items:center; gap:8px; margin-left:auto; flex:none; }
+.credcard .cred-foot { display:flex; align-items:center; gap:10px; margin:0; padding-top:14px; margin-top:2px;
+  border-top:1px solid var(--line); flex-wrap:wrap; }
+.credcard .cred-foot .grow { flex:1; }
+/* 状态图例：收进右下角，悬停才展开。tooltip 自绘（原生 title 在 Electron 壳里样式不可控、
+   延迟一秒才出，四档色值这种"要对着看"的信息等不起），纯 CSS，无 JS 无原生件。 */
+.credleg { position:relative; font-size:11px; color:var(--ink3); cursor:default; }
+.credleg .credtip { display:none; position:absolute; right:0; bottom:calc(100% + 8px); z-index:20;
+  background:var(--frost); backdrop-filter:blur(var(--frost-blur)) saturate(1.15);
+  -webkit-backdrop-filter:blur(var(--frost-blur)) saturate(1.15);
+  border:1px solid var(--line); border-radius:10px; padding:10px 14px; font-size:12px; color:var(--ink);
+  box-shadow:var(--shadow-lg); white-space:nowrap; line-height:1.9; }
+.credleg:hover .credtip, .credleg:focus-visible .credtip { display:block; }
+.credleg .credtip i { font-style:normal; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:7px; }
+.credleg .credtip .lg-ok { background:var(--ok); } .credleg .credtip .lg-warn { background:var(--warn); }
+.credleg .credtip .lg-err { background:var(--danger); } .credleg .credtip .lg-unk { background:var(--ink3); }
+.credcard .cred-empty { margin:0; padding:11px 2px; font-size:13px; color:var(--ink3); border-top:1px solid var(--line); }
+/* 窄幅：状态句让位换行到第二行，第一行保住 点+名+胶囊+按钮组，按钮不吊在名字屁股后面 */
+@media (max-width:860px) {
+  .credrow { flex-wrap:wrap; }
+  .credrow .cr-stat { flex:1 0 100%; order:5; white-space:normal; }
+  .credrow .cr-act { order:4; }
+}
 /* 全链路自检分组 */
 .eg-head { display:flex; align-items:center; margin-bottom:6px; }
 .envgrp { margin-top:12px; }
@@ -667,7 +827,7 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .envcard .envrow { display:flex; align-items:center; gap:10px; padding:7px 0; font-size:13px; border-bottom:1px solid var(--sect); }
 .envcard .envrow:last-of-type { border-bottom:none; }
 .envcard .ek { width:56px; font-weight:500; }
-.envcard .ev { flex:1; min-width:0; font-family:var(--mono); font-size:11.5px; color:var(--ink2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.envcard .ev { flex:1 1 0; width:0; min-width:0; font-family:var(--mono); font-size:11.5px; color:var(--ink2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } /* width:0 同病同修，见 .prow .pv 上方注释 */
 .envcard .ev.err { color:var(--danger); }
 .poolcard { border-radius:12px; padding:18px 26px 22px; margin-bottom:16px; }
 .poolcard .pr { display:flex; align-items:baseline; gap:16px; }
@@ -724,6 +884,19 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .doc2 p, .doc2 ul { margin:8px 0; }
 .rside { border-radius:16px; padding:22px 26px; margin-bottom:20px; }
 .rside h3 { margin:0 0 6px; font-size:15px; }
+/* 回执轮页签（施工令-034）：返修/自修把每一轮追加进同一个回执文件，此前详情页只渲染最新一轮，
+   旧轮内容在界面上根本不存在（要看只能去翻 .md）。现在每轮一个页签，默认落最新轮。
+   单轮回执不出这套壳——只有一轮时 .rtabs 压根不渲染，那条动线一个像素没变。 */
+.rtabs { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 2px; }
+.rtab { padding:4px 12px; border-radius:99px; border:1px solid var(--line); background:transparent;
+  color:var(--ink3); font-size:11.5px; font-weight:500; cursor:pointer; white-space:nowrap;
+  transition:color 140ms var(--ease-out), border-color 140ms var(--ease-out), background 140ms var(--ease-out); }
+.rtab:hover { color:var(--ink); border-color:var(--ink3); }
+.rtab.on { background:var(--ink); color:var(--paper); border-color:var(--ink); }
+.rtab:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.rtab-pane { display:none; }
+.rtab-pane.on { display:block; }
+@media (prefers-reduced-motion: reduce) { .rtab { transition:none; } }
 .rsec { background:var(--sect); border-radius:12px; padding:12px 22px; margin-top:14px; }
 .rsec .rl { font-size:11px; color:var(--ink3); font-weight:500; }
 .rsec .rv { font-size:12.5px; font-weight:500; margin-top:3px; }
@@ -769,8 +942,6 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
     scrollbar-width:none; display:flex; flex-wrap:nowrap; max-width:100vw; }
   nav.snav::-webkit-scrollbar { display:none; }
   .hubgrid { grid-template-columns:1fr !important; }
-  .stat-strip { flex-wrap:wrap; row-gap:10px; }
-  .stat-strip .vdiv { display:none; }
   .p7grid, .p8grid { grid-template-columns:1fr !important; display:block; }
   .p8grid > div { width:100%; }
   .p8main, .rside, .formcard, .livecard { margin-top:14px; }
@@ -781,7 +952,6 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
   .prow { flex-wrap:wrap; row-gap:6px; }
   .rl-wrap { min-height:calc(100vh - 150px); margin-top:12px; }
   .rl-msg { max-width:94%; }
-  .fl-wrap, .ttools { overflow-x:auto; -webkit-overflow-scrolling:touch; }
   .p6grid, .p5grid, .dgrid, .artgrid { grid-template-columns:1fr !important; display:block; }
 }
 
@@ -801,8 +971,15 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .wk-it { margin:0 0 6px 16px; color:var(--ink2); cursor:pointer; }
 .wk-it:hover { color:var(--ink); }
 .wk-it.cur { color:var(--accent-ink); font-weight:600; }
-.wk-l { color:var(--accent-ink); cursor:pointer; }
+/* 触点地板 ≥26px（W32 补巡 · 施工令-030）：词条内链原先只有一行文字高（~17px），
+   在触屏与小鼠标上都难点。**保持 inline** 只加纵向 padding——行内元素的纵向 padding
+   会撑大命中盒却不改变行盒高度，于是触点够了、正文行距一个像素没动（改 inline-block
+   会把 wiki 正文的段落行距整体拉开，那就越界了）。 */
+.wk-l { color:var(--accent-ink); cursor:pointer; padding:5px 2px; }
 .wk-l:hover { text-decoration:underline; }
+/* 裸引导链（决策台空态「想法池拍板 / 工单池待投区」）：同一条地板，同一种做法 */
+.glink { color:var(--accent-ink); cursor:pointer; padding:5px 2px; }
+.glink:hover { text-decoration:underline; }
 .wk-l.ghost { opacity:.55; border-bottom:1px dashed var(--accent-ink); }
 .wk-body { line-height:1.85; font-size:14px; }
 .wk-body p { margin:0 0 12px; }
@@ -871,9 +1048,7 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 .rl-fold[open] > summary { border-bottom-left-radius:0; border-bottom-right-radius:0; }
 .rl-fold > div { border:1px solid var(--line); border-top:none; border-radius:0 0 10px 10px; padding:12px 16px; }
 
-/* 管线头行（0.23.4）：流程视图两级分组的区块标题 */
-.fl-pipehead { position:absolute; left:8px; right:8px; height:30px; display:flex; align-items:center; gap:8px;
-  font-size:13px; border-bottom:0.5px solid var(--line); padding:0 6px; }
+/* 管线头行（0.23.4）已随施工令-022 退役：管线不再是画布里的一条区块标题，它就是甘特的一整行（.fghead）。 */
 
 /* 施工令-005：在途原地展开区已删（与卡片本体信息重复），整卡点击直达详情页。
    agdIn 关键帧保留——确认层 .ask-ov 仍在用。 */
@@ -906,10 +1081,83 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 /* 下面三条只为压过原「nowrap 单行省略」的更高特指度声明，规则本体仍在 .clamp2 */
 .inbox-row .rt.clamp2 { flex:0 0 170px; white-space:normal; }
 .bcard2 .ct.clamp2 { display:-webkit-box; white-space:normal; }
-.trow2 .tt2.clamp2 { display:-webkit-box; white-space:normal; max-width:300px; }
 
 /* 工程队状态卡（施工令-002）：只读一行卡，无状态文件时整卡不渲染 */
 .crewcard { display:flex; align-items:center; gap:12px; padding:12px 20px; margin-top:16px; }
 .crewcard .cwo { font-size:11px; color:var(--ink3); }
 .crewcard .cwn { font-size:12.5px; color:var(--ink2); max-width:420px; }
 .crewcard .spacer { flex:1; }
+
+/* ===== 挂起（施工令-021 · 制作人裁决权）：全站置灰 + ❄ 徽标 =====
+   语义：挂起是「制作人按下了冻结」，不是坏了也不是没人管——所以用降饱和的冷调，
+   不用告警红。三处渲染（工单池卡 / 在途时间轴段 / 流程视图）共用这一组类，
+   任何新视图只要挂上 .susp 就自动同款，不必各画各的。
+   施工令-022 起流程视图不再有 .fl-node：挂起单在新流程页只出现在沉淀抽屉的 ❄ 类里（.fgsi.susp），
+   现在/接下来两段一律跳过——「全链路跳过」在视图层的兑现。 */
+.susp { filter:grayscale(.85); opacity:.55; }
+.susp:hover { opacity:.8; }
+.bcard2.susp { border-style:dashed; }
+.tlseg.susp { opacity:.35; filter:grayscale(1); }
+.pill.susp-p { background:var(--chip); color:var(--ink3); font-weight:600; letter-spacing:.02em; }
+/* 徽标本身不跟着置灰——它是「为什么灰」的答案，灰掉就白标了 */
+.susp .snowb, .snowb { filter:none; opacity:1; }
+.bcard2 .snowb { font-size:11px; margin-right:4px; }
+
+/* 详情页「已挂起」横幅：顶在最上层，解挂按钮就在横幅里——制作人不必去操作栏里翻 */
+.suspbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 18px;
+  margin-bottom:14px; border-radius:14px; background:var(--chip); border:1px dashed var(--ink3); color:var(--ink2); }
+.suspbar b { font-size:13px; color:var(--ink); }
+.suspbar .sbwho { font-size:12px; color:var(--ink3); }
+.suspbar .sbwhy { font-size:12px; color:var(--ink2); flex-basis:100%; line-height:1.5; }
+.suspbar .sp { flex:1; }
+@media (prefers-reduced-motion: reduce) { .susp:hover { opacity:.55; } }
+
+/* ===== 关键汇报 · 一单一链事件链（施工令-037，制作人 2026-08-09 18:34 批准设计稿）=====
+   语义色三档，全部走既有令牌，不新造色也不写裸 hex（双主题自动跟随）：
+     绿 --ok        = 终态（完成/归档，默认折叠成一行）
+     橙 --now       = 在途（机闸：执行/判官在跑）——全站唯一「此刻正在发生」色，与流程视图现在线同源
+     靛 --accent-ink= 等人闸（人闸：等制作人/总监签字放行）——设计稿夜间那档 #9D93FF 正是本令牌夜值
+   几何：链条一根 2px 竖线 + 每站一颗圆点，与 .logrow 同一时间列宽（52px）以求列对齐。 */
+.kchain { margin-top:12px; }
+.kitem { border-top:1px solid var(--line); padding:8px 2px; }
+.kitem:first-child { border-top:0; }
+.khead { display:flex; align-items:center; gap:10px; cursor:pointer; padding:3px 2px; border-radius:8px;
+  transition:background .16s var(--ease-out); }
+.khead:hover { background:var(--sect); }
+.karrow { color:var(--ink3); font-size:11px; width:10px; flex:none; }
+.kid { font-weight:600; font-family:var(--mono); font-size:12.5px; color:var(--ink); text-decoration:none; flex:none; }
+.kid:hover { color:var(--accent); text-decoration:underline; }
+.ktitle { color:var(--ink2); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:13px; }
+.kst { font-size:11px; border-radius:999px; padding:2px 10px; flex:none; font-weight:600; white-space:nowrap; }
+.kst.done { background:var(--okbg); color:var(--ok); }
+.kst.doing { background:var(--nowtint); color:var(--now); }
+.kst.wait { background:var(--accenttint); color:var(--accent-ink); }
+/* 折叠：只藏链体，头行永远在（完成单折一行 = 一行说清「什么时候被谁收的」） */
+.kbody { display:none; }
+.kitem.open .kbody { display:block; }
+.kline { margin:8px 0 4px 6px; padding-left:14px; border-left:2px solid var(--line); }
+.kstep { position:relative; padding:3px 0 3px 10px; font-size:12.5px; color:var(--ink2); line-height:1.55; }
+.kstep::before { content:''; position:absolute; left:-19px; top:10px; width:8px; height:8px; border-radius:50%;
+  background:var(--ok); }
+.kstep .kt { color:var(--ink3); font-family:var(--mono); font-size:11.5px; display:inline-block;
+  width:52px; flex:none; }
+.kstep .kx { color:var(--ink); }
+.kstep .kwhy { color:var(--ink3); }
+/* 现在行：橙点带光晕——「此刻停在哪」必须一眼跳出来 */
+.kstep.now { color:var(--now); }
+.kstep.now .kx, .kstep.now .kt { color:var(--now); font-weight:600; }
+.kstep.now::before { background:var(--now); box-shadow:0 0 0 3px var(--nowtint); }
+.kstep.fin::before { background:var(--ok); box-shadow:0 0 0 3px var(--okbg); }
+.kstep.fin .kx { color:var(--ok); font-weight:600; }
+/* 缺站行：如实说「没有就是没有」，不伪装成一个站 */
+.kstep.kmiss { color:var(--ink3); font-style:italic; }
+.kstep.kmiss::before { background:var(--line); }
+/* 尾端「现在等什么」：人闸靛、机闸橙——颜色本身就在回答「该我动手了吗」 */
+.kfoot { font-size:12px; padding:6px 0 2px 10px; margin-left:6px; }
+.kfoot.human { color:var(--accent-ink); }
+.kfoot.mach { color:var(--now); }
+.kfoot b { font-weight:600; }
+@media (max-width:720px) {
+  .ktitle { display:none; } /* 窄屏先舍标题：单号与徽章是最小可用信息 */
+  .kstep .kt { width:44px; }
+}

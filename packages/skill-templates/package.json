@@ -1,0 +1,10 @@
+{
+  "name": "@ticketflow/skill-templates",
+  "version": "0.1.0",
+  "private": true,
+  "description": "执行技能模板（通用契约核）：pre-work 开工检查 / post-work 收工汇报 两份 SKILL.md。产品专有取证细则作叠加层放各家私域，不进本包。",
+  "scripts": {
+    "test": "node -e \"const fs=require('fs');['pre-work/SKILL.md','post-work/SKILL.md'].forEach(p=>{if(!fs.statSync(require('path').join(__dirname,p)).size)throw new Error(p+' 空文件')});console.log('纯文档包：两份 SKILL.md 在位非空（无可执行逻辑，无更多测试）')\""
+  },
+  "author": "suxing412"
+}

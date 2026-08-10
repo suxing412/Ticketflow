@@ -26,10 +26,26 @@ function titleWarnings(title) {
   return w;
 }
 
+// 管线归属（TK-106~116 案，2026-08-09）：整条地图施工链漏写管线章，全堆进看板「散单」行，制作人亲自抓出。
+// 归属可继承（口径同 pipelines.pipelineOf）：本单没写就沿父链上溯，父链上有章即算有归属。
+// 只警示不拦截——存量单与确无归属的独立杂务照过。root 缺省时只查本单（不误报父链继承的子单需传 root）。
+function 管线Warnings(t, root) {
+  let c = t; let g = 0;
+  while (c && c.fm && g++ < 10) {
+    if (String(c.fm.管线 || '').trim()) return [];
+    const 父 = c.fm.父单;
+    c = (root && 父) ? store.find(root, String(父)) : null;
+  }
+  return ['缺管线归属（frontmatter 管线: P-#）：本单与父链都没写，看板会把它堆进「散单」行——TK-106~116 漏章案'];
+}
+
 // 预检警示：不拦截定稿，只随结果回报 + 落流水
-function warnings(t) {
+function warnings(t, root) {
   if (!t) return [];
-  return titleWarnings(t.fm && t.fm.title); // 标题规范适用全部单型（含专项/父单/机制单）
+  return [
+    ...titleWarnings(t.fm && t.fm.title), // 标题规范适用全部单型（含专项/父单/机制单）
+    ...管线Warnings(t, root),
+  ];
 }
 
 // 预检错误：任一条命中即拦截定稿
@@ -61,4 +77,4 @@ function preflight(root, t, cfg2) {
   return errs;
 }
 
-module.exports = { preflight, warnings, titleWarnings, 标题上限, 职能表, 基础职能 };
+module.exports = { preflight, warnings, titleWarnings, 管线Warnings, 标题上限, 职能表, 基础职能 };

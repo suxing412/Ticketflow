@@ -28,6 +28,7 @@ function readySet(root, crit) {
   for (const t of store.list(root, '待投')) {
     if (!t.fm.放行) continue;
     if (t.fm.待复核) continue; // 挂起旗同样拦派发（2026-08-05 推演补漏：此前只拦断点续跑）
+    if (t.fm.挂起) continue;   // 施工令-021：制作人原位冻结的单不进就绪队列——零派发计数亦据此不把它算作「该派没派」
     if (!depsDone(root, t)) continue;
     out.push({ id: t.id, 职能: t.fm.职能, 优先级: t.fm.优先级 || 'P2', 执行池: t.fm.执行池 || null, // 池章直通（0.22.2：兼容池评测单盖章曾被 poolFor 覆盖）
       红链: crit ? crit.has(t.id) : false, 创建时间: t.fm.创建时间 || '' });
