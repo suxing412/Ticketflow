@@ -3,15 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI-DevPlatform · 仪表盘</title>
+<title>AI-DevPlatform · 驾驶舱</title>
 <style>
-  :root { --墨: #24292f; --灰: #6a737d; --线: #d8dee4; --底: #f6f8fa; --绿: #1a7f37; --红: #cf222e; }
+  :root { --墨: #24292f; --灰: #6a737d; --线: #d8dee4; --底: #f6f8fa; --绿: #1a7f37; --红: #cf222e; --黄: #9a6700; --蓝: #0969da; }
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 24px; font: 14px/1.6 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--墨); background: #fff; max-width: 880px; margin-inline: auto; }
+  body { margin: 0; padding: 24px; font: 14px/1.6 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--墨); background: #fff; max-width: 1100px; margin-inline: auto; }
   h1 { font-size: 20px; margin: 0 0 4px; }
-  h2 { font-size: 15px; margin: 28px 0 8px; border-bottom: 1px solid var(--线); padding-bottom: 6px; }
+  h2 { font-size: 15px; margin: 28px 0 8px; border-bottom: 1px solid var(--线); padding-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+  h2 .右 { margin-left: auto; font-weight: 400; font-size: 12px; }
   .淡 { color: var(--灰); }
   .徽 { display: inline-block; font-size: 12px; padding: 1px 8px; border: 1px solid var(--线); border-radius: 10px; color: var(--灰); margin-left: 8px; vertical-align: 2px; }
+  .徽.危 { color: var(--红); border-color: var(--红); }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--线); vertical-align: top; }
   th { font-weight: 600; background: var(--底); }
@@ -19,32 +21,110 @@
   .灯.绿 { background: var(--绿); } .灯.红 { background: var(--红); }
   button { font: inherit; font-size: 13px; padding: 2px 10px; border: 1px solid var(--线); border-radius: 6px; background: var(--底); cursor: pointer; }
   button:hover { background: #eef1f4; }
-  pre { background: var(--底); border: 1px solid var(--线); border-radius: 6px; padding: 10px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.主 { background: var(--蓝); color: #fff; border-color: var(--蓝); }
+  button.危 { border-color: var(--红); color: var(--红); }
+  pre { background: var(--底); border: 1px solid var(--线); border-radius: 6px; padding: 10px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 380px; }
   code { background: var(--底); border: 1px solid var(--线); border-radius: 4px; padding: 0 4px; font-size: 12px; }
   ul.账本 { list-style: none; padding: 0; margin: 0; }
   ul.账本 li { padding: 5px 0; border-bottom: 1px dashed var(--线); font-size: 13px; }
   .级急 { color: var(--红); font-weight: 600; margin-right: 6px; }
   .级常 { color: var(--灰); margin-right: 6px; }
+  .态 { display: inline-block; font-size: 12px; padding: 0 8px; border-radius: 10px; border: 1px solid var(--线); }
+  .态.草稿 { color: var(--灰); } .态.待投 { color: var(--蓝); border-color: var(--蓝); }
+  .态.在途 { color: var(--黄); border-color: var(--黄); } .态.完成 { color: var(--绿); border-color: var(--绿); }
+  .列 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 820px) { .列 { grid-template-columns: 1fr; } }
+  .卡 { border: 1px solid var(--线); border-radius: 8px; padding: 12px 14px; }
+  .卡 .数 { font-size: 22px; font-weight: 600; }
+  .栏 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+  input, select, textarea { font: inherit; font-size: 13px; padding: 3px 8px; border: 1px solid var(--线); border-radius: 6px; }
+  textarea { width: 100%; min-height: 90px; }
+  .提示 { font-size: 12px; color: var(--灰); margin-top: 4px; }
 </style>
 </head>
 <body>
 
-<h1 id="标题">AI-DevPlatform<span class="徽">桩模式 · 零真实 CLI 调用</span></h1>
+<h1 id="标题">AI-DevPlatform<span class="徽" id="模式徽">读取中…</span></h1>
 <div class="淡" id="健康行">开机检查中…</div>
 
-<h2>瞭望塔在岗灯</h2>
-<div><span id="灯" class="灯"></span><span id="灯文">读取中…</span></div>
-<div class="淡" id="灯注"></div>
+<!-- ── 工单看板：这是产品的主界面，放最上面 ── -->
+<h2>工单看板<span class="右 淡" id="工单来源"></span></h2>
+<div class="栏">
+  <span class="淡">按状态：</span>
+  <select id="滤状态"><option value="">全部</option><option>草稿</option><option>待投</option><option>在途</option><option>完成</option></select>
+  <button onclick="刷工单()">刷新</button>
+  <button onclick="开建单()">＋ 新建工单</button>
+</div>
+<table>
+  <thead><tr><th>编号</th><th>状态</th><th>角色</th><th>标题</th><th>项目</th><th>执行池</th><th>操作</th></tr></thead>
+  <tbody id="工单体"><tr><td colspan="7" class="淡">读取中…</td></tr></tbody>
+</table>
 
-<h2>Providers（枚举自仓根 packages/providers）</h2>
+<div id="建单区" style="display:none">
+  <h2>新建工单</h2>
+  <div class="栏">
+    <input id="新编号" placeholder="编号 如 T-1" size="12">
+    <select id="新角色"></select>
+    <input id="新标题" placeholder="标题" size="30">
+    <input id="新项目" placeholder="项目（留空则只跑不提交）" size="22">
+  </div>
+  <textarea id="新正文" placeholder="## 范围&#10;要做什么&#10;&#10;## 不要做&#10;- …&#10;&#10;## 验收标准&#10;- [ ] …"></textarea>
+  <div class="栏">
+    <button class="主" onclick="建单()">建单（落草稿）</button>
+    <button onclick="document.getElementById('建单区').style.display='none'">取消</button>
+    <span class="淡" id="建单反馈"></span>
+  </div>
+  <div class="提示">带「项目」的工单执行时会走完整提交链（隔离 worktree → 检查点 → 快进发布 → 完成）；不带则只跑不提交。</div>
+</div>
+
+<!-- ── 运行结果 ── -->
+<div id="运行区" style="display:none">
+  <h2>运行结果<span class="右"><button onclick="document.getElementById('运行区').style.display='none'">收起</button></span></h2>
+  <pre id="运行"></pre>
+</div>
+
+<div class="列">
+  <div>
+    <!-- ── 路由排名 ── -->
+    <h2>路由排名<span class="右 淡" id="区分度"></span></h2>
+    <div class="栏">
+      <span class="淡">角色：</span><select id="排名角色" onchange="刷排名()"></select>
+    </div>
+    <table>
+      <thead><tr><th>Provider</th><th>分数</th><th>理由</th></tr></thead>
+      <tbody id="排名体"><tr><td colspan="3" class="淡">读取中…</td></tr></tbody>
+    </table>
+    <div class="提示" id="排名说明"></div>
+  </div>
+
+  <div>
+    <!-- ── 预算与战绩 ── -->
+    <h2>战绩与预算</h2>
+    <div class="栏">
+      <div class="卡"><div class="淡">真实运行</div><div class="数" id="真跑数">—</div></div>
+      <div class="卡"><div class="淡">干跑</div><div class="数" id="干跑数">—</div></div>
+      <div class="卡"><div class="淡">成功率</div><div class="数" id="成功率">—</div></div>
+    </div>
+    <table>
+      <thead><tr><th>时刻</th><th>Provider</th><th>工单</th><th>结果</th><th>耗时</th></tr></thead>
+      <tbody id="战绩体"><tr><td colspan="5" class="淡">读取中…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Providers ── -->
+<h2>Providers<span class="右 淡">枚举自仓根 packages/providers</span></h2>
 <table>
   <thead><tr><th>名称</th><th>adapter</th><th>启用</th><th>说明</th><th>操作</th></tr></thead>
   <tbody id="表体"><tr><td colspan="5" class="淡">读取中…</td></tr></tbody>
 </table>
-<div id="回声区" style="display:none">
-  <h2>echo 桩调用结果</h2>
-  <pre id="回声"></pre>
-</div>
+<div id="回声区" style="display:none"><pre id="回声"></pre></div>
+
+<!-- ── 瞭望塔 ── -->
+<h2>瞭望塔在岗灯</h2>
+<div><span id="灯" class="灯"></span><span id="灯文">读取中…</span></div>
+<div class="淡" id="灯注"></div>
 
 <h2>未读账本 <span class="淡" id="账本计数"></span></h2>
 <ul class="账本" id="账本"><li class="淡">读取中…</li></ul>
@@ -52,51 +132,137 @@
 <script>
 'use strict';
 const $ = (id) => document.getElementById(id);
-const 万 = (n) => (n == null ? '—' : Math.round(n / 1000) + 's');
+const 秒 = (n) => (n == null ? '—' : Math.round(n / 1000) + 's');
+const 转义 = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const 取JSON = (u, o) => fetch(u, o).then((r) => r.json().then((j) => ({ 码: r.status, 体: j })));
 
+// ── 健康 ──
 async function 刷健康() {
   try {
-    const j = await fetch('/api/health').then((r) => r.json());
+    const { 体: j } = await 取JSON('/api/health');
     $('标题').firstChild.textContent = j.平台 + ' v' + j.版本;
-    document.title = j.平台 + ' · 仪表盘';
-    $('健康行').textContent = '服务在线 · 端口 ' + j.端口 + ' · ' + j.时刻;
-  } catch { $('健康行').textContent = '服务不可达'; }
+    $('模式徽').textContent = j.桩模式 ? '本体桩模式 · server 不起进程' : '未知';
+    $('健康行').textContent = '服务在线 · 端口 ' + j.端口 + ' · 公用件 ' + j.公用件 + ' · ' + j.时刻;
+  } catch { $('健康行').innerHTML = '<span class="级急">服务不可达</span>'; }
 }
 
-async function 刷瞭望塔() {
+// ── 工单看板 ──
+async function 刷工单() {
+  const 滤 = $('滤状态').value;
   try {
-    const j = await fetch('/api/watchtower').then((r) => r.json());
-    const 心 = j.心跳 || {};
-    const 灯 = $('灯');
-    if (心.在岗) {
-      灯.className = '灯 绿';
-      $('灯文').textContent = '在岗 · 心跳戳 ' + 心.时刻 + '（' + 万(心.毫秒龄) + ' 前）';
-      $('灯注').textContent = '';
-    } else {
-      灯.className = '灯 红';
-      $('灯文').textContent = '离岗 · ' + (心.存在 ? ('心跳戳已停更 ' + 万(心.毫秒龄)) : (心.说明 || '未见心跳戳'));
-      $('灯注').textContent = '拉起：' + (j.拉起命令 || 'npm run watchtower');
+    const { 码, 体: j } = await 取JSON('/api/tickets' + (滤 ? '?state=' + encodeURIComponent(滤) : ''));
+    if (码 === 503) {
+      // 未配工单库根是**最常见的首次使用障碍**，直接把修法摆在界面上，
+      // 而不是让人去翻日志或文档。
+      $('工单体').innerHTML = '<tr><td colspan="7"><span class="级急">工单库未配置</span><div class="提示">' + 转义(j.error) + '</div></td></tr>';
+      $('工单来源').textContent = '';
+      return;
     }
-    const 账 = j.未读 || { 总数: 0, 条目: [] };
-    $('账本计数').textContent = '（共 ' + 账.总数 + ' 条，示最近 ' + 账.条目.length + '）';
-    $('账本').innerHTML = 账.条目.length
-      ? 账.条目.slice().reverse().map((e) => {
-          const 级 = e.级别 || e.级 || '常';
-          const 正文 = e.文本 || e.正文 || e.摘要 || e.原文 || JSON.stringify(e);
-          const 时 = e.t || e.时刻 || e.at || '';
-          return '<li><span class="' + (级 === '急' ? '级急' : '级常') + '">[' + 级 + ']</span>'
-            + 转义(String(正文)) + ' <span class="淡">' + 转义(String(时)) + '</span></li>';
-        }).join('')
-      : '<li class="淡">暂无未读</li>';
-  } catch { $('灯文').textContent = '读取失败'; }
+    $('工单来源').textContent = j.根目录 || '';
+    if (!j.工单 || !j.工单.length) { $('工单体').innerHTML = '<tr><td colspan="7" class="淡">还没有工单</td></tr>'; return; }
+    const 序 = { 草稿: 0, 待投: 1, 在途: 2, 完成: 3 };
+    j.工单.sort((a, b) => (序[a.state] - 序[b.state]) || a.id.localeCompare(b.id));
+    $('工单体').innerHTML = j.工单.map((t) => {
+      const f = t.fm || {};
+      const 可派 = t.state === '待投';
+      const 可投 = t.state === '草稿';
+      return '<tr><td><code>' + 转义(t.id) + '</code></td>'
+        + '<td><span class="态 ' + 转义(t.state) + '">' + 转义(t.state) + '</span></td>'
+        + '<td>' + 转义(f.role || f.职能 || '') + '</td>'
+        + '<td>' + 转义(f.title || '') + '</td>'
+        + '<td>' + 转义(f.项目 || '') + '</td>'
+        + '<td>' + 转义(f.执行池 || '') + '</td>'
+        + '<td>'
+        + (可投 ? '<button onclick="迁移(\'' + 转义(t.id) + '\',\'待投\')">投出</button> ' : '')
+        + (可派 ? '<button onclick="跑(\'' + 转义(t.id) + '\',true)">干跑</button> '
+                + '<button class="危" onclick="跑(\'' + 转义(t.id) + '\',false)">真跑（花钱）</button>' : '')
+        + '</td></tr>';
+    }).join('');
+  } catch (e) { $('工单体').innerHTML = '<tr><td colspan="7" class="级急">工单接口不可达</td></tr>'; }
 }
 
-function 转义(s) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+async function 迁移(id, 到) {
+  const { 体: j } = await 取JSON('/api/tickets/' + encodeURIComponent(id) + '/move', {
+    method: 'POST', body: JSON.stringify({ 到 }),
+  });
+  if (!j.ok) alert('流转失败：' + j.error);
+  刷工单();
+}
 
+async function 跑(id, 干跑) {
+  // 真跑要花钱，且可能改目标仓——多问一句。前端确认不是安全边界（服务端三闸才是），
+  // 但它挡得住手滑，而手滑是这里最可能发生的事。
+  if (!干跑 && !confirm('真跑会调用 AI CLI、产生费用，若工单带「项目」还会在目标仓提交并合并。\n\n工单：' + id + '\n\n确定继续？')) return;
+  $('运行区').style.display = '';
+  $('运行').textContent = (干跑 ? '干跑' : '真跑') + '中…（真跑可能要几十秒）';
+  try {
+    const { 体: j } = await 取JSON('/api/exec/run/' + encodeURIComponent(id), {
+      method: 'POST', body: JSON.stringify({ 干跑 }),
+    });
+    $('运行').textContent = JSON.stringify(j, null, 2);
+  } catch (e) { $('运行').textContent = '调用失败：' + e.message; }
+  刷工单(); 刷战绩(); 刷排名();
+}
+
+function 开建单() {
+  $('建单区').style.display = '';
+  $('新编号').focus();
+}
+
+async function 建单() {
+  const id = $('新编号').value.trim();
+  if (!id) { $('建单反馈').textContent = '要有编号'; return; }
+  const fm = { id, role: $('新角色').value, title: $('新标题').value.trim() };
+  const 项目 = $('新项目').value.trim();
+  if (项目) fm.项目 = 项目;
+  const { 体: j } = await 取JSON('/api/tickets', {
+    method: 'POST', body: JSON.stringify({ id, fm, 正文: $('新正文').value }),
+  });
+  $('建单反馈').textContent = j.ok ? '已落草稿' : ('失败：' + j.error);
+  if (j.ok) { $('新编号').value = ''; $('新标题').value = ''; $('新正文').value = ''; 刷工单(); }
+}
+
+// ── 路由排名 ──
+async function 刷排名() {
+  const 角色 = $('排名角色').value;
+  try {
+    const { 体: j } = await 取JSON('/api/routing/rank?role=' + encodeURIComponent(角色));
+    $('区分度').innerHTML = j.有区分度
+      ? '<span style="color:var(--绿)">有区分度</span>'
+      : '<span style="color:var(--黄)">无区分度</span>';
+    $('排名说明').textContent = j.说明 || '';
+    $('排名体').innerHTML = (j.排名 || []).map((r, i) =>
+      '<tr><td>' + (i === 0 ? '<b>' + 转义(r.名称) + '</b>' : 转义(r.名称)) + '</td><td>' + r.分数
+      + '</td><td class="淡">' + 转义((r.理由 || []).join('　')) + '</td></tr>').join('')
+      || '<tr><td colspan="3" class="淡">无候选</td></tr>';
+  } catch { $('排名体').innerHTML = '<tr><td colspan="3" class="级急">路由接口不可达</td></tr>'; }
+}
+
+// ── 战绩 ──
+async function 刷战绩() {
+  try {
+    const { 体: j } = await 取JSON('/api/routing/history?limit=50');
+    const 记 = j.记录 || [];
+    const 真 = 记.filter((x) => !x.dry);
+    const 干 = 记.filter((x) => x.dry);
+    $('真跑数').textContent = 真.length;
+    $('干跑数').textContent = 干.length;
+    // 成功率只算真跑：干跑必然成功，混进去这个数就没意义了
+    $('成功率').textContent = 真.length ? Math.round(真.filter((x) => x.ok).length / 真.length * 100) + '%' : '—';
+    $('战绩体').innerHTML = 记.slice(-12).reverse().map((x) =>
+      '<tr><td class="淡">' + 转义(String(x.at || '').slice(5, 19).replace('T', ' ')) + '</td>'
+      + '<td>' + 转义(x.provider) + '</td><td><code>' + 转义(x.ticket || '') + '</code></td>'
+      + '<td>' + (x.dry ? '<span class="淡">干跑</span>' : (x.ok ? '<span style="color:var(--绿)">成</span>' : '<span class="级急">败</span>'))
+      + '</td><td class="淡">' + 秒(x.durationMs) + '</td></tr>').join('')
+      || '<tr><td colspan="5" class="淡">还没有运行记录</td></tr>';
+  } catch { $('战绩体').innerHTML = '<tr><td colspan="5" class="级急">战绩接口不可达</td></tr>'; }
+}
+
+// ── Providers ──
 async function 刷providers() {
   try {
-    const j = await fetch('/api/providers').then((r) => r.json());
-    if (!j.ok) { $('表体').innerHTML = '<tr><td colspan="5" class="级急">' + 转义(j.error || '加载失败') + '</td></tr>'; return; }
+    const { 体: j } = await 取JSON('/api/providers');
+    if (!j.ok) { $('表体').innerHTML = '<tr><td colspan="5" class="级急">' + 转义(j.error) + '</td></tr>'; return; }
     $('表体').innerHTML = j.providers.map((p) =>
       '<tr><td><code>' + 转义(p.名称) + '</code></td><td>' + 转义(p.adapter || '') + '</td><td>' + (p.启用 ? '✔' : '✘')
       + '</td><td class="淡">' + 转义(p.说明 || '') + '</td><td><button onclick="回声测(\'' + 转义(p.名称) + '\')">echo 桩测</button></td></tr>'
@@ -108,15 +274,38 @@ async function 回声测(名) {
   $('回声区').style.display = '';
   $('回声').textContent = '调用中…';
   try {
-    const j = await fetch('/api/providers/echo', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: 名, prompt: 'echo：交钥匙壳联测 ' + new Date().toISOString() }),
-    }).then((r) => r.json());
+    const { 体: j } = await 取JSON('/api/providers/echo', {
+      method: 'POST', body: JSON.stringify({ provider: 名, prompt: 'echo 联测 ' + new Date().toISOString() }),
+    });
     $('回声').textContent = JSON.stringify(j, null, 2);
   } catch (e) { $('回声').textContent = '调用失败：' + e.message; }
 }
 
-刷健康(); 刷providers(); 刷瞭望塔();
+// ── 瞭望塔 ──
+async function 刷瞭望塔() {
+  try {
+    const { 体: j } = await 取JSON('/api/watchtower');
+    const 在 = j.心跳 && j.心跳.在岗;
+    $('灯').className = '灯 ' + (在 ? '绿' : '红');
+    $('灯文').textContent = 在 ? '在岗' : '离岗';
+    $('灯注').textContent = (j.心跳 && j.心跳.说明) || (j.拉起命令 ? '拉起：' + j.拉起命令 : '');
+    const 未 = j.未读 || { 总数: 0, 条目: [] };
+    $('账本计数').textContent = '（共 ' + 未.总数 + ' 条）';
+    $('账本').innerHTML = (未.条目 || []).slice(-10).reverse().map((c) =>
+      '<li><span class="' + (c.级别 === '急' ? '级急' : '级常') + '">' + 转义(c.级别 || '常') + '</span>' + 转义(c.摘要 || c.原文 || JSON.stringify(c)) + '</li>'
+    ).join('') || '<li class="淡">暂无未读</li>';
+  } catch { $('灯文').textContent = '读取失败'; }
+}
+
+// ── 角色下拉：从 /api/health 拿不到，用固定词表（与 plan.js 契约一致）──
+const 角色表 = ['backend', 'frontend', 'integrator', 'reviewer', 'orchestrator'];
+for (const 选 of ['新角色', '排名角色']) {
+  $(选).innerHTML = 角色表.map((r) => '<option>' + r + '</option>').join('');
+}
+$('排名角色').value = 'backend';
+$('滤状态').onchange = 刷工单;
+
+刷健康(); 刷工单(); 刷排名(); 刷战绩(); 刷providers(); 刷瞭望塔();
 setInterval(刷瞭望塔, 5000);
 setInterval(刷健康, 30000);
 </script>

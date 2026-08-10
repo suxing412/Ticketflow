@@ -1,0 +1,11 @@
+{
+  "_说明": [
+    "改名为 预算.local.json 即生效（不入库）。口径见 packages/budget/README.md。",
+    "日token/月token 是保险丝不是财务系统，宁可早刹一点。",
+    "没在这里配上限的池，一律不许真跑——这是第三道闸，独立于总开关。",
+    "注意 codex 取不到 usage（非 stream-json），给它配上限也不会累计，见 budget README。"
+  ],
+  "池": {
+    "claude": { "日token": 200000 }
+  }
+}

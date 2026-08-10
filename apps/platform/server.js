@@ -13,7 +13,10 @@
 //   orchestration/plan                                              纯计算那半已接（store 改注入）
 //   workspace/worktree   引 child_process，**不进本文件的依赖闭包**——它住独立进程
 //                        scripts/工作区服务.js，本文件只用 http 转发过去。
-// 全部台账见 docs/接线说明.md 第四、六节。
+//   执行加固 / 派单       同理**隔离**进 scripts/执行器.js。它们自身是纯计算，
+//                        但只服务于「拉起 AI CLI」那条链，跟着能力走比跟着纯度走更清楚：
+//                        谁要用它们，谁就得先有那个能力面。本文件只转发 /api/exec/*。
+// 全部台账见 docs/接线说明.md 第四、六、八节。
 //
 // providers 消费走仓根 packages/providers（@papercrew/providers），
 // 换布局时用环境变量 TICKETFLOW_PACKAGES 指向 packages/。
@@ -49,11 +52,19 @@ const 工单根 = 工单库.解析根目录(仓根);
 function 读JSON(p, 缺省) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return 缺省; }
 }
-const 配置 = 读JSON(path.join(仓根, 'config', 'platform.config.json'), {});
+// 危险开关只能从 config/*.local.json 打开——那些文件被 .gitignore 结构性挡住。
+// server 侧也要走同一套合并，否则它看到的配置与执行器不一致（比如工作区写开关），
+// 两个进程对同一份事实各执一词，是最难查的那类 bug。
+const 本地覆盖 = require('./lib/本地覆盖');
+const { 配置, 生效的覆盖 } = 本地覆盖.应用(仓根, 读JSON(path.join(仓根, 'config', 'platform.config.json'), {}));
 const 包 = 读JSON(path.join(仓根, 'package.json'), {});
 const 端口 = Number(process.env.PORT || (配置.server && 配置.server.port) || 4370);
 const { 令牌, 文件: 令牌路径, 新建: 令牌新建 } = 门禁.取令牌(仓根);
 const 工作区端口 = Number(process.env.WORKSPACE_PORT || (配置.workspace && 配置.workspace.port) || 4371);
+const 执行器端口 = Number(process.env.EXECUTOR_PORT || (配置.执行 && 配置.执行.port) || 4372);
+// 战绩账本根：必须与执行器写入的那个根一致，否则 rank 读不到执行器写的战绩，闭环断掉。
+// 环境变量只为测试隔离——改它必须两边同时改。
+const 账本根 = process.env.PLATFORM_JOURNAL || 仓根;
 const 平台名 = 配置.名称 || 包.name || 'AI-DevPlatform';
 const 版本 = 配置.版本 || 包.version || '0.0.0';
 
@@ -218,7 +229,7 @@ const 服务 = http.createServer((req, res) => {
     try {
       const 角色 = 查询.get('role') || 查询.get('角色') || '';
       const 类别 = 查询.get('kind') || 查询.get('类别') || '执行';
-      const 排名 = 路由器.rankProviders(仓根, 配置, { role: 角色, kind: 类别 });
+      const 排名 = 路由器.rankProviders(账本根, 配置, { role: 角色, kind: 类别 });
       // 全平局要**说出来**。否则调用方会把「按字母序排第一」误当成「评估下来最优」，
       // 那比没有排名更危险——它看起来像个判断，实际上一点信号都没有。
       const 无区分度 = 排名.length > 1 && 排名.every((r) => r.score === 排名[0].score);
@@ -243,14 +254,14 @@ const 服务 = http.createServer((req, res) => {
     try {
       const 上限 = Math.min(Math.max(Number(查询.get('limit')) || 50, 1), 500);
       const 角色 = 查询.get('role') || 查询.get('角色') || '';
-      const 记录 = 路由历史.read(仓根, 上限);
+      const 记录 = 路由历史.read(账本根, 上限);
       const 汇总 = {};
       if (角色 && registry) {
-        for (const p of registry.list(配置)) 汇总[p.name] = 路由历史.summary(仓根, p.name, 角色);
+        for (const p of registry.list(配置)) 汇总[p.name] = 路由历史.summary(账本根, p.name, 角色);
       }
       return 发JSON(res, 200, {
         ok: true,
-        账本: 路由历史.historyPath(仓根),
+        账本: 路由历史.historyPath(账本根),
         条数: 记录.length,
         ...(角色 ? { 角色, 汇总 } : {}),
         记录,
@@ -387,6 +398,32 @@ const 服务 = http.createServer((req, res) => {
         });
       } catch (e) { return 发JSON(res, 400, { ok: false, error: e.message }); }
     });
+  }
+
+  // ——— 执行链：转发给执行器进程，本文件绝不自己拉起 AI CLI ———
+  // 与 /api/workspace 同一套路：能起进程的能力住独立进程，这里只用 http。
+  // 两个隔离进程各管一种能力（git / AI CLI），可以单独关掉其中任意一个。
+  if (url路径.startsWith('/api/exec/')) {
+    const 尾 = url路径.slice('/api/exec'.length);
+    const 代理 = http.request({
+      host: '127.0.0.1', port: 执行器端口, method: req.method,
+      path: 尾 + (请求URL.search || ''),
+      headers: { Authorization: `Bearer ${令牌}`, 'Content-Type': 'application/json' },
+    }, (上游) => {
+      let s = '';
+      上游.on('data', (d) => s += d);
+      上游.on('end', () => {
+        try { return 发JSON(res, 上游.statusCode, JSON.parse(s)); }
+        catch { return 发JSON(res, 502, { ok: false, error: '执行器返回了非 JSON 内容' }); }
+      });
+    });
+    代理.on('error', () => 发JSON(res, 503, {
+      ok: false,
+      error: `执行器未在 127.0.0.1:${执行器端口} 应答。它默认不随本服务启动——`
+        + '手动拉起：npm run executor。它是唯一被允许拉起 AI CLI 的地方，本服务自己不碰 child_process。',
+    }));
+    req.pipe(代理);
+    return;
   }
 
   // ——— 工作区：转发给隔离进程，本文件绝不自己起 git ———

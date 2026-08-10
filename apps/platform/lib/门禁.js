@@ -24,6 +24,14 @@ const fs = require('fs');
 const path = require('path');
 
 const 令牌文件 = (仓根) => path.join(仓根, 'config', '接口令牌.local.json');
+// 明文副本，纯 ASCII 路径 + 纯 ASCII 内容（只有 64 位十六进制，无换行歧义）。
+//
+// 为什么非要多一个文件：Windows PowerShell 5.1 的 Get-Content 按系统 ANSI 码页读文件，
+// 上面那份 JSON 里有中文键（_说明/令牌/生成于），GBK 解 UTF-8 直接把整个 JSON 读坏，
+// ConvertFrom-Json 当场失败——**在 JSON 里加个 token 别名救不了，因为坏的是整份文件**。
+// 实测两次才定位到这一点（2026-08-10）。明文文件让 PowerShell 一句话拿到令牌：
+//   $T = Get-Content config\api-token.txt
+const 明文令牌文件 = (仓根) => path.join(仓根, 'config', 'api-token.txt');
 // 免令牌路径。加条目前先问一句：这条接口泄露什么、能改什么。
 const 免令牌 = new Set(['/api/health']);
 
@@ -33,13 +41,24 @@ function 取令牌(仓根) {
   const 文件 = 令牌文件(仓根);
   try {
     const 旧 = JSON.parse(fs.readFileSync(文件, 'utf8'));
-    if (typeof 旧.令牌 === 'string' && /^[0-9a-f]{64}$/.test(旧.令牌)) return { 令牌: 旧.令牌, 文件, 新建: false };
+    // 两个键都认：老文件只有 令牌，新文件两者都有。读哪个都行，值相同。
+    const 值 = 旧.令牌 || 旧.token;
+    if (typeof 值 === 'string' && /^[0-9a-f]{64}$/.test(值)) {
+      // 老装机没有明文副本，补写一次（不改令牌值，已存的 curl 别名仍有效）
+      try { if (!fs.existsSync(明文令牌文件(仓根))) fs.writeFileSync(明文令牌文件(仓根), 值, 'utf8'); } catch { /* 非致命 */ }
+      return { 令牌: 值, 文件, 新建: false };
+    }
   } catch { /* 不存在或坏了，重新生成 */ }
   const 令牌 = crypto.randomBytes(32).toString('hex');
   try {
     fs.mkdirSync(path.dirname(文件), { recursive: true });
     fs.writeFileSync(文件, JSON.stringify({
       _说明: '本机接口令牌。删掉本文件并重启服务即可轮换。已被 .gitignore 挡住，不入库。',
+      // token 是 令牌 的 ASCII 别名，两个字段值相同。
+      // 为什么要这个别名：Windows PowerShell 5.1 的 Get-Content 按系统 ANSI 码页读文件，
+      // 读 UTF-8 的中文键会乱码 → ConvertFrom-Json 直接失败。实测踩过（2026-08-10）。
+      // 有了 token，PowerShell 至少能靠它取到值；中文键保留，不破坏既有读法。
+      token: 令牌,
       令牌,
       生成于: new Date().toISOString(),
     }, null, 2) + '\n', 'utf8');

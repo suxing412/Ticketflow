@@ -7,18 +7,35 @@
   ],
   "名称": "AI-DevPlatform",
   "版本": "0.1.0",
-  "server": { "port": 4370 },
+  "server": {
+    "port": 4370
+  },
   "_角色说明": [
     "角色词表不是随手起的，是 lib/orchestration/plan.js 的既有契约：它按 roles 的键校验",
     "子任务角色，并对 reviewer 额外设了只读约束（不得声明 writeScope、不得要求编码能力）。",
     "缺这一段时任何计划都会被判「使用未知角色」——/api/plan/validate 全线不通。"
   ],
   "roles": {
-    "orchestrator": { "说明": "拆解与编排，只出计划不落地", "requiredCapabilities": [] },
-    "backend": { "说明": "服务端实现", "requiredCapabilities": [] },
-    "frontend": { "说明": "前端实现", "requiredCapabilities": [] },
-    "integrator": { "说明": "集成、测试与报告", "requiredCapabilities": [] },
-    "reviewer": { "说明": "评审，只读角色", "requiredCapabilities": [] }
+    "orchestrator": {
+      "说明": "拆解与编排，只出计划不落地",
+      "requiredCapabilities": []
+    },
+    "backend": {
+      "说明": "服务端实现",
+      "requiredCapabilities": []
+    },
+    "frontend": {
+      "说明": "前端实现",
+      "requiredCapabilities": []
+    },
+    "integrator": {
+      "说明": "集成、测试与报告",
+      "requiredCapabilities": []
+    },
+    "reviewer": {
+      "说明": "评审，只读角色",
+      "requiredCapabilities": []
+    }
   },
   "_路由说明": [
     "weights 是**策略**，写在这里是为了让加权公式可见可调——数值与 router.js 的内置默认一致，",
@@ -28,21 +45,122 @@
     "在两者都空之前，/api/routing/rank 会如实告知「本次排名无区分度」。"
   ],
   "routing": {
-    "weights": { "quality": 0.5, "success": 0.3, "latency": 0.1, "cost": 0.1 },
+    "weights": {
+      "quality": 0.5,
+      "success": 0.3,
+      "latency": 0.1,
+      "cost": 0.1
+    },
     "crossProviderReview": true,
     "roles": {}
   },
-  "watchtower": { "outDir": "watchtower-out", "freshMs": 45000, "unreadLimit": 50 },
+  "watchtower": {
+    "outDir": "watchtower-out",
+    "freshMs": 45000,
+    "unreadLimit": 50
+  },
   "_工作区说明": [
     "工作区服务是唯一被允许起 git 进程的地方（scripts/工作区服务.js，npm run workspace 手动拉）。",
     "server.js 只经 http 转发过去，自己从头到尾不碰 child_process——桩模式的物理保证因此不受影响。",
     "允许写默认 false。开成 true 意味着带令牌的调用方可以在本仓建分支、提交、合并；",
     "这是一项独立的授权决定，不该由「服务起来了」顺带获得，所以单列开关而不是跟着端口走。"
   ],
-  "workspace": { "port": 4371, "允许写": false },
+  "workspace": {
+    "port": 4371,
+    "允许写": false
+  },
+  "_执行说明": [
+    "执行器是唯一被允许拉起 AI CLI 的地方（scripts/执行器.js，npm run executor 手动拉）。",
+    "真跑三闸，缺一即拒：① 请求体显式 干跑:false ② 本段 允许真跑:true ③ 该池在 预算.池 里配了上限。",
+    "三条各自独立：防手滑 / 防「服务起来了就能花钱」/ 防没有刹车就上路。",
+    "权限（协-002 拍板 A3）：白名单之外一律受限——缺配置即最严不是最松。判据只看角色不看项目。",
+    "受限参数会覆盖掉适配器默认的 --dangerously-skip-permissions / --dangerously-bypass-approvals-and-sandbox。",
+    "预算池上限写在 预算.池 段，口径见 packages/budget/README.md；注意 codex 取不到 usage，其消耗不计入。"
+  ],
+  "执行": {
+    "port": 4372,
+    "允许真跑": false,
+    "超时毫秒": 900000,
+    "静默毫秒": 120000,
+    "权限": {
+      "默认": "受限",
+      "放开": [
+        "backend",
+        "frontend",
+        "integrator"
+      ],
+      "受限参数": [
+        "--permission-mode",
+        "plan"
+      ]
+    }
+  },
+  "预算": {
+    "池": {}
+  },
+  "_打分说明": [
+    "scores.quality 的来源是**公开基准**，不是本机实测——它是先验，不是战绩。",
+    "取 SWE-bench Verified 的百分数直接当 0-100 的 quality（口径天然对齐）。",
+    "对应关系有一处必须说清：跑分是**模型**的，而 provider 是 **CLI**。首次真跑回执里",
+    "claude CLI 自报 model=claude-sonnet-5，故取 Sonnet 5 的分，不拿榜首 Opus 5 冒充。",
+    "换了 CLI 默认模型，这里就该跟着改——否则先验会悄悄失真。",
+    "latency/cost 留空走默认 50：没有可比口径的公开数据，编一个比不填更坏。",
+    "先验只占权重 0.5，另 0.3 归实际战绩（journal/provider-runs.jsonl）。",
+    "跑得越多，先验的影响越小——这是有意的：本机实测最终该压过外部榜单。",
+    "来源与日期记在 scores.来源/日期，过期了要能一眼看出来。"
+  ],
   "providers": {
-    "codex": { "adapter": "codex-cli", "enabled": true, "roles": [], "说明": "Codex CLI（无头 exec，提示词走 stdin）" },
-    "claude": { "adapter": "claude-cli", "enabled": true, "roles": [], "说明": "Claude Code CLI（无头 -p，提示词走 stdin）" },
-    "echo": { "adapter": "command-cli", "enabled": true, "roles": [], "command": "echo", "args": [], "说明": "通用命令行适配器示例（任意厂商可按此声明接入）" }
+    "codex": {
+      "adapter": "codex-cli",
+      "enabled": true,
+      "roles": [],
+      "说明": "Codex CLI（无头 exec，提示词走 stdin）",
+      "scores": {
+        "default": {
+          "quality": 57
+        },
+        "来源": "SWE-bench Verified，GPT-5.3 Codex 56.8%（该分出自其自有 scaffold，与下面 claude 的口径不完全可比）",
+        "日期": "2026-08-10",
+        "注意": "OpenAI 2026-02 起停报 Verified 分数，此值可能滞后；且 codex 取不到 usage，其消耗不计入预算账"
+      }
+    },
+    "claude": {
+      "adapter": "claude-cli",
+      "enabled": true,
+      "roles": [],
+      "说明": "Claude Code CLI（无头 -p，提示词走 stdin）",
+      "scores": {
+        "default": {
+          "quality": 85
+        },
+        "来源": "SWE-bench Verified，Claude Sonnet 5 85.2%",
+        "日期": "2026-08-10",
+        "注意": "对应本机 claude CLI 实测自报的 claude-sonnet-5；若改用 Opus 5（榜首 97.0%）需同步改此值"
+      }
+    },
+    "echo": {
+      "adapter": "command-cli",
+      "enabled": true,
+      "roles": [],
+      "command": "echo",
+      "args": [],
+      "说明": "通用命令行适配器示例（任意厂商可按此声明接入）",
+      "scores": {
+        "default": {
+          "quality": 0
+        },
+        "来源": "不是真 Provider——它只把输入回声出来，不干活",
+        "日期": "2026-08-10",
+        "注意": "打 0 分是为了让它永远排在最后，而不是禁用它：它仍要能被显式 pin 出来做接线自测"
+      }
+    }
+  },
+  "项目": {
+    "_说明": [
+      "写操作只认这里登记过的仓——否则带令牌的调用方能让服务往任意 git 仓提交。",
+      "路径是机器相关的，实际值放 config/项目.local.json（不入库）。"
+    ],
+    "注册": {},
+    "默认": ""
   }
 }

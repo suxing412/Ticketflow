@@ -89,8 +89,12 @@ t('lib/ 下的模块要么被接线，要么在 server.js 里写明为何不接'
     //   · 被挪进隔离进程持有（worktree 走的就是这条：它引 child_process，
     //     只能靠进程隔离，不能靠给断言开例外）
     const 交代了 = new RegExp(`(${短名}|${无后缀})[^\\n]*不接`).test(源);
-    const 隔离了 = new RegExp(`(${短名}|${无后缀})[^\\n]*(独立进程|隔离)`).test(源)
-      && fs.readFileSync(path.join(平台根, 'scripts', '工作区服务.js'), 'utf8').includes(短名);
+    // 「被某个隔离进程持有」是正当归宿。原先这里把隔离进程写死成工作区服务一个，
+    // 加了执行器之后就不成立了——改成扫 scripts/ 下全部进程，谁持有都算。
+    const 被隔离进程持有 = fs.readdirSync(path.join(平台根, 'scripts'))
+      .filter((f) => f.endsWith('.js'))
+      .some((f) => fs.readFileSync(path.join(平台根, 'scripts', f), 'utf8').includes(短名));
+    const 隔离了 = new RegExp(`(${短名}|${无后缀})[^\\n]*(独立进程|隔离)`).test(源) && 被隔离进程持有;
     if (!接线了 && !交代了 && !隔离了) 漏网.push(`  lib/${m}`);
   }
   assert.deepEqual(漏网, [], '这些模块既没接线，也没写明为何不接（孤儿模块不会报错，只会安静地不存在）：\n' + 漏网.join('\n'));
@@ -111,7 +115,16 @@ const 探空闲端口 = () => new Promise((resolve, reject) => {
 
 const 起服务 = async () => {
   const port = await 探空闲端口();
-  const env = { ...process.env, PORT: String(port) };
+  // 转发目标指向**确定空闲**的端口，而不是配置里的默认值——否则本机恰好跑着
+  // 工作区服务/执行器时，「未拉起时优雅降级」那两条就会失效（实际红过一次）。
+  // 测试要自带隔离，不能取决于跑测试的人当时开着什么。
+  const 空闲工作区 = await 探空闲端口();
+  const 空闲执行器 = await 探空闲端口();
+  const env = {
+    ...process.env, PORT: String(port),
+    WORKSPACE_PORT: String(空闲工作区), EXECUTOR_PORT: String(空闲执行器),
+    PLATFORM_NO_LOCAL: '1',
+  };
   delete env.TICKETFLOW_PACKAGES;
   const srv = require('child_process').spawn(process.execPath, [path.join(平台根, 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   await new Promise((resolve, reject) => {
@@ -292,7 +305,9 @@ const 取 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
     });
 
     await ta('工作区未拉起时优雅降级，且说明可操作', async () => {
-      // 测试环境不起隔离进程，所以这里必然是转发失败那条路——正好验降级。
+      // 用一个**确定没人监听**的端口来验降级，而不是「假定本机没跑工作区服务」。
+      // 后者会让测试结果取决于跑测试的人当时开着什么——2026-08-10 就这么红过一次：
+      // 我为了验提交链把工作区服务跑起来了，这条立刻从 503 变成 200。
       const r = await 取(port, '/api/workspace/worktrees?repository=.');
       assert.equal(r.码, 503, '转发失败应是 503（依赖的服务不在），不是 500');
       assert.ok(/npm run workspace/.test(r.体.error), '要告诉人怎么拉起来：' + r.体.error);

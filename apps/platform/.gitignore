@@ -4,6 +4,15 @@ watchtower-out/
 # 运行时流水与信箱（目录占位入库，内容不入库）
 journal/*
 !journal/.gitkeep
+
+# 预算账（协-002 首次真跑发现）：budget 把账本写在根目录下，原先没人挡它，
+# 一跑就冒进 git status，迟早被误提交。它是运行时账目，不入库。
+预算账.jsonl
+
+# 隔离工作区（协-003 首次提交链发现）：worktree.prepare 把工作树建在这里。
+# 里面是**别的仓的**签出，绝不能进本仓版本库——一旦入库就是仓中仓，
+# git 会把它当普通目录吞进来，而它其实是另一个仓库的工作树。
+workspaces/
 呼叫/*
 !呼叫/.gitkeep
 
@@ -16,3 +25,4 @@ npm-debug.log*
 node_modules/
 package-lock.json
 dist/
+config/api-token.txt
