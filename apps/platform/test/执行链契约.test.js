@@ -139,7 +139,7 @@ t('本地覆盖：深合并而非整段替换，且只认白名单文件', () =>
   assert.deepEqual(合.权限.放开, ['backend'], '嵌套段也要保留');
   // 白名单：只有表里的文件名能覆盖对应的顶层键。
   // 不做白名单的话，随手建个 .local.json 就能改任意配置——覆盖机制会变成后门。
-  assert.deepEqual(Object.values(覆盖.覆盖表).sort(), ['workspace', '执行', '预算'].sort());
+  assert.deepEqual(Object.values(覆盖.覆盖表).sort(), ['workspace', '执行', '预算', '项目'].sort());
   assert.equal(覆盖.覆盖表['执行.local.json'], '执行');
   assert.ok(!覆盖.覆盖表['providers.local.json'], 'providers 不在白名单内，不许被本地覆盖');
 });

@@ -22,6 +22,9 @@ const 覆盖表 = {
   '执行.local.json': '执行',
   '预算.local.json': '预算',
   'workspace.local.json': 'workspace',
+  // 项目注册表：路径天生是机器相关的，入库那份只能是空壳。
+  // 它同时是**写操作的白名单**——不在注册表里的仓，工作区服务一律拒绝往里提交。
+  '项目.local.json': '项目',
 };
 
 function 深合并(基, 盖) {

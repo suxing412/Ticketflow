@@ -93,6 +93,36 @@ function 取工作目录() {
   return { ok: true, 目录: 目标, 临时: !配的 };
 }
 
+// ——————————————————————————————————————————————————————————
+// 提交链（协-003）：经工作区服务做 git，本进程不碰 git
+// ——————————————————————————————————————————————————————————
+// 为什么绕一圈 http 而不直接 require worktree：本进程的能力面是「拉起 AI CLI」，
+// 工作区服务的能力面是 git。两者分开，才能单独关掉其中一个——
+// 比如「允许跑 AI 但今天不许它提交」就是一个真实存在的状态。
+const 工作区端口 = Number(process.env.WORKSPACE_PORT || (配置.workspace && 配置.workspace.port) || 4371);
+
+function 工作区请求(路径, 体) {
+  return new Promise((resolve) => {
+    const 数据 = JSON.stringify(体 || {});
+    const req = http.request({
+      host: '127.0.0.1', port: 工作区端口, path: 路径, method: 'POST',
+      headers: { Authorization: `Bearer ${令牌}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(数据) },
+    }, (上游) => {
+      let s = '';
+      上游.on('data', (d) => s += d);
+      上游.on('end', () => {
+        try { resolve({ 码: 上游.statusCode, 体: JSON.parse(s) }); }
+        catch { resolve({ 码: 502, 体: { ok: false, error: '工作区服务返回非 JSON' } }); }
+      });
+    });
+    req.on('error', () => resolve({
+      码: 503,
+      体: { ok: false, error: `工作区服务未在 127.0.0.1:${工作区端口} 应答——提交链需要它。拉起：npm run workspace` },
+    }));
+    req.write(数据); req.end();
+  });
+}
+
 // codex 的消耗取不到 usage（非 stream-json），必须显式呈报，闷着跑等于账目失真
 function 计量提示(池) {
   return 池 === 'codex'
@@ -222,29 +252,74 @@ const 服务 = http.createServer((req, res) => {
       const 许 = 真跑许可(派.选中);
       if (!许.准) return 发JSON(res, 许.码, { ...共同, ok: false, error: 许.错 });
 
-      // 决定 3：没有隔离目录就拒绝真跑，而不是退回主工作区
-      const 工作 = 取工作目录();
-      if (!工作.ok) return 发JSON(res, 403, { ...共同, ok: false, error: 工作.错 });
+      // ——— 提交链（协-003）———
+      // 工单带「项目」就走完整链路：worktree 里干活 → 检查点 → 快进发布 → 完成。
+      // 不带项目就退回临时目录，只跑不提交（问答类工单本来就没有产出物要合）。
+      const 项目名 = String(t.fm.项目 || '').trim();
+      (async () => {
+        let 工作区 = null; let 工作目录 = null; let 临时 = false;
 
-      const 落 = 派单.落单(工单库, 工单根.根, id, 派);
-      if (!落.ok) return 发JSON(res, 409, { ...共同, ok: false, error: 落.error });
+        if (项目名) {
+          const p = await 工作区请求('/write/prepare', { 项目: 项目名, 工单: { id, fm: t.fm } });
+          if (p.码 !== 200 || !p.体.ok) {
+            return 发JSON(res, p.码, { ...共同, ok: false, error: `建隔离工作区失败：${p.体.error}` });
+          }
+          工作区 = p.体.工作区;
+          工作目录 = 工作区.path;
+        } else {
+          // 决定 3：没有隔离目录就拒绝真跑，而不是退回主工作区
+          const 工作 = 取工作目录();
+          if (!工作.ok) return 发JSON(res, 403, { ...共同, ok: false, error: 工作.错 });
+          工作目录 = 工作.目录; 临时 = 工作.临时;
+        }
 
-      拉起(调用, (体 && 体.提示词) || t.body || '', 工作.目录, (r) => {
+        const 落 = 派单.落单(工单库, 工单根.根, id, 派);
+        if (!落.ok) return 发JSON(res, 409, { ...共同, ok: false, error: 落.error });
+
+        拉起(调用, (体 && 体.提示词) || t.body || '', 工作目录, async (r) => {
         const 判 = 加固.成败判定({ 退出码: r.退出码, 输出: r.输出 });
         记战绩({
           provider: 派.选中, role: 共同.角色, ticket: id,
           ok: 判.成, dry: false, durationMs: r.耗时毫秒, _输出: r.输出,
         });
+
+        // 提交链只在**成功**时走。失败的活不该留下检查点——那会让「有提交」
+        // 变成一个不可信的信号，事后分不清哪些提交是成品哪些是半成品。
+        let 检查点 = null; let 发布 = null; let 完成 = null;
+        if (判.成 && 工作区) {
+          const c = await 工作区请求('/write/checkpoint', { 项目: 项目名, 工作区, 工单: { id, fm: t.fm } });
+          检查点 = c.体;
+          if (c.码 === 200 && c.体.ok && c.体.committed) {
+            工作区.commit = c.体.commit;                       // publish 要用检查点的 sha
+            const pb = await 工作区请求('/write/publish', { 项目: 项目名, 工作区 });
+            发布 = pb.体;
+            if (pb.码 === 200 && pb.体.ok) {
+              const m = 工单库.move(工单根.根, id, '在途', '完成', (fm) => {
+                fm.完成时间 = new Date().toISOString();
+                fm.检查点 = c.体.commit;
+                fm.发布提交 = pb.体.commit;
+              });
+              完成 = m.ok ? '完成' : `流转失败：${m.error}`;
+            }
+          }
+        }
+
         return 发JSON(res, 200, {
           ...共同, 干跑: false, 成: 判.成,
           ...(判.成 ? {} : { 失败原因: 判.原因 }),
           耗时毫秒: r.耗时毫秒,
           ...(r.验尸 ? { 验尸: r.验尸, 活尾巴: r.活尾巴 } : {}),
-          工作目录: 工作.目录,
-          ...(工作.临时 ? { 工作目录说明: "本次现建的临时隔离目录（仓外）——决定 3：主工作区全程零改动" } : {}),
+          工作目录,
+          ...(临时 ? { 工作目录说明: '本次现建的临时隔离目录（仓外）——决定 3：主工作区全程零改动' } : {}),
+          ...(工作区 ? { 隔离工作区: { 分支: 工作区.branch, 路径: 工作区.path } } : {}),
+          ...(检查点 ? { 检查点 } : {}),
+          ...(发布 ? { 发布 } : {}),
+          工单状态: 完成 || '在途',
+          ...(!项目名 ? { 提交链: '未走——工单没有「项目」字段，只跑不提交' } : {}),
           ...(计量提示(派.选中) ? { 计量提示: 计量提示(派.选中) } : {}),
         });
-      });
+        });
+      })();
     });
   }
 

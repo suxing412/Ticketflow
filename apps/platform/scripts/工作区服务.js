@@ -28,7 +28,9 @@ const 工作区 = require(path.join(平台根, 'lib', 'workspace', 'worktree.js'
 function 读JSON(p, 缺省) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return 缺省; }
 }
-const 配置 = 读JSON(path.join(平台根, 'config', 'platform.config.json'), {});
+const 本地覆盖 = require(path.join(平台根, 'lib', '本地覆盖.js'));
+// 允许写 同样是危险开关，只能从不入库的 config/workspace.local.json 打开。
+const { 配置, 生效的覆盖 } = 本地覆盖.应用(平台根, 读JSON(path.join(平台根, 'config', 'platform.config.json'), {}));
 const 端口 = Number(process.env.WORKSPACE_PORT || (配置.workspace && 配置.workspace.port) || 4371);
 const 允许写 = (配置.workspace && 配置.workspace.允许写) === true;
 const { 令牌 } = 门禁.取令牌(平台根);
@@ -53,6 +55,12 @@ function 收窄路径(输入) {
   }
   if (!fs.existsSync(绝对)) return { ok: false, 错误: `路径不存在：${绝对}` };
   return { ok: true, 路径: 绝对 };
+}
+
+function 收体(req, 上限, 完成) {
+  let 体 = '';
+  req.on('data', (c) => { 体 += c; if (体.length > 上限) req.destroy(); });
+  req.on('end', () => { try { 完成(体 ? JSON.parse(体) : {}); } catch { 完成(null); } });
 }
 
 const 服务 = http.createServer((req, res) => {
@@ -97,22 +105,56 @@ const 服务 = http.createServer((req, res) => {
     } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
   }
 
-  // ——— 写操作 ———
-  // 代码不在这里实现。默认关闭时连路由都不注册，开启时也只回一个明确的「未实现」，
-  // 而不是留一条半通的路。要接哪一个写操作，得单独决定单独做——
-  // 「服务起来了顺带就能 commit」正是要避免的事。
+  // ——— 写操作（协-003）———
+  // 默认关闭。开关是独立的授权决定，不随「服务起来了」顺带获得。
   if (路径.startsWith('/write/')) {
     if (!允许写) {
       return 发JSON(res, 403, {
         ok: false,
-        error: '写操作未启用。要开需在 config/platform.config.json 写 workspace.允许写: true，'
-          + '并明白这意味着带令牌的调用方可以在本仓建分支、提交、合并。',
+        error: '写操作未启用。要开需写 config/workspace.local.json（不入库）的 允许写: true，'
+          + '并明白这意味着带令牌的调用方可以在目标项目里建分支、提交、合并。',
       });
     }
-    return 发JSON(res, 501, {
-      ok: false,
-      error: '写操作尚未实现。允许写已开启，但具体哪个写操作要暴露、以什么形状暴露，'
-        + '是逐个决定的事，不随开关一起获得。',
+    return 收体(req, 256 * 1024, (体) => {
+      if (!体) return 发JSON(res, 400, { ok: false, error: '需要 JSON 体' });
+
+      // 项目路径同样过路径闸：写操作能改的仓，必须是显式配置过的，不是请求想指哪就指哪。
+      const 项目名 = String(体.项目 || '').trim();
+      const 注册 = (配置.项目 && 配置.项目.注册) || {};
+      const 项 = 注册[项目名];
+      if (!项 || !项.路径) {
+        return 发JSON(res, 400, {
+          ok: false,
+          error: `项目「${项目名 || '(空)'}」不在注册表里。写操作只认 项目.注册 中登记过的仓——`
+            + `否则带令牌的调用方能让本服务往任意 git 仓里提交。已登记：${Object.keys(注册).join('/') || '（无）'}`,
+        });
+      }
+      const 项目 = { name: 项目名, path: path.resolve(项.路径) };
+      if (!fs.existsSync(项目.path)) return 发JSON(res, 400, { ok: false, error: `项目路径不存在：${项目.path}` });
+
+      try {
+        if (路径 === '/write/prepare') {
+          const 工单 = 体.工单 || {};
+          if (!工单.id) return 发JSON(res, 400, { ok: false, error: '需要 工单.id' });
+          const w = 工作区.prepare(平台根, 配置, 工单, 项目, { role: 工单.fm && 工单.fm.role });
+          return 发JSON(res, 200, { ok: true, 工作区: w });
+        }
+        if (路径 === '/write/checkpoint') {
+          if (!体.工作区) return 发JSON(res, 400, { ok: false, error: '需要 工作区（prepare 的返回值原样传回）' });
+          const r = 工作区.checkpoint(配置, 体.工作区, 体.工单 || {});
+          return 发JSON(res, 200, { ok: true, ...r });
+        }
+        if (路径 === '/write/publish') {
+          if (!体.工作区) return 发JSON(res, 400, { ok: false, error: '需要 工作区' });
+          const r = 工作区.publish(项目, 体.工作区);
+          return 发JSON(res, 200, { ok: true, ...r });
+        }
+        return 发JSON(res, 404, { ok: false, error: '未知写操作：' + 路径 });
+      } catch (e) {
+        // git 层的失败（冲突、基线前进、写区越界）是**业务结果**，回 409 让调用方能分诊，
+        // 不是 500——500 会让人以为服务坏了，实际是工单该重做。
+        return 发JSON(res, 409, { ok: false, error: e.message });
+      }
     });
   }
 
@@ -121,5 +163,7 @@ const 服务 = http.createServer((req, res) => {
 
 服务.listen(端口, '127.0.0.1', () => {
   process.stdout.write(`[工作区服务] 上岗 → http://127.0.0.1:${端口}  仓根 ${仓根}\n`);
+  process.stdout.write(`[工作区服务] ${本地覆盖.摘要(生效的覆盖)}
+`);
   process.stdout.write(`[工作区服务] 写操作：${允许写 ? '**已启用**（可建分支/提交/合并）' : '关闭（默认）'}\n`);
 });
