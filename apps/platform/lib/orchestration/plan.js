@@ -1,8 +1,17 @@
 // orchestration/plan.js — Orchestrator 输出协议、DAG 校验与子工单物化。
 // AI 只提出计划；确定性内核负责校验角色、依赖、数量和写区后才允许落盘。
+//
+// 工单库（store）由调用方注入，本模块不自己去找。
+// 原先这里写的是 `require('../../../studio/lib/core/store')`——从 apps/platform 上溯
+// 三级伸手进 **另一个产品** 的内部模块。按 docs/边界与协作.md，公用件唯一家是仓根
+// packages/、双签共建；跨产品引内部实现不在约定内，而且 studio 那边改自己的内部结构
+// 时根本不会知道我们在用。改成注入后：
+//   · 纯计算的那半（extractJson / configuredPlanFile / resolvePlan / normalizePlan /
+//     bodyOf）不再有任何跨产品依赖，可以立刻接线；
+//   · 要落盘的那半（materialize / consume）由调用方把 store 递进来，platform 什么时候
+//     有了自己的工单库，什么时候就能用，不必等 store 提到 packages/。
 const fs = require('fs');
 const path = require('path');
-const store = require('../../../studio/lib/core/store');
 
 const arr = (value) => Array.isArray(value) ? value : value == null || value === '' ? [] : [value];
 
@@ -114,7 +123,14 @@ function bodyOf(task) {
   return `## 范围\n${task.description || task.title}\n\n## 不要做\n${forbidden}\n\n## 验收标准\n${checklist}\n\n## 写入范围\n${writeScope}\n\n## 完工要求\n按通用角色协议输出回执和实际验证证据。\n`;
 }
 
-function materialize(root, cfg, parent, plan) {
+// store 是必填：它负责一切落盘。缺了就明确报错，不做静默降级——
+// 悄悄什么都不写，比直接失败难查得多。
+function materialize(root, cfg, parent, plan, store) {
+  if (!store || typeof store.find !== 'function' || typeof store.create !== 'function'
+    || typeof store.move !== 'function' || typeof store.update !== 'function') {
+    throw new Error('materialize 需要注入工单库 store（要求 find/create/move/update 四个方法）；'
+      + '本模块不自行解析工单库位置——跨产品直引内部模块不在边界约定内');
+  }
   const idByKey = Object.fromEntries(plan.tasks.map((task, index) => [task.key, `${parent.id}-${index + 1}`]));
   // 先完整预检，避免写到一半才发现编号被无关工单占用。
   for (const id of Object.values(idByKey)) {
@@ -163,7 +179,7 @@ function materialize(root, cfg, parent, plan) {
 
 function consume(root, cfg, parent, output, options = {}) {
   const resolved = resolvePlan(cfg, output, options.workspacePath);
-  return { ...resolved, ...materialize(root, cfg, parent, resolved.plan) };
+  return { ...resolved, ...materialize(root, cfg, parent, resolved.plan, options.store) };
 }
 
 module.exports = { extractJson, configuredPlanFile, resolvePlan, normalizePlan, bodyOf, materialize, consume };

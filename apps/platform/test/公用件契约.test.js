@@ -53,6 +53,40 @@ t('依赖面只有 providers 与 watchtower 两个包（变宽必须是显式决
   for (const 包 of 命中) assert.ok(允许.has(包), `新增了对公用件 ${包} 的依赖——请确认这是显式决定并更新本测试`);
 });
 
+// ---- 跨产品直引：上面那条盯不住的洞 ----
+// 上面的扫描认的是 `packages/xxx` 形态，于是 `require('../../../studio/lib/core/store')`
+// 这种「上溯出本产品、伸手进另一个产品内部」的写法**完全不在雷达上**。
+// orchestration/plan.js 就这么溜了很久（2026-08-10 查接线时才发现）。
+// 边界规矩：公用件唯一家是仓根 packages/、双签共建；对方的内部实现不是我们的 API。
+t('不得直引另一个产品的内部模块（公用件走 packages/，不走 apps/*/lib）', () => {
+  const 平台根 = path.resolve(__dirname, '..');
+  const 违规 = [];
+  const 扫 = (dir) => {
+    for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (d.name === 'node_modules' || d.name === '.git' || d.name === 'test') continue;
+      const p = path.join(dir, d.name);
+      if (d.isDirectory()) { 扫(p); continue; }
+      if (!d.name.endsWith('.js')) continue;
+      // 剔掉整行注释再扫：交代「原先这里写的是 require('...')」的文档注释不该被判违规，
+      // 否则修好一处之后，解释这处修法的注释本身会把测试顶红。
+      const src = fs.readFileSync(p, 'utf8').split(/\r?\n/)
+        .filter((line) => !line.trim().startsWith('//')).join('\n');
+      for (const m of src.matchAll(/require\(\s*'(\.\.[^']*)'\s*\)/g)) {
+        // 把相对路径解析成真实位置，看它有没有跑出本产品目录
+        const 目标 = path.resolve(path.dirname(p), m[1]);
+        if (目标.startsWith(平台根 + path.sep)) continue;         // 还在本产品内，放行
+        const 仓根 = path.resolve(平台根, '..', '..');
+        const 相对仓根 = path.relative(仓根, 目标).replace(/\\/g, '/');
+        if (相对仓根.startsWith('packages/')) continue;            // 公用件，放行
+        违规.push(`  ${path.relative(平台根, p)} → ${m[1]}  (解析到 ${相对仓根})`);
+      }
+    }
+  };
+  扫(平台根);
+  assert.deepEqual(违规, [], '这些 require 伸出了本产品之外，且不是公用件：\n' + 违规.join('\n')
+    + '\n公用件唯一家是仓根 packages/（双签共建）；对方产品的内部模块不是可依赖的 API。');
+});
+
 // ---- 消费点收敛：解析算法只准存在一份 ----
 // 补 2026-08-09 漏掉的那个洞：上面那条只清点「依赖了哪些包」，不管各消费点是不是
 // 真的走 lib/公用件。于是 server.js 与 scripts/watchtower.js 各自抄了一份「往上找

@@ -121,6 +121,12 @@ const 取 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
         assert.ok(Array.isArray(项.理由) && 项.理由.length, '每个候选都要给出理由——不透明的排名没人敢信');
       }
       assert.equal(r.体.选中, r.体.排名[0].名称, '选中的必须是排第一的');
+      assert.equal(typeof r.体.有区分度, 'boolean');
+      // 全平局必须自曝：把「字母序第一」当成「评估最优」比没有排名更危险
+      if (!r.体.有区分度) {
+        assert.ok(/无区分度/.test(r.体.说明), '平局时说明里要写明无区分度：' + r.体.说明);
+        assert.ok(/scores|prefer|战绩/.test(r.体.说明), '要告诉人怎么让排名变得有信号：' + r.体.说明);
+      }
     });
 
     await ta('GET /api/routing/history 无记录时也给出账本路径与说明', async () => {
@@ -156,6 +162,40 @@ const 取 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
       const r = await 取(port, '/api/review/parse', { method: 'POST', 体: { 没有文本: 1 } });
       assert.equal(r.码, 400);
       assert.ok(r.体.error.includes('文本'), '错误里要写清缺什么：' + r.体.error);
+    });
+
+    await ta('POST /api/plan/validate 把 Orchestrator 输出解析成 DAG', async () => {
+      const 输出 = ['我建议这样拆：', '```json', JSON.stringify({
+        summary: '两步走',
+        tasks: [
+          { key: 'a', title: '写接口', role: 'backend', acceptance: ['接口返回 200'] },
+          { key: 'b', title: '评审', role: 'reviewer', dependsOn: ['a'], acceptance: ['无阻断问题'] },
+        ],
+      }), '```'].join('\n');
+      const r = await 取(port, '/api/plan/validate', { method: 'POST', 体: { 输出 } });
+      assert.equal(r.码, 200);
+      assert.equal(r.体.合规, true, '合法计划应通过校验：' + (r.体.原因 || ''));
+      assert.equal(r.体.任务数, 2);
+      assert.equal(r.体.任务[1].依赖[0], 'a', '依赖关系要保留');
+    });
+
+    await ta('POST /api/plan/validate 对不合规计划给 200 + 合规:false（不是 5xx）', async () => {
+      const r = await 取(port, '/api/plan/validate', { method: 'POST', 体: { 输出: '我觉得先干这个再干那个' } });
+      assert.equal(r.码, 200, '校验不通过是业务结果，不是服务故障');
+      assert.equal(r.体.合规, false);
+      assert.ok(r.体.原因 && r.体.原因.length, '要说明哪里不合规');
+    });
+
+    t('materialize 缺注入 store 时明确报错，不静默降级', () => {
+      const 计划 = require(path.join(平台根, 'lib', 'orchestration', 'plan.js'));
+      assert.throws(
+        () => 计划.materialize('/tmp', {}, { id: 'T-1', fm: {} }, { tasks: [] }),
+        (e) => {
+          assert.ok(e.message.includes('store'), '错误里要点名缺的是 store：' + e.message);
+          return true;
+        },
+        '缺 store 必须抛错——悄悄什么都不写比直接失败难查得多',
+      );
     });
 
     await ta('原有四条接口未被新接线打断', async () => {

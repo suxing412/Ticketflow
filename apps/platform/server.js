@@ -33,6 +33,9 @@ const 路由器 = require('./lib/routing/router');
 const 路由历史 = require('./lib/routing/history');
 const 工具链 = require('./lib/toolchain');
 const 评审意见 = require('./lib/review-opinion');
+// plan 只用它纯计算的那半（解析 + 校验）。落盘的 materialize/consume 需要注入工单库，
+// platform 目前没有自己的工单库，故不接——不是忘了，见 docs/接线说明.md 第四节。
+const 计划 = require('./lib/orchestration/plan');
 
 // ——————————————————————————————————————————————————————————
 // 配置
@@ -192,13 +195,21 @@ const 服务 = http.createServer((req, res) => {
       const 角色 = 查询.get('role') || 查询.get('角色') || '';
       const 类别 = 查询.get('kind') || 查询.get('类别') || '执行';
       const 排名 = 路由器.rankProviders(仓根, 配置, { role: 角色, kind: 类别 });
+      // 全平局要**说出来**。否则调用方会把「按字母序排第一」误当成「评估下来最优」，
+      // 那比没有排名更危险——它看起来像个判断，实际上一点信号都没有。
+      const 无区分度 = 排名.length > 1 && 排名.every((r) => r.score === 排名[0].score);
       return 发JSON(res, 200, {
         ok: true,
         角色: 排名[0] ? 排名[0].role : (角色 || (类别 === '执行' ? 'generalist' : 'reviewer')),
         类别,
         选中: 排名[0] ? 排名[0].name : null,
+        有区分度: !无区分度,
         排名: 排名.map((r) => ({ 名称: r.name, 分数: r.score, 理由: r.reasons })),
-        说明: 排名.length ? '仅排名，未派发任何任务' : '无候选：检查 providers 是否启用、能力是否匹配',
+        说明: !排名.length ? '无候选：检查 providers 是否启用、能力是否匹配'
+          : 无区分度 ? '本次排名无区分度：各候选得分相同，当前顺序仅按名称字母序，不代表评估结论。'
+            + '要让排名真正有信号，需其一：providers.<名>.scores 显式打分、'
+            + 'routing.roles.<角色>.prefer 声明偏好，或 journal/provider-runs.jsonl 积累实际战绩。'
+            : '仅排名，未派发任何任务',
       });
     } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
   }
@@ -248,6 +259,33 @@ const 服务 = http.createServer((req, res) => {
       try {
         return 发JSON(res, 200, { ok: true, ...评审意见.parse(体.文本, 体.通过) });
       } catch (e) { return 发JSON(res, 400, { ok: false, error: e.message }); }
+    });
+  }
+
+  // ——— 计划校验：Orchestrator 的自然语言输出 → 结构化 DAG ———
+  // 只解析与校验，**不落盘**。落盘要注入工单库，platform 还没有自己的那一套。
+  // 这条的价值在于：AI 提的计划先过确定性内核，角色/依赖/数量/写区不合规当场打回。
+  if (url路径 === '/api/plan/validate' && req.method === 'POST') {
+    return 收体(req, 512 * 1024, (体) => {
+      if (!体 || typeof 体.输出 !== 'string') {
+        return 发JSON(res, 400, { ok: false, error: '需要 JSON 体 { "输出": "<Orchestrator 的回复原文>" }' });
+      }
+      try {
+        const { plan, source } = 计划.resolvePlan(配置, 体.输出, undefined);
+        return 发JSON(res, 200, {
+          ok: true, 合规: true, 来源: source,
+          摘要: plan.summary || '',
+          任务数: plan.tasks.length,
+          任务: plan.tasks.map((t) => ({
+            key: t.key, 标题: t.title, 角色: t.role,
+            依赖: t.dependsOn, 验收: t.acceptance, 写区: t.writeScope,
+          })),
+          说明: '仅校验，未落盘——物化子工单需要注入工单库，platform 尚无自有工单库',
+        });
+      } catch (e) {
+        // 校验不通过是**正常业务结果**，不是服务故障，所以是 200 + 合规:false。
+        return 发JSON(res, 200, { ok: true, 合规: false, 原因: e.message });
+      }
     });
   }
 
