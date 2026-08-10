@@ -40,6 +40,26 @@
     "这是一项独立的授权决定，不该由「服务起来了」顺带获得，所以单列开关而不是跟着端口走。"
   ],
   "workspace": { "port": 4371, "允许写": false },
+  "_执行说明": [
+    "执行器是唯一被允许拉起 AI CLI 的地方（scripts/执行器.js，npm run executor 手动拉）。",
+    "真跑三闸，缺一即拒：① 请求体显式 干跑:false ② 本段 允许真跑:true ③ 该池在 预算.池 里配了上限。",
+    "三条各自独立：防手滑 / 防「服务起来了就能花钱」/ 防没有刹车就上路。",
+    "权限（协-002 拍板 A3）：白名单之外一律受限——缺配置即最严不是最松。判据只看角色不看项目。",
+    "受限参数会覆盖掉适配器默认的 --dangerously-skip-permissions / --dangerously-bypass-approvals-and-sandbox。",
+    "预算池上限写在 预算.池 段，口径见 packages/budget/README.md；注意 codex 取不到 usage，其消耗不计入。"
+  ],
+  "执行": {
+    "port": 4372,
+    "允许真跑": false,
+    "超时毫秒": 900000,
+    "静默毫秒": 120000,
+    "权限": {
+      "默认": "受限",
+      "放开": ["backend", "frontend", "integrator"],
+      "受限参数": ["--permission-mode", "plan"]
+    }
+  },
+  "预算": { "池": {} },
   "providers": {
     "codex": { "adapter": "codex-cli", "enabled": true, "roles": [], "说明": "Codex CLI（无头 exec，提示词走 stdin）" },
     "claude": { "adapter": "claude-cli", "enabled": true, "roles": [], "说明": "Claude Code CLI（无头 -p，提示词走 stdin）" },

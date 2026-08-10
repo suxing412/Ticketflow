@@ -89,8 +89,12 @@ t('lib/ 下的模块要么被接线，要么在 server.js 里写明为何不接'
     //   · 被挪进隔离进程持有（worktree 走的就是这条：它引 child_process，
     //     只能靠进程隔离，不能靠给断言开例外）
     const 交代了 = new RegExp(`(${短名}|${无后缀})[^\\n]*不接`).test(源);
-    const 隔离了 = new RegExp(`(${短名}|${无后缀})[^\\n]*(独立进程|隔离)`).test(源)
-      && fs.readFileSync(path.join(平台根, 'scripts', '工作区服务.js'), 'utf8').includes(短名);
+    // 「被某个隔离进程持有」是正当归宿。原先这里把隔离进程写死成工作区服务一个，
+    // 加了执行器之后就不成立了——改成扫 scripts/ 下全部进程，谁持有都算。
+    const 被隔离进程持有 = fs.readdirSync(path.join(平台根, 'scripts'))
+      .filter((f) => f.endsWith('.js'))
+      .some((f) => fs.readFileSync(path.join(平台根, 'scripts', f), 'utf8').includes(短名));
+    const 隔离了 = new RegExp(`(${短名}|${无后缀})[^\\n]*(独立进程|隔离)`).test(源) && 被隔离进程持有;
     if (!接线了 && !交代了 && !隔离了) 漏网.push(`  lib/${m}`);
   }
   assert.deepEqual(漏网, [], '这些模块既没接线，也没写明为何不接（孤儿模块不会报错，只会安静地不存在）：\n' + 漏网.join('\n'));

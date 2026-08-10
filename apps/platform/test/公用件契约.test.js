@@ -36,8 +36,11 @@ t('公用件缺位时报人话错误（部署问题必须直接给出修法）',
 // ---- 依赖面清点：本仓对 Ticketflow 的代码级依赖只有两个包 ----
 // providers（本仓主笔，寄放对方仓）+ watchtower（对方主笔，信道守护）。
 // 这条断言的意义是**防止依赖面无意中变宽**——每多一个包，正本归位与 npm 化的谈判就更难。
-t('依赖面只有 providers 与 watchtower 两个包（变宽必须是显式决定）', () => {
-  const 允许 = new Set(['providers', 'watchtower']);
+t('依赖面只有 providers / watchtower / budget 三个包（变宽必须是显式决定）', () => {
+  // budget 于 2026-08-10 加入（协-002）：执行链要在派活前查预算冻结、执行后落账。
+  // 加它是**显式决定**——#32 双签合入后 packages/budget 成为公用件正本，
+  // platform 自建薄闸等于当场制造分叉，那正是公用件制度要消除的东西。
+  const 允许 = new Set(['providers', 'watchtower', 'budget']);
   const 命中 = new Set();
   const 扫 = (dir) => {
     for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
