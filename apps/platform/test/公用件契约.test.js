@@ -45,7 +45,10 @@ t('依赖面只有 providers 与 watchtower 两个包（变宽必须是显式决
       const p = path.join(dir, d.name);
       if (d.isDirectory()) { 扫(p); continue; }
       if (!d.name.endsWith('.js')) continue;
-      const src = fs.readFileSync(p, 'utf8');
+      // 剔整行注释再扫，与下面那条跨产品断言同款：注释里提一句「将来若抽 packages/core」
+      // 是在讨论依赖，不是**产生**依赖。不剔的话，写文档反而会把测试顶红。
+      const src = fs.readFileSync(p, 'utf8').split(/\r?\n/)
+        .filter((line) => !line.trim().startsWith('//')).join('\n');
       for (const m of src.matchAll(/packages[\/\\'",\s]+([a-z][\w-]*)/g)) 命中.add(m[1]);
     }
   };
