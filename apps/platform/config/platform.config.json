@@ -8,7 +8,38 @@
   "名称": "AI-DevPlatform",
   "版本": "0.1.0",
   "server": { "port": 4370 },
+  "_角色说明": [
+    "角色词表不是随手起的，是 lib/orchestration/plan.js 的既有契约：它按 roles 的键校验",
+    "子任务角色，并对 reviewer 额外设了只读约束（不得声明 writeScope、不得要求编码能力）。",
+    "缺这一段时任何计划都会被判「使用未知角色」——/api/plan/validate 全线不通。"
+  ],
+  "roles": {
+    "orchestrator": { "说明": "拆解与编排，只出计划不落地", "requiredCapabilities": [] },
+    "backend": { "说明": "服务端实现", "requiredCapabilities": [] },
+    "frontend": { "说明": "前端实现", "requiredCapabilities": [] },
+    "integrator": { "说明": "集成、测试与报告", "requiredCapabilities": [] },
+    "reviewer": { "说明": "评审，只读角色", "requiredCapabilities": [] }
+  },
+  "_路由说明": [
+    "weights 是**策略**，写在这里是为了让加权公式可见可调——数值与 router.js 的内置默认一致，",
+    "所以填上不改变当前行为，只是把隐式默认变成显式声明。",
+    "providers.<名>.scores 是**数据**，出厂故意留空：厂商孰优孰劣该由 journal/provider-runs.jsonl",
+    "的实际战绩说话，或由仓主显式声明偏好（routing.roles.<角色>.prefer），不由出厂配置替人拍板。",
+    "在两者都空之前，/api/routing/rank 会如实告知「本次排名无区分度」。"
+  ],
+  "routing": {
+    "weights": { "quality": 0.5, "success": 0.3, "latency": 0.1, "cost": 0.1 },
+    "crossProviderReview": true,
+    "roles": {}
+  },
   "watchtower": { "outDir": "watchtower-out", "freshMs": 45000, "unreadLimit": 50 },
+  "_工作区说明": [
+    "工作区服务是唯一被允许起 git 进程的地方（scripts/工作区服务.js，npm run workspace 手动拉）。",
+    "server.js 只经 http 转发过去，自己从头到尾不碰 child_process——桩模式的物理保证因此不受影响。",
+    "允许写默认 false。开成 true 意味着带令牌的调用方可以在本仓建分支、提交、合并；",
+    "这是一项独立的授权决定，不该由「服务起来了」顺带获得，所以单列开关而不是跟着端口走。"
+  ],
+  "workspace": { "port": 4371, "允许写": false },
   "providers": {
     "codex": { "adapter": "codex-cli", "enabled": true, "roles": [], "说明": "Codex CLI（无头 exec，提示词走 stdin）" },
     "claude": { "adapter": "claude-cli", "enabled": true, "roles": [], "说明": "Claude Code CLI（无头 -p，提示词走 stdin）" },

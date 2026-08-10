@@ -7,6 +7,14 @@
 //   - 执行器接线只到「providers 注册表可枚举 + echo 级测试调用（桩模式）」为止；
 //   - 桩模式是物理性的：本文件不引入 child_process，任何路径都发不起真实 CLI 进程，零计费。
 //
+// 2026-08-10 接线：lib/ 下六个模块此前一个都没接到接口上（写好了、测过了，但没有任何
+// 代码路径走得到）。本轮接了其中四个——判据是**不破坏上面那条物理保证**：
+//   routing/router + routing/history + toolchain + review-opinion   零 child_process，已接
+//   orchestration/plan                                              纯计算那半已接（store 改注入）
+//   workspace/worktree   引 child_process，**不进本文件的依赖闭包**——它住独立进程
+//                        scripts/工作区服务.js，本文件只用 http 转发过去。
+// 全部台账见 docs/接线说明.md 第四、六节。
+//
 // providers 消费走仓根 packages/providers（@papercrew/providers），
 // 换布局时用环境变量 TICKETFLOW_PACKAGES 指向 packages/。
 'use strict';
@@ -20,6 +28,17 @@ const 仓根 = __dirname;
 // 算法，一仓合并后解析成 <仓根>/apps/Ticketflow 而失效——同一个约定不留第二份。
 const 公用件 = require('./lib/公用件');
 
+// 本仓自有模块。四个都是纯计算或只读文件，不起进程——桩模式的物理保证不受影响，
+// 契约测试里有一条断言盯着这件事（见 test/接线契约.test.js）。
+const 路由器 = require('./lib/routing/router');
+const 路由历史 = require('./lib/routing/history');
+const 工具链 = require('./lib/toolchain');
+const 评审意见 = require('./lib/review-opinion');
+// plan 只用它纯计算的那半（解析 + 校验）。落盘的 materialize/consume 需要注入工单库，
+// platform 目前没有自己的工单库，故不接——不是忘了，见 docs/接线说明.md 第四节。
+const 计划 = require('./lib/orchestration/plan');
+const 门禁 = require('./lib/门禁');
+
 // ——————————————————————————————————————————————————————————
 // 配置
 // ——————————————————————————————————————————————————————————
@@ -29,6 +48,8 @@ function 读JSON(p, 缺省) {
 const 配置 = 读JSON(path.join(仓根, 'config', 'platform.config.json'), {});
 const 包 = 读JSON(path.join(仓根, 'package.json'), {});
 const 端口 = Number(process.env.PORT || (配置.server && 配置.server.port) || 4370);
+const { 令牌, 文件: 令牌路径, 新建: 令牌新建 } = 门禁.取令牌(仓根);
+const 工作区端口 = Number(process.env.WORKSPACE_PORT || (配置.workspace && 配置.workspace.port) || 4371);
 const 平台名 = 配置.名称 || 包.name || 'AI-DevPlatform';
 const 版本 = 配置.版本 || 包.version || '0.0.0';
 
@@ -104,7 +125,16 @@ function 发静态(res, url路径) {
   }
   fs.readFile(绝对, (err, buf) => {
     if (err) return 发JSON(res, 404, { ok: false, error: '未找到：' + 相对 });
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(绝对).toLowerCase()] || 'application/octet-stream' });
+    const 类型 = MIME[path.extname(绝对).toLowerCase()] || 'application/octet-stream';
+    // 首页发出去之前把令牌注进 </head> 前。注入脚本给同源请求自动带上 Authorization
+    // 与 JSON 头，于是 public/index.html 里已有的 fetch 调用一行都不用改。
+    // 令牌只随首页出门：跨站页面读不到本页内容，拿不到它。
+    if (绝对 === path.join(静态根, 'index.html')) {
+      const 注入 = String(buf).replace('</head>', 门禁.注入脚本(令牌) + '\n</head>');
+      res.writeHead(200, { 'Content-Type': 类型 });
+      return res.end(注入);
+    }
+    res.writeHead(200, { 'Content-Type': 类型 });
     res.end(buf);
   });
 }
@@ -113,7 +143,18 @@ function 发静态(res, url路径) {
 // 路由
 // ——————————————————————————————————————————————————————————
 const 服务 = http.createServer((req, res) => {
-  const url路径 = (req.url || '/').split('?')[0];
+  // 原先只 split('?')[0] 把查询串整个丢掉。新接的几条要读 role/kind/limit，故正经解析一次。
+  // 基底 URL 只为让 WHATWG URL 肯收相对路径，不参与任何判断。
+  const 请求URL = new URL(req.url || '/', 'http://127.0.0.1');
+  const url路径 = 请求URL.pathname;
+  const 查询 = 请求URL.searchParams;
+
+  // 门禁在路由之前。放在之后的话，未知路径的 404 会泄露「哪些接口存在」——
+  // 未授权者不该有能力区分「这条接口不存在」和「这条接口存在但你进不来」。
+  if (url路径.startsWith('/api/')) {
+    const 拒 = 门禁.校验(req, { 令牌, 端口, 路径: url路径 });
+    if (拒) return 发JSON(res, 拒.码, { ok: false, error: 拒.错误 });
+  }
 
   if (url路径 === '/api/health') {
     return 发JSON(res, 200, {
@@ -166,11 +207,144 @@ const 服务 = http.createServer((req, res) => {
     });
   }
 
+  // ——— 动态路由：按角色给 Provider 排名 ———
+  // 只算不派。返回每个候选的分数与理由，理由是给人看的——排名不透明就没人敢信它。
+  if (url路径 === '/api/routing/rank' && req.method === 'GET') {
+    if (!registry) return 发JSON(res, 503, { ok: false, error: registry错误 });
+    try {
+      const 角色 = 查询.get('role') || 查询.get('角色') || '';
+      const 类别 = 查询.get('kind') || 查询.get('类别') || '执行';
+      const 排名 = 路由器.rankProviders(仓根, 配置, { role: 角色, kind: 类别 });
+      // 全平局要**说出来**。否则调用方会把「按字母序排第一」误当成「评估下来最优」，
+      // 那比没有排名更危险——它看起来像个判断，实际上一点信号都没有。
+      const 无区分度 = 排名.length > 1 && 排名.every((r) => r.score === 排名[0].score);
+      return 发JSON(res, 200, {
+        ok: true,
+        角色: 排名[0] ? 排名[0].role : (角色 || (类别 === '执行' ? 'generalist' : 'reviewer')),
+        类别,
+        选中: 排名[0] ? 排名[0].name : null,
+        有区分度: !无区分度,
+        排名: 排名.map((r) => ({ 名称: r.name, 分数: r.score, 理由: r.reasons })),
+        说明: !排名.length ? '无候选：检查 providers 是否启用、能力是否匹配'
+          : 无区分度 ? '本次排名无区分度：各候选得分相同，当前顺序仅按名称字母序，不代表评估结论。'
+            + '要让排名真正有信号，需其一：providers.<名>.scores 显式打分、'
+            + 'routing.roles.<角色>.prefer 声明偏好，或 journal/provider-runs.jsonl 积累实际战绩。'
+            : '仅排名，未派发任何任务',
+      });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+  }
+
+  // ——— 路由历史：只读 journal/provider-runs.jsonl ———
+  if (url路径 === '/api/routing/history' && req.method === 'GET') {
+    try {
+      const 上限 = Math.min(Math.max(Number(查询.get('limit')) || 50, 1), 500);
+      const 角色 = 查询.get('role') || 查询.get('角色') || '';
+      const 记录 = 路由历史.read(仓根, 上限);
+      const 汇总 = {};
+      if (角色 && registry) {
+        for (const p of registry.list(配置)) 汇总[p.name] = 路由历史.summary(仓根, p.name, 角色);
+      }
+      return 发JSON(res, 200, {
+        ok: true,
+        账本: 路由历史.historyPath(仓根),
+        条数: 记录.length,
+        ...(角色 ? { 角色, 汇总 } : {}),
+        记录,
+        ...(记录.length ? {} : { 说明: '尚无执行记录——桩模式不写账，真实派发接线后才会有内容' }),
+      });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+  }
+
+  // ——— 工具链探测：只查文件是否存在，不安装、不下载 ———
+  if (url路径 === '/api/toolchain' && req.method === 'GET') {
+    try {
+      const found = 工具链.resolve(仓根, 配置);
+      return 发JSON(res, 200, {
+        ok: true,
+        就位: found.ok,
+        目录: found.dir, node: found.node, npm: found.npm, npx: found.npx,
+        候选路径: 工具链.candidates(仓根, 配置),
+        注入指引: 工具链.guidance(仓根, 配置),
+      });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+  }
+
+  // ——— 评审报告归一：纯文本进、结构化字段出 ———
+  // 无状态、不落盘。各家 Provider 的 Markdown 格式不一，UI 不该自己去猜。
+  if (url路径 === '/api/review/parse' && req.method === 'POST') {
+    return 收体(req, 256 * 1024, (体) => {
+      if (!体 || typeof 体.文本 !== 'string') {
+        return 发JSON(res, 400, { ok: false, error: '需要 JSON 体 { "文本": "<评审报告 Markdown>", "通过"?: true|false }' });
+      }
+      try {
+        return 发JSON(res, 200, { ok: true, ...评审意见.parse(体.文本, 体.通过) });
+      } catch (e) { return 发JSON(res, 400, { ok: false, error: e.message }); }
+    });
+  }
+
+  // ——— 计划校验：Orchestrator 的自然语言输出 → 结构化 DAG ———
+  // 只解析与校验，**不落盘**。落盘要注入工单库，platform 还没有自己的那一套。
+  // 这条的价值在于：AI 提的计划先过确定性内核，角色/依赖/数量/写区不合规当场打回。
+  if (url路径 === '/api/plan/validate' && req.method === 'POST') {
+    return 收体(req, 512 * 1024, (体) => {
+      if (!体 || typeof 体.输出 !== 'string') {
+        return 发JSON(res, 400, { ok: false, error: '需要 JSON 体 { "输出": "<Orchestrator 的回复原文>" }' });
+      }
+      try {
+        const { plan, source } = 计划.resolvePlan(配置, 体.输出, undefined);
+        return 发JSON(res, 200, {
+          ok: true, 合规: true, 来源: source,
+          摘要: plan.summary || '',
+          任务数: plan.tasks.length,
+          任务: plan.tasks.map((t) => ({
+            key: t.key, 标题: t.title, 角色: t.role,
+            依赖: t.dependsOn, 验收: t.acceptance, 写区: t.writeScope,
+          })),
+          说明: '仅校验，未落盘——物化子工单需要注入工单库，platform 尚无自有工单库',
+        });
+      } catch (e) {
+        // 校验不通过是**正常业务结果**，不是服务故障，所以是 200 + 合规:false。
+        return 发JSON(res, 200, { ok: true, 合规: false, 原因: e.message });
+      }
+    });
+  }
+
+  // ——— 工作区：转发给隔离进程，本文件绝不自己起 git ———
+  // worktree.js 引 child_process，**读 git 状态也要 spawn**（rev-parse/diff 一样起进程），
+  // 所以「只接只读函数」绕不开那条保证。唯一出路是进程隔离：git 能力全住
+  // scripts/工作区服务.js，这里只用 http 转发。于是 server.js 的依赖闭包依旧干净，
+  // 那条传递闭包断言一个字都不用改。
+  if (url路径.startsWith('/api/workspace/')) {
+    const 尾 = url路径.slice('/api/workspace'.length);
+    const 代理 = http.request({
+      host: '127.0.0.1', port: 工作区端口, method: req.method,
+      path: 尾 + (请求URL.search || ''),
+      headers: { Authorization: `Bearer ${令牌}`, 'Content-Type': 'application/json' },
+    }, (上游) => {
+      let s = '';
+      上游.on('data', (d) => s += d);
+      上游.on('end', () => {
+        try { return 发JSON(res, 上游.statusCode, JSON.parse(s)); }
+        catch { return 发JSON(res, 502, { ok: false, error: '工作区服务返回了非 JSON 内容' }); }
+      });
+    });
+    代理.on('error', () => 发JSON(res, 503, {
+      ok: false,
+      error: `工作区服务未在 127.0.0.1:${工作区端口} 应答。它默认不随本服务启动——`
+        + '手动拉起：npm run workspace。它是唯一被允许起 git 进程的地方，本服务自己不碰 child_process。',
+    }));
+    代理.end();
+    return;
+  }
+
   if (url路径.startsWith('/api/')) return 发JSON(res, 404, { ok: false, error: '未知 API：' + url路径 });
   return 发静态(res, url路径);
 });
 
 服务.listen(端口, '127.0.0.1', () => {
   process.stdout.write(`[${平台名}] v${版本} 开机 → http://127.0.0.1:${端口}  （桩模式，零真实 CLI 调用）\n`);
+  process.stdout.write(`[${平台名}] 门禁：${令牌新建 ? '已生成新令牌' : '沿用既有令牌'} → ${令牌路径}`
+    + `（浏览器打开首页无需手工填；curl 需带 Authorization: Bearer <令牌>；`
+    + `/api/health 免令牌，供瞭望塔心跳探测）\n`);
   if (registry错误) process.stderr.write(`[${平台名}] 警告：${registry错误}\n`);
 });
