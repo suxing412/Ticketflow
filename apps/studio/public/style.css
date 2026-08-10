@@ -1109,10 +1109,84 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 .bcard2 .ct.clamp2 { display:-webkit-box; white-space:normal; }
 
 /* 工程队状态卡（施工令-002）：只读一行卡，无状态文件时整卡不渲染 */
-.crewcard { display:flex; align-items:center; gap:12px; padding:12px 20px; margin-top:16px; }
+/* 工程队卡（施工令-002 立卡 · 041 直读 · 042 扩成队列卡）：
+   顶行仍是「当前施工令」那一行（.cwtop 保留原来的横排口径），其下挂 Q 队列精简行。 */
+.crewcard { display:block; padding:12px 20px; margin-top:16px; }
+.crewcard .cwtop { display:flex; align-items:center; gap:12px; }
 .crewcard .cwo { font-size:11px; color:var(--ink3); }
 .crewcard .cwn { font-size:12.5px; color:var(--ink2); max-width:420px; }
 .crewcard .spacer { flex:1; }
+/* ---- 042 §二：hub 队列区（精简版行——它不可点，因为还没有工单可点） ---- */
+.crewq { margin-top:10px; padding-top:8px; border-top:1px dashed var(--line); }
+.crewq .cqh { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--ink3); margin-bottom:4px; }
+.crewq .cqh b { font-family:var(--mono); color:var(--ink2); }
+.crewq .cqh .sp { flex:1; }
+.crewq .cqmore, .crewq .cqmoreline a { color:var(--accent-ink); text-decoration:none; }
+.crewq .cqmore:hover, .crewq .cqmoreline a:hover { text-decoration:underline; }
+.cqrow { display:flex; align-items:center; gap:8px; padding:3px 6px; border-radius:6px; min-width:0; }
+.cqrow:hover { background:var(--we); }
+.cqrow .cqs { font-size:10.5px; color:var(--ink3); white-space:nowrap; }
+.cqrow .cqb { font-size:10px; padding:0 6px; border-radius:999px; white-space:nowrap;
+  color:var(--ink3); border:1px dashed var(--ink3); }
+.cqrow .cqt { flex:1 1 0; width:0; min-width:0; font-size:12px; color:var(--ink2);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cqrow .cqw { font-size:10px; color:var(--danger); white-space:nowrap; }
+.cqrow .cqe { font-size:10.5px; color:var(--ink3); white-space:nowrap; }
+.cqrow.blocked { opacity:.6; }
+.crewq .cqempty, .crewq .cqmoreline { font-size:11px; color:var(--ink3); padding:3px 6px; }
+
+/* ===== P12b 队列页（施工令-042 §一）：按 批→序 铺全量计划粒 =====
+   与流程页共用语义令牌，但形态相反：流程页是「一行一管线的横切」，本页是「一块一批的竖列」。
+   条不可点（无工单可点），只有已成单的粒把单号做成链——点错地方跳 404 是比看不见更差的体验。 */
+.qtop { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-top:22px; }
+.qtop .sp { flex:1; min-width:0; }
+.qsum { font-family:var(--mono); font-size:13px; color:var(--ink); font-weight:700; }
+.qboard { margin-top:12px; display:flex; flex-direction:column; gap:10px; }
+.qbatch { border:1px solid var(--line); border-radius:12px; background:var(--card); box-shadow:var(--shadow-sm); overflow:hidden; }
+.qbh { display:flex; align-items:center; gap:8px; padding:9px 14px; cursor:pointer; background:var(--sect);
+  border-bottom:1px solid var(--line); min-height:38px; }
+.qbh:hover, .qbh:focus-visible { background:var(--we); outline:none; }
+.qbh b { font-size:13px; }
+.qbh .qbn { font-size:11px; color:var(--ink3); }
+.qbh .qbe { font-size:11.5px; color:var(--ink3); white-space:nowrap; }
+.qbh .sp { flex:1; min-width:0; }
+.qbh .qcar { color:var(--ink3); font-size:11px; transition:transform .14s var(--ease-out); }
+.qbatch.fold .qbh { border-bottom:none; }
+.qbatch.fold .qbh .qcar { transform:rotate(-90deg); }
+.qbatch.fold .qrows { display:none; }
+.qbatch.done .qbh b { color:var(--ink2); }
+.qrows { padding:6px 10px 8px; }
+.qrow { display:flex; align-items:center; gap:9px; padding:5px 8px; border-radius:7px; min-width:0;
+  border:1px solid transparent; }
+.qrow:hover { background:var(--we); border-color:var(--line); }
+.qrow .qs { font-size:11px; color:var(--accent-ink); white-space:nowrap; }
+.qrow .qt { flex:1 1 0; width:0; min-width:0; font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.qrow .qtk { font-size:11px; color:var(--accent-ink); text-decoration:none; white-space:nowrap; }
+.qrow .qtk:hover { text-decoration:underline; }
+.qrow .qsrc { font-size:10.5px; color:var(--ink3); max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.qrow .qest { font-size:11px; color:var(--ink3); white-space:nowrap; min-width:52px; text-align:right; }
+.qrow .qpool { font-size:10px; color:var(--ink3); border:1px solid var(--line); border-radius:999px; padding:0 6px; white-space:nowrap; }
+/* 状态徽章五型：计划/起草中还没成单（虚框，弱于任何真单）；已成单起用实调；终态退成灰字 */
+.qrow .qb { font-size:10px; padding:1px 7px; border-radius:999px; white-space:nowrap; color:var(--ink3);
+  border:1px dashed var(--ink3); background:transparent; }
+.qrow .qb.draft { color:var(--gatetx); border-color:var(--gateln); background:var(--gatebg); }
+.qrow .qb.made { color:var(--accent-ink); border:1px solid var(--accent-ink); }
+.qrow .qb.done { color:var(--ok); border:1px solid var(--okln); }
+.qrow .qb.drop { color:var(--ink3); border-style:dotted; text-decoration:line-through; }
+/* 依赖未满足：置灰 + 红字「候：X」——本页最要紧的一句话是「这条为什么还不能开」 */
+.qrow.blocked { opacity:.55; }
+.qrow.blocked:hover { opacity:.9; }
+.qrow .qwait { font-size:10px; color:var(--danger); border:1px solid var(--danger); background:var(--dangerbg);
+  border-radius:999px; padding:1px 7px; white-space:nowrap; }
+/* 终态行整行退让：它们在场只为当「还剩几件」的分母 */
+.qrow.fin { opacity:.62; }
+.qrow.fin:hover { opacity:1; }
+.qrow.fin .qt { color:var(--ink3); }
+@media (max-width:860px) {
+  .qrow { flex-wrap:wrap; }
+  .qrow .qsrc { max-width:100%; }
+  .qrow .qt { flex:1 1 100%; width:auto; }
+}
 
 /* ===== 挂起（施工令-021 · 制作人裁决权）：全站置灰 + ❄ 徽标 =====
    语义：挂起是「制作人按下了冻结」，不是坏了也不是没人管——所以用降饱和的冷调，

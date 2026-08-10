@@ -14,7 +14,9 @@ const FNCLS = { 策划: 'fn-plan', 技术策划: 'fn-tplan', 程序: 'fn-code', 
 const STCLS = { 在途: 'st-doing', 质检: 'st-review', 待验收: 'st-accept', 完成: 'st-done', 待定夺: 'st-escal', 执行失败: 'st-escal', 草稿: 'mut', 已归档: 'mut', 待投: '', 池: '' };
 const STPCT = { 草稿: 0, 待投: 0, 池: 0, 在途: 60, 质检: 85, 待定夺: 70, 执行失败: 60, 待验收: 90, 完成: 100, 已归档: 0 };
 // 施工令-015：wiki 升格唯一知识入口（施工令-020 起五分区），风格库导航退役——美术标杆并入 Wiki 页签
-const NAV = [['总览', ''], ['想法', 'ideas'], ['工单', 'board'], ['流程', 'flow'], ['在途', 'agents'], ['决策台', 'decisions'], ['Wiki', 'wiki'], ['项管', 'relay'], ['报表', 'report']]; // 参数入口只走 ⚙；树形页签随施工令-028 退役
+// 施工令-042：「队列」页签落在流程与在途之间——流程页答「现在怎么走」，队列页答「后面排了什么」，
+// 两页同源（排程台账）且互为上下文，中间不该再隔着别的东西。
+const NAV = [['总览', ''], ['想法', 'ideas'], ['工单', 'board'], ['流程', 'flow'], ['队列', 'queue'], ['在途', 'agents'], ['决策台', 'decisions'], ['Wiki', 'wiki'], ['项管', 'relay'], ['报表', 'report']]; // 参数入口只走 ⚙；树形页签随施工令-028 退役
 function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1900); }
 // 数值跳字确认（步进器改完后调用）：重触发 animation
 function bump(el) { if (!el) return; el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
@@ -164,17 +166,36 @@ async function viewHub() {
   } catch { /* 无动态不补 */ } }, 0);
   // 工程队卡（施工令-002 立卡，041 §五 改直读）：服务端直读 工程队/ 目录实况算出四字段，
   // 无目录/无施工令文件 → 整卡不渲染（占位 div 保持空）。卡上不再有任何要人手维护的字段。
+  // 施工令-042 §二：状态卡扩成**队列卡**——当前施工令（041 直读逻辑原样保留）之下，
+  // 列出监制台自己排着的活（Q 队列 = 无管线的待办计划粒）。制作人开机第一眼要看见的
+  // 不只是「工程队在干什么」，还有「干完这个轮到什么」。队列取不到就退回单行卡，不让整卡消失。
   setTimeout(async () => { try {
-    const c = (await api('/api/crew')).卡; const el = $('hub-crew');
+    const [cr, q] = await Promise.all([api('/api/crew'), api('/api/schedule/工程队').catch(() => null)]);
+    const c = cr.卡; const el = $('hub-crew');
     if (!el || !c) return;
     const cls = c.状态 === '完工' ? 'ok' : c.状态 === '待验收' ? 'red' : 'mut';
     const 更新 = c.更新时间 ? new Date(c.更新时间) : null;
     const 时 = 更新 && !isNaN(更新) ? 更新.toLocaleString('zh-CN', { hour12: false }).slice(5) : esc(c.更新时间 || '');
+    const 行 = (q && Array.isArray(q.行)) ? q.行 : null; // 老服务端回的是 {error}：整段队列区不出，卡退回 041 单行样
+    const 队列Html = !行 ? ''
+      : 行.length
+        ? `<div class="crewq">
+            <div class="cqh">↓ 其后队列 <b>${q.总数}</b> 项${q.预估合计 ? ` · 预估 ${q.预估合计} 单元` : ''}
+              <span class="sp"></span><a href="#/queue" class="cqmore">全部队列 →</a></div>
+            ${行.map((x) => `<div class="cqrow${x.置灰 ? ' blocked' : ''}" title="${esc(x.提示)}">
+              <span class="cqs mono">${esc(x.批)}${x.序 ? '·' + x.序 : ''}</span>
+              <span class="cqb">${esc(x.徽章)}</span>
+              <span class="cqt">${esc(x.题)}</span>
+              ${x.候 ? `<span class="cqw">候：${esc(x.候)}</span>` : ''}
+              <span class="cqe mono">${x.预估单元 != null ? esc(x.预估单元 + ' 单元') : ''}</span></div>`).join('')}
+            ${q.余数 ? `<div class="cqmoreline">…另有 ${q.余数} 项，<a href="#/queue">去队列页看全</a></div>` : ''}</div>`
+        : '<div class="crewq"><div class="cqempty">其后队列空——批次拍板后由总监/项管登记</div></div>';
     el.innerHTML = `<div class="crewcard card r14">
-      <b style="font-size:13px">工程队</b><span class="pill sm ${cls}">${esc(c.状态 || '—')}</span>
-      <span class="cwo mono">施工令 ${esc(c.施工令 || '—')}</span>
-      <span class="cwn clamp2" title="${esc(c.名称 || '')}">${esc(c.名称 || '')}</span>
-      <span class="spacer"></span><span class="subnote">${esc(时)} 更新 · 直读工程队目录</span></div>`;
+      <div class="cwtop"><b style="font-size:13px">工程队</b><span class="pill sm ${cls}">${esc(c.状态 || '—')}</span>
+        <span class="cwo mono">施工令 ${esc(c.施工令 || '—')}</span>
+        <span class="cwn clamp2" title="${esc(c.名称 || '')}">${esc(c.名称 || '')}</span>
+        <span class="spacer"></span><span class="subnote">${esc(时)} 更新 · 直读工程队目录</span></div>
+      ${队列Html}</div>`;
   } catch { /* 无状态文件不渲染 */ } }, 0);
   setTimeout(async () => { try {
     const e2 = await api('/api/env'); const el = $('hub-env'); if (!el) return;
@@ -751,6 +772,92 @@ window.fgDrawer = (key, cat) => {
     + (list.length > 60 ? `<span class="dim" style="font-size:11px;padding:4px 10px">…还有 ${list.length - 60} 单</span>` : '');
   box.className = 'fgdrawer open ' + cur;
   box.innerHTML = `<div class="fgdh">${esc(名)} · ${list.length} 单${cur === 'susp' ? '（挂起=原位冻结，全链路跳过；解挂在详情页/决策台）' : ''}</div><div class="fgdl">${rows}</div>`;
+};
+
+/* ===== P12b 队列（施工令-042 §一）=====
+   案由：制作人 2026-08-11 02:38「我现在完全看不到后续的队列里排了什么东西」。
+   流程页的计划粒是**按管线切片**的（041 §一），一条管线一小段，看得见「这条线接下来轮到谁」，
+   看不见「批C 一共几件、已经做掉几件、还剩多少单元」——那是另一个问题，另一张脸。
+   本页按 批→序 铺全量五态：已完成的那几件也要在场，否则「还剩几件」这句话没有分母。
+   判据全在服务端 lib/pm/schedule-view.队列页（纯函数、可单测）；本函数只画。 */
+let qOpen = {}; // 批名 → 用户是否手动展开/折叠（3s 脉冲重画会重进本函数，不记住的话折叠状态每 3 秒被打回原形）
+const QCLS = { 计划: 'plan', 起草中: 'draft', 已成单: 'made', 完成: 'done', 撤销: 'drop' };
+function qRow(c) {
+  const 终 = ['完成', '撤销'].includes(c.状态);
+  // 单号在手就链过去（已成单/完成）——施工令 §一「已成单→链到单号」。没有单号的粒不给链：
+  // 它还没有工单，跳详情只会 404（同流程页 planBar 的处置）。
+  const 链 = c.单号 ? `<a class="qtk mono" href="#/t/${encodeURIComponent(c.单号)}" title="进工单详情">${esc(c.单号)}</a>` : '';
+  return `<div class="qrow${c.置灰 ? ' blocked' : ''}${终 ? ' fin' : ''}" title="${esc(c.提示)}">
+      <span class="qs mono">${esc(c.批)}${c.序 ? '·' + c.序 : ''}</span>
+      <span class="qb ${QCLS[c.状态] || ''}">${esc(c.徽章)}</span>
+      <span class="qt">${esc(c.题)}</span>${链}
+      ${c.候 ? `<span class="qwait" title="${esc('未满足依赖：' + (c.未满足 || []).map((x) => x.名 + (x.态 ? '（' + x.态 + '）' : '')).join('、'))}">候：${esc(c.候)}</span>` : ''}
+      ${c.池衡建议 ? `<span class="qpool" title="池衡建议">${esc(c.池衡建议)}</span>` : ''}
+      <span class="qsrc" title="${esc(c.来源 || '（未注明来源）')}">${esc(c.来源 || '（未注明来源）')}</span>
+      <span class="qest mono">${c.预估单元 != null ? esc(c.预估单元 + ' 单元') : '—'}</span></div>`;
+}
+async function viewQueue() {
+  const p = projActive();
+  const q = await api('/api/schedule/队列' + (p ? '?项目=' + encodeURIComponent(p) : '')).catch(() => null);
+  // 404 也是一份 JSON（{error}），光判 !q 会让老版本服务端渲染出一张空板——空板与「队列真的空」
+  // 在页面上长得一模一样，而这两件事该说的话完全不同。认 摘要 字段在不在，不认 HTTP 层。
+  if (!q || !q.摘要) {
+    return `<div class="emptycard" style="margin-top:30px"><h5>读不到排程台账</h5>
+      <p>这台监制台上还没有 <span class="mono">排程台账/排程账.jsonl</span>（或服务端版本尚未带 042 读口）。
+      批次拍板后由总监/项管登记计划粒，本页即有内容。</p></div>`;
+  }
+  const s = q.摘要 || { 文: '—' };
+  const 未归属 = q.未归属
+    ? `<span class="subnote">另有 <b>${q.未归属}</b> 粒未归属本项目视界（既不在本项目管线上，也没有本项目的单号）——
+        它们在 <a href="#/flow">流程页</a> 的「监制台维护队列」或别的项目里</span>` : '';
+  if (q.空) {
+    return `<div class="qtop"><span class="qsum">${esc(s.文)}</span><span class="sp"></span>${未归属}</div>
+      <div class="emptycard" style="margin-top:14px"><h5>${esc(q.空文 || '队列空')}</h5>
+      <p>计划粒＝尚未成单的批次计划项。登记后它会同时出现在这里、<a href="#/flow">流程页</a>的「接下来」段与晨晚报里。</p></div>`;
+  }
+  const 批Html = (q.批们 || []).map((b) => {
+    const 手动 = qOpen[b.批];
+    const 折 = 手动 === undefined ? !!b.折叠 : !手动; // 默认按服务端判据（完结批折叠），用户点过就听用户的
+    return `<div class="qbatch${折 ? ' fold' : ''}${b.完结 ? ' done' : ''}">
+      <div class="qbh" onclick="qFold('${qesc(b.批)}')" tabindex="0" role="button" aria-expanded="${!折}"
+          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();qFold('${qesc(b.批)}')}">
+        <span class="qcar">▾</span><b>${esc(b.批)}</b>
+        <span class="pill sm ${b.完结 ? 'ok' : 'mut'}">${b.完结 ? '本批已了' : b.计数.未完 + ' 项未完'}</span>
+        <span class="qbn">共 ${b.计数.总} 项${b.计数.完 ? ` · 已了 ${b.计数.完}` : ''}</span>
+        <span class="sp"></span>
+        <span class="qbe mono">${b.预估 ? b.预估 + ' 单元' : '无预估'}</span></div>
+      <div class="qrows">${b.粒.map(qRow).join('')}</div></div>`;
+  }).join('');
+  // 30s 活体：排程账变了才整页重画。3s 脉冲令牌只按工单目录 mtime 算，登记/转移一粒计划粒
+  // 一个字节都不会动到工单目录——不自己看着账，这页会一直停在打开那一刻的读数。
+  const sig = (x) => JSON.stringify((x.批们 || []).map((b) => [b.批, b.计数.总, b.计数.未完, b.粒.map((c) => c.状态 + (c.置灰 ? '·灰' : ''))]));
+  const sig0 = sig(q);
+  // 每次重画都会挂一条新轮询，而旧的那条只认「id 还在页上」——不发号的话，页面重画十次就有十条
+  // 在跑，十个 fetch 抢着 route()。发号：只有最新一条干活，旧的空转到 guard 消失自己散。
+  const 号 = window._qSeq = (window._qSeq || 0) + 1;
+  pollLoop('q-board', 30000, async () => {
+    if (号 !== window._qSeq) return;
+    const nd = await api('/api/schedule/队列' + (p ? '?项目=' + encodeURIComponent(p) : '')).catch(() => null);
+    if (号 === window._qSeq && nd && nd.摘要 && sig(nd) !== sig0) route();
+  });
+  return `<div class="qtop"><span class="qsum">${esc(s.文)}</span>
+      <span class="subnote">按 批 → 序 排（口径同排程台账）· 点批头折叠 · 悬浮任一行看来源全文</span>
+      <span class="sp"></span>${未归属}</div>
+    <div class="qboard" id="q-board">${批Html}</div>
+    <div class="fglegend" style="margin-top:12px">
+      <span><i class="lg-plan"></i>计划＝还没起草的活 · 起草中＝草稿在台上 · 已成单→点单号进详情</span>
+      <span><i class="lg-stuck"></i>置灰+「候：X」＝依赖未满足，这条现在开不了</span>
+      <span>已了的批默认折叠（点批头可展开）· 预估合计只数未完的活</span></div>`;
+}
+// 批折叠：只切类不重画——重画要重取两个接口，还会把用户滚动位置打回顶部。
+window.qFold = (批) => {
+  const heads = [...document.querySelectorAll('.qbatch')];
+  const box = heads.find((el) => (el.querySelector('.qbh b') || {}).textContent === 批);
+  if (!box) return;
+  const 折 = !box.classList.contains('fold');
+  box.classList.toggle('fold', 折);
+  const h = box.querySelector('.qbh'); if (h) h.setAttribute('aria-expanded', String(!折));
+  qOpen[批] = !折; // 记住用户的选择，扛住 3s 脉冲重画
 };
 
 /* ===== P10 树形 · 已退役（施工令-028，制作人 2026-08-09 03:00 裁决）=====
@@ -2366,7 +2473,7 @@ async function wkGraph(proj) {
 }
 
 // 施工令-015：stylelib 路由退役（内容并入 wiki 美术标杆页签），旧书签在 route() 里转向
-const ROUTES = { '': viewOverview, ideas: viewIdeas, board: viewBoard, flow: viewFlow, agents: viewAgents, decisions: viewDecisions, wiki: viewWiki, relay: viewRelay, report: viewReport };
+const ROUTES = { '': viewOverview, ideas: viewIdeas, board: viewBoard, flow: viewFlow, queue: viewQueue, agents: viewAgents, decisions: viewDecisions, wiki: viewWiki, relay: viewRelay, report: viewReport };
 const WK_ALIAS = ['style', 'stylelib', '风格库']; // 旧书签不死：一律落 wiki 美术标杆
 
 /* ===== P14 想法池（H49 双域·制作人层域）===== */

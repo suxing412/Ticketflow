@@ -1030,7 +1030,38 @@ const 排程读 = {
   },
   // 晨晚报组稿：当日状态变更过的 + 计划中的前 N 条
   切片: (q) => scheduleView.切片(schedule.现态(ROOT), { 日: q.日, 上限: q.上限 ? Number(q.上限) : undefined }),
+  // 项目内「队列」页（施工令-042 §一）：本项目全量五态计划粒，按 批→序 分组 + 依赖置灰
+  队列: (q) => {
+    const ctx = 工单语境(q.项目);
+    return scheduleView.队列页(schedule.现态(ROOT), { 项目: q.项目, 管线集: ctx.管线集, 单号集: ctx.单号集, 单号态: ctx.单号态 });
+  },
+  // 主页工程队队列卡（施工令-042 §二）：无管线的待办粒（Q 队列），最多 N 行
+  工程队: (q) => scheduleView.工程队队列(schedule.现态(ROOT), {
+    上限: q.上限 ? Number(q.上限) : 8,
+    单号态: 工单语境('').单号态,
+  }),
 };
+// 队列页的项目归属与依赖判据要的工单佐证（施工令-042 §一）：
+// 计划粒身上没有项目章（040 的字段表里就没这一格），管线与单号是它跟项目之间仅有的两根绳子；
+// 依赖若指向工单，还得知道那张单了结没有。三份佐证都从工单池现取，不缓存——
+// 队列页本来就是低频页，缓存换来的那点耗时，抵不上「看到的是上一分钟的账」这种错。
+function 工单语境(项目) {
+  const snap = store.snapshot(ROOT);
+  const 单号态 = {}; const 全单 = [];
+  for (const s of store.STATES) {
+    for (const t of (snap[s] || [])) {
+      单号态[t.id] = s;
+      全单.push({ id: t.id, 项目: t.fm.项目 || null, 管线: t.fm.管线 || null, 父单: t.fm.父单 || null });
+    }
+  }
+  const byId = Object.fromEntries(全单.map((t) => [t.id, t]));
+  const p = String(项目 || '').trim();
+  const 默认 = (cfg && cfg.项目 && cfg.项目.默认) || '';
+  // 无章的单归默认项目——与前端 projOf() 同一口径（多项目视界 D42），否则老单会整片判成外项目
+  const 本项目 = p ? 全单.filter((t) => (t.项目 || 默认) === p) : 全单;
+  const 管线集 = [...new Set(本项目.map((t) => pipelines.pipelineOf(t, byId)).filter(Boolean))];
+  return { 单号态, 管线集, 单号集: 本项目.map((t) => t.id) };
+}
 app.get('/api/schedule/:action', (req, res) => {
   if (!ready(res)) return;
   const 名 = String(req.params.action || '');
