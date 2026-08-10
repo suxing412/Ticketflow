@@ -37,6 +37,16 @@ function isSim(opts) { return opts && opts.durMs != null; }
 // 而「base 缺省 = 走 Anthropic 官方端点」——结果是拿 deepseek 的 key 去敲官方的门：
 // 必然 401，且等于把第三方密钥递给了错误的收件人。端点因此单独兜底。
 function 凭据Of(root, cfg, poolName) {
+  // codex 实测定谳（2026-08-08，协-003 收尾验证）：codex CLI **完全无视**
+  // ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN——注入垃圾令牌 + 非法 base 后
+  // `codex exec` 仍退出 0 正常作答，走的是它自己的 ~/.codex 登录态。
+  // 若这里为 codex 池返回凭据，runner 会照常注入、codex 照常忽略，后果是双重错误且完全静默：
+  //   ① 用户以为在按量池上跑，实际在烧订阅；
+  //   ② 预算闸因 codex 非 stream-json 取不到 usage，永远不累计、永不触发。
+  // 故 codex 池一律不托管，并由 startWork 显式失败——宁可响亮地拒派，不要静默地跑错池。
+  // 注：池名 'codex-key' 不走这条——resolveCli 只把**恰好叫 codex** 的池路由到 codex CLI，
+  // 别的名字一律走 claude CLI（命名陷阱，改 resolveCli 前先读这段）。
+  if (poolName === 'codex') return null;
   const c = (cfg.执行池 && cfg.执行池[poolName] && cfg.执行池[poolName].兼容) || null;
   try {
     const creds = require('./creds');
@@ -560,6 +570,17 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   const 档 = roster.modelFor(cfg, t.fm.职能, poolName); // H85 补章：档挂在 职能×池 上，不再按人头查
   const model = kind === '初检' ? (两检cfg.模型 || 'deepseek-v4-flash') : pickModel(cfg, kind, 档, poolName, t.fm.职能);
   const compat = (kind === '执行' || kind === '初检') ? 凭据Of(root, cfg, poolName) : null;
+  // 响亮拒派（2026-08-08 实测）：给 codex 池配了托管 key / 内联兼容段，说明制作人**以为**
+  // 它会按量跑。codex 会忽略注入照跑订阅——静默跑错池比拒派危险得多，这里直接失败。
+  if (poolName === 'codex' && (kind === '执行' || kind === '初检')) {
+    const 有托管 = (() => { try { return require('./creds').has(root, 'codex'); } catch { return false; } })();
+    const 有内联 = !!((cfg.执行池 || {}).codex || {}).兼容;
+    if (有托管 || 有内联) {
+      failLocal('codex 池配了 key 但 codex CLI 无视 ANTHROPIC_* 环境变量（2026-08-08 实测）——'
+        + '照跑会静默落在订阅登录态上且预算闸失效。请改用 claude 家族的按量池，或撤掉 codex 的托管凭据');
+      return true;
+    }
+  }
   const { cmd, args, stream } = resolveCli((kind === '执行' || kind === '初检') ? poolName : 'claude', compat ? (kind === '初检' ? model : (compat.模型 || model)) : model, (cfg.执行器 || {}).放行工具); // 质检/代核/代裁走 claude
   const receiptPath = path.join(root, '回执', `${t.id}.md`);
   const prompt = kind === '质检' ? buildQaPrompt(root, t, proj, receiptPath)
@@ -645,6 +666,9 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   child.on('close', (code) => {
     clearTimeout(killer);
     if (!running.has(agentId)) return; // 已被超时处理
+    // 预算记账（施工令-021）：只对 stream-json 会话有效（claude 家族）；codex 是纯文本流取不到 usage——
+    // 它是订阅池，预算闸本就不针对它。记账失败绝不挡交单。
+    try { const bd = require('./budget'); const u = bd.usageOf(out); if (u.输入 || u.输出) bd.记(root, { 池: cliPool, 单: t.id, ...u }); } catch { /* 尽力 */ }
     settleClose(kind, code, stream ? extractClaudeText(out) : out, errout, t.id, finishOk, failLocal);
   });
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 事件兜底 */ }
@@ -684,6 +708,9 @@ async function tick(root, cfg, opts = {}) {
       const locks = await require('./gates').allLocks(cfg).catch(() => null);
       const gatesInfo = {};
       if (locks) for (const p of ['codex', 'claude']) gatesInfo[p] = { fivePct: locks[p] && locks[p].fivePct, locked: !!(locks[p] && locks[p].locked) };
+      // 预算闸（施工令-021）：按量计费池没有订阅那种用量窗口，额度锁对它恒不生效。
+      // 并进 gatesInfo 而不是改 poolFrozen 签名——池序降级/编制快照/UI 三处自动跟着走。
+      const gatesInfo2 = require('./budget').并入(gatesInfo, require('./budget').冻结池(cfg, root));
       const runningByPool = {};
       for (const e of running.values()) if (e.kind === '执行' && e.池) runningByPool[e.池] = (runningByPool[e.池] || 0) + 1;
       const ledger = pmLedger.read(root);
@@ -698,7 +725,7 @@ async function tick(root, cfg, opts = {}) {
         if (pj && busyProjects.has(pj.name)) { result.拒因.push(`${r2.id} 挂起：项目 ${pj.name} 编辑器锁关（制作人验收中）`); return false; }
         return true;
       });
-      const picks = dispatch.pickNext(cfg, ready, runningByPool, gatesInfo, ledger.并发上限);
+      const picks = dispatch.pickNext(cfg, ready, runningByPool, gatesInfo2, ledger.并发上限);
       for (const p of picks) {
         const t0 = store.find(root, p.id);
         if (!t0 || t0.state !== '待投') continue;

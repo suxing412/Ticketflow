@@ -918,7 +918,7 @@ app.get('/api/pm/roster', async (req, res) => {
   if (!ready(res)) return;
   const D = require('./lib/pm/dispatch');
   let gi = null;
-  try { const locks = await gates.allLocks(cfg); gi = { codex: locks.codex, claude: locks.claude }; } catch { /* 读数盲飞：可用性按未知呈报，不假绿 */ }
+  try { const locks = await gates.allLocks(cfg); gi = require('./lib/budget').并入({ codex: locks.codex, claude: locks.claude }, require('./lib/budget').冻结池(cfg, ROOT)); } catch { /* 读数盲飞：可用性按未知呈报，不假绿 */ }
   const 编制 = roster.snapshot(cfg, gi ? ((p) => D.poolFrozen(cfg, gi, p)) : null);
   res.json({ 编制, 池态: gi });
 });
@@ -994,7 +994,7 @@ app.get('/api/gates', async (req, res) => {
     const rec = require('./lib/recommend').recommend(ROOT, cfg, { codex: locks.codex, claude: locks.claude });
     // 沟通护城河读数（施工令-006）：UI 此前完全不提示，制作人看不出「claude 生产单为什么不动」。
     // 判定不另写一套——直接问 dispatch.moatBlocked，UI 与调度同一把尺，绝不各算各的。
-    const gi = { codex: locks.codex, claude: locks.claude };
+    const gi = require('./lib/budget').并入({ codex: locks.codex, claude: locks.claude }, require('./lib/budget').冻结池(cfg, ROOT));
     const 保留 = Number((cfg.额度 || {}).沟通保留 ?? 20);
     const moat = { 池: 'claude', 保留线: 保留, 窗口: '5h', 余量: locks.claude.fivePct == null ? null : 100 - locks.claude.fivePct,
       已越: require('./lib/pm/dispatch').moatBlocked(cfg, gi, 'claude') };
