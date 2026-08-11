@@ -56,6 +56,12 @@
   <select id="滤状态"><option value="">全部</option><option>草稿</option><option>待投</option><option>在途</option><option>质检</option><option>完成</option></select>
   <button onclick="刷工单()">刷新</button>
   <button onclick="开建单()">＋ 新建工单</button>
+  <button onclick="批量投出()">批量投出草稿</button>
+  <button onclick="按调度干跑()">按调度干跑本轮可派</button>
+</div>
+<div class="提示">
+  批量操作**只做干跑与流转，从不真跑**——真跑逐张点，每张独立过三闸。
+  一个按钮同时花掉几张单的钱，不该存在。
 </div>
 <table>
   <thead><tr><th>编号</th><th>状态</th><th>角色</th><th>标题</th><th>项目</th><th>执行池</th><th>操作</th></tr></thead>
@@ -296,6 +302,51 @@ async function 判(id, 干跑) {
     const { 体: j } = await 取JSON('/api/exec/qa/' + encodeURIComponent(id), { method: 'POST', body: JSON.stringify({ 干跑 }) });
     $('运行').textContent = JSON.stringify(j, null, 2);
   } catch (e) { $('运行').textContent = '调用失败：' + e.message; }
+  刷工单(); 刷战绩(); 刷调度();
+}
+
+// 批量操作。**只做干跑与流转，绝不批量真跑**——
+// 一个按钮同时花掉几张单的钱，不该存在。真跑必须逐张点，每张独立过三闸。
+async function 批量投出() {
+  const { 体: j } = await 取JSON('/api/tickets?state=' + encodeURIComponent('草稿'));
+  const 单 = (j.工单 || []).map((t) => t.id);
+  if (!单.length) { alert('没有草稿单'); return; }
+  if (!confirm('把这 ' + 单.length + ' 张草稿投出到「待投」？\n\n' + 单.join('、'))) return;
+  const 结果 = [];
+  for (const id of 单) {
+    const { 体: r } = await 取JSON('/api/tickets/' + encodeURIComponent(id) + '/move', {
+      method: 'POST', body: JSON.stringify({ 到: '待投' }),
+    });
+    结果.push(id + (r.ok ? ' ✓' : ' ✗ ' + r.error));
+  }
+  $('运行区').style.display = '';
+  $('运行').textContent = '批量投出：\n' + 结果.join('\n');
+  刷工单(); 刷调度();
+}
+
+// 按调度算出来的「本轮可派」逐张干跑。干跑零计费，用来在真跑前把一批单的
+// 选人、权限、依赖一次看完——比一张张点省事，又不会花钱。
+async function 按调度干跑() {
+  const { 码, 体: t } = await 取JSON('/api/exec/tick');
+  if (码 !== 200) { alert('执行器未拉起：npm run executor'); return; }
+  const 可派 = t.本轮可派 || [];
+  if (!可派.length) {
+    $('运行区').style.display = '';
+    $('运行').textContent = '本轮无可派工单。\n\n跳过原因：\n'
+      + (t.跳过 || []).map((s) => '  ' + s.id + '：' + s.原因).join('\n');
+    return;
+  }
+  $('运行区').style.display = '';
+  $('运行').textContent = '干跑 ' + 可派.length + ' 张…';
+  const 行 = [];
+  for (const x of 可派) {
+    const { 体: r } = await 取JSON('/api/exec/run/' + encodeURIComponent(x.id), {
+      method: 'POST', body: JSON.stringify({ 干跑: true }),
+    });
+    行.push(x.id + '  → ' + (r.ok ? (r.provider + '（' + (r.权限 && r.权限.模式) + '）') : ('✗ ' + r.error)));
+  }
+  $('运行').textContent = '批量干跑（零计费）：\n' + 行.join('\n')
+    + '\n\n真跑请逐张点——每张独立过三闸，批量真跑不提供。';
   刷工单(); 刷战绩(); 刷调度();
 }
 
