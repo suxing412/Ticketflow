@@ -51,6 +51,11 @@ if (STUB) {
   q.eagerRefresh = () => {};
   // 额度闸从严：桩台一律不放行（真派发面已哑，这里是第二道）
   q.checkGate = async () => ({ allowed: false, threshold: 0, reason: '桩台模式：额度查询停用，一律不放行' });
+  // 池衡余额外呼（H99 · 施工令-045）：deepseek 系的 /user/balance 是真 HTTP 请求，桩台一律不发。
+  // 额度那两池的外呼已随 quota 一并哑掉（gates.allLocks 读它），于是桩台的三池读数**全报盲区**——
+  // 这正是桩台该有的样子：读不到就说读不到，绝不编数（要件 1）。
+  const pb = require('./lib/pm/poolbalance');
+  pb.探余额 = async () => ({ error: '桩台模式：余额外呼已停用' });
   const np = require('./lib/netprobe');
   np.httpProbe = async () => null;
   np.探 = async () => ({ 直连: null, 经代理: null });
@@ -526,6 +531,26 @@ app.post('/api/config/model-add', (req, res) => {
   res.json({ ok: true, 可选: cfg.模型.可选 });
 });
 
+// 池衡参数（H99 · 施工令-045 要件 5）：迟滞/阈值/冷却/回退次数与自动平衡总开关。
+// 走 /api/config/* 这条老路而不是项管的受限动作 API——**调参是总监与制作人的事**，
+// 项管只在参数定下的框里动手；把它塞进受限动作里等于让项管自己放宽自己的闸。
+app.post('/api/config/poolbalance', (req, res) => {
+  if (!ready(res)) return;
+  const { key, value } = req.body || {};
+  const NUM = { 最小间隔分钟: [1, 720], 阈值差: [1, 100], 冷却分钟: [1, 1440], 失败回退次数: [1, 10], 自愈窗秒: [0, 600] };
+  cfg.池衡 = cfg.池衡 || {};
+  if (key === '开') { cfg.池衡.开 = !!value; }
+  else if (key in NUM) {
+    const v = Number(value);
+    if (!Number.isInteger(v) || v < NUM[key][0] || v > NUM[key][1]) return res.status(400).json({ error: `取值须在 ${NUM[key][0]}–${NUM[key][1]}` });
+    cfg.池衡[key] = v;
+  } else return res.status(400).json({ error: '不可调整的池衡参数：' + key });
+  saveCfg();
+  journal.append(ROOT, `池衡参数调整：${key} → ${key === '开' ? (value ? '开' : '关') : Number(value)}`);
+  // 版本随回：参数在 CAS 切片里，改完不换新版本前端下一手必 409
+  res.json({ ok: true, 池衡: cfg.池衡, 版本: require('./lib/pm/poolbalance').版本(cfg) });
+});
+
 // 额度刷新间隔（绝不爆表纪律的可调项，硬下限 120s 在 quota.js 兜底）
 app.post('/api/config/quota', (req, res) => {
   if (!ready(res)) return;
@@ -963,6 +988,26 @@ app.post('/api/pm/concurrency', (req, res) => {
   journal.append(ROOT, `并发调配（施工令-010）：${摘}｜理由：${String(理由 || '未述').slice(0, 120)}`);
   pmLedger.event(ROOT, '并发调配', { 生效: r.生效, 理由: String(理由 || '').slice(0, 200) });
   res.json({ ok: true, 生效: r.生效, ...concurrency.view(cfg, pmLedger.read(ROOT).并发上限) });
+});
+
+// ---- 池衡控制面（H99 · 施工令-045）----
+// 案源：制作人 2026-08-11 决议「项管拥有读额度切模型的权力，他应该做到平衡才行」。
+// 业务全在 lib/pm/poolbalance（读数归一/决策/回退/CAS/品味锁都在那儿可单测），此处**只做路由**。
+// 写路由是**枚举动作**而不是通用 patch：项管手里只有这四把钥匙，别的门连锁孔都没有——
+// 「brain 提示词自由文本不能直接改 cfg」这一条，靠的就是这里没有第二个写口（要件 10）。
+const poolbalance = require('./lib/pm/poolbalance');
+app.get('/api/pm/poolbalance', async (req, res) => {
+  if (!ready(res)) return;
+  const 读数 = await poolbalance.采集(ROOT, cfg).catch(() => ({}));
+  res.json(poolbalance.矩阵(cfg, 读数, { 事件: pmLedger.events(ROOT, 400), 活单: poolbalance.活单摘(ROOT) }));
+});
+app.post('/api/pm/poolbalance/:action', (req, res) => { // 中文动作名走 :action 参数（同 /api/schedule/:action：字面量中文路径在 express 4 下必 404）
+  if (!ready(res)) return;
+  const b = req.body || {};
+  const r = poolbalance.执行动作(ROOT, cfg, { ...b, 动作: String(req.params.action || '') }, { 保存: saveCfg });
+  // 码由 lib 给：403 越权/品味锁 · 409 CAS 冲突或覆盖冻结 · 429 迟滞窗内 · 400 其余语义错
+  if (!r.ok) return res.status(r.码 || 400).json(r);
+  res.json(r);
 });
 
 // ---- 排程台账（施工令-040 · Q1 后端半）----
@@ -1505,6 +1550,10 @@ function start() {
             require('./lib/pm/patrol').打点停滞(ROOT, cfg);
             // 施工令-010 零输出看门狗：会话拉起 ≥config.并发.零输出分钟 仍一个字没吐 → 急件（TK-102 挂死 48 分钟案）
             require('./lib/pm/patrol').零输出(ROOT, cfg);
+            // H99 池衡巡检（施工令-045）：读三池额度 → 决策 → 受限动作落配置。异步且自吞异常，
+            // 不 await——池衡是优化面，它的外呼慢一点不该把同一拍的其余巡检项拖住。
+            require('./lib/pm/wake').池衡巡检(ROOT, cfg, { 保存: saveCfg })
+              .catch((e) => journal.append(ROOT, `池衡巡检异常：${String(e.message).slice(0, 80)}`));
           } catch { /* 巡检失败不阻塞 */ }
         }, 15 * 60000).unref();
       }

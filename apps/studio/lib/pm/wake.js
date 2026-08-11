@@ -104,4 +104,25 @@ function checkChainFailures(root, opts = {}) {
   return alerts;
 }
 
-module.exports = { onCampaignFinalized, onChildDispatched, checkCloseouts, checkChainFailures, isCampaign, childrenOf };
+// ④ 池衡巡检（H99 · 施工令-045）：读三池额度 → 决策 → 受限动作落配置。
+// 挂在这儿而不是 runner.tick 里，是因为它**不是派发路径的一环**：一次外呼（额度/余额）+ 一次判断，
+// 15 分钟一拍足矣；塞进 tick（默认 30s 一轮）只会把外呼频次抬高 30 倍，换不来任何实时性。
+// 判断力全在 poolbalance 的纯函数里，这里只做编排：取数 → 巡检 → 回一份摘要给调用方留痕。
+// 任何一步失败都只回结果不抛：池衡是**优化面**，它挂了不该把 15 分钟巡检的其余项带崩。
+async function 池衡巡检(root, cfg, opts = {}) {
+  const pb = require('./poolbalance');
+  const 参 = pb.参数(cfg);
+  if (!参.开) return { 开: false, 说明: '池衡自动平衡已关（studio.config.json · 池衡.开）' };
+  let 读数 = null;
+  try { 读数 = opts.读数 || await pb.采集(root, cfg, opts); } catch (e) { return { 开: true, error: '读数采集失败：' + String(e.message).slice(0, 80) }; }
+  let r;
+  try { r = pb.巡检(root, cfg, 读数, opts); } catch (e) { return { 开: true, error: '池衡巡检异常：' + String(e.message).slice(0, 80) }; }
+  const 动 = r.切.length + r.回退.length;
+  if (动) {
+    journal.append(root, `池衡巡检：切换 ${r.切.length} 处 · 回退 ${r.回退.length} 处`
+      + `（${[...r.切, ...r.回退].map((d) => `${d.位} ${d.从}→${d.到}`).join('；')}）——只影响此后新派发的会话`);
+  }
+  return { 开: true, 读数, ...r };
+}
+
+module.exports = { onCampaignFinalized, onChildDispatched, checkCloseouts, checkChainFailures, isCampaign, childrenOf, 池衡巡检 };

@@ -85,6 +85,31 @@ t('①置位：外呼面停用——额度查询恒空、连通探测恒空、�
   assert.deepEqual(v.脑, 脑面.map(() => '桩台空转'), '项管脑外呼未停用（每个入口都 spawn 一次 claude CLI）');
 });
 
+// 池衡余额外呼（H99 · 施工令-045）：deepseek 系的 /user/balance 是真 HTTP 请求，桩台一律不发。
+// 顺带锁死一条**调用路径**：采集必须经 module.exports.探余额 调，模块内局部直调会从桩闸旁边溜过去
+// （037/038 两起「手搓漏面」事故正是这一型）——所以这里断言的是 采集 的产物，不只是导出名。
+function 按量池仓() {
+  const root = 桩台仓();
+  const p = path.join(root, 'studio.config.json');
+  const c = JSON.parse(fs.readFileSync(p, 'utf8'));
+  c.执行池.deepseek = { 阈值: 70, 周阈值: 90, 兼容: { base: 'https://api.deepseek.com/anthropic', key: 'sk-stub-key-0000' } };
+  fs.writeFileSync(p, JSON.stringify(c), 'utf8');
+  return root;
+}
+t('①置位：池衡余额外呼停用，且采集经导出面调用——三池读数全报盲区，绝不编数', () => {
+  const root = 按量池仓();
+  const v = 探({ STUDIO_STUB: '1', STUDIO_ROOT: root }, `(async () => {
+    const pb = require(${模块('pm', 'poolbalance')});
+    const cfg = JSON.parse(require('fs').readFileSync(${JSON.stringify(path.join(root, 'studio.config.json'))}, 'utf8'));
+    return { 名: pb.探余额.name, 读数: await pb.采集(${JSON.stringify(root)}, cfg) };
+  })()`);
+  assert.notEqual(v.名, '探余额', '桩台下 探余额 竟还是原厂函数');
+  for (const 池 of ['claude', 'codex', 'deepseek']) {
+    assert.equal(v.读数[池].盲区, true, `${池} 竟在桩台下报出了读数`);
+    assert.equal(v.读数[池].可用度, null, `${池} 盲区却带着可用度数字——编数就是撒谎`);
+  }
+});
+
 t('①置位：项管脑被调时回调按「桩台不作业」回，不静默丢掉调用方', () => {
   const v = 探({ STUDIO_STUB: '1', STUDIO_ROOT: 桩台仓() },
     `new Promise((res) => b.draftTicket('x', {}, '需求', null, (r) => res(r)))`);

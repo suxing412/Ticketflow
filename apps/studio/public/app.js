@@ -1320,6 +1320,90 @@ function poolCardHtml(name, l, cfg2, moat) {
     ${rows}
     ${moatHtml}`;
 }
+/* ---- 池位矩阵卡（H99 · 施工令-045 要件 9）----
+   一张卡回答三个问题：①三池现在各剩多少（读不到就明写盲区，绝不摆一个好看的数）
+   ②每个会话位当前落在哪个池的哪个档、有没有被品味锁/人工覆盖钉住 ③项管最近动过什么手。
+   编辑面只留「人工覆盖 / 解除覆盖」——那是**人**的入口；项管的自动切换走 /api/pm/poolbalance，
+   参数页不提供代项管切换的按钮（那等于绕开迟滞与台账，把审计面开了个后门）。*/
+function pbPoolPill(p) {
+  if (!p) return '';
+  if (p.盲区) return `<span class="pill sm mut" title="${esc(p.源 || '')}｜${esc(p.因 || '')}">${esc(p.池)} · 盲区</span>`;
+  const cls = p.冻结 ? 'err' : p.可用度 >= 50 ? 'ok' : 'warn';
+  const 冷 = p.冷却至 ? ` · 冷却至 ${esc(String(p.冷却至).slice(11, 16))}` : '';
+  const 明 = (p.明细 || []).map((d) => (d.余额 != null ? `余额 ${d.余额}${d.币种 || ''}/满额 ${d.满额}` : `${d.窗} ${d.已用}%/闸 ${d.阈值}%`)).join(' · ');
+  return `<span class="pill sm ${cls}" title="${esc(p.源 || '')}｜${esc(明)}｜取数 ${esc(p.读数时刻 || '未知')}">${esc(p.池)} 可用 ${p.可用度}%${冷}</span>`;
+}
+function pbHtml(m) {
+  if (!m || !m.位) return '<p class="dim">池衡读取失败</p>';
+  const 池行 = (m.池 || []).map(pbPoolPill).join(' ') || '<span class="dim">（无池）</span>';
+  const 位行 = m.位.map((b) => {
+    const 判官 = b.类型 !== '执行';
+    const 池签 = `<span class="poolp pill sm fn ${b.当前池 === 'claude' ? 'pool-claude' : 'pool-codex'}" title="${判官 ? 'QA/核查 会话由 runner 定死走 claude，可切的是模型档' : esc(b.摘 || '')}">${esc(b.当前池 || '未挂池')}${b.档 ? ' · ' + esc(b.档) : ''}</span>`;
+    const 读 = b.读数 ? (b.读数.盲区 ? '<span class="pill sm mut">读数盲区</span>' : `<span class="pill sm ${b.读数.可用度 >= 50 ? 'ok' : 'warn'}">可用 ${b.读数.可用度}%</span>`) : '';
+    const 锁 = b.锁 ? `<span class="pill sm warn" title="${esc(b.锁.因)}">品味锁 · 应为 ${esc(b.锁.应为)}${b.锁.合规 ? '' : '（当前不合锁）'}</span>` : '';
+    const 覆 = b.覆盖 ? `<span class="pill sm err" title="${esc(b.覆盖.理由 || '')}｜${esc(b.覆盖.时刻 || '')}">人工覆盖 · ${esc(b.覆盖.由 || '人')} · 自动已冻</span>` : '';
+    const 最近 = b.最近切换 ? `<span class="dim mono" style="font-size:11px">最近 ${esc(String(b.最近切换).slice(5, 16).replace('T', ' '))}</span>` : '';
+    return `<div class="pbrow" data-pos="${esc(b.位)}"><b>${esc(b.位)}</b>${池签}${读}${锁}${覆}${最近}
+      <span class="pbacts">${b.覆盖 ? `<button class="btn h32" onclick="pbRelease('${esc(b.位)}')">解除覆盖</button>`
+        : `<button class="btn h32" onclick="pbOverride('${esc(b.位)}',${判官 ? 1 : 0})">人工覆盖</button>`}</span></div>`;
+  }).join('');
+  const 事件 = (m.事件 || []).map((e) => `<div class="pbev"><span class="pill sm ${e.类型 === '池衡拒绝' || e.类型 === '池衡越权' ? 'warn' : 'mut'}">${esc(e.类型.replace('池衡', ''))}</span>
+    <span class="mono dim">${esc(String(e.t || '').slice(5, 16).replace('T', ' '))}</span>
+    <span>${esc(e.位 || e.动作 || '')}${e.从 ? ` ${esc(e.从)}→${esc(e.到 || '')}` : ''}</span>
+    <span class="dim" title="${esc(e.因 || e.理由 || '')}">${esc(String(e.由 || '')) }${e.因类 ? ' · ' + esc(e.因类) : ''}</span></div>`).join('')
+    || '<p class="dim" style="margin:6px 0 0">（还没有池衡事件）</p>';
+  const p = m.参数 || {};
+  return `<div class="pbhead"><span class="pill sm ${m.开 ? 'ok' : 'mut'}">自动平衡 ${m.开 ? '开' : '关'}</span>
+      <span class="dim mono" style="font-size:11px" title="CAS 版本：写前先读、按现态重试">v${esc(m.版本 || '')}</span>
+      <button class="btn h32" style="margin-left:auto" onclick="pbToggle(${m.开 ? 0 : 1})">${m.开 ? '关闭自动平衡' : '开启自动平衡'}</button></div>
+    <p class="pmeta">项管每 15 分钟读三池额度、按可用度差调整池位；品味锁位与人工覆盖位不动。切换只影响此后新派发的会话。</p>
+    <div class="pbpools">${池行}</div>
+    <div class="pbrows">${位行}</div>
+    <div class="pbparams">${[['最小间隔分钟', 5], ['阈值差', 5], ['冷却分钟', 15], ['失败回退次数', 1]].map(([k, st]) =>
+      `<span class="pbp" data-pbk="${k}">${k} <button onclick="pbStep('${k}',-${st})">−</button><b class="val">${p[k]}</b><button onclick="pbStep('${k}',${st})">＋</button></span>`).join('')}</div>
+    <div class="sec-h" style="margin-top:14px"><h3 class="h17" style="font-size:13px">最近 5 条池衡事件</h3></div>${事件}`;
+}
+window.pbLoad = async () => {
+  const box = $('pb-card'); if (!box) return;
+  try { const m = await api('/api/pm/poolbalance'); window._pb = m; box.innerHTML = pbHtml(m); }
+  catch { box.innerHTML = '<p class="dim">池衡读取失败（服务未就绪？）</p>'; }
+};
+// 人工覆盖：总监/制作人的入口。原生 prompt 在 exe 壳里是哑弹（施工令-012），一律走 askInput。
+window.pbOverride = async (位, 判官) => {
+  const m = window._pb || {}; const b = (m.位 || []).find((x) => x.位 === 位) || {};
+  const 池表 = (m.池 || []).map((p) => p.池).join(' / ');
+  const 值 = await askInput(判官 ? `人工覆盖 ${位}：模型档` : `人工覆盖 ${位}：目标池`, 判官 ? (b.档 || '') : (b.当前池 || ''),
+    { note: 判官 ? 'QA/核查 会话由 runner 定死走 claude，这里切的是模型档（留空=CLI 默认）' : `可选池：${池表}` });
+  if (值 == null) return;
+  const 理由 = await askInput('理由（进台账，晨报可对账）', '', { note: '人工覆盖会冻结项管的自动切换，直至你解除' });
+  if (理由 == null) return;
+  const r = await post('/api/pm/poolbalance/人工覆盖', { 位, ...(判官 ? { 档: 值 } : { 池: 值 }), 预期版本: m.版本, 操作者: '制作人', 理由 });
+  toast(r.ok ? `已覆盖：${位} → ${r.到}（自动切换已冻结）` : (r.error || '失败'));
+  pbLoad();
+};
+window.pbRelease = async (位) => {
+  if (!await ask(`解除 ${位} 的人工覆盖？解除后项管的自动平衡会重新接管这一位。`)) return;
+  const m = window._pb || {};
+  const r = await post('/api/pm/poolbalance/解除覆盖', { 位, 预期版本: m.版本, 操作者: '制作人', 理由: '参数页解除' });
+  toast(r.ok ? `${位} 覆盖已解除，自动平衡恢复` : (r.error || '失败'));
+  pbLoad();
+};
+window.pbToggle = async (on) => {
+  const r = await post('/api/config/poolbalance', { key: '开', value: !!on });
+  if (!r.ok) return toast(r.error || '失败');
+  toast(on ? '池衡自动平衡已开' : '池衡自动平衡已关（读数与人工覆盖照常）');
+  pbLoad();
+};
+window.pbStep = async (k, delta) => {
+  const el = document.querySelector(`.pbp[data-pbk="${k}"] .val`); if (!el) return;
+  const next = Number(el.textContent) + delta;
+  const r = await post('/api/config/poolbalance', { key: k, value: next });
+  if (!r.ok) return toast(r.error || '失败');
+  el.textContent = String(next); bump(el);
+  if (window._pb && window._pb.参数) window._pb.参数[k] = next;
+  if (window._pb) window._pb.版本 = r.版本 || window._pb.版本; // 参数也在 CAS 切片里：改完必须换新版本，否则下一手覆盖必 409
+  toast(`池衡 ${k} → ${next}`);
+};
 // H85 编制权下放项管（2026-08-06 制作人裁决）：参数页的「agent 编制 · 执行池」管理区已整体拆除
 // （下拉框/在岗徽章/交互面）。编制是项管所辖数据，只在项管页以只读快照呈现（rosterSnapHtml），
 // 调整走 /api/pm/roster（项管调用 + 总监代劳），监制台不再提供编辑界面。
@@ -1423,6 +1507,7 @@ async function viewParams() {
   // 全链路自检进页自动跑（服务端 60s 缓存，便宜）；按钮=强制复检
   setTimeout(() => { if ($('env-card')) window.envProbe(null); }, 0);
   setTimeout(() => { if ($('creds-card')) window.credsLoad(); }, 0);
+  setTimeout(() => { if ($('pb-card')) window.pbLoad(); }, 0); // 池衡矩阵：外呼一次额度/余额，不阻塞首屏
   return `<div class="p6grid"><div>
       <div class="sec-h"><h3 class="h17">执行器</h3><span class="subnote">派发调度循环 · 开 exe 即开工厂</span></div>${runCards}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">参数闸值</h3><span class="subnote">监制台可调</span></div>${params}
@@ -1433,7 +1518,9 @@ async function viewParams() {
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">执行池阈值</h3><span class="subnote">额度锁的杆（D26）</span></div>${poolCards}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">额度双池</h3></div>
       <div class="poolcard card" id="pool-codex">${poolCardHtml('codex', null, c.执行池 && c.执行池.codex)}</div>
-      <div class="poolcard card" id="pool-claude">${poolCardHtml('claude', null, c.执行池 && c.执行池.claude)}</div></div></div>`;
+      <div class="poolcard card" id="pool-claude">${poolCardHtml('claude', null, c.执行池 && c.执行池.claude)}</div>
+      <div class="sec-h" style="margin-top:26px"><h3 class="h17">池位矩阵</h3><span class="subnote">H99 项管池衡 · 职能×池×档</span></div>
+      <div class="card pbcard" id="pb-card"><p class="dim">读取中…</p></div></div></div>`;
 }
 // 编制步进：POST 后原地更新该职能人数、在途上限推导值、右侧编制表——视图保持渲染，不整页重载
 // sStep（编制步进）已随拉取制退役（0.23.11）；编制管理区整体归项管（H85）
