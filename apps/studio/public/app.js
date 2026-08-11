@@ -423,12 +423,32 @@ window.releaseAll = async () => {
   toast(`已投池 ${ok} 张${fail ? ` · 失败 ${fail} 张（看 journal）` : ''}`);
   route();
 };
+/* 工单页长列折叠（施工令-044 F5）：只对「完成」列生效——它是唯一只增不减的列。
+   最近＝交付时间倒序（缺交付时间的回落更新时间/创建时间，一律不参与「最近」的前排）。
+   展开态落 localStorage：制作人把它展开过一次，回来还是展开的。 */
+const BOARD_FOLD_N = 10;
+const FOLD_STATES = new Set(['完成']);
+const foldKey = (s) => 'studio-board-open-' + s;
+const boardOpen = (s) => { try { return localStorage.getItem(foldKey(s)) === '1'; } catch { return false; } };
+const boardRecent = (arr) => [...arr].sort((a, b) =>
+  String(b.交付时间 || b.更新时间 || b.创建时间 || '').localeCompare(String(a.交付时间 || a.更新时间 || a.创建时间 || ''))
+  || String(b.id).localeCompare(String(a.id)));
+window.boardFold = (s) => {
+  try { localStorage.setItem(foldKey(s), boardOpen(s) ? '0' : '1'); } catch { /* 隐私模式：本次会话内不记忆 */ }
+  route();
+};
 async function viewBoard() {
   const { states, board } = await loadBoard();
   const conf = await api('/api/config').catch(() => ({ 闸值: {} }));
   const widths = { 池: 'w168', 在途: 'w168', 待验收: 'w168', 执行失败: 'w128', 完成: 'w128', 已归档: 'w128' };
   const cols = states.map((s) => {
-    const items = board[s] || [];
+    // 完成列折叠（施工令-044 F5 · 巡礼）：落袋单只增不减，百来张平铺下去，工单页一开就是一屏
+    // 「已经做完的事」——找在办的单反而要滚很久。默认只留最近 10 张（交付时间倒序，最近的在最上），
+    // 其余收进一个「展开全部 N 条」钮里。总数不藏：列头 .cnt 永远报全量。展开态记本地（换页/重启都记得）。
+    const 折 = FOLD_STATES.has(s);
+    const items = 折 ? boardRecent(board[s] || []) : (board[s] || []);
+    const 收 = 折 && items.length > BOARD_FOLD_N && !boardOpen(s);
+    const 可见 = 收 ? items.slice(0, BOARD_FOLD_N) : items;
     const hot = s === '待验收' || s === '待定夺' || s === '执行失败';
     const head = s === '草稿'
       ? `<h4>${s}<a class="newdraft" href="#/draft">＋ 起草</a></h4>`
@@ -437,11 +457,14 @@ async function viewBoard() {
         : s === '已归档' && (window._hiddenCnt || window._showHidden)
           ? `<h4>${s}<span class="cnt">${items.length}</span><button class="newdraft" title="隐藏归档：制作人湮灭的废案，默认不渲染" onclick="window._showHidden=!window._showHidden;route()">${window._showHidden ? '藏起' : `显隐藏 ${window._hiddenCnt}`}</button></h4>`
           : `<h4>${s}<span class="cnt">${items.length}</span></h4>`;
-    const cards = items.map((t) => `<div class="bcard2${suspCls(t)}" data-tid="${esc(t.id)}" onclick="location.hash='#/t/${t.id}'"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}>
+    const cards = 可见.map((t) => `<div class="bcard2${suspCls(t)}" data-tid="${esc(t.id)}" onclick="location.hash='#/t/${t.id}'"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}>
         <span class="cid">${snowB(t)}${esc(t.id)}</span>
         <span class="cpri ${t.优先级 === 'P0' ? 'p0' : ''}">${esc(t.优先级 || '')}</span>
         <div class="ct clamp2" title="${esc(t.title)}">${esc(t.title)}</div>${fnPill(t.职能)}</div>`).join('');
-    return `<div class="bcol2 ${widths[s] || ''} ${hot ? 'hot' : ''}">${head}${cards}</div>`;
+    const 折钮 = 折 && items.length > BOARD_FOLD_N
+      ? `<button class="bmore" onclick="boardFold('${qesc(s)}')" title="${收 ? `这一列共 ${items.length} 张，当前只铺了最近 ${BOARD_FOLD_N} 张（按交付时间倒序）` : `收回只看最近 ${BOARD_FOLD_N} 张`}">${收 ? `展开全部 ${items.length} 条` : `收起 · 只看最近 ${BOARD_FOLD_N} 条`}</button>`
+      : '';
+    return `<div class="bcol2 ${widths[s] || ''} ${hot ? 'hot' : ''}">${head}${cards}${折钮}</div>`;
   }).join('');
   const fillBar = async () => {
     const g = await api('/api/gates'); gateCache = g;
@@ -1220,9 +1243,19 @@ async function viewReport() {
     stat('token(agent自报)', o.token估计合计 ? o.token估计合计.toLocaleString() : '—'),
     ...(dispatch && pl && pl.台账 && pl.台账.管理费 ? [stat('管理费(项管)', (pl.台账.管理费.token合计 || 0).toLocaleString() + ' tk·' + (pl.台账.管理费.次数 || 0) + '次')] : []),
   ].join('<div class="vdiv"></div>');
+  // 报表口径混排修（施工令-044 F4 · 巡礼）：「按职能」表的项管行原先把 token 数塞进「均 h」列
+  // （"1,385,033 tk" 与同列的 "2.4"（小时）同列而居），一列两种量纲，读表的人得逐格辨认单位。
+  // 时间列只放时间：项管行不计工时 → 合计h/均h 一律「—」，token 归它自己的去处（项目管理台账卡 +
+  // 顶栏「管理费(项管)」读数），悬浮里把数报全，不靠混排凑信息量。
+  const 项管行 = (L) => {
+    const f = L.管理费 || {};
+    const tk = (f.token合计 || 0).toLocaleString();
+    return { 名: '项目管理', 单数: f.次数 || 0, 实际h合计: '—', 平均h: '—', 自修合计: 0,
+      提示: `项目管理（项管自身开销）：${f.次数 || 0} 次 · ${tk} tokens —— 按次计，不产生工时。明细见「项目管理台账」卡。` };
+  };
   const gtable = (title, rows2, note) => `<div class="rp-card card r14"><h4>${title}<span class="subnote" style="margin-left:10px">${note || ''}</span></h4>
     <table class="rp-t"><tr><th></th><th>单数</th><th>合计h</th><th>均h</th><th>自修</th></tr>
-    ${rows2.map((g) => `<tr><td>${esc(g.名)}</td><td>${g.单数}</td><td>${g.实际h合计}</td><td>${g.平均h}</td><td class="${g.自修合计 ? 'warnc' : 'dim'}">${g.自修合计}</td></tr>`).join('') || '<tr><td colspan="5" class="dim">无数据</td></tr>'}</table></div>`;
+    ${rows2.map((g) => `<tr${g.提示 ? ` title="${esc(g.提示)}"` : ''}><td>${esc(g.名)}</td><td>${g.单数}</td><td>${g.实际h合计}</td><td${g.平均h === '—' ? ' class="dim"' : ''}>${g.平均h}</td><td class="${g.自修合计 ? 'warnc' : 'dim'}">${g.自修合计}</td></tr>`).join('') || '<tr><td colspan="5" class="dim">无数据</td></tr>'}</table></div>`;
   const dayMax = Math.max(1, ...d.每日.map((x) => x.交付));
   const daysHtml = d.每日.map((x) => `<div class="rp-day" title="${esc(x.日)} · 交付 ${x.交付} 单 · ${x.实际h}h">
       <i style="height:${Math.round(x.交付 / dayMax * 46) + 4}px"></i><span>${esc(x.日.slice(5))}</span></div>`).join('') || '<p class="dim">暂无交付</p>';
@@ -1234,7 +1267,8 @@ async function viewReport() {
       <td class="dim" title="${esc(r.实际消耗 || '')}">${esc((r.实际消耗 || '—').slice(0, 26))}</td></tr>`).join('');
   return `<div class="stat-strip card r14">${strip}</div>
     <div class="rp-grid">
-      <div>${gtable('按职能', dispatch && pl && pl.台账 ? [...d.按职能, { 名: '项目管理', 单数: (pl.台账.管理费 || {}).次数 || 0, 实际h合计: '—', 平均h: ((pl.台账.管理费 || {}).token合计 || 0).toLocaleString() + ' tk', 自修合计: 0 }] : d.按职能)}${dispatch ? costRankTable(rows) : gtable('按主办', d.按主办)}${dispatch && pl && pl.台账 ? pmLedgerCard(pl.台账) : ''}${gtable('按执行池', d.按池, '订阅额度去向')}${scoreCard(sc)}</div>
+      <div>${gtable('按职能', dispatch && pl && pl.台账 ? [...d.按职能, 项管行(pl.台账)] : d.按职能,
+    dispatch && pl && pl.台账 ? '项目管理行按次计，不计工时——它的 token 归项目管理台账' : '')}${dispatch ? costRankTable(rows) : gtable('按主办', d.按主办)}${dispatch && pl && pl.台账 ? pmLedgerCard(pl.台账) : ''}${gtable('按执行池', d.按池, '订阅额度去向')}${scoreCard(sc)}</div>
       <div><div class="rp-card card r14"><h4>每日交付<span class="subnote" style="margin-left:10px">近 14 天</span></h4>
         <div class="rp-days">${daysHtml}</div></div>
         ${gtable('按项目', d.按项目)}</div>

@@ -382,6 +382,11 @@ a.gear { text-decoration:none; }
 .bcard2 > .pill { align-self:flex-start; margin-top:auto; flex:none; }
 .newdraft { display:inline-flex; align-items:center; height:26px; padding:0 11px; border-radius:13px;
   border:1px solid var(--accent-ink); color:var(--accent-ink); font-size:11px; font-weight:500; background:var(--card); }
+/* 长列折叠钮（施工令-044 F5，「完成」列专用）：虚线框=「下面还有，只是没铺出来」，
+   与实线的卡片一眼可分；整列宽、高 28px（触点地板 ≥26 自带满足）。 */
+.bmore { display:flex; align-items:center; justify-content:center; width:100%; height:28px; margin-top:2px;
+  border:1px dashed var(--line); border-radius:10px; color:var(--ink3); font-size:11px; background:transparent; }
+.bmore:hover { color:var(--accent-ink); border-color:var(--accent-ink); }
 
 /* ===== 在途 · 执行时间轴（甘特并入） ===== */
 .tlcard { padding:18px 24px; margin-bottom:14px; }
@@ -396,6 +401,12 @@ a.gear { text-decoration:none; }
   box-shadow:inset 0 1px 2px var(--groove-soft); } /* 轨道凹槽 */
 .tlseg { position:absolute; top:3px; height:16px; border-radius:5px; opacity:.85; cursor:pointer;
   box-shadow:inset 0 1px 0 var(--edge-hl-soft); } /* 段条上缘受光，给"实体条"质感 */
+/* 触点地板 ≥26px（施工令-044 F3）：段条本身是甘特刻度，高度=轨道几何（16px 内嵌 22px 轨道），
+   不能为了好点就把它撑高——那会连带改泳道行高与堆叠层距（rowH/laneH 的 30px 节拍写在 app.js 里）。
+   故走伪元素扩区：透明 ::after 只吃点击不参与布局，视觉一个像素不动。纵向 26px 居中展开=
+   ±5px，仍在本行 30px 节拍之内，不会去抢上下泳道的点击。横向不扩：同一泳道里相邻两段挨得近，
+   横向撑开会互相偷点击——段宽本身编码的是「跑了多久」，那才是它该保的语义。 */
+.tlseg::after { content:''; position:absolute; left:0; right:0; top:50%; height:26px; transform:translateY(-50%); }
 .tlseg:hover { opacity:1; }
 .tlseglb { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
   font-size:10px; font-style:normal; font-weight:600; color:rgba(0,0,0,.66); pointer-events:none; overflow:hidden; }
@@ -476,8 +487,10 @@ a.gear { text-decoration:none; }
   border-top:1px dashed var(--line); font-size:11px; }
 .fgfold .fgfk { color:var(--ink3); margin-right:2px; }
 .fgfold .fgdot { color:var(--ink3); font-style:normal; opacity:.6; }
+/* min-height 22 → 26（施工令-044 F3 触点地板）：四类分计数是真按钮（点开抽屉），
+   胶囊自己就是命中盒，直接抬到地板高最直白——整条 .fgfold 随之高 4px，别处几何不动。 */
 .fgcat { font:inherit; font-size:11px; color:var(--ink3); background:transparent; border:1px solid transparent;
-  border-radius:999px; padding:1px 8px; cursor:pointer; min-height:22px; }
+  border-radius:999px; padding:1px 8px; cursor:pointer; min-height:26px; }
 .fgcat b { font-family:var(--mono); font-weight:700; }
 .fgcat:hover { color:var(--ink2); border-color:var(--line); }
 .fgcat.on { color:var(--ink); border-color:var(--ink3); background:var(--we); }
@@ -594,6 +607,9 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .arow2 .ar-id { min-width:0; flex:1 1 0; width:0; }
 .arow2 .ar-idline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .arow2 .aid { font-family:var(--mono); font-size:12px; color:var(--accent-ink); }
+/* 卡内单号链（整卡也可点，它另开一条 stopPropagation 的路）：行内元素纵向 padding
+   只撑命中盒不改行盒，18→28px，卡头一行的行距原样（施工令-044 F3，同 .wk-l 修法）。 */
+.arow2 .aid a { padding:5px 2px; }
 .arow2 .ar-who { font-size:11px; color:var(--ink3); }
 .arow2 .at { font-size:14px; font-weight:600; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .poolp.pool-claude { color:var(--pool-claude); }
@@ -994,7 +1010,9 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .wk-grid { display:grid; grid-template-columns: 170px minmax(0,1fr) 210px; gap:16px; align-items:start; }
 .wk-tree { border-right:0.5px solid var(--line); padding-right:12px; font-size:13px; }
 .wk-cat { margin:0 0 8px; font-weight:600; }
-.wk-it { margin:0 0 6px 16px; color:var(--ink2); cursor:pointer; }
+/* 词条行是块级（一行一条，整行可点）：地板靠纵向 padding 补足（21→27px），
+   同步把行间距 6→3px 匀回来——列表节拍只多 3px，视觉上仍是原来那份密度（施工令-044 F3）。 */
+.wk-it { margin:0 0 3px 16px; padding:3px 2px; color:var(--ink2); cursor:pointer; border-radius:6px; }
 .wk-it:hover { color:var(--ink); }
 .wk-it.cur { color:var(--accent-ink); font-weight:600; }
 /* 触点地板 ≥26px（W32 补巡 · 施工令-030）：词条内链原先只有一行文字高（~17px），
@@ -1225,7 +1243,10 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
   transition:background .16s var(--ease-out); }
 .khead:hover { background:var(--sect); }
 .karrow { color:var(--ink3); font-size:11px; width:10px; flex:none; }
-.kid { font-weight:600; font-family:var(--mono); font-size:12.5px; color:var(--ink); text-decoration:none; flex:none; }
+/* 触点地板 ≥26px（施工令-044 F3）：单号链是 flex 项（会被块化），纵向 padding 会把头行整体撑高，
+   所以 padding 撑命中盒 + 等量负 margin 把布局位移抵掉——命中盒 19→27px，头行高度一个像素没动。 */
+.kid { font-weight:600; font-family:var(--mono); font-size:12.5px; color:var(--ink); text-decoration:none; flex:none;
+  padding:4px 2px; margin:-4px 0; }
 .kid:hover { color:var(--accent); text-decoration:underline; }
 .ktitle { color:var(--ink2); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:13px; }
 .kst { font-size:11px; border-radius:999px; padding:2px 10px; flex:none; font-weight:600; white-space:nowrap; }
