@@ -1155,7 +1155,10 @@ app.get('/api/gates', async (req, res) => {
     const 保留 = Number((cfg.额度 || {}).沟通保留 ?? 20);
     const moat = { 池: 'claude', 保留线: 保留, 窗口: '5h', 余量: locks.claude.fivePct == null ? null : 100 - locks.claude.fivePct,
       已越: require('./lib/pm/dispatch').moatBlocked(cfg, gi, 'claude') };
-    res.json({ paused: require('./lib/core/state').read(ROOT).paused, locks: gi, 推荐: rec, 护城河: moat });
+    // 预算闸失效位（施工令-046）：三候选全失守时 lib/budget 落的是空实现——不落账、不冻结、零症状。
+    // 这一位是那台哑火保险丝在 API 面的唯一出口，参数页额度卡据此挂红标。正常命中时返回体逐字节不变。
+    res.json({ paused: require('./lib/core/state').read(ROOT).paused, locks: gi, 推荐: rec, 护城河: moat,
+      ...require('./lib/budget-resolve').失效位(require('./lib/budget')) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // H69 评分仪表盘：岗位×模型矩阵聚合（均分+样本数，n<5 前端灰显）。只读仪表盘，不接奖惩。

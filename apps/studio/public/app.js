@@ -1320,6 +1320,18 @@ function poolCardHtml(name, l, cfg2, moat) {
     ${rows}
     ${moatHtml}`;
 }
+/* ---- 预算闸失效红标（施工令-046）----
+   lib/budget 三候选全失守时落的是空实现：不落账、不冻结，按量池烧多少都不会自己停，
+   而界面上一点症状都没有——静默失效比报错危险得多。这是故障不是设定内行为（对比 .moat 走警示色），
+   故走危险红且挂在额度双池正上方；悬停给三候选各自的失败因，照着改就能修。*/
+function budgetDeadHtml(g) {
+  if (!g || !g.budget失效) return '';
+  const 因 = (g.budget失败因 || []).map((f) => `${f.候选}：${f.因}`).join('\n');
+  return `<div class="budgetdead" title="${esc(因 || '（服务端未给失败因）')}">
+    <b>⚠ 预算闸失效 — 不落账不冻结</b>
+    <span>按量池（API key）没有 5h/周 窗口，全靠这道闸刹车；它现在是空转的。
+      悬停看三候选失败因，修 <code>studio.config.json · packages路径</code> 或 <code>TICKETFLOW_PACKAGES</code> 后重启。</span></div>`;
+}
 /* ---- 池位矩阵卡（H99 · 施工令-045 要件 9）----
    一张卡回答三个问题：①三池现在各剩多少（读不到就明写盲区，绝不摆一个好看的数）
    ②每个会话位当前落在哪个池的哪个档、有没有被品味锁/人工覆盖钉住 ③项管最近动过什么手。
@@ -1481,11 +1493,12 @@ async function viewParams() {
   let lastPoolJson = '';
   const fillPools = async () => {
     const g = await api('/api/gates');
-    const key = JSON.stringify([g.locks.codex, g.locks.claude, g.护城河]);
+    const key = JSON.stringify([g.locks.codex, g.locks.claude, g.护城河, g.budget失效, g.budget失败因]);
     if (key === lastPoolJson) return;
     lastPoolJson = key;
     const pc = $('pool-codex'); if (pc) pc.innerHTML = poolCardHtml('codex', g.locks.codex, c.执行池 && c.执行池.codex, g.护城河);
     const pl = $('pool-claude'); if (pl) pl.innerHTML = poolCardHtml('claude', g.locks.claude, c.执行池 && c.执行池.claude, g.护城河);
+    const bd = $('budget-dead'); if (bd) bd.innerHTML = budgetDeadHtml(g); // 失效才出，正常时这块是零高度空 div
   };
   setTimeout(() => { fillPools().catch(() => { /* 保持占位，不清空 */ }); }, 0);
   pollLoop('pool-codex', 5000, fillPools);
@@ -1517,6 +1530,7 @@ async function viewParams() {
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">项目注册</h3><span class="subnote">执行 agent 的目标仓库（D32）</span></div>${projCard}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">执行池阈值</h3><span class="subnote">额度锁的杆（D26）</span></div>${poolCards}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">额度双池</h3></div>
+      <div id="budget-dead"></div>
       <div class="poolcard card" id="pool-codex">${poolCardHtml('codex', null, c.执行池 && c.执行池.codex)}</div>
       <div class="poolcard card" id="pool-claude">${poolCardHtml('claude', null, c.执行池 && c.执行池.claude)}</div>
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">池位矩阵</h3><span class="subnote">H99 项管池衡 · 职能×池×档</span></div>
