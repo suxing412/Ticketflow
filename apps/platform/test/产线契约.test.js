@@ -210,5 +210,85 @@ t('判官失败不打整单——工单维持原状待重判', () => {
   }
 });
 
+// ---- 输出提取（2026-08-10 首次跨厂真判踩出来的）----
+const 输出提取 = require(path.join(平台根, 'lib', '输出提取.js'));
+
+t('codex JSONL：抽出最后一条 agent_message，不把流事件当正文', () => {
+  // 这段是**真实的 codex 输出结构**（首次跨厂真判抓的样本）。
+  // 不抽的话，review-opinion 会把 thread.started / command_execution 这些
+  // 流事件当成「阻断问题」——判官明明工作正常，回执却是一堆 JSON 垃圾。
+  const 流 = [
+    '{"type":"thread.started","thread_id":"x"}',
+    '{"type":"turn.started"}',
+    '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"我先看一眼文件。"}}',
+    '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls","exit_code":0}}',
+    '2026-08-10T14:27:42Z ERROR codex_models_manager: failed to refresh',
+    '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"结论：不过\\n## 阻断问题\\n- 改了不该改的文件"}}',
+    '{"type":"turn.completed","usage":{"input_tokens":1}}',
+  ].join('\n');
+  const r = 输出提取.抽正文(流, 'codex-jsonl');
+  assert.equal(r.来源, 'codex-jsonl');
+  assert.ok(r.正文.startsWith('结论：不过'), '要取最后一条 agent_message，不是第一条：' + r.正文.slice(0, 40));
+  assert.ok(!r.正文.includes('thread.started'), '流事件不得混进正文');
+  // 非 JSON 的日志行（codex 会往 stdout 混 ERROR 行）不能把解析带崩
+  assert.equal(输出提取.逐行JSON(流).length, 6);
+});
+
+t('claude stream-json：取最后一条 assistant 文本', () => {
+  const 流 = [
+    '{"type":"system","subtype":"init"}',
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"我先想想。"}]}}',
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"结论：通过"}]}}',
+  ].join('\n');
+  const r = 输出提取.抽正文(流, 'claude-stream-json');
+  assert.equal(r.正文, '结论：通过');
+});
+
+t('抽不出正文时回退原文，且标记提取失败', () => {
+  // 空会让上游误判成「零输出」，进而把一次成功的运行记成失败、污染路由战绩。
+  const r = 输出提取.抽正文('{"type":"turn.started"}', 'codex-jsonl');
+  assert.ok(r.提取失败, '要标记出来，人才知道是格式变了而不是判官没说话');
+  assert.ok(r.正文.length > 0, '必须回退原文，不能返回空');
+  // 未知格式原样返回，不猜
+  assert.equal(输出提取.抽正文('随便一段话', '没见过的格式').正文, '随便一段话');
+});
+
+t('端到端：抽正文 → 质检判定，结论与问题都干净', () => {
+  const 流 = [
+    '{"type":"thread.started"}',
+    '{"type":"item.completed","item":{"type":"agent_message","text":"结论：不过\\n## 阻断问题\\n- 没有导出\\n- 漏了测试\\n## 验收证据\\n- 看了 index.js"}}',
+  ].join('\n');
+  const 抽 = 输出提取.抽正文(流, 'codex-jsonl');
+  const 判 = 质检.判定(0, 抽.正文);
+  assert.equal(判.结论, '不过');
+  assert.deepEqual(判.意见.问题, ['没有导出', '漏了测试'], '问题里不得混入流事件');
+  assert.equal(判.意见.证据.length, 1);
+});
+
+// ---- 受限参数按适配器分（同一次真判踩出来的）----
+t('受限参数按适配器分：claude 的 flag 不能塞给 codex', () => {
+  const 配 = { providers: { codex: { adapter: 'codex-cli' } }, 执行: { 权限: { 放开: [] } } };
+  const c = 派单.权限参数(配, 'reviewer', 'claude-cli');
+  const x = 派单.权限参数(配, 'reviewer', 'codex-cli');
+  assert.deepEqual(c.参数, ['--permission-mode', 'plan']);
+  assert.ok(x.参数.includes('--sandbox'), 'codex 用沙箱表达同一件事');
+  assert.ok(!x.参数.includes('--permission-mode'),
+    'codex 不认这个 flag——实测退出码 2，且加固②会把它归类成「判官失败」，看上去像判官不稳定');
+});
+
+t('旧的数组写法仍兼容，但必须响亮告警', () => {
+  // 保留兼容是为了不破坏既有配置，但一刀切正是本次故障的成因，不能默默接受。
+  const 配 = { 执行: { 权限: { 放开: [], 受限参数: ['--permission-mode', 'plan'] } } };
+  const r = 派单.权限参数(配, 'reviewer', 'codex-cli');
+  assert.ok(r.警告, '数组写法必须带警告');
+  assert.ok(/跨厂时必挂/.test(r.警告), r.警告);
+});
+
+t('未知适配器：明说受限模式形同虚设', () => {
+  const r = 派单.权限参数({}, 'reviewer', '没见过-cli');
+  assert.deepEqual(r.参数, []);
+  assert.ok(/形同虚设/.test(r.警告), '注不进参数就等于没受限，必须说出来：' + r.警告);
+});
+
 fs.rmSync(沙盒, { recursive: true, force: true });
 console.log(`全部通过：${passed} 项`);

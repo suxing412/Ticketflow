@@ -61,6 +61,20 @@ t('worktree 只被隔离进程持有，server.js 碰不到它', () => {
   assert.ok(/workspace['\\/]+worktree/.test(服务源), '隔离进程应当是持有 worktree 的那一个');
 });
 
+t('每条转发路径都必须转发请求体（少一个 pipe 就静默丢 body）', () => {
+  // 2026-08-10 实测踩到：/api/workspace/* 那条写的是裸 代理.end()，**请求体被整个丢掉**，
+  // 于是经 server 调任何 /write/* 都收到空 body，报「项目(空)不在注册表里」。
+  // 之前没暴露，是因为执行器直连 4371 绕过了 server——这条路径压根没人走过。
+  // 两条转发实现不一致才是根源，所以断言两条都得有 pipe。
+  const 转发块 = 源.split('http.request(').slice(1);
+  assert.ok(转发块.length >= 2, '应有工作区与执行器两条转发');
+  for (const 块 of 转发块) {
+    const 片 = 块.slice(0, 1400);
+    assert.ok(/req\.pipe\(代理\)/.test(片),
+      '转发必须 req.pipe(代理)，裸的 代理.end() 会静默丢掉请求体：\n' + 片.slice(0, 260));
+  }
+});
+
 t('隔离进程自己要有门禁与路径闸（它是唯一能起 git 的地方）', () => {
   const 服务源 = fs.readFileSync(path.join(平台根, 'scripts', '工作区服务.js'), 'utf8');
   assert.ok(/门禁\.校验/.test(服务源), '隔离进程必须自己校验令牌——不能靠「只有 server 会调它」这种假设');

@@ -29,6 +29,7 @@ const 路由历史 = require(path.join(平台根, 'lib', 'routing', 'history.js'
 const 调度 = require(path.join(平台根, 'lib', '调度.js'));
 const 巡检 = require(path.join(平台根, 'lib', '巡检.js'));
 const 质检 = require(path.join(平台根, 'lib', '质检.js'));
+const 输出提取 = require(path.join(平台根, 'lib', '输出提取.js'));
 
 function 读JSON(p, 缺省) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return 缺省; }
@@ -233,7 +234,7 @@ const 服务 = http.createServer((req, res) => {
         const adapter = registry.create(配置, 派.选中);
         调用 = adapter.buildInvocation({});
         // 判官一律受限：它只该读和判，不该改任何文件。
-        const 受限 = 派单.权限参数(配置, 'reviewer');
+        const 受限 = 派单.权限参数(配置, 'reviewer', 派.adapter);
         调用 = { ...调用, args: [...调用.args.filter((a) => !/^--dangerously-/.test(a)), ...(受限.参数 || [])] };
       } catch (e) { return 发JSON(res, 400, { ok: false, error: e.message }); }
 
@@ -254,7 +255,10 @@ const 服务 = http.createServer((req, res) => {
       if (!工作.ok) return 发JSON(res, 403, { ...共同, ok: false, error: 工作.错 });
 
       拉起(调用, 提示, 工作.目录, (r) => {
-        const 判 = 质检.判定(r.退出码, r.输出);
+        // 先按适配器声明的格式抽出 agent 正文，再交给判定——
+        // 直接拿整条 JSONL 流去解析，「阻断问题」里会塞满流事件（实测踩过）。
+        const 抽 = 输出提取.抽正文(r.输出, 调用.outputFormat);
+        const 判 = 质检.判定(r.退出码, 抽.正文);
         记战绩({
           provider: 派.选中, role: 'reviewer', ticket: id,
           ok: 判.结论 !== '判官失败', dry: false, durationMs: r.耗时毫秒,
@@ -275,6 +279,7 @@ const 服务 = http.createServer((req, res) => {
 
         return 发JSON(res, 200, {
           ...共同, 干跑: false, 结论: 判.结论, 说明: 判.说明,
+          正文来源: 抽.来源, ...(抽.提取失败 ? { 提取告警: "按声明格式抽不出 agent 正文，已回退原文——格式可能变了" } : {}),
           意见: 判.意见, 工单状态: 流转 || '质检（判官失败，维持原状待重判）',
           耗时毫秒: r.耗时毫秒,
           ...(r.验尸 ? { 验尸: r.验尸, 活尾巴: r.活尾巴 } : {}),
