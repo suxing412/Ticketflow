@@ -23,12 +23,19 @@ const 沙盒 = fs.mkdtempSync(path.join(os.tmpdir(), 'platform-tickets-'));
 库.建目录(沙盒);
 
 // ---- 状态机 ----
-t('四态与转移表（协-001 决定 1：先做四态）', () => {
-  assert.deepEqual(库.STATES, ['草稿', '待投', '在途', '完成']);
+t('状态机：协-004 加质检态，靠改表不改逻辑', () => {
+  // 协-001 决定 1 承诺「表驱动，加态是改表不是改逻辑」。协-004 加质检时兑现了：
+  // 状态机代码一行没动，只改了 STATES 与 TRANSITIONS 两张表。
+  assert.deepEqual(库.STATES, ['草稿', '待投', '在途', '质检', '完成']);
   assert.equal(库.isLegal('草稿', '待投'), true);
+  assert.equal(库.isLegal('在途', '质检'), true, '干完送检');
+  assert.equal(库.isLegal('在途', '完成'), true, '免检时直达完成');
+  assert.equal(库.isLegal('质检', '完成'), true, '判过');
+  assert.equal(库.isLegal('质检', '待投'), true, '判不过回待投重做——不是失败终态，同一张单可以再跑');
   assert.equal(库.isLegal('在途', '待投'), true, '退回重投要合法');
   assert.equal(库.isLegal('草稿', '完成'), false, '不许跳级');
   assert.equal(库.isLegal('完成', '在途'), false, '完成是终态');
+  assert.equal(库.isLegal('草稿', '质检'), false, '没干过的活不能直接送检');
 });
 
 // ---- 反向验证 ①：工单号 ----

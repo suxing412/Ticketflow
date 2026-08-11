@@ -74,7 +74,7 @@
     "真跑三闸，缺一即拒：① 请求体显式 干跑:false ② 本段 允许真跑:true ③ 该池在 预算.池 里配了上限。",
     "三条各自独立：防手滑 / 防「服务起来了就能花钱」/ 防没有刹车就上路。",
     "权限（协-002 拍板 A3）：白名单之外一律受限——缺配置即最严不是最松。判据只看角色不看项目。",
-    "受限参数会覆盖掉适配器默认的 --dangerously-skip-permissions / --dangerously-bypass-approvals-and-sandbox。",
+    "受限参数**按适配器分**：一个厂商的 flag 拿给另一个厂商用必挂（claude 的 --permission-mode codex 不认）。跨厂评审让执行方与判官不同源，这个错必然会踩。",
     "预算池上限写在 预算.池 段，口径见 packages/budget/README.md；注意 codex 取不到 usage，其消耗不计入。"
   ],
   "执行": {
@@ -89,10 +89,18 @@
         "frontend",
         "integrator"
       ],
-      "受限参数": [
-        "--permission-mode",
-        "plan"
-      ]
+      "受限参数": {
+        "claude-cli": [
+          "--permission-mode",
+          "plan"
+        ],
+        "codex-cli": [
+          "--sandbox",
+          "read-only",
+          "--skip-git-repo-check"
+        ],
+        "command-cli": []
+      }
     }
   },
   "预算": {

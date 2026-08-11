@@ -26,6 +26,10 @@ const 加固 = require(path.join(平台根, 'lib', '执行加固.js'));
 const 派单 = require(path.join(平台根, 'lib', '派单.js'));
 const 工单库 = require(path.join(平台根, 'lib', '工单库.js'));
 const 路由历史 = require(path.join(平台根, 'lib', 'routing', 'history.js'));
+const 调度 = require(path.join(平台根, 'lib', '调度.js'));
+const 巡检 = require(path.join(平台根, 'lib', '巡检.js'));
+const 质检 = require(path.join(平台根, 'lib', '质检.js'));
+const 输出提取 = require(path.join(平台根, 'lib', '输出提取.js'));
 
 function 读JSON(p, 缺省) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return 缺省; }
@@ -202,11 +206,131 @@ const 服务 = http.createServer((req, res) => {
   const 拒 = 门禁.校验(req, { 令牌, 端口, 路径: '/api/执行器' });
   if (拒) return 发JSON(res, 拒.码, { ok: false, error: 拒.错误 });
 
+  // ——— 质检（协-004）：由另一个 Provider 判一次 ———
+  // 独立接口而不是塞进 /run 的尾巴：质检是一次**独立的付费调用**，
+  // 应该能被单独触发、单独看回执、单独失败重来。混在 /run 里，
+  // 「执行成功但质检挂了」会变成一个说不清的复合结果。
+  const q = 路径.match(/^\/qa\/([^/]+)$/);
+  if (q && req.method === 'POST') {
+    if (!registry) return 发JSON(res, 503, { ok: false, error: 'providers 注册表加载失败' });
+    if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
+    const id = decodeURIComponent(q[1]);
+
+    return 收体(req, 64 * 1024, (体) => {
+      const 干跑 = !(体 && (体.干跑 === false || 体.dry_run === false));
+      const t = 工单库.find(工单根.根, id);
+      if (!t) return 发JSON(res, 404, { ok: false, error: `工单不存在：${id}` });
+      if (t.state !== '质检') {
+        return 发JSON(res, 409, { ok: false, error: `只有「质检」态的工单可以判，当前是「${t.state}」` });
+      }
+
+      // 判官走「评审」类别：router 的 crossProviderReview 会优先挑**别家**，
+      // 降低同源盲区——自己判自己是最没有价值的一种评审。
+      const 派 = 派单.选派(平台根, 配置, { 角色: 'reviewer', 类别: '评审', 公用件, 账本根, 工单: t });
+      if (!派.ok) return 发JSON(res, 409, { ok: false, ...派 });
+
+      let 调用;
+      try {
+        const adapter = registry.create(配置, 派.选中);
+        调用 = adapter.buildInvocation({});
+        // 判官一律受限：它只该读和判，不该改任何文件。
+        const 受限 = 派单.权限参数(配置, 'reviewer', 派.adapter);
+        调用 = { ...调用, args: [...调用.args.filter((a) => !/^--dangerously-/.test(a)), ...(受限.参数 || [])] };
+      } catch (e) { return 发JSON(res, 400, { ok: false, error: e.message }); }
+
+      const 提示 = 质检.质检提示词(t, (体 && 体.变更文件) || []);
+      const 共同 = { ok: true, 工单: id, 判官: 派.选中, 跨厂: 派.选中 !== t.fm.执行池, 调用 };
+
+      if (干跑) {
+        return 发JSON(res, 200, {
+          ...共同, 干跑: true, 提示词预览: 提示.slice(0, 400),
+          说明: '干跑：未拉起判官，零计费。真判需 {"干跑": false} 且满足真跑三闸。',
+        });
+      }
+
+      const 许 = 真跑许可(派.选中);
+      if (!许.准) return 发JSON(res, 许.码, { ...共同, ok: false, error: 许.错 });
+
+      const 工作 = 取工作目录();
+      if (!工作.ok) return 发JSON(res, 403, { ...共同, ok: false, error: 工作.错 });
+
+      拉起(调用, 提示, 工作.目录, (r) => {
+        // 先按适配器声明的格式抽出 agent 正文，再交给判定——
+        // 直接拿整条 JSONL 流去解析，「阻断问题」里会塞满流事件（实测踩过）。
+        const 抽 = 输出提取.抽正文(r.输出, 调用.outputFormat);
+        const 判 = 质检.判定(r.退出码, 抽.正文);
+        记战绩({
+          provider: 派.选中, role: 'reviewer', ticket: id,
+          ok: 判.结论 !== '判官失败', dry: false, durationMs: r.耗时毫秒,
+          qualityPassed: 判.结论 === '通过', _输出: r.输出,
+        });
+
+        let 流转 = null;
+        if (判.下一步) {
+          const m = 工单库.move(工单根.根, id, '质检', 判.下一步, (fm) => {
+            fm.质检结论 = 判.结论;
+            fm.质检意见 = 判.意见;
+            fm.质检时间 = new Date().toISOString();
+            fm.质检判官 = 派.选中;
+            if (判.下一步 === '完成') fm.完成时间 = new Date().toISOString();
+          });
+          流转 = m.ok ? 判.下一步 : `流转失败：${m.error}`;
+        }
+
+        return 发JSON(res, 200, {
+          ...共同, 干跑: false, 结论: 判.结论, 说明: 判.说明,
+          正文来源: 抽.来源, ...(抽.提取失败 ? { 提取告警: "按声明格式抽不出 agent 正文，已回退原文——格式可能变了" } : {}),
+          意见: 判.意见, 工单状态: 流转 || '质检（判官失败，维持原状待重判）',
+          耗时毫秒: r.耗时毫秒,
+          ...(r.验尸 ? { 验尸: r.验尸, 活尾巴: r.活尾巴 } : {}),
+        });
+      });
+    });
+  }
+
+  // ——— 调度一轮（协-004）：算出这一轮该派谁，顺带巡检 ———
+  // GET 只算不派，POST 才真派。分开是因为「看看会派什么」是个高频且无害的动作，
+  // 而它和「真的派出去」只差一个 HTTP 方法时，人迟早会点错。
+  if (路径 === '/tick') {
+    if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
+    const 全部 = 工单库.list(工单根.根);
+    const 待投表 = 全部.filter((t) => t.state === '待投').map((t) => 工单库.find(工单根.根, t.id)).filter(Boolean);
+    const 在跑 = 调度.统计在跑(全部.filter((t) => t.state === '在途'));
+    const 冻 = 派单.冻结情况(公用件, 配置, 账本根);
+
+    const 排 = 调度.排一轮(配置, {
+      待投表, 在跑,
+      依赖就绪: (单) => 派单.依赖就绪(工单库, 工单根.根, 单).ok,
+      选池: (单) => {
+        const p = 派单.选派(平台根, 配置, { 角色: (单.fm && (单.fm.role || 单.fm.职能)) || '', 公用件, 账本根 });
+        return p.ok ? p.选中 : null;
+      },
+    });
+
+    const 告警 = 巡检.巡一轮(配置, {
+      全部工单: 全部, 现在: Date.now(), 冻结: 冻.挡,
+      本轮派出: 排.派.length, 本轮跳过: 排.跳过,
+    });
+
+    return 发JSON(res, 200, {
+      ok: true, 待投: 待投表.length, 在跑, 并发上限: (配置.执行 && 配置.执行.并发) || { 默认: 1 },
+      本轮可派: 排.派, 跳过: 排.跳过, 告警,
+      说明: 'GET /tick 只算不派。真派用 POST /run/<工单> —— 一次一张，'
+        + '每张都要独立过真跑三闸。**本进程不自动连跑**，见 /health 的 自动派发 字段。',
+    });
+  }
+
   if (路径 === '/health') {
     return 发JSON(res, 200, {
       ok: true, 服务: '执行器', 端口, 允许真跑, 上限毫秒, 静默毫秒,
       工单库: 工单根.ok ? 工单根.根 : null,
-      说明: '本进程是唯一被允许拉起 AI CLI 的地方；干跑默认开启',
+      并发: (配置.执行 && 配置.执行.并发) || { 默认: 1 },
+      // 有意不做自动连跑：/tick 只**算**该派谁，真派仍要一张一张 POST /run。
+      // 让一个能自己花钱的循环在后台无人值守地转，是另一个量级的授权——
+      // 那要单独一张令，不该由「加了调度模块」顺带获得。
+      自动派发: false,
+      说明: '本进程是唯一被允许拉起 AI CLI 的地方；干跑默认开启；'
+        + 'GET /tick 只算不派，不存在后台自动连跑的循环',
     });
   }
 
@@ -263,13 +387,24 @@ const 服务 = http.createServer((req, res) => {
       (async () => {
         let 工作区 = null; let 工作目录 = null; let 临时 = false;
 
+        // 依赖闸（协-004）：DAG 写在工单里就得被执行，否则子单会拿到缺半截的工作区。
+        const 依 = 派单.依赖就绪(工单库, 工单根.根, t);
+        if (!依.ok) return 发JSON(res, 409, { ...共同, ok: false, error: 依.error, 未完成: 依.未完成, 缺失: 依.缺失 });
+
         if (项目名) {
-          const p = await 工作区请求('/write/prepare', { 项目: 项目名, 工单: { id, fm: t.fm } });
+          const p = await 工作区请求('/write/prepare', {
+            项目: 项目名, 工单: { id, fm: t.fm },
+            // 依赖单原样递过去：worktree.integrate 从它们的 fm.workspace.commit 取检查点，
+            // 把上游的产出合进本单的工作区。不递的话每张子单都从基线起步，
+            // 前一张干的活对后一张不可见。
+            依赖: 依.依赖单.map((d) => ({ id: d.id, fm: d.fm })),
+          });
           if (p.码 !== 200 || !p.体.ok) {
             return 发JSON(res, p.码, { ...共同, ok: false, error: `建隔离工作区失败：${p.体.error}` });
           }
           工作区 = p.体.工作区;
           工作目录 = 工作区.path;
+          派.工作区 = 工作区;                 // 落单时写进 fm.workspace，供后续依赖单集成
         } else {
           // 决定 3：没有隔离目录就拒绝真跑，而不是退回主工作区
           const 工作 = 取工作目录();
@@ -298,12 +433,22 @@ const 服务 = http.createServer((req, res) => {
             const pb = await 工作区请求('/write/publish', { 项目: 项目名, 工作区 });
             发布 = pb.体;
             if (pb.码 === 200 && pb.体.ok) {
-              const m = 工单库.move(工单根.根, id, '在途', '完成', (fm) => {
-                fm.完成时间 = new Date().toISOString();
+              // 干完了不等于做对了。默认送质检，由**另一个 Provider** 判一次；
+              // 跳过质检必须是显式决定（配置关掉、工单 QA:关、或角色免检）。
+              // 反过来会让「没配 = 没人验收」，那是最危险的默认。
+              const 检 = 质检.需质检(配置, t);
+              const 目标 = 检.要 ? '质检' : '完成';
+              const m = 工单库.move(工单根.根, id, '在途', 目标, (fm) => {
+                if (!检.要) { fm.完成时间 = new Date().toISOString(); fm.免检原因 = 检.因; }
                 fm.检查点 = c.体.commit;
                 fm.发布提交 = pb.体.commit;
+                // 回填 commit：下游依赖单靠 fm.workspace.commit 把本单的产出合进去。
+                // 只写 fm.检查点 的话 worktree.integrate 看不见，会把本单当成
+                // 「没有可集成的检查点」而 **静默跳过**——DAG 就断在这里。
+                fm.workspace = Object.assign({}, fm.workspace, { commit: c.体.commit });
               });
-              完成 = m.ok ? '完成' : `流转失败：${m.error}`;
+              完成 = m.ok ? 目标 : `流转失败：${m.error}`;
+              if (m.ok && 检.要) 完成 += '（待质检：POST /qa/' + id + '）';
             }
           }
         }

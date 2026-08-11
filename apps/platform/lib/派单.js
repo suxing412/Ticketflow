@@ -11,17 +11,59 @@ const 加固 = require('./执行加固');
 // 权限判定（协-002 拍板 A3）
 // 白名单之外一律受限——**缺配置即最严，不是最松**。
 // 判据只看角色不看项目：项目维度等真有需求再加，现在加是凭空造复杂度。
-function 权限参数(配置, 角色) {
+// 受限参数**必须按适配器分**。
+//
+// 2026-08-10 实测踩到：原先写死一套 ['--permission-mode','plan']，那是 claude CLI 的参数。
+// 跨厂评审把判官选成 codex 之后，注进去的是 codex 根本不认的 flag：
+//   error: unexpected argument '--permission-mode' found
+// 判官进程退出码 2，每次质检都必挂。**而且不会有人发现是参数错了**——
+// 加固②会把它归类成「判官失败」，工单维持原状，看上去像是判官不稳定。
+//
+// 一个厂商的 flag 拿给另一个厂商用，这个错误在「跨厂评审」这个设计下是必然会踩的，
+// 因为正是跨厂让执行方和判官不同源。
+const 默认受限参数 = {
+  'claude-cli': ['--permission-mode', 'plan'],
+  // codex 用沙箱与审批策略表达同一件事；另外它在非 git 目录会拒跑，
+  // 而我们的隔离工作目录经常就不是 git 仓（不带项目的工单跑在临时目录里）。
+  'codex-cli': ['--sandbox', 'read-only', '--skip-git-repo-check'],
+  'command-cli': [],                       // echo 桩不需要权限概念
+};
+
+function 权限参数(配置, 角色, adapter) {
   const 权 = (配置.执行 && 配置.执行.权限) || {};
   const 放开 = Array.isArray(权.放开) ? 权.放开 : [];
-  const 受限参数 = Array.isArray(权.受限参数) ? 权.受限参数 : ['--permission-mode', 'plan'];
   if (放开.includes(String(角色 || ''))) {
     return { 模式: '放开', 参数: null, 说明: `角色 ${角色} 在放开白名单内，沿用适配器默认（含权限绕过）` };
   }
+  // 配置里可按适配器覆盖：受限参数: { 'codex-cli': [...] }；
+  // 也兼容旧的数组写法（那时只有一个厂商，写成数组是合理的）。
+  const 配的 = 权.受限参数;
+  let 参数; let 兼容警告 = null;
+  if (Array.isArray(配的)) {
+    // 旧写法：一刀切。**这正是本次故障的成因**——claude 的 flag 被塞给了 codex，
+    // 判官每次必挂，而加固②会把它归类成「判官失败」，看上去像判官不稳定。
+    // 保留兼容是为了不破坏既有配置，但必须响亮地说出来。
+    参数 = 配的;
+    兼容警告 = '执行.权限.受限参数 是数组（旧的一刀切写法）：同一套 flag 会塞给所有厂商，'
+      + `跨厂时必挂。请改成按适配器分：{ "claude-cli": [...], "codex-cli": [...] }。`
+      + `当前对 ${adapter || '未知适配器'} 注入的是 ${JSON.stringify(配的)}。`;
+  } else if (配的 && typeof 配的 === 'object') {
+    参数 = 配的[adapter] || 默认受限参数[adapter] || [];
+  } else {
+    参数 = 默认受限参数[adapter] || [];
+  }
+
   return {
     模式: '受限',
-    参数: 受限参数,
-    说明: `角色 ${角色 || '(空)'} 不在放开白名单内 → 受限模式，覆盖掉适配器默认的权限绕过开关`,
+    参数,
+    adapter: adapter || null,
+    说明: `角色 ${角色 || '(空)'} 不在放开白名单内 → 受限模式`
+      + (adapter ? `（按 ${adapter} 的参数）` : '（未知适配器，无受限参数可注入）')
+      + '，覆盖掉适配器默认的权限绕过开关',
+    ...(兼容警告 ? { 警告: 兼容警告 } : {}),
+    ...(!兼容警告 && adapter && !默认受限参数[adapter] && !(配的 && 配的[adapter])
+      ? { 警告: `适配器 ${adapter} 没有已知的受限参数——受限模式对它形同虚设，请在 执行.权限.受限参数.${adapter} 显式配置` }
+      : {}),
   };
 }
 
@@ -41,8 +83,14 @@ function 冻结情况(公用件, 配置, 账本根) {
 }
 
 // 选人：排名 → 过冻结 → 候选链降级（留痕）
-function 选派(仓根, 配置, { 角色, 类别 = '执行', 公用件, 账本根 }) {
-  const 排名 = 路由器.rankProviders(仓根, 配置, { role: 角色, kind: 类别 });
+// 工单要递进去：router 的 crossProviderReview 靠 task.fm.执行池 知道「原执行方是谁」，
+// 才能在评审时优先挑**别家**（同源盲区是真的——同一个模型往往看不出自己的错）。
+// 不递的话它拿不到 original，跨厂避让整个失效，而且**不会报错**，只会安静地挑回同一家。
+function 选派(仓根, 配置, { 角色, 类别 = '执行', 公用件, 账本根, 工单 = null }) {
+  const 排名 = 路由器.rankProviders(仓根, 配置, {
+    role: 角色, kind: 类别,
+    task: 工单 ? { fm: 工单.fm || {} } : null,
+  });
   if (!排名.length) return { ok: false, error: '无候选 Provider：检查是否启用、能力是否匹配' };
 
   const 冻 = 冻结情况(公用件, 配置, 账本根 || 仓根);
@@ -55,10 +103,13 @@ function 选派(仓根, 配置, { 角色, 类别 = '执行', 公用件, 账本�
       ...(冻.ok ? {} : { 预算闸: 冻.错误 }),
     };
   }
-  const 权 = 权限参数(配置, 角色);
+  // adapter 从配置里查：受限参数按适配器分，不知道是哪家就注不对参数。
+  const adapter = ((配置.providers || {})[择.选中.name] || {}).adapter || null;
+  const 权 = 权限参数(配置, 角色, adapter);
   return {
     ok: true,
     选中: 择.选中.name,
+    adapter,
     分数: 择.选中.score,
     理由: 择.选中.reasons,
     降级: 择.降级,
@@ -70,6 +121,36 @@ function 选派(仓根, 配置, { 角色, 类别 = '执行', 公用件, 账本�
 
 // 工单流转：待投 → 在途，并把派单结果写进 fm。
 // 只在**确实要执行**时调用；干跑不流转工单（干跑是演练，不该改变工单状态）。
+// 依赖就绪判定（协-004）。
+//
+// plan.materialize 生成的子单带 fm.依赖，但此前没人检查过——于是子单可以在依赖还没干完时
+// 就被派出去，拿到一个缺半截的工作区。DAG 写在工单里却不被执行，等于没有 DAG。
+//
+// 判据：依赖单必须已「完成」。未完成就拒派，并逐个说清卡在谁身上——
+// 只说「依赖未就绪」等于让人自己去翻，那是把排查成本转嫁给使用者。
+function 依赖就绪(工单库, 根, 工单) {
+  const 依赖 = 工单.fm && 工单.fm.依赖;
+  const 表 = Array.isArray(依赖) ? 依赖 : (依赖 ? [依赖] : []);
+  if (!表.length) return { ok: true, 依赖单: [] };
+  const 未完成 = []; const 缺失 = []; const 依赖单 = [];
+  for (const id of 表) {
+    const t = 工单库.find(根, String(id));
+    if (!t) { 缺失.push(String(id)); continue; }
+    if (t.state !== '完成') { 未完成.push({ id: t.id, 当前状态: t.state }); continue; }
+    依赖单.push(t);
+  }
+  if (缺失.length || 未完成.length) {
+    return {
+      ok: false, 依赖单,
+      error: '依赖未就绪，拒绝派活'
+        + (未完成.length ? `；未完成：${未完成.map((x) => `${x.id}(${x.当前状态})`).join('、')}` : '')
+        + (缺失.length ? `；找不到：${缺失.join('、')}` : ''),
+      未完成, 缺失,
+    };
+  }
+  return { ok: true, 依赖单 };
+}
+
 function 落单(工单库, 根, id, 派单结果) {
   const t = 工单库.find(根, id);
   if (!t) return { ok: false, error: `工单不存在：${id}` };
@@ -81,8 +162,18 @@ function 落单(工单库, 根, id, 派单结果) {
     fm.派单时间 = new Date().toISOString();
     fm.权限模式 = 派单结果.权限.模式;
     if (派单结果.降级) fm.降级留痕 = 派单结果.跳过;
+    // worktree.integrate 靠 fm.workspace.commit 找依赖单的检查点，prepare 靠
+    // fm.workspace.path 复用已存在的工作树。这两处是 worktree.js 的既有契约——
+    // 只写 fm.检查点 它们看不见，依赖集成会**静默跳过所有依赖**（skipped 而非报错）。
+    if (派单结果.工作区) {
+      fm.workspace = {
+        path: 派单结果.工作区.path,
+        branch: 派单结果.工作区.branch,
+        mode: 派单结果.工作区.mode,
+      };
+    }
   });
   return r.ok ? { ok: true, id, 状态: '在途', 执行池: 派单结果.选中 } : r;
 }
 
-module.exports = { 权限参数, 冻结情况, 选派, 落单 };
+module.exports = { 权限参数, 冻结情况, 选派, 落单, 依赖就绪 };

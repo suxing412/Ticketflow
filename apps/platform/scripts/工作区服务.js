@@ -136,7 +136,11 @@ const 服务 = http.createServer((req, res) => {
         if (路径 === '/write/prepare') {
           const 工单 = 体.工单 || {};
           if (!工单.id) return 发JSON(res, 400, { ok: false, error: '需要 工单.id' });
-          const w = 工作区.prepare(平台根, 配置, 工单, 项目, { role: 工单.fm && 工单.fm.role });
+          const 依赖 = Array.isArray(体.依赖) ? 体.依赖 : [];
+          const w = 工作区.prepare(平台根, 配置, 工单, 项目, {
+            role: 工单.fm && 工单.fm.role,
+            dependencies: 依赖,          // integrate 从各自的 fm.workspace.commit 取检查点
+          });
           return 发JSON(res, 200, { ok: true, 工作区: w });
         }
         if (路径 === '/write/checkpoint') {
