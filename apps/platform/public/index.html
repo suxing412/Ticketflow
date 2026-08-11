@@ -254,8 +254,38 @@ async function 跑(id, 干跑) {
       method: 'POST', body: JSON.stringify({ 干跑 }),
     });
     $('运行').textContent = JSON.stringify(j, null, 2);
+    // orchestrator 跑出合规计划时给一个物化入口。**不自动物化**——
+    // AI 提的拆解没经人眼就落成一批工单，等于把「AI 只提计划、确定性内核负责校验」
+    // 这条原则从中间掐断。物化是一个独立的、人点下去的动作。
+    const 头 = $('运行区').querySelector('h2');
+    const 旧 = 头.querySelector('.物化钮'); if (旧) 旧.remove();
+    if (j.计划预览 && j.计划预览.合规) {
+      const b = document.createElement('button');
+      b.className = '主 物化钮';
+      b.textContent = '物化这 ' + j.计划预览.任务数 + ' 张子单';
+      b.onclick = () => 物化(id);
+      头.appendChild(b);
+    }
   } catch (e) { $('运行').textContent = '调用失败：' + e.message; }
   刷工单(); 刷战绩(); 刷排名(); 刷调度(); 刷消耗();
+}
+
+// 物化：把 orchestrator 的计划落成真实子单。
+// 需要把**原始输出**回填给 /api/plan/materialize——它自己再解析一次，
+// 而不是信任前端传来的已解析结构：前端能改的东西，不该成为落盘的依据。
+async function 物化(父单) {
+  const 文 = $('运行').textContent;
+  let 原始 = '';
+  try { 原始 = (JSON.parse(文).计划预览 || {}).正文预览 || ''; } catch { /* 下面兜底 */ }
+  if (!原始) {
+    alert('拿不到原始计划文本。请改用接口物化：\nPOST /api/plan/materialize {"输出": <orchestrator 的原始回复>, "父单": "' + 父单 + '"}');
+    return;
+  }
+  const { 体: j } = await 取JSON('/api/plan/materialize', {
+    method: 'POST', body: JSON.stringify({ 输出: 原始, 父单 }),
+  });
+  $('运行').textContent = JSON.stringify(j, null, 2);
+  刷工单(); 刷调度();
 }
 
 async function 判(id, 干跑) {
