@@ -400,6 +400,60 @@ const 服务 = http.createServer((req, res) => {
     });
   }
 
+  // ——— 消耗报表（协-005）：钱花在哪 ———
+  // 平台会真的花钱之后，「花了多少」就不再是可选信息。budget.view 早就有，
+  // 但一直没有消费方——账记着没人看，等于没记。
+  if (url路径 === '/api/budget' && req.method === 'GET') {
+    try {
+      const budget = 公用件.载入('budget', 'budget.js');
+      const 池表 = budget.view(配置, 账本根);
+      const 明细 = budget.读账(账本根).slice(-200);
+      // 按工单归集：一张单可能跑过多次（判不过回炉重跑），成本要算总账。
+      const 按单 = {};
+      for (const r of 明细) {
+        const k = r.单 || '(无单号)';
+        const o = 按单[k] || (按单[k] = { 单: k, 次数: 0, 输入: 0, 缓存: 0, 输出: 0, 池: new Set() });
+        o.次数 += 1; o.输入 += r.输入 || 0; o.缓存 += r.缓存 || 0; o.输出 += r.输出 || 0;
+        o.池.add(r.池);
+      }
+      return 发JSON(res, 200, {
+        ok: true, 账本: budget.账本(账本根), 池: 池表,
+        按工单: Object.values(按单).map((o) => ({ ...o, 池: [...o.池] }))
+          .sort((a, b) => (b.输入 + b.输出) - (a.输入 + a.输出)).slice(0, 20),
+        条数: 明细.length,
+        ...(池表.length ? {} : { 说明: '还没有配任何池的预算上限——没有上限就没有刹车，也无从判超' }),
+        codex提示: 'codex 非 stream-json 输出，取不到 usage，其消耗**不计入本账**（见 packages/budget/README.md）',
+      });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: `预算闸不可用：${e.message}` }); }
+  }
+
+  // ——— 工单树（协-005）：把 plan.materialize 生成的 DAG 显出来 ———
+  // 父子关系与依赖一直写在 fm 里，但看板是平的——DAG 存在却看不见，
+  // 等于每次都要人肉在几十张单里拼出结构。
+  if (url路径 === '/api/tickets-tree' && req.method === 'GET') {
+    if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
+    try {
+      const 全 = 工单库.list(工单根.根).map((t) => {
+        const d = 工单库.find(工单根.根, t.id);
+        const fm = (d && d.fm) || {};
+        const 依 = fm.依赖;
+        return {
+          id: t.id, 状态: t.state, 角色: fm.role || fm.职能 || '', 标题: fm.title || '',
+          父单: fm.父单 || null, 项目: fm.项目 || '', 执行池: fm.执行池 || '',
+          依赖: Array.isArray(依) ? 依 : (依 ? [依] : []),
+          质检结论: fm.质检结论 || null,
+        };
+      });
+      const 子 = {};
+      for (const t of 全) if (t.父单) (子[t.父单] = 子[t.父单] || []).push(t.id);
+      return 发JSON(res, 200, {
+        ok: true, 条数: 全.length, 工单: 全,
+        根单: 全.filter((t) => !t.父单).map((t) => t.id),
+        子表: 子,
+      });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+  }
+
   // ——— 执行链：转发给执行器进程，本文件绝不自己拉起 AI CLI ———
   // 与 /api/workspace 同一套路：能起进程的能力住独立进程，这里只用 http。
   // 两个隔离进程各管一种能力（git / AI CLI），可以单独关掉其中任意一个。
