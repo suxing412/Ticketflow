@@ -429,6 +429,29 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.ok(p3.includes('工单正文'), '无章程目录也能组提示词');
   });
 
+  // 施工令-043（案源 TK-138 死锁案 2026-08-11）：验收标准写了「总监代跑」的条目执行者够不着，
+  // 判官照「全量数字缺」打回 → 自修空转两轮到总监手术。质检与核查两卷都必须载明豁免规则。
+  await t('总监代劳条款：质检+代核两卷都带豁免规则（施工令-043）', async () => {
+    const root = makeRoot();
+    const 体 = ['## 验收标准',
+      '1. gates 冒烟 500 案全绿——**总监代跑**，代劳实测后誊入本单，执行方不判失分；',
+      '2. 单测零回归（执行方自跑）。'].join('\n');
+    const fake = { id: 'TK-138', fm: { 职能: '程序', title: '引擎实测门' }, body: 体 };
+    const rp = path.join(root, '回执', 'TK-138.md');
+    fs.mkdirSync(path.dirname(rp), { recursive: true });
+    fs.writeFileSync(rp, '## 验收对照\n1. 待代跑（总监代劳条款，执行方不可得）\n2. ✓ 37/37 绿\n', 'utf8');
+    const proj = { name: 'TK', path: 'D:/x' };
+    for (const [名, p] of [['质检', runner.buildQaPrompt(root, fake, proj, rp)],
+      ['核查', runner.buildAuditPrompt(root, fake, proj, rp)]]) {
+      assert.ok(p.includes('【总监代劳条款豁免】'), 名 + '卷面缺豁免规则标题');
+      assert.ok(p.includes('执行方标注「待代跑」即视为该条**应答完备**'), 名 + '卷面缺「待代跑＝应答完备」判据');
+      assert.ok(p.includes('不得以「数字缺/未跑」为由打回或列为缺陷'), 名 + '卷面缺打回禁令——TK-138 死锁正是卡在这句');
+      assert.ok(p.includes('判词中该条记「待总监代跑」'), 名 + '卷面缺判词写法');
+      assert.ok(p.includes('冒填数字'), 名 + '卷面缺反向闸：豁免不是许人编数字');
+      assert.ok(p.includes('总监代跑'), 名 + '卷面必须复述工单里的触发措辞');
+    }
+  });
+
   await t('模型分级（D38）：个体覆盖 > 池默认 > CLI 默认；质检/代核走裁判档', async () => {
     const cfgM = { ...CFG, 模型: { codex默认: '', claude默认: 'sonnet', 质检: 'opus', 代核: 'opus' } };
     assert.equal(runner.pickModel(cfgM, '执行', { 模型: 'haiku' }, 'claude'), 'haiku', '个体覆盖优先');

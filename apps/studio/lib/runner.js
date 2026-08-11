@@ -231,6 +231,12 @@ function buildPrompt(root, t, proj) {
     '', '完成后按通用章程的回执格式输出完工报告，它会作为回执存档。',
   ].filter(Boolean).join('\n');
 }
+// 总监代劳条款（施工令-043，案源 TK-138 死锁案 2026-08-11）：验收标准里写明「总监代跑」的条目
+// 对执行者结构性不可得——判官照「全量数字缺」打回，执行方自修再多轮也补不上（TK-138 空转两轮
+// 直到总监手术；同族时序摩擦当日再发两起）。质检与核查两卷同用一条规则，抽成常量防两处飘。
+// 初检（precheck.js 机判）侧的豁免白名单已覆盖同一语义，此处只补 LLM 判官卷面。
+const 代劳条款规则 = '【总监代劳条款豁免】验收标准中凡载明「总监代跑/代劳实测后誊入/不判失分」或指向 enginectl 引擎实测的条目，执行方标注「待代跑」即视为该条**应答完备**——不得以「数字缺/未跑」为由打回或列为缺陷；判词中该条记「待总监代跑」。若执行方对此类条目**冒填数字**（非引用已存在的总监誊入段），按回执失实处理。';
+
 // 核查提示词（D34）：Claude 按验收标准逐条只读核验，结论行机器可读
 function buildAuditPrompt(root, t, proj, receiptPath) {
   const receipt = fs.existsSync(receiptPath) ? fs.readFileSync(receiptPath, 'utf8') : '（无回执）';
@@ -238,6 +244,7 @@ function buildAuditPrompt(root, t, proj, receiptPath) {
     `你代制作人层核验委托验收单 ${t.id}（${t.fm.title}）。只读核验，不改任何文件。`,
     `项目仓库：${proj.path}`,
     '对照工单验收标准逐条核验产出与回执，输出核验报告；',
+    代劳条款规则,
     '报告末尾输出一行「质量分：N」（N=1-5：验收标准达成度+回执诚实度+证据链质量，H69 仪表盘用，独立于结论）。',
     '最后单独一行输出机器可读结论：「结论：通过」或「结论：不过」。',
     '', '=== 工单正文 ===', t.body || '', '', '=== 主办回执 ===', receipt,
@@ -269,6 +276,7 @@ function buildQaPrompt(root, t, proj, receiptPath) {
     '报告倒数第二行输出「质量分：N」（N=1-5：产出工艺+回执诚实度，H69 仪表盘用，独立于结论）。',
     '【结论体裁铁律】报告最后一行必须是且只能是「结论：通过」或「结论：不过」，禁止任何其它措辞（如「有保留」「无法判定」）。',
     '【保留项豁免】标注【保留】的验收条目是制作人签字位，不在你的核验范围——跳过它们，只裁可核项；可核项全过即「结论：通过」，保留项未签不构成不过的理由。',
+    代劳条款规则,
     '', '=== 工单正文 ===', t.body || '', '', '=== 主办回执 ===', receipt,
   ].filter(Boolean).join('\n');
 }
@@ -913,4 +921,4 @@ function killTicket(root, id, 因) {
   return false;
 }
 
-module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi };
+module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi };
