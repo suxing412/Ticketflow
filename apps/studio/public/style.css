@@ -894,6 +894,11 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
   background:var(--dangerbg); border:1px solid var(--danger); color:var(--danger); font-size:12px; line-height:1.6; }
 .budgetdead b { display:block; font-size:13.5px; font-weight:700; margin-bottom:4px; }
 .budgetdead code { font-family:var(--mono); font-size:11px; }
+/* 不计量池标注（施工令-047）：codex 取不到 usage = 这条通道的事实，不是故障也不是闸——
+   既不走 .budgetdead 的危险红（那是保险丝哑火），也不走 .moat 的警示色（那是正在生效的限制），
+   只用静音灰虚线框说明「这里永远不会有账」，免得制作人把空账当成没花钱。 */
+.poolcard .nometer { margin-top:12px; font-size:11.5px; line-height:1.5; padding:7px 12px; border-radius:8px;
+  background:var(--sect); color:var(--ink3); border:1px dashed var(--line); cursor:help; }
 /* 沟通护城河提示：中性告知（这是设定内的行为，不是故障），走警示色不走危险红 */
 .poolcard .moat { margin-top:12px; font-size:11.5px; line-height:1.5; padding:7px 12px; border-radius:8px;
   background:var(--gatebg); color:var(--gatetx); border:1px solid var(--gateln); cursor:help; }

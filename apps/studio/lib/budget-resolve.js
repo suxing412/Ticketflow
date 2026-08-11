@@ -77,8 +77,11 @@ function 解析(o = {}) {
   for (const c of 候选) {
     try {
       const m = c.取();
-      // 形状校验：解析到了但不是预算闸（半截包/同名文件）比找不到更坑——当场判失败进下一候选
-      if (!m || typeof m.冻结池 !== 'function' || typeof m.并入 !== 'function') throw new Error('模块形状不对（缺 冻结池/并入）');
+      // 形状校验：解析到了但不是预算闸（半截包/同名文件）比找不到更坑——当场判失败进下一候选。
+      // 施工令-047 加验 usageOf/记：stream 计量回灌走的就是这两个纯函数（robinwang2 信 §六「不必另立接口」），
+      // 缺了它们壳照样能过冻结那半边，而计量那半边会一路静默不落账——正是 046 要根治的病，不许再开一扇后门。
+      const 缺 = ['冻结池', '并入', 'usageOf', '记'].filter((k) => typeof (m || {})[k] !== 'function');
+      if (缺.length) throw new Error('模块形状不对（缺 ' + 缺.join('/') + '）');
       return m;
     } catch (e) {
       // 只留首行：MODULE_NOT_FOUND 的 message 后面挂着整段 Require stack，

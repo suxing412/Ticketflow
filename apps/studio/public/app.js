@@ -1293,6 +1293,7 @@ const P6NAMES = { 滞留超时小时: '滞留超时', 速度窗口小时: '速�
 // 额度双池卡。口径纪律（施工令-006）：每个窗口只跟管得着它的那根杆并排——
 // 旧版把「5h X% · 周 Y% · 阈值 Z%」串成一行，读起来像周窗也归 阈值 管（周 61% > 阈值 70%？
 // 其实周窗归 周阈值 90% 管），凭空造出违规错觉。现在一窗一行，各挂各的杆。
+// @testable-begin poolCardHtml
 function poolCardHtml(name, l, cfg2, moat) {
   const pct = l && l.fivePct != null ? l.fivePct : null;
   const wpct = l && l.weekPct != null ? l.weekPct : null;
@@ -1316,10 +1317,18 @@ function poolCardHtml(name, l, cfg2, moat) {
       : row('窗口', null, '阈值 —', '额度读数不可用', false))
     : `${row('5h', pct, `阈值 ${th}%`, '管 5h 窗', pct != null && pct >= th)}
     ${row('周', wpct, `周阈值 ${wth}%`, '管周窗', wpct != null && wpct >= wth)}`;
+  // 不计量池标注（施工令-047 · robinwang2 2026-08-11 信 §六）：codex CLI 走纯文本流，
+  // 会话收线拿不到 usage——预算账里永远不会有 codex 的行。这不是故障（对比上方 .budgetdead 红标是故障），
+  // 是这条通道的事实，所以走静音灰标；同「池衡盲区不编数」纪律：宁可明写测不到，绝不摆个估算数充数。
+  const 计量Html = name === 'codex'
+    ? `<div class="nometer" title="codex CLI 的输出是纯文本流（不是 --output-format stream-json），会话结束取不到 usage 字段；它本身又是订阅计费池，按量预算闸本就不针对它。监制台因此显式不为 codex 记账，也不臆造数字——同「池衡盲区不编数」纪律。claude 家族（含各 *-key 按量池）走 stream-json，每次会话如实回灌进预算账。">不计量池——消耗不入预算账</div>`
+    : '';
   return `<div class="pr"><h4>${name} 池</h4><span class="pstat ${hot ? 'err' : 'dim'}">${l ? (hot ? '●锁 ' + esc(l.resetAt || '') + ' 解冻' : '正常') : '查询中…'}</span></div>
     ${rows}
+    ${计量Html}
     ${moatHtml}`;
 }
+// @testable-end poolCardHtml
 /* ---- 预算闸失效红标（施工令-046）----
    lib/budget 三候选全失守时落的是空实现：不落账、不冻结，按量池烧多少都不会自己停，
    而界面上一点症状都没有——静默失效比报错危险得多。这是故障不是设定内行为（对比 .moat 走警示色），

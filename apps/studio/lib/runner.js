@@ -147,7 +147,67 @@ function resolveCli(poolName, model, allowedTools) {
   // 放行工具（TK-49 案）：acceptEdits 下 Bash 仍逐条要审批，无头会话无人可批——
   // 项目侧 settings.json 规则曾四种路径变体全落空，改由拉起参数直接放行（值在 config.执行器.放行工具）。
   const allow = Array.isArray(allowedTools) ? allowedTools.filter((s) => typeof s === 'string' && s.trim()) : [];
-  return { cmd, args: ['-p', '--permission-mode', 'acceptEdits', '--output-format', 'stream-json', '--verbose', ...(allow.length ? ['--allowedTools', ...allow] : []), ...(model ? ['--model', model] : [])], stream: true };
+  // --include-partial-messages（施工令-047）：与 AI-DevPlatform 侧 providers/claude-cli.js 同起法
+  // （robinwang2 2026-08-11 信 §一）。两处收益：①活尾巴能跟着字走，不必等整条消息吐完（旧样一条
+  // 长消息期间尾巴纹丝不动，H63 验尸只能靠回执 mtime 判进展）；②与对方口径逐旗对齐，账才可对。
+  // 代价是流量涨几倍——故 stdout 入口做行分拣：增量事件只喂尾巴、不进 out（见 流分拣器），
+  // 于是 extractClaudeText / settleClose 读到的 out 与 047 前逐字节同形，800KB 上限也不被撑爆。
+  return { cmd, args: ['-p', '--permission-mode', 'acceptEdits', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', ...(allow.length ? ['--allowedTools', ...allow] : []), ...(model ? ['--model', model] : [])], stream: true };
+}
+
+// ---- stream-json 行分拣（施工令-047）----
+// 一条 stdout 数据块进来分三路：
+//   主  = 非增量事件的整行 → 拼进 out（extractClaudeText / settleClose 的读物，口径不变）
+//   计量 = 含 usage 的整行 → 另存细流喂 budget.usageOf（out 被上限截头时也不会连带丢掉账）
+//   增  = text_delta 的文本片 → 只更新活尾巴，一个字节都不留存
+// 增量事件（type=stream_event）的 usage 挂在 e.event.usage 上，usageOf 只认 e.usage / e.message.usage
+// ——不认它是对的（message_delta 报的是本条消息的累计输出，与随后的 assistant 整条重复），
+// 故增量行不进细流：既不影响账，也不白占上限。
+function 分派(行s) {
+  let 主 = '', 计量 = '';
+  const 增 = [];
+  for (const l of 行s) {
+    // 判增量只认**解析出来的** e.type——不能用「行里出现 stream_event 字样」当判据：
+    // agent 的回答里完全可能原样引一段事件 JSON（本仓的 agent 就在改这个文件），
+    // 那样一行整段报告会被当成增量丢掉，回执直接蒸发。宁可多 parse 几行。
+    if (l.includes('"stream_event"')) {
+      let e = null;
+      try { e = JSON.parse(l); } catch { /* 不是 JSON 就不是增量事件，落到下面当主流 */ }
+      if (e && e.type === 'stream_event') {
+        const d = e.event && e.event.delta;
+        if (d && d.type === 'text_delta' && d.text) 增.push(d.text);
+        continue;
+      }
+    }
+    主 += l + '\n';
+    if (l.includes('"usage"')) 计量 += l + '\n';
+  }
+  return { 主, 计量, 增 };
+}
+// 有状态分拣器：数据块边界会把一行劈成两半，残段留到下一块再拼（不留残段就会丢 usage 行）。
+function 流分拣器() {
+  let 残 = '';
+  return {
+    收(chunk) {
+      const 行 = (残 + String(chunk)).split('\n');
+      残 = 行.pop();
+      if (残.length > 400000) { 行.push(残); 残 = ''; } // 半行大到不像 JSONL：当整行放行，防内存爬升
+      return 分派(行);
+    },
+    收尾() { const r = 分派(残 ? [残] : []); 残 = ''; return r; }, // 末行常常没有换行符
+  };
+}
+// stream-json 活尾巴：最近一个**整块**文本 + 其后到达的增量片。
+// 只扫 out 末 8KB——尾巴只要最后 300 字，每来一块就全量正则扫 800KB 是纯白工（O(n²)）。
+function 流尾(out, 活片) {
+  const 块 = [];
+  for (const m of String(out).slice(-8000).matchAll(/"type":"text","text":"((?:[^"\\]|\\.)*)"/g)) {
+    try { const s = JSON.parse('"' + m[1] + '"').replace(/\s+/g, ' ').trim(); if (s) 块.push(s); } catch { /* 窗口切半的行忽略 */ }
+  }
+  const 活 = String(活片 || '').replace(/\s+/g, ' ').trim();
+  const tail = ((块.length ? 块[块.length - 1] : '') + (活 ? (块.length ? ' ' : '') + 活 : '')).slice(-300);
+  const tail3 = 块.slice(-3).map((x) => x.slice(-200));
+  return { tail: tail || null, tail3: tail3.length ? tail3 : (tail ? [tail] : null) };
 }
 
 // stream-json（JSONL 事件流）→ 报告文本：收集全部 assistant 文本块，
@@ -378,6 +438,41 @@ function settleClose(kind, code, out, errout, ticketId, finishOk, failLocal) {
     return;
   }
   finishOk(tail, true);
+}
+
+// ---- 流计量回灌（施工令-047）----
+// 口径全抄 robinwang2 2026-08-11「stream 侧计量口径」信，一个字不自创：
+//   · 只对 claude 家族成立——usage 字段只存在于 --output-format stream-json 的事件流里；
+//     codex 是纯文本流（且本就是订阅池），显式**不计量**：不臆造数字、不落假账行，
+//     额度卡上同口径标「不计量池——消耗不入预算账」（同「池衡盲区不编数」纪律）。
+//   · 三列分开取值（输入=max、缓存=max、输出=Σ），合计不含缓存——这两条都在 budget.usageOf 里，
+//     此处只负责喂流与落账，绝不在 runner 里重写一份口径（两份口径必然飘）。
+// 三个坑（信 §四）逐条对应：
+//   坑一 原始流是内部字段，绝不落账本：本函数只把三个数展开进 记()，流文本一个字节都不经手账本；
+//   坑二 干跑/零消耗不记：没花钱就别记，否则污染用量窗口；
+//   坑三 记账失败不抛、不阻断交单：本函数**永不抛**——保险丝坏了不该顺带炸掉产线。
+// 返回 { 记, 因?, 用量?, 账? } 供测试与调用方判读；调用方不必 try（本函数自己包死）。
+function 计量回灌(root, o = {}, bd) {
+  const 池 = o.池 || '';
+  const 单 = o.单 || null;
+  try {
+    if (!o.流式) return { 记: false, 因: `${池 || '未知池'} 非 stream-json 流——不计量池，消耗不入预算账` };
+    if (池 === 'codex') return { 记: false, 因: 'codex 订阅池——不计量池，消耗不入预算账' };
+    const b = bd || require('./budget');
+    const u = b.usageOf(o.流 || '');
+    if (!u.输入 && !u.输出) return { 记: false, 因: '零消耗（流里没有 usage）——干跑不记账', 用量: u };
+    const 账 = b.记(root, { 池, 单, 输入: u.输入, 缓存: u.缓存, 输出: u.输出 });
+    if (!账) return { 记: false, 因: '记账未落（预算闸空实现或写盘失败）——不阻断交单', 用量: u };
+    try {
+      journal.append(root, `流计量回灌 ${单}（${池}）：输入 ${u.输入} · 缓存 ${u.缓存} · 输出 ${u.输出}`
+        + `（合计 ${u.输入 + u.输出}，缓存不计入合计）`);
+    } catch { /* 流水写不进不影响账已落 */ }
+    return { 记: true, 用量: u, 账 };
+  } catch (e) {
+    const why = String((e && e.message) || e).slice(0, 120);
+    try { journal.append(root, `流计量回灌失败 ${单}（${池}）：${why}——记账失败不阻断交单`); } catch { /* 尽力 */ }
+    return { 记: false, 因: '记账异常：' + why };
+  }
 }
 
 // ---- 执行一份工作（在途执行 / 质检复核）。opts.durMs=0 供测试同步完成；opts.failWith 注入失败 ----
@@ -615,25 +710,34 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     child = spawn(cmd, args, { cwd: proj.path, env, windowsHide: true, shell: cmd.endsWith('.cmd'), stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (e) { failLocal('CLI 启动失败：' + e.message); return true; }
   entry.child = child;
-  const cliPool = kind === '执行' ? poolName : 'claude'; // 质检/代核实际走 claude，流水如实记
+  // 质检/代核/代裁实际走 claude，流水如实记；初检（二线 LLM 档）走的是 两检.池（默认 deepseek），
+  // 旧样把它也算成 claude——流水失实事小，账记错池事大（施工令-047 起这个名字直接当记账的池名用，
+  // 记到 claude 头上等于拿订阅池的名义记按量池的账，判超会掐错池）。
+  const cliPool = (kind === '执行' || kind === '初检') ? poolName : 'claude';
   // 凭据来源入流水（施工令-029）：迁移后要看得见「这一发到底是从托管取的还是从 config 兜底取的」。
   // 只记来源三个字，key/指纹一律不进流水。
   journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name} · 超时闸 ${rc.执行超时分钟 ?? 30}m 派发时快照${compat ? ' · 凭据' + compat.来源 : ''}）`); // 夜班推演 #3：热改超时不作用于在跑会话，快照值写明防误判
-  let out = '', errout = '';
-  child.stdout.on('data', (d) => { out += d; if (out.length > 800000) out = out.slice(-400000);
+  let out = '', errout = '', 计量流 = '', 活片 = '';
+  const 分拣 = stream ? 流分拣器() : null;
+  child.stdout.on('data', (d) => {
     entry.收字节 = (entry.收字节 || 0) + d.length; // 活性字节（施工令-010）：零输出看门狗的判据 = stdout∪stderr
-    // 活尾巴：stream-json 取最近一个 text 块的可读文本，纯文本流走 tailFrom（stdout 优先、stderr 兜底）
-    if (stream) {
-      const ms = out.match(/"text":"((?:[^"\\]|\\.)*)"/g);
-      if (ms) { try {
-        const dec = (s) => JSON.parse('"' + s.slice(8, -1) + '"').replace(/\s+/g, ' ').trim();
-        entry.tail = dec(ms[ms.length - 1]).slice(-300);
-        // 展开区「最近 3 行」（施工令-004）：另存最近三个文本块，tail 语义原样不动（软超时判据依赖它）
-        entry.tail3 = ms.slice(-3).map(dec).filter(Boolean).map((x) => x.slice(-200));
-      } catch { /* 保持旧尾 */ } }
-    } else {
+    // 活尾巴：stream-json 走行分拣（整块文本 + 增量片），纯文本流走 tailFrom（stdout 优先、stderr 兜底）
+    if (!分拣) {
+      out += d; if (out.length > 800000) out = out.slice(-400000);
       Object.assign(entry, tailFrom(out, errout));
+      return;
     }
+    const r = 分拣.收(d);
+    out += r.主; if (out.length > 800000) out = out.slice(-400000);
+    // 计量细流（施工令-047）：只留含 usage 的整行。out 那条 800KB 上限截的是头，
+    // 而 usage 行一旦被截掉就永远补不回来——账不能跟着显示缓冲一起丢。
+    if (r.计量) { 计量流 += r.计量; if (计量流.length > 400000) 计量流 = 计量流.slice(-200000); }
+    // 一条消息吐完（assistant 整行到达）就清增量缓冲：那段字已经以整块形式进 out 了，再拼就是重影
+    if (r.主.includes('"type":"assistant"')) 活片 = '';
+    if (r.增.length) 活片 = (活片 + r.增.join('')).slice(-400);
+    // 展开区「最近 3 行」（施工令-004）：tail3 仍是整块口径，tail 语义原样不动（H63 软超时判据依赖它）
+    const s = 流尾(out, 活片);
+    if (s.tail) { entry.tail = s.tail; if (s.tail3) entry.tail3 = s.tail3; }
   });
   child.stderr.on('data', (d) => { errout += d; if (errout.length > 20000) errout = errout.slice(-10000);
     entry.收字节 = (entry.收字节 || 0) + d.length;
@@ -674,9 +778,10 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   child.on('close', (code) => {
     clearTimeout(killer);
     if (!running.has(agentId)) return; // 已被超时处理
-    // 预算记账（施工令-021）：只对 stream-json 会话有效（claude 家族）；codex 是纯文本流取不到 usage——
-    // 它是订阅池，预算闸本就不针对它。记账失败绝不挡交单。
-    try { const bd = require('./budget'); const u = bd.usageOf(out); if (u.输入 || u.输出) bd.记(root, { 池: cliPool, 单: t.id, ...u }); } catch { /* 尽力 */ }
+    if (分拣) { const r = 分拣.收尾(); out += r.主; 计量流 += r.计量; } // 末行（常无换行符）也要进账
+    // 预算记账（施工令-021 → 047 流计量回灌）：口径与落账全在 计量回灌 里，它永不抛——
+    // 交单这条路上不许有第二个可能崩的点（信 §四.3：保险丝坏了不该顺带炸掉产线）。
+    计量回灌(root, { 池: cliPool, 单: t.id, 流: 计量流, 流式: !!stream });
     settleClose(kind, code, stream ? extractClaudeText(out) : out, errout, t.id, finishOk, failLocal);
   });
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 事件兜底 */ }
@@ -921,4 +1026,4 @@ function killTicket(root, id, 因) {
   return false;
 }
 
-module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi };
+module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi, 计量回灌, 流分拣器, 流尾 };
