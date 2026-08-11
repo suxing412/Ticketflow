@@ -367,6 +367,31 @@ const 服务 = http.createServer((req, res) => {
       });
     }
 
+    // 运行历史必须在「单张详情」**之前**判——不然会被块尾的 404 吃掉。
+    // 全局战绩看不出「这一张跑过几轮、每轮什么结果」，而判不过会回待投重跑，
+    // 一张单跑三四轮是常态：不按单归集，就没法回答「它为什么还没完成」。
+    const 单史 = url路径.match(/^\/api\/tickets\/([^/]+)\/runs$/);
+    if (单史 && req.method === 'GET') {
+      try {
+        const id = decodeURIComponent(单史[1]);
+        const 全 = 路由历史.read(账本根, 1000).filter((r) => r.ticket === id);
+        const 真 = 全.filter((r) => !r.dry);
+        return 发JSON(res, 200, {
+          ok: true, 工单: id, 总次数: 全.length, 真实次数: 真.length, 干跑次数: 全.length - 真.length,
+          // 按 kind 分而不是按 role：**reviewer 角色的工单本身也要被执行**，
+          // 只按 role 分会把「执行一张 reviewer 单」错记成「对它做了质检」。
+          // 实测踩到：R-1 是 reviewer 单，它的首次执行被归进了质检列。
+          // 老记录没有 kind，回退到 qualityPassed 是否存在来判——
+          // 那个字段只有质检才写，是可靠的区分依据。
+          执行: 真.filter((r) => (r.kind ? r.kind === '执行' : r.qualityPassed === undefined))
+            .map((r) => ({ 时刻: r.at, provider: r.provider, 成: r.ok, 耗时毫秒: r.durationMs })),
+          质检: 真.filter((r) => (r.kind ? r.kind === '质检' : r.qualityPassed !== undefined))
+            .map((r) => ({ 时刻: r.at, 判官: r.provider, 判过: r.qualityPassed, 耗时毫秒: r.durationMs })),
+          ...(全.length ? {} : { 说明: '这张单还没跑过' }),
+        });
+      } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+    }
+
     const 单张 = url路径.match(/^\/api\/tickets\/([^/]+)$/);
     if (单张 && req.method === 'GET') {
       try {

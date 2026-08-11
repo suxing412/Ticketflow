@@ -262,7 +262,7 @@ const 服务 = http.createServer((req, res) => {
         const 抽 = 输出提取.抽正文(r.输出, 调用.outputFormat);
         const 判 = 质检.判定(r.退出码, 抽.正文);
         记战绩({
-          provider: 派.选中, role: 'reviewer', ticket: id,
+          provider: 派.选中, role: 'reviewer', ticket: id, kind: '质检',
           ok: 判.结论 !== '判官失败', dry: false, durationMs: r.耗时毫秒,
           qualityPassed: 判.结论 === '通过', _输出: r.输出,
         });
@@ -311,6 +311,7 @@ const 服务 = http.createServer((req, res) => {
 
     const 告警 = 巡检.巡一轮(配置, {
       全部工单: 全部, 现在: Date.now(), 冻结: 冻.挡,
+      战绩: 路由历史.read(账本根, 300),
       本轮派出: 排.派.length, 本轮跳过: 排.跳过,
     });
 
@@ -375,7 +376,7 @@ const 服务 = http.createServer((req, res) => {
       };
 
       if (干跑) {
-        记战绩({ provider: 派.选中, role: 共同.角色, ticket: id, ok: true, dry: true, durationMs: 0 });
+        记战绩({ provider: 派.选中, role: 共同.角色, ticket: id, kind: '执行', ok: true, dry: true, durationMs: 0 });
         return 发JSON(res, 200, { ...共同, 干跑: true, 说明: '干跑：全链路走完但未拉起任何进程，零计费。真跑需 {"干跑": false} 且满足另两闸。' });
       }
 
@@ -424,7 +425,7 @@ const 服务 = http.createServer((req, res) => {
         拉起(调用, 拼.提示, 工作目录, async (r) => {
         const 判 = 加固.成败判定({ 退出码: r.退出码, 输出: r.输出 });
         记战绩({
-          provider: 派.选中, role: 共同.角色, ticket: id,
+          provider: 派.选中, role: 共同.角色, ticket: id, kind: '执行',
           ok: 判.成, dry: false, durationMs: r.耗时毫秒, _输出: r.输出,
         });
 

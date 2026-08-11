@@ -341,5 +341,21 @@ t('按契约写的计划，plan.js 真的收', () => {
   assert.deepEqual(r.plan.tasks[1].dependsOn, ['a']);
 });
 
+// ---- 反复回炉（协-005）----
+t('反复回炉：判不过达阈值才报，且只算工单的锅', () => {
+  const 全 = [{ id: 'X', state: '待投', fm: {} }];
+  const 战 = (n) => Array.from({ length: n }, () => ({ role: 'reviewer', qualityPassed: false, ticket: 'X' }));
+  assert.equal(巡检.反复回炉(全, 战(2), 3).length, 0, '没到阈值不报——单次判不过是正常的');
+  const 告 = 巡检.反复回炉(全, 战(3), 3);
+  assert.equal(告.length, 1);
+  assert.equal(告[0].级别, '急');
+  assert.ok(/继续重跑只是烧钱/.test(告[0].说明), '要说清为什么该停下来看：' + 告[0].说明);
+  // 判官自己失败的不算——那不是工单的错
+  const 判官挂 = Array.from({ length: 5 }, () => ({ role: 'reviewer', qualityPassed: undefined, ticket: 'X' }));
+  assert.equal(巡检.反复回炉(全, 判官挂, 3).length, 0, '判官挂了不该记在工单头上');
+  // 后来过了就不再提
+  assert.equal(巡检.反复回炉([{ id: 'X', state: '完成', fm: {} }], 战(5), 3).length, 0);
+});
+
 fs.rmSync(沙盒, { recursive: true, force: true });
 console.log(`全部通过：${passed} 项`);
