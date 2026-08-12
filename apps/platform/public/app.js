@@ -197,8 +197,19 @@ async function 按调度干跑() {
   刷工单(); 刷战绩(); 刷调度();
 }
 
+// 选角色自动填骨架。**只在正文还是原样时替换**——人改过的内容绝不覆盖，
+// 那是最容易招人恨的交互：辛苦写了半页，切个下拉全没了。
+let 上次模板 = '';
+async function 换模板() {
+  const 现 = $('新正文').value;
+  if (现 && 现 !== 上次模板) return;   // 人动过了，不碰
+  const { 体: j } = await 取JSON('/api/tickets/template?role=' + encodeURIComponent($('新角色').value));
+  if (j.ok) { $('新正文').value = j.正文; 上次模板 = j.正文; }
+}
+
 function 开建单() {
   $('建单区').style.display = '';
+  换模板();
   $('新编号').focus();
 }
 
@@ -211,7 +222,11 @@ async function 建单() {
   const { 体: j } = await 取JSON('/api/tickets', {
     method: 'POST', body: JSON.stringify({ id, fm, 正文: $('新正文').value }),
   });
-  $('建单反馈').textContent = j.ok ? '已落草稿' : ('失败：' + j.error);
+  if (j.ok) {
+    const 病 = (j.验收标准 && j.验收标准.体检) || [];
+    $('建单反馈').innerHTML = '已落草稿（验收标准 ' + ((j.验收标准 && j.验收标准.条数) || 0) + ' 条）'
+      + (病.length ? '<br><span class="级常">体检提醒：</span>' + 病.map((b) => 转义(b.说)).join('；') : '');
+  } else $('建单反馈').textContent = '失败：' + j.error;
   if (j.ok) { $('新编号').value = ''; $('新标题').value = ''; $('新正文').value = ''; 刷工单(); }
 }
 
@@ -355,6 +370,7 @@ for (const 选 of ['新角色', '排名角色']) {
 }
 $('排名角色').value = 'backend';
 $('滤状态').onchange = 刷工单;
+$('新角色').onchange = 换模板;
 
 刷健康(); 刷工单(); 刷调度(); 刷排名(); 刷战绩(); 刷消耗(); 刷providers(); 刷瞭望塔();
 setInterval(刷瞭望塔, 5000);
