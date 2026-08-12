@@ -48,6 +48,7 @@ const 自检 = require('./lib/自检');
 const 工单模板 = require('./lib/工单模板');
 const 流程视图 = require('./lib/流程视图');
 const 知识库 = require('./lib/知识库');
+const 项目 = require('./lib/项目');
 // let 不是 const：界面上配好工单库之后要能当场生效。
 // 让人「配完请重启」是 studio 级产品不该有的台阶——尤其这还是第一次打开就撞上的那一步。
 let 工单根 = 工单库.解析根目录(仓根);
@@ -367,14 +368,30 @@ const 服务 = http.createServer((req, res) => {
         if (状态 && !工单库.STATES.includes(状态)) {
           return 发JSON(res, 400, { ok: false, error: `未知状态：${状态}（合法：${工单库.STATES.join('/')}）` });
         }
-        const 单 = 工单库.list(根, 状态);
-        return 发JSON(res, 200, { ok: true, 根目录: 根, 来源: 工单根.来源, 条数: 单.length, 工单: 单 });
+        const 全 = 工单库.list(根, 状态);
+        // 按项目收窄（协-007）。工单库只有一个，项目是**筛选维度**不是分库——
+        // 分库会把跨项目依赖切断，也让巡检与调度失去全局视野（studio 同样是一个库）。
+        // 「(无项目)」是个真实的类别，不是「全部」的同义词：不带项目的单只跑不提交，
+        // 它们是一群需要单独看见的单，所以给它一个显式的筛选值。
+        const 项目筛 = 查询.get('项目') || 查询.get('project') || '';
+        const 单 = !项目筛 ? 全
+          : 全.filter((t) => (项目筛 === '(无项目)' ? !((t.fm || {}).项目) : (t.fm || {}).项目 === 项目筛));
+        return 发JSON(res, 200, {
+          ok: true, 根目录: 根, 来源: 工单根.来源, 条数: 单.length, 工单: 单,
+          ...(项目筛 ? { 项目筛, 全库条数: 全.length } : {}),
+        });
       } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
     }
 
     if (url路径 === '/api/tickets' && req.method === 'POST') {
       return 收体(req, 256 * 1024, (体) => {
         if (!体 || !体.id) return 发JSON(res, 400, { ok: false, error: '需要 JSON 体 { "id": "<编号>", "fm"?: {}, "正文"?: "" }' });
+        // 项目名在**建单这一刻**校验，不留到真跑（协-007）。
+        // 不拦的话，一个写错的项目名要经过投出、排队、派活好几步——每步都显示正常——
+        // 最后在花钱那一刻炸成「项目未注册」。错得越晚越贵。
+        // 空值仍然放行：不带项目的单只跑不提交，那是既定行为不是配错了。
+        const 项目错 = 项目.校验工单项目(配置, (体.fm || {}).项目);
+        if (项目错) return 发JSON(res, 400, { ok: false, error: 项目错 });
         try {
           const r = 工单库.create(根, String(体.id), 体.fm || {}, 体.正文 || '');
           if (!r.ok) return 发JSON(res, 400, { ok: false, error: r.error });
@@ -503,8 +520,30 @@ const 服务 = http.createServer((req, res) => {
         o.次数 += 1; o.输入 += r.输入 || 0; o.缓存 += r.缓存 || 0; o.输出 += r.输出 || 0;
         o.池.add(r.池);
       }
+      // 按项目归集（协-007）：回答「这个项目花了多少」。
+      //
+      // 账本是公用件 packages/budget 写的，字段里没有项目——**不去改那个包**：
+      // 它是双签共建的正本，为本产品的一个报表去动它的记录格式，等于把
+      // 单方需求塞进公共契约。这里用工单库做一次关联即可，代价只是一次目录扫描。
+      const 项目of = {};
+      if (工单根.ok) {
+        try {
+          for (const t of 工单库.list(工单根.根)) 项目of[t.id] = (t.fm || {}).项目 || '(无项目)';
+        } catch { /* 工单库读不了不该把整个报表打掉 */ }
+      }
+      const 按项目 = {};
+      for (const r of 明细) {
+        // 单已不在库（改过号、手工删过）要单独成类，不能并进「(无项目)」——
+        // 那会让一笔查不到出处的开销看起来像一笔正常的无项目开销。
+        const k = 项目of[r.单] || (r.单 ? '(单已不在库)' : '(无单号)');
+        const o = 按项目[k] || (按项目[k] = { 项目: k, 次数: 0, 输入: 0, 缓存: 0, 输出: 0, 单数: new Set() });
+        o.次数 += 1; o.输入 += r.输入 || 0; o.缓存 += r.缓存 || 0; o.输出 += r.输出 || 0;
+        if (r.单) o.单数.add(r.单);
+      }
       return 发JSON(res, 200, {
         ok: true, 账本: budget.账本(账本根), 池: 池表,
+        按项目: Object.values(按项目).map((o) => ({ ...o, 单数: o.单数.size }))
+          .sort((a, b) => (b.输入 + b.输出) - (a.输入 + a.输出)),
         按工单: Object.values(按单).map((o) => ({ ...o, 池: [...o.池] }))
           .sort((a, b) => (b.输入 + b.输出) - (a.输入 + a.输出)).slice(0, 20),
         条数: 明细.length,
@@ -512,6 +551,32 @@ const 服务 = http.createServer((req, res) => {
         codex提示: 'codex 非 stream-json 输出，取不到 usage，其消耗**不计入本账**（见 packages/budget/README.md）',
       });
     } catch (e) { return 发JSON(res, 500, { ok: false, error: `预算闸不可用：${e.message}` }); }
+  }
+
+  // ——— 项目（协-007）：项目是一等公民，不是工单上的一个字符串 ———
+  // 注册表一直都在（config/项目.local.json），但界面上项目不存在：看板混着列、
+  // 消耗不分项目、登记只能手改 JSON、项目名写错要等到真跑那一刻才炸。
+  if (url路径 === '/api/projects' && req.method === 'GET') {
+    return 发JSON(res, 200, {
+      ok: true,
+      默认: 项目.默认项目(配置),
+      项目: 项目.列(配置),
+      说明: '「就绪」只表示路径在、是 git 仓——本进程不引 child_process，'
+        + '查不了分支与未提交改动，那是工作区服务(:4371)的能力面',
+    });
+  }
+  if (url路径 === '/api/setup/project' && req.method === 'POST') {
+    return 收体(req, 8 * 1024, (体) => {
+      const r = 项目.落位(仓根, 体 && (体.名 || 体.name), 体 && (体.路径 || 体.path), 体 && (体.设为默认 || 体.makeDefault));
+      if (!r.ok) return 发JSON(res, 400, { ok: false, error: r.错误 });
+      // 注册表进的是 配置.项目，而 配置 是开机时合并好的常量。改完不重读，
+      // 本进程会一直用旧表——人在界面上登记完，下一秒建单还说「项目不在注册表里」。
+      const 新配置 = 本地覆盖.应用(仓根, 读JSON(path.join(仓根, 'config', 'platform.config.json'), {})).配置;
+      配置.项目 = 新配置.项目;
+      return 发JSON(res, 200, {
+        ok: true, 名: r.名, 路径: r.路径, 配置文件: r.文件, 覆盖: r.覆盖, 默认: r.默认,
+      });
+    });
   }
 
   // ——— 流程（协-006）：现在卡在哪、接下来能干什么 ———
@@ -522,10 +587,13 @@ const 服务 = http.createServer((req, res) => {
     try {
       // list 只带 fm 摘要，依赖字段就在 fm 里，够用；不必逐张 find 读正文。
       const 全 = 工单库.list(工单根.根);
-      return 发JSON(res, 200, {
-        ok: true, 根目录: 工单根.根,
-        ...流程视图.铺(全, { 转移表: 工单库.TRANSITIONS }),
-      });
+      const 项目筛 = 查询.get('项目') || 查询.get('project') || '';
+      // ⚠ 依赖要在**全库**里查，筛选只决定铺哪些出来。
+      // 先筛后铺的话，一张单依赖的上游若属于别的项目，会被算成「依赖缺失——
+      // 永远不会就绪」，而它其实好好的。跨项目依赖不常见，但错的那次代价是
+      // 让人去删一条完全正常的依赖。
+      const 视图 = 流程视图.铺(全, { 转移表: 工单库.TRANSITIONS, 只看项目: 项目筛 });
+      return 发JSON(res, 200, { ok: true, 根目录: 工单根.根, ...(项目筛 ? { 项目筛 } : {}), ...视图 });
     } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
   }
 

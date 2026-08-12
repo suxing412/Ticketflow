@@ -320,7 +320,11 @@ const 取 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
     });
 
     await ta('POST /api/plan/materialize 落盘子单并幂等', async () => {
-      await 取(port, '/api/tickets', { method: 'POST', 体: { id: 'P-1', fm: { id: 'P-1', title: '父单', 项目: 'demo' } } });
+      // 父单**不带项目**：协-007 起，建单会校验项目必须在注册表里，
+      // 而这个测试跑的是真配置（沙盒只隔离了工单库，不隔离 config）。
+      // 写一个真实注册过的项目名会让测试跟着某台机器的本地配置走——那种耦合迟早红。
+      // 项目校验本身在 test/项目契约.test.js 里用假配置单独验，不靠这条。
+      await 取(port, '/api/tickets', { method: 'POST', 体: { id: 'P-1', fm: { id: 'P-1', title: '父单' } } });
       const 输出 = ['```json', JSON.stringify({
         summary: '两步走',
         tasks: [
