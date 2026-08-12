@@ -82,4 +82,91 @@ t('切单提示词带管线两处：口径条目 + 输出契约字段清单', ()
   assert.ok(/TK-106~116/.test(p), '案源留痕');
 });
 
+/* ===================== 估时自校准接线（H101 · 施工令-050）=====================
+ * 锁三处：①提示词自律那一半的文本确实在（切单/起草两条链都要有）
+ *        ②取数层真把「预计 vs 实际」两端凑齐（时间从工单戳、token 从预算账）
+ *        ③机器兜底那一半确实改写了 fm 并落了台账事件——只有提示词就是「请你遵守」，
+ *          模型漏读一行即退回自由拍值，而那正是 H101 要治的病。 */
+const fs = require('fs');
+const path = require('path');
+const { seed } = require('./helper');
+const estimate = require('../lib/pm/estimate');
+
+t('切单提示词带校准步：纪律条目 + 校准表 + 输出契约里的粒度口径', () => {
+  const { buildCutPrompt } = require('../lib/pm/brain');
+  const root = makeRoot();
+  const 表 = estimate.校准表({ 时间: [], token: [] });
+  const p = buildCutPrompt(root, {}, { id: 'TK-S9', fm: { 项目: 'SLG' }, body: '造地图' }, '', estimate.提示词块(表));
+  assert.ok(/③历史校准（H101 已制度化/.test(p), '六件套第③条改挂校准表');
+  assert.ok(/不得自由拍值/.test(p), '自律纪律原文在');
+  assert.ok(/估时校准表（H101/.test(p), '校准表块注进去了');
+  assert.ok(/机器兜底/.test(p), '明写机器会复核改写——不是吓唬，是实况');
+  assert.ok(/预计时间: <小时数——基准估值 × 校准系数/.test(p), '输出契约字段带粒度口径');
+  assert.ok(/估时校准引用/.test(p), '简报要写引用了哪一格与算式');
+  // 不传校准块也不掉纪律（取数失败降级路径）：退化成「无历史可校」版
+  const 空 = buildCutPrompt(root, {}, { id: 'TK-S9', fm: {}, body: '造地图' }, '');
+  assert.ok(/无历史可校/.test(空) && /不得自由拍值/.test(空));
+});
+
+t('起草提示词带校准步（buildDraftPrompt 抽成纯函数才断言得了）', () => {
+  const { buildDraftPrompt } = require('../lib/pm/brain');
+  const 表 = estimate.校准表({ 时间: [], token: [] });
+  const p = buildDraftPrompt({}, '把海岸线钉零', 'D:/proj', estimate.提示词块(表));
+  assert.ok(/估时校准表（H101/.test(p) && /不得自由拍值/.test(p), '起草链与切单链同一套纪律');
+  assert.ok(/起草说明里必须单列「估时校准引用」/.test(p), '留痕要求写进提示词');
+  assert.ok(/FIELD_RULES|字段规范/.test(p) && /短题制/.test(p), '原有纪律段未被挤掉');
+  assert.ok(/=== 制作人层需求 ===[\s\S]*把海岸线钉零/.test(p), '需求还在最后');
+});
+
+t('取数层：完结单的「预计 vs 实际」两端凑齐（时间取工单戳、token 取预算账，可注入）', () => {
+  const root = makeRoot();
+  seed(root, '完成', { id: 'TK-200', 职能: '程序', 单型: '实现单', 预计时间: '0.5', 预计token: '50000',
+    领单时间: '2026-08-10T00:00:00.000Z', 交付时间: '2026-08-10T01:00:00.000Z' });
+  seed(root, '已归档', { id: 'TK-201', 职能: '程序', 单型: '实现单', 预计时间: '0.5', 预计token: '50000',
+    领单时间: '2026-08-10T00:00:00.000Z', 交付时间: '2026-08-10T01:00:00.000Z' });
+  seed(root, '在途', { id: 'TK-202', 职能: '程序', 单型: '实现单', 预计时间: '0.5' }); // 没完结：不该进样本
+  const { 历史样本 } = require('../lib/pm/brain');
+  const 单表 = 历史样本(root, { 读账: () => [
+    { 池: 'claude', 单: 'TK-200', 输入: 40000, 缓存: 900000, 输出: 30000 }, // 缓存不计入合计（虚胖防线）
+    { 池: 'claude', 单: 'TK-200', 输入: 0, 缓存: 0, 输出: 0 },
+    { 池: 'claude', 单: '无此单', 输入: 1, 输出: 1 },
+  ] });
+  assert.deepEqual(单表.map((x) => x.id).sort(), ['TK-200', 'TK-201'], '只取 完成/已归档');
+  const m = Object.fromEntries(单表.map((x) => [x.id, x.实耗token]));
+  assert.equal(m['TK-200'], 70000, '输入+输出，缓存不进合计');
+  assert.equal(m['TK-201'], 0, '账上没有＝无 token 计量（不计量池），只校时间');
+  const 样本 = estimate.比样本(单表);
+  assert.equal(样本.时间.length, 2);
+  assert.equal(样本.时间[0].比, 2, '1h 实际 ÷ 0.5h 预计');
+  assert.equal(样本.token.length, 1, '只有 TK-200 有实耗');
+  // 读账缺席（预算闸落空实现）不炸：只剩时间维
+  assert.equal(历史样本(root, { 读账: null }).every((x) => x.实耗token >= 0), true);
+});
+
+t('机器兜底：落 fm 前复核改写估值 + 台账落「估时校准」事件（晨报按它对账）', () => {
+  const root = makeRoot();
+  const { 校准落fm, 备校准 } = require('../lib/pm/brain');
+  const 表 = estimate.校准表(estimate.比样本([0, 1, 2].map((i) => ({
+    fm: { 职能: '程序', 单型: '实现单', 预计时间: '0.5', 预计token: '50000',
+      领单时间: `2026-08-1${i}T00:00:00.000Z`, 交付时间: `2026-08-1${i}T01:00:00.000Z` },
+    实耗token: 70000,
+  }))));
+  const fm = { id: 'TK-300', 职能: '程序', 单型: '实现单', 预计时间: '0.25', 预计token: '50000' };
+  const 记 = 校准落fm(root, 'TK-300', fm, 表);
+  assert.equal(fm.预计时间, '0.5', '0.25 × 2 → 0.5h，就地改写（模型拍的值不作数）');
+  assert.equal(fm.预计token, '70000', '5 万 × 1.4 → 7 万');
+  assert.equal(记.时间.来源, '同组中位比');
+  const 事件 = fs.readFileSync(path.join(root, '项管台账', '事件.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const e = 事件.find((x) => x.类型 === '估时校准');
+  assert.ok(e && e.单 === 'TK-300', '落痕：台账有这条事件');
+  assert.deepEqual(e.时间, { 校前: 0.25, 校后: 0.5, 系数: 2, 样本数: 3, 来源: '同组中位比' }, '样本数/系数/校前→校后 齐备');
+  // 无表（取数失败）→ 不改不记，估值保留模型原值：校准挂了不许把切单带崩
+  const fm2 = { 职能: '程序', 单型: '实现单', 预计时间: '0.25', 预计token: '50000' };
+  assert.equal(校准落fm(root, 'TK-301', fm2, null), null);
+  assert.equal(fm2.预计时间, '0.25');
+  // 备校准 在空仓上也出得了表与块（无样本版），不抛
+  const b = 备校准(root);
+  assert.ok(b.表 && /不得自由拍值/.test(b.块));
+});
+
 console.log('全部通过：' + passed + ' 项');

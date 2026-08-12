@@ -7,6 +7,65 @@ const os = require('os');
 const { spawn } = require('child_process');
 const store = require('../core/store');
 const ledger = require('./ledger');
+const estimate = require('./estimate');
+
+/* ===================== 估时自校准接线（H101 · 施工令-050）=====================
+ * 章程「估时校准步」四步：①取历史（历史样本）→②算偏差 ③校估值（pm/estimate 纯函数）
+ * →④落痕（ledger.event('估时校准')）。每次切单/起草在成单前必过，不是可选优化。
+ * 双层：提示词自律（把校准表与纪律注进会话，要求引用算式）+ 机器兜底（落 fm 前用同一张表复核改写）。
+ * 单层不够——提示词那半边是「请你遵守」，模型漏读一行就退回自由拍值，而这正是 H101 要治的病。 */
+
+// ① 取历史（取数层：本文件唯一碰盘的一段，deps 全可注入便于测试）。
+// 时间实耗取 领单时间→交付时间（口径同 report.aggregate 的 实际h）；
+// token 实耗从预算账按单归集（施工令-047 流计量回灌落的就是这一本，合计不含缓存）。
+// 预算闸落空实现时它没有 读账——那就当没有 token 计量，只校时间（不臆造数字）。
+function 历史样本(root, deps = {}) {
+  const st = deps.store || store;
+  const 单表 = [];
+  for (const s of (deps.状态 || ['完成', '已归档'])) {
+    for (const t of st.list(root, s)) 单表.push({ id: t.id, fm: t.fm, 实耗token: 0 });
+  }
+  let 账 = [];
+  try {
+    const 读 = deps.读账 || require('../budget').读账;
+    if (typeof 读 === 'function') 账 = 读(root) || [];
+  } catch { 账 = []; } // 账读不到＝无 token 计量：本轮只校时间
+  const 归 = new Map();
+  for (const r of 账) {
+    if (!r || !r.单) continue;
+    归.set(r.单, (归.get(r.单) || 0) + (Number(r.输入) || 0) + (Number(r.输出) || 0));
+  }
+  for (const t of 单表) t.实耗token = 归.get(t.id) || 0;
+  return 单表;
+}
+
+// ②③ 备料：一次取数 → 一张校准表 + 一段提示词块。取数/算表失败一律降级到「无表」，
+// 提示词块照发（那一版明写「无样本，按基准估值原样填」）——校准挂了不许把切单带崩。
+function 备校准(root, deps) {
+  try {
+    const 表 = estimate.校准表(estimate.比样本(历史样本(root, deps)));
+    return { 表, 块: estimate.提示词块(表) };
+  } catch (e) {
+    try { require('../journal').append(root, `估时校准取数失败：${String(e.message).slice(0, 100)}——本次按基准估值不校准`); } catch { /* 留痕失败不阻塞 */ }
+    return { 表: null, 块: estimate.提示词块(null) };
+  }
+}
+
+// ③④ 机器兜底 + 落痕：落盘前拿同一张表复核 fm 两个估值字段，改写并记台账事件。
+// 就地改 fm（调用方拿到的是 childFm/draftFm 刚吐出来的对象，还没进 store.create）。
+function 校准落fm(root, id, fm, 表) {
+  if (!表 || !fm) return null;
+  try {
+    const r = estimate.校准({ 表, 职能: fm.职能, 单型: fm.单型, 预计时间: fm.预计时间, 预计token: fm.预计token });
+    fm.预计时间 = String(r.预计时间);
+    fm.预计token = String(r.预计token);
+    ledger.event(root, '估时校准', { 单: id, ...r.记录 }); // 晨报按这条对账
+    return r.记录;
+  } catch (e) {
+    try { require('../journal').append(root, `估时校准复核失败 ${id}：${String(e.message).slice(0, 100)}——估值保留模型原值`); } catch { /* 尽力 */ }
+    return null;
+  }
+}
 
 // 管理费记账（H49 报表单列，0.22.3 补接线）：从事件流提取真实用量入台账
 function extractUsage(raw) {
@@ -48,8 +107,9 @@ function cli() {
   return cands.find((c) => c === 'claude' || fs.existsSync(c));
 }
 
-// 切单提示词：六件套纪律 + 单型库 + 单元标准 + 机器可读输出契约
-function buildCutPrompt(root, cfg, parent, projPath) {
+// 切单提示词：六件套纪律 + 单型库 + 单元标准 + 估时校准表 + 机器可读输出契约
+// 校准块（H101，可缺）：备校准() 出的那段文本；不传时退化为「无历史可校」版，提示词结构不变。
+function buildCutPrompt(root, cfg, parent, projPath, 校准块) {
   const read = (f) => { try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch { return ''; } };
   const 单元 = (cfg.单元 || {});
   return [
@@ -60,7 +120,8 @@ function buildCutPrompt(root, cfg, parent, projPath) {
     '=== 拆单六件套（缺一不拆，按序执行）===',
     '①仓况盘点：先扫项目仓相关目录，列出已有实现，绝不重复造轮',
     '②调研先行判断：未知数多则第一张子单必须是调研单',
-    '③历史校准：预计时间用 agent 实测口径（' + (单元.小时 || 0.25) + 'h/单元，≤' + (单元.token || 50000) + ' token）',
+    '③历史校准（H101 已制度化，见下方「估时校准表」）：先按 agent 实测口径出基准估值（' + (单元.小时 || 0.25) + 'h/单元，≤' + (单元.token || 50000) + ' token），'
+      + '**再乘校准表里本单 职能×单型 的偏差系数得最终 预计时间/预计token，并在简报里写出引用了哪一格与算式——不得自由拍值**',
     '④协议选段：把相关纪律写进各子单「不要做」与验收标准',
     '⑤依赖建模：同写区串行（依赖链）、异写区并行；标注红链',
     '⑥单元合规自检：每张 ≤2 单元、单一写区、验收标准全部可判定（GWT/勾选）',
@@ -82,6 +143,8 @@ function buildCutPrompt(root, cfg, parent, projPath) {
     '管线归属必填：凡属某条管线域的单（看板管线注册表见 /api/pipelines 或工单正文域语义），frontmatter 必须写 管线: P-N；确无归属的独立杂务才允许留空进散单。案源：TK-106~116 整条地图施工链漏章堆散单，制作人亲自抓出。',
     '不设收口单（H56）：全部子单完成后项管自动生成收口报告、专项父单自动转待验收——制作人的保留签字在父单，一个专项只签一次（H53）。最后一张实现/装配单须含受控重建与全量测试绿的交付责任。',
     '',
+    校准块 || estimate.提示词块(null),
+    '',
     '=== 输出契约（机器解析，严格遵守）===',
     '每张子单一个代码块，格式：',
     '```ticket',
@@ -92,15 +155,16 @@ function buildCutPrompt(root, cfg, parent, projPath) {
     '优先级: <P0|P1|P2>',
     'QA: <开|关>',
     '验收方式: <委托|保留>',
-    '预计时间: <小时数>',
-    '预计token: <数字>',
+    '预计时间: <小时数——基准估值 × 校准系数，粒度 0.25h（H101）>',
+    '预计token: <数字——基准估值 × 校准系数，粒度 万 token（H101）>',
     '依赖: <逗号分隔的同批序号如 1,2；无则留空>',
     '依据: <承重实现单填已落袋的方案单号（H88）；其余留空>',
     '管线: <本单所属管线号 P-N（注册表见 /api/pipelines）；确无归属的独立杂务才留空>',
     '---',
     '<正文：## 范围 / ## 不要做 / ## 验收标准>',
     '```',
-    '全部子单之后，输出「## 拆单简报」：切法理由、依赖图、红链、预计总耗时与总 token。',
+    '全部子单之后，输出「## 拆单简报」：切法理由、依赖图、红链、预计总耗时与总 token，'
+      + '外加「估时校准引用」一段（逐张写 基准估值 × 引用的系数格 = 最终估值；无样本就写「无样本，未校准」）。',
     '',
     '=== 拍板父单 ===',
     parent.body || '',
@@ -167,7 +231,8 @@ function draftFm(tk, { id, 项目, 粒ID }) {
 function cut(root, cfg, parentId, projPath, cb) {
   const parent = store.find(root, parentId);
   if (!parent) return cb({ ok: false, error: '父单不存在' });
-  const prompt = buildCutPrompt(root, cfg, parent, projPath);
+  const 校 = 备校准(root); // H101：切单链的校准步，取数一次，提示词与机器复核共用这张表
+  const prompt = buildCutPrompt(root, cfg, parent, projPath, 校.块);
   const cmd = cli();
   const model = (cfg.模型 || {}).项管 || 'fable';
   setWorking({ 用途: '切单', 对象: parentId });
@@ -193,15 +258,20 @@ function cut(root, cfg, parentId, projPath, cb) {
     }
     const ids = tickets.map(() => `${px}-${++mx}`);
     const created = [];
+    const 校痕 = [];
     tickets.forEach((tk, i) => {
       const fm = childFm(tk, { id: ids[i], ids, parentId, 项目: parent.fm.项目 });
+      const 记 = 校准落fm(root, ids[i], fm, 校.表); // H101 机器兜底：落盘前用同一张表复核估值
+      if (记) 校痕.push(ids[i] + ' ' + estimate.记录一行(记));
       const r = store.create(root, ids[i], fm, tk.body);
       if (r.ok) created.push(ids[i]);
     });
     // 简报落台账，事件=待审（Claude 制作人层审批后放行）
     const briefPath = path.join(ledger.DIR(root), `拆单简报-${parentId}.md`);
     fs.mkdirSync(ledger.DIR(root), { recursive: true });
-    fs.writeFileSync(briefPath, `# 拆单简报 · ${parentId}\n\n子单：${created.join('、')}\n\n${brief || '（项管未附简报）'}\n`, 'utf8');
+    // 机器侧校准结果附在简报末尾：模型写的「引用算式」与机器实际改写的值并排放，对不上一眼看得出
+    const 校段 = 校痕.length ? `\n\n## 估时校准（H101 · 机器复核实况）\n${校痕.map((s) => '- ' + s).join('\n')}\n` : '';
+    fs.writeFileSync(briefPath, `# 拆单简报 · ${parentId}\n\n子单：${created.join('、')}\n\n${brief || '（项管未附简报）'}\n${校段}`, 'utf8');
     ledger.event(root, '待审', { 父单: parentId, 子单: created, 简报: briefPath });
     // 0.23.3：拆单简报本体主动贴进项管信道——制作人不该去翻台账文件（用户实测困惑）
     try { require('../relay').append(root, '项管', '拆单完成：' + parentId + ' → ' + created.join('、') + '（简报呈 Claude 审批后放行）' + String.fromCharCode(10) + String.fromCharCode(10) + (brief || '（无简报正文）')); } catch { /* 信道失败不阻塞 */ }
@@ -368,10 +438,11 @@ function adjudicateReferral(root, cfg, id, cb) {
 const FIELD_RULES = '字段规范（补：单型=工程单 时 执行池 必须= deepseek，QA=关；单型=方案单 时 职能 必须= 技术策划、产出物类型=文档、QA=开、验收方式=委托，H88）（补 H90：单型=调研单/方案单 时，正文「验收标准」章必须含评审台证据项——异厂评审意见合集 md 的绝对路径 + 回执附录三件（意见原文/采纳驳回/修订点）齐备，缺则返修）（补 H91/施工令-019：评审台已行红队立场卷制，上述评审证据项还须含击杀结论——各厂领卷（可行性/不变量/成本红队）与击杀/未杀条数，构造不出击杀的卷须有「未能构造击杀」声明，缺席致落空的立场卷如实标注，缺则返修）（逐字遵守，违者返修）：职能 只能取 策划/技术策划/程序/美术/QA/装配 六者之一，不得加括号后缀；优先级 只能取 P0/P1/P2/P3；QA 只能取 开/关；需求若点名依赖单号或执行池，frontmatter 必须含 依赖:/执行池: 字段原样带上。正文三章（背景/执行内容/验收标准）必须写在 ticket 代码块内部、frontmatter 的第二个 --- 之后——写在代码块外会被解析丢弃（TK-86 空壳案）。';
 // opts.粒ID（施工令-040 第 6 条，可选）：这次起草兑现的排程计划粒。落草稿成功后
 // 一并写进工单 frontmatter 并把粒推到「起草中」——挂接点就这一处，Pump/派发结构不动。
-function draftTicket(root, cfg, 需求, projPath, cb, opts) {
-  setWorking({ 用途: '起草' });
-  const 单元 = (cfg.单元 || {});
-  const prompt = [
+// 起草提示词（H101 起抽成纯函数：校准步的文本是可断言的合规面，藏在 spawn 里没法测）。
+// 校准块可缺——缺时退化为「无历史可校」版，同 buildCutPrompt。
+function buildDraftPrompt(cfg, 需求, projPath, 校准块) {
+  const 单元 = ((cfg || {}).单元 || {});
+  return [
     '你是单流的「项目管理」职能。制作人层委托你起草一张执行工单（单张，不是拆专项）。',
     '宪法要句（H80，规则空白时按此裁并注明依据）：①自动化——能给机器的不耗人 ②模块化——换实现不换协议 ③透明化——一切留痕如实呈报 ④自优化——教训必须变成协议或工具的改动 ⑤人本化——品味/取舍/方向/销毁性决定只属于人，AI 仅建议与执行。',
     '项目仓库（可读，用于盘点核实）：' + (projPath || '（未注册）'),
@@ -380,8 +451,16 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
     FIELD_RULES,
     '输出契约与拆单相同：一个 ```ticket 代码块（title/单型/职能/产出物类型/优先级/QA/验收方式/预计时间/预计token/依赖（需求点名了就写，否则留空）/管线 + --- + 正文三章）。之后一段「起草说明」：盘点发现+边界取舍。',
     '管线归属必填（案源 TK-106~116，起草单尤重）：单张起草单没有父单可继承归属，漏写就必落看板「散单」行——凡属某条管线域的单，frontmatter 必须写 管线: P-N（注册表见 /api/pipelines 或按工单正文域语义判），确无归属的独立杂务才允许留空。',
+    '', 校准块 || estimate.提示词块(null),
+    '起草说明里必须单列「估时校准引用」一行：基准估值 × 引用的系数格 = 最终估值（无样本就写「无样本，未校准」）。',
     '', '=== 制作人层需求 ===', String(需求 || '').slice(0, 4000),
   ].join(String.fromCharCode(10));
+}
+
+function draftTicket(root, cfg, 需求, projPath, cb, opts) {
+  setWorking({ 用途: '起草' });
+  const 校 = 备校准(root); // H101：起草链的校准步，与切单同一套取数/表/复核
+  const prompt = buildDraftPrompt(cfg, 需求, projPath, 校.块);
   const cmd = cli();
   const model = (cfg.模型 || {}).项管 || 'opus';
   const child = spawn(cmd, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'],
@@ -407,6 +486,7 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
     const tk = tickets[0];
     const 粒ID = ((opts || {}).粒ID) || null;
     const fm = draftFm(tk, { id: nid, 项目: (cfg.项目 && cfg.项目.默认) || '', 粒ID });
+    const 记 = 校准落fm(root, nid, fm, 校.表); // H101 机器兜底：落盘前复核估值
     const r = store.create(root, nid, fm, tk.body);
     if (!r.ok) return cb(r);
     // 排程台账挂钩：粒 计划→起草中 + 回填单号。账记不上不能把起草带崩——单已经落盘了，
@@ -417,11 +497,16 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
         if (!sr.ok) require('../journal').append(root, `排程挂钩失败（起草 ${nid} · 粒 ${粒ID}）：${sr.error}`);
       } catch (e) { try { require('../journal').append(root, `排程挂钩异常（起草 ${nid}）：${e.message}`); } catch { /* 留痕失败不阻塞 */ } }
     }
-    try { require('../relay').append(root, '项管', '受托起草：' + nid + ' ' + fm.title + '（草稿区待 Claude 审）' + String.fromCharCode(10) + String.fromCharCode(10) + (brief || '')); } catch { /**/ }
+    try {
+      require('../relay').append(root, '项管', '受托起草：' + nid + ' ' + fm.title + '（草稿区待 Claude 审）'
+        + String.fromCharCode(10) + String.fromCharCode(10) + (brief || '')
+        + (记 ? String.fromCharCode(10) + String.fromCharCode(10) + '估时校准（机器复核）：' + estimate.记录一行(记) : ''));
+    } catch { /**/ }
     ledger.event(root, '待审', { 单: nid, 起草: '单张' }); // 不写父单/子单：夜班推演 #7——伪装拆单结构会污染 H53 收口/成本归集
     cb({ ok: true, 单: nid });
   });
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
-module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, buildCutPrompt, parseTickets, childFm, draftFm, getWorking };
+module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, buildCutPrompt, buildDraftPrompt,
+  parseTickets, childFm, draftFm, getWorking, 历史样本, 备校准, 校准落fm };
