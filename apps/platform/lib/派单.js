@@ -136,6 +136,10 @@ function 依赖就绪(工单库, 根, 工单) {
   for (const id of 表) {
     const t = 工单库.find(根, String(id));
     if (!t) { 缺失.push(String(id)); continue; }
+    // 归档的上游**永远不会完成**——等它就是死等。归进「缺失」而不是「未完成」：
+    // 两者的处置不同，前者要改依赖或把上游捞回来，后者只需要等。
+    // 混成一类的话，人会一直等一张已经废掉的单。
+    if (t.state === '已归档') { 缺失.push(String(id) + '（已归档）'); continue; }
     if (t.state !== '完成') { 未完成.push({ id: t.id, 当前状态: t.state }); continue; }
     依赖单.push(t);
   }

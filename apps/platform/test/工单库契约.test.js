@@ -23,10 +23,11 @@ const 沙盒 = fs.mkdtempSync(path.join(os.tmpdir(), 'platform-tickets-'));
 库.建目录(沙盒);
 
 // ---- 状态机 ----
-t('状态机：协-004 加质检态，靠改表不改逻辑', () => {
-  // 协-001 决定 1 承诺「表驱动，加态是改表不是改逻辑」。协-004 加质检时兑现了：
+t('状态机：加态靠改表不改逻辑（协-004 质检、协-009 已归档）', () => {
+  // 协-001 决定 1 承诺「表驱动，加态是改表不是改逻辑」。两次加态都兑现了：
   // 状态机代码一行没动，只改了 STATES 与 TRANSITIONS 两张表。
-  assert.deepEqual(库.STATES, ['草稿', '待投', '在途', '质检', '完成']);
+  // 这条 deepEqual 的价值就在于**加一个态不能悄悄发生**——每次都要有人来这里确认。
+  assert.deepEqual(库.STATES, ['草稿', '待投', '在途', '质检', '完成', '已归档']);
   assert.equal(库.isLegal('草稿', '待投'), true);
   assert.equal(库.isLegal('在途', '质检'), true, '干完送检');
   assert.equal(库.isLegal('在途', '完成'), true, '免检时直达完成');
@@ -34,8 +35,22 @@ t('状态机：协-004 加质检态，靠改表不改逻辑', () => {
   assert.equal(库.isLegal('质检', '待投'), true, '判不过回待投重做——不是失败终态，同一张单可以再跑');
   assert.equal(库.isLegal('在途', '待投'), true, '退回重投要合法');
   assert.equal(库.isLegal('草稿', '完成'), false, '不许跳级');
-  assert.equal(库.isLegal('完成', '在途'), false, '完成是终态');
   assert.equal(库.isLegal('草稿', '质检'), false, '没干过的活不能直接送检');
+});
+
+t('已归档：任何状态都能归，且归了能取回', () => {
+  // 归档是「删掉它」的正规入口。此前工单库**只能建不能销**，
+  // 人想清一张废单只能去磁盘 rm 文件——绕过产品，账本还留下对不上号的记录。
+  for (const s of ['草稿', '待投', '在途', '质检', '完成']) {
+    assert.equal(库.isLegal(s, '已归档'), true, `${s} 该能归档——废单不分状态`);
+  }
+  // **归档必须可逆**。不可逆的话人不敢用它，只会继续攒着，
+  // 那就等于没做这个功能。
+  assert.equal(库.isLegal('已归档', '草稿'), true, '取回要合法');
+  assert.deepEqual(库.TERMINAL, ['已归档'], '真正的终态只有已归档；完成之后还能归档');
+  assert.equal(库.isLegal('完成', '已归档'), true, '完成不是尽头——它还能被收纳');
+  assert.equal(库.isLegal('完成', '在途'), false, '但完成不能倒回去重跑');
+  assert.equal(库.isLegal('已归档', '在途'), false, '取回只能回草稿，不许从归档直接上线');
 });
 
 // ---- 反向验证 ①：工单号 ----
@@ -274,6 +289,30 @@ const 取 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
       const 坏 = await 取(port, '/api/tickets?state=' + encodeURIComponent('不存在的态'));
       assert.equal(坏.码, 400);
       assert.ok(/合法/.test(坏.体.error), 坏.体.error);
+    });
+
+    await ta('GET /api/tickets 默认不含已归档，显式要才给', async () => {
+      // 归档的意义就是从眼前挪走；「全部」照样列出来的话，归档等于没做。
+      // **这条必须在接口层**：只在前端过滤的话，命令行调用方和执行器都绕过它，
+      // 两处对同一个词各执一词。
+      await 取(port, '/api/tickets', { method: 'POST', 体: { id: 'ARC-1', fm: { title: '要归档的' } } });
+      await 取(port, '/api/tickets/ARC-1/move', { method: 'POST', 体: { 到: '已归档' } });
+
+      const 默认 = await 取(port, '/api/tickets');
+      assert.ok(!默认.体.工单.some((t) => t.id === 'ARC-1'), '默认列表里出现了已归档的单');
+
+      const 显式 = await 取(port, '/api/tickets?state=' + encodeURIComponent('已归档'));
+      assert.ok(显式.体.工单.some((t) => t.id === 'ARC-1'), '显式筛已归档反而看不到');
+
+      // 参数名是中文，得自己编码——node 的 http.request 不接受未转义字符，
+      // 直接写 `?含归档=1` 会抛 ERR_UNESCAPED_CHARACTERS（写这条时当场撞到）。
+      const 全含 = await 取(port, '/api/tickets?' + encodeURIComponent('含归档') + '=1');
+      assert.ok(全含.体.工单.some((t) => t.id === 'ARC-1'), '含归档=1 该给全表——查账时要用');
+
+      // 归档可逆：取回之后又出现在默认列表里
+      await 取(port, '/api/tickets/ARC-1/move', { method: 'POST', 体: { 到: '草稿' } });
+      const 取回后 = await 取(port, '/api/tickets');
+      assert.ok(取回后.体.工单.some((t) => t.id === 'ARC-1'), '取回之后该回到默认列表');
     });
 
     // ⚠ 这里**只测被拒的路径**，故意不测成功路径。

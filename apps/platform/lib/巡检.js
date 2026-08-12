@@ -61,7 +61,9 @@ function 依赖死结(全部工单) {
   const 表 = new Map((全部工单 || []).map((t) => [String(t.id), t]));
   const 出 = [];
   for (const t of 全部工单 || []) {
-    if (t.state === '完成') continue;
+    // 已完成与**已归档**都不参与死结判定：前者不需要再依赖谁，
+    // 后者已经退出产线——给一张废掉的单报依赖问题是纯噪音。
+    if (t.state === '完成' || t.state === '已归档') continue;
     const 依 = (t.fm && t.fm.依赖) || [];
     const 表依 = Array.isArray(依) ? 依 : [依];
     for (const d of 表依) {
@@ -98,7 +100,7 @@ function 反复回炉(全部工单, 战绩, 阈值 = 3) {
   for (const [单, n] of Object.entries(次数)) {
     if (n < 阈值) continue;
     const t = (全部工单 || []).find((x) => x.id === 单);
-    if (t && t.state === '完成') continue;         // 后来过了就不必再提
+    if (t && (t.state === '完成' || t.state === '已归档')) continue;   // 后来过了、或已归档，都不必再提
     // 单已经不在库里（被删了）→ 不报。
     //
     // 战绩账本是**只追加**的，它记着这张单历史上被判不过几次，而且永远记着。

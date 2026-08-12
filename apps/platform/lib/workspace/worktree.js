@@ -25,7 +25,12 @@ function configOf(cfg) {
   return {
     mode: value.mode || value.模式 || 'direct',
     root: value.root || value.根目录 || 'workspaces',
-    branchPrefix: value.branchPrefix || value.分支前缀 || 'studio',
+    // 2026-08-12 改：默认从 'studio' 改成 'platform'。
+    // 这个前缀会出现在**用户自己的仓**里（分支名 <前缀>/<项目>/<单号>），
+    // 而建它的是 platform 不是 studio——两个产品都往同一个仓写的时候，
+    // 光看分支名分不清是谁建的。已存在的 studio/* 分支不受影响：
+    // 清理时读的是工单 frontmatter 里记下的那个名字，不是现算的。
+    branchPrefix: value.branchPrefix || value.分支前缀 || 'platform',
     baseRef: value.baseRef || value.基线 || 'HEAD',
     autoCommit: value.autoCommit !== false && value.自动提交 !== false,
     integrateDependencies: value.integrateDependencies !== false && value.集成依赖 !== false,
@@ -194,7 +199,16 @@ function prepare(monitorRoot, cfg, ticket, project, options = {}) {
   const prefix = safePart(wc.branchPrefix, 'studio');
   const projectPart = safePart(project.name, 'project');
   const ticketPart = safePart(ticket.id, 'ticket');
-  const branch = `${prefix}/${projectPart}/${ticketPart}`;
+  // 分支名：**工单自己记着的那个优先**，配置只用于新建。
+  //
+  // 不这么做的话，改一次 branchPrefix 就会让所有在途的单静默换轨：
+  // prepare 按新前缀算出一个不存在的分支名，于是从 baseRef 另起一条，
+  // 而老分支上那些没合回去的提交就此搁浅——没有报错，只是活不见了。
+  // 2026-08-12 把默认前缀从 studio 改成 platform 时当场发现这条（DEP-2 上有未合并提交）。
+  const 记着的 = ticket.fm && ticket.fm.workspace && ticket.fm.workspace.branch;
+  const branch = 记着的 && /^[\w./-]+$/.test(记着的)
+    ? String(记着的)
+    : `${prefix}/${projectPart}/${ticketPart}`;
   const root = workspaceRoot(monitorRoot, wc.root, repository);
   const target = path.join(root, projectPart, ticketPart);
   const stored = ticket.fm && ticket.fm.workspace && ticket.fm.workspace.path;
@@ -268,7 +282,83 @@ function publish(project, workspace) {
   return { ok: true, commit: head(basePath), path: basePath };
 }
 
+// 收工 —— 一张单干完之后把它的隔离工作区和分支收掉（协-009）。
+//
+// 原先 publish 只做 merge --ff-only 就返回，**全仓没有一行清理代码**。
+// 于是每跑一张单，就在用户自己的仓里永久留下一个 worktree 目录和一个分支。
+// 实测：靶仓跑了 5 张单，5 个 worktree、5 个分支全在，其中 3 张早已完成。
+// 跑一百张就是一百个——`git worktree list` 和 `git branch` 会越来越长，
+// 这是往用户的仓里堆垃圾，而且没有任何一处会提醒他。
+//
+// 安全边界写死在实现里，不做成选项：
+//   ① 分支用 `git branch -d`（小写），**不用 -D**。小写的会拒绝删除未合并的分支——
+//      这正是我们想要的判据：活没合进去就别删。想删得动就先合。
+//   ② 先摘 worktree 再删分支。反过来 git 会拒绝：分支正被某个 worktree 检出。
+//   ③ worktree remove 不加 --force。有未提交改动时它会拒绝，那说明这里还有活的东西，
+//      宁可留着让人来看。
+//   ④ 每一步都单独报结果。「清理失败」四个字没用，人要知道是哪一步、为什么。
+function 收工(project, workspace, { 分支 } = {}) {
+  const 出 = { 工作区: null, 分支: null };
+  const repo = repoTop(project.path);
+  const 路径 = workspace && workspace.path;
+  const 支 = 分支 || (workspace && workspace.branch);
+
+  if (!路径 && !支) return { ok: false, 错误: '没有可收的工作区（工单里没记 workspace.path 与 branch）' };
+
+  // ——— 摘 worktree ———
+  if (路径) {
+    if (!fs.existsSync(路径)) {
+      // 目录已经不在了（人手删过、或换过机器）。git 那边可能还留着登记，
+      // prune 一下把陈账清掉——不 prune 的话 `git worktree list` 会一直显示它。
+      git(repo, ['worktree', 'prune'], [0, 1]);
+      出.工作区 = { 已清: true, 说: '目录本来就不在，已 prune 掉 git 里的陈账' };
+    } else {
+      const r = git(repo, ['worktree', 'remove', 路径], [0, 1, 128]);
+      出.工作区 = r.code === 0
+        ? { 已清: true, 说: `已摘除 ${路径}` }
+        : { 已清: false, 说: `摘不掉：${r.stderr || r.stdout || '未知原因'}。`
+            + '多半是里面还有未提交的改动——那说明这里还有活的东西，先去看一眼再说。' };
+      if (r.code !== 0) return { ok: false, ...出, 错误: 出.工作区.说 };
+    }
+  }
+
+  // ——— 删分支 ———
+  if (支) {
+    const 有 = git(repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${支}`], [0, 1]);
+    if (有.code !== 0) {
+      出.分支 = { 已清: true, 说: `分支 ${支} 已不存在` };
+    } else {
+      const r = git(repo, ['branch', '-d', 支], [0, 1, 128]);
+      出.分支 = r.code === 0
+        ? { 已清: true, 说: `已删分支 ${支}` }
+        : { 已清: false, 说: `留着分支 ${支}：git 说它还没合进当前分支。`
+            + '这是有意的——用的是 -d 不是 -D，活没合回去就不删，那些提交是这台机器上唯一的一份。' };
+    }
+  }
+  return { ok: true, ...出 };
+}
+
+// 找出「已经没人认领」的工作区：目录还在，但对应的工单已完成或压根不存在。
+// 纯读，不动任何东西——要不要收由调用方决定。
+function 遗留工作区(monitorRoot, cfg, project, 工单表) {
+  const repo = repoTop(project.path);
+  const 表 = new Map((工单表 || []).map((t) => [String(t.id), t]));
+  const 出 = [];
+  for (const w of worktreeList(repo)) {
+    const 名 = path.basename(w.path || '');
+    if (!名 || path.resolve(w.path) === path.resolve(repo)) continue;   // 主工作区不算
+    const t = 表.get(名);
+    if (!t) { 出.push({ 单: 名, 路径: w.path, 分支: w.branch, 因: '工单库里找不到这张单' }); continue; }
+    // 已归档的单同样该收：它已经退出产线，工作区留着没有任何用处。
+    if (t.state === '完成' || t.state === '已归档') {
+      出.push({ 单: 名, 路径: w.path, 分支: w.branch, 因: `工单已${t.state === '完成' ? '完成' : '归档'}` });
+    }
+  }
+  return 出;
+}
+
 module.exports = {
+  收工, 遗留工作区,
   configOf, isGitRepo, repoTop, workspaceRoot, worktreeList,
   prepare, integrate, checkpoint, dependencyTickets, publish, changedFiles, enforceWriteScope,
   正文写入范围,

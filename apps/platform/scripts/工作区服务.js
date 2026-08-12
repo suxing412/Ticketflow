@@ -103,6 +103,21 @@ const 服务 = http.createServer((req, res) => {
     } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
   }
 
+  // 遗留工作区（协-009）：目录还在，但对应的工单已完成或压根不存在。
+  // 纯读不动手——「有多少垃圾」得先看得见，收不收是另一回事。
+  if (路径 === '/遗留' && req.method === 'GET') {
+    const 闸 = 收窄路径(查询.get('repository'));
+    if (!闸.ok) return 发JSON(res, 400, { ok: false, error: 闸.错误 });
+    try {
+      // 工单表由调用方带进来（本进程的能力面是 git，不读工单库）。
+      // 不带就只按「工单库里找不到」判——那仍然能抓出大部分陈账。
+      let 工单表 = [];
+      try { 工单表 = JSON.parse(查询.get('工单') || '[]'); } catch { /* 传坏了就当没传 */ }
+      const 出 = 工作区.遗留工作区(平台根, 配置, { path: 闸.路径 }, 工单表);
+      return 发JSON(res, 200, { ok: true, 仓库: 闸.路径, 条数: 出.length, 遗留: 出 });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+  }
+
   if (路径 === '/changes' && req.method === 'GET') {
     const 闸 = 收窄路径(查询.get('dir'));
     if (!闸.ok) return 发JSON(res, 400, { ok: false, error: 闸.错误 });
@@ -161,7 +176,21 @@ const 服务 = http.createServer((req, res) => {
         if (路径 === '/write/publish') {
           if (!体.工作区) return 发JSON(res, 400, { ok: false, error: '需要 工作区' });
           const r = 工作区.publish(项目, 体.工作区);
-          return 发JSON(res, 200, { ok: true, ...r });
+          // 发布成功之后顺手收工（协-009）。**发布是收工唯一正当的时机**：
+          // 到这一步那些提交已经快进合并进主线了，worktree 和分支再留着就是垃圾。
+          // 收不掉不算发布失败——活已经合进去了，那才是这次请求的主事。
+          // 所以收工结果单独一个字段，不影响 ok。
+          let 收 = null;
+          try { 收 = 工作区.收工(项目, 体.工作区); } catch (e) { 收 = { ok: false, 错误: e.message }; }
+          return 发JSON(res, 200, { ok: true, ...r, 收工: 收 });
+        }
+        // 手动收工：给那些没走到发布就停下的单用（人工废弃、判不过放弃、跑挂了）。
+        // 不自动做——没发布就意味着那条分支上的提交是这台机器上**唯一的一份**，
+        // 该不该扔是人的决定。真要扔，-d 还会再挡一道（未合并的删不掉）。
+        if (路径 === '/write/收工') {
+          if (!体.工作区 && !体.分支) return 发JSON(res, 400, { ok: false, error: '需要 工作区 或 分支' });
+          const r = 工作区.收工(项目, 体.工作区 || {}, { 分支: 体.分支 });
+          return 发JSON(res, r.ok ? 200 : 409, r);
         }
         return 发JSON(res, 404, { ok: false, error: '未知写操作：' + 路径 });
       } catch (e) {

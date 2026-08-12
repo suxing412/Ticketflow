@@ -56,8 +56,16 @@ async function 刷工单() {
       return;
     }
     $('工单来源').textContent = j.根目录 || '';
-    if (!j.工单 || !j.工单.length) { $('工单体').innerHTML = '<tr><td colspan="7" class="淡">还没有工单</td></tr>'; return; }
-    const 序 = { 草稿: 0, 待投: 1, 在途: 2, 质检: 3, 完成: 4 };
+    // 「全部」不含已归档——**这条在服务端做**（server.js 的 /api/tickets）。
+    // 前端不再重复过滤一遍：同一件事两处各做一遍，迟早一处改了另一处没改，
+    // 而且命令行调用方绕不过前端那份。
+    if (!j.工单 || !j.工单.length) {
+      $('工单体').innerHTML = '<tr><td colspan="7" class="淡">'
+        + (滤 ? '这个状态下没有单' : '还没有工单（已归档的不在这里，用上面的筛选看）')
+        + '</td></tr>';
+      return;
+    }
+    const 序 = { 草稿: 0, 待投: 1, 在途: 2, 质检: 3, 完成: 4, 已归档: 5 };
     // 先按状态，再让子单紧跟父单——DAG 平铺在列表里就看不出结构了。
     const 键 = (t) => ((t.fm && t.fm.父单) ? t.fm.父单 + '' + t.id : t.id);
     j.工单.sort((a, b) => (序[a.state] - 序[b.state]) || 键(a).localeCompare(键(b)));
@@ -90,6 +98,11 @@ async function 刷工单() {
         + (可判 ? '<button class="btn" onclick="判(\'' + 转义(t.id) + '\',true)">试判</button> '
                 + '<button class="' + 真跑钮类(f.执行池) + '" onclick="判(\'' + 转义(t.id) + '\',false)">'
                 + 转义(真跑标签(f.执行池, '真判')) + '</button>' : '')
+        // 归档：每张单都能归，包括在途的（跑挂了、需求取消了都算）。
+        // 已归档的单给一条回头路——归档不可逆的话人就不敢用它，只会继续攒着。
+        + (t.state === '已归档'
+          ? '<button class="btn" onclick="迁移(\'' + 转义(t.id) + '\',\'草稿\')">取回</button>'
+          : '<button class="btn" onclick="归档(\'' + 转义(t.id) + '\')" title="从看板挪走，记录留着">归档</button>')
         + '</td></tr>';
     }).join('');
   } catch (e) { $('工单体').innerHTML = '<tr><td colspan="7" class="级急">工单接口不可达</td></tr>'; }
@@ -140,6 +153,29 @@ async function 退回待投(id) {
     method: 'POST', body: JSON.stringify({ 到: '待投' }),
   });
   if (!j.ok) { alert('退回失败：' + j.error); return; }
+  刷工单(); 刷调度();
+}
+
+// 归档：把单从看板挪走，记录留着。
+//
+// 这是「删掉它」的正规入口。此前工单库只能建不能销，人想清掉一张废单
+// 只能去磁盘上 rm 文件——绕过产品，账本还会留下对不上号的记录
+// （实测：删掉的单，「反复回炉」告警永远消不掉）。
+//
+// 多问一句，因为有一种情况会丢东西：**在途的单归档，那次执行还在跑**。
+// 平台看不见 CLI 进程死没死，归档不会去杀它。
+async function 归档(id) {
+  const 行 = [...document.querySelectorAll('#工单体 tr')].find((tr) => tr.textContent.includes(id));
+  const 态 = 行 ? ((行.querySelector('.态') || {}).textContent || '').trim() : '';
+  const 话 = 态 === '在途'
+    ? '这张单**正在途**。归档不会去杀那个 CLI 进程——平台看不见它死没死。\n'
+      + '若它还在跑，跑完的产出会落在一张已归档的单上，没人会去看。\n\n'
+    : '';
+  if (!confirm('归档 ' + id + '：从看板挪走，记录与账本都留着。\n\n' + 话 + '随时可以「取回」。确定？')) return;
+  const { 体: j } = await 取JSON('/api/tickets/' + encodeURIComponent(id) + '/move', {
+    method: 'POST', body: JSON.stringify({ 到: '已归档' }),
+  });
+  if (!j.ok) { alert('归档失败：' + j.error); return; }
   刷工单(); 刷调度();
 }
 
