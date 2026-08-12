@@ -284,3 +284,7 @@ td.淡, td .淡 { font-size:12.5px; }
 .md table.md表 { border-collapse:collapse; width:100%; font-size:12.5px; }
 .md table.md表 th, .md table.md表 td { border:1px solid var(--line); padding:6px 10px; text-align:left; vertical-align:top; }
 .md table.md表 th { background:var(--sect); font-weight:600; white-space:nowrap; }
+
+/* 项目列不折行：「靶仓」被拆成「靶／仓」两行时，读起来像两个不同的词。
+   列变多之后表格挤，宁可让标题列吸收换行——那里折行不会改变语义。 */
+td:nth-child(5), th:nth-child(5) { white-space:nowrap; }

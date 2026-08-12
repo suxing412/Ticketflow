@@ -78,6 +78,9 @@
 </div>
 
 <!-- ── 产线状态：一眼看出「为什么没在跑」 ── -->
+<!-- 静默计费风险：订阅池但环境里带着 API key，CLI 可能在耗尽后自己切到计费。
+     这是唯一一个「不问就会花钱」的口子，所以摆在产线状态上方而不是折叠里。 -->
+<div class="提示" id="计费提示"></div>
 <h2>产线状态<span class="右"><button onclick="刷调度()">重算</button></span></h2>
 <div class="栏" id="调度概览"><span class="淡">读取中…</span></div>
 <div id="告警区"></div>
