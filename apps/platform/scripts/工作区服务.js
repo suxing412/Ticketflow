@@ -170,8 +170,13 @@ const 服务 = http.createServer((req, res) => {
         }
         if (路径 === '/write/checkpoint') {
           if (!体.工作区) return 发JSON(res, 400, { ok: false, error: '需要 工作区（prepare 的返回值原样传回）' });
+          // 改动了哪些文件，**必须在这一刻取**：提交之后 diff 就空了，
+          // 发布并收工之后连工作区目录都没了。质检要看的正是这份清单。
+          // 取不到不算失败——检查点本身才是这次请求的主事。
+          let 变更文件 = [];
+          try { 变更文件 = 工作区.changedFiles(体.工作区.path); } catch { /* 拿不到就空着 */ }
           const r = 工作区.checkpoint(配置, 体.工作区, 体.工单 || {});
-          return 发JSON(res, 200, { ok: true, ...r });
+          return 发JSON(res, 200, { ok: true, ...r, 变更文件 });
         }
         if (路径 === '/write/publish') {
           if (!体.工作区) return 发JSON(res, 400, { ok: false, error: '需要 工作区' });

@@ -259,7 +259,10 @@ function checkpoint(cfg, workspace, ticket) {
   const title = String(ticket.fm && ticket.fm.title || '').replace(/[\r\n]+/g, ' ').slice(0, 80);
   git(workspace.path, [
     '-c', 'user.name=AI Workflow Studio', '-c', 'user.email=noreply@local',
-    'commit', '--no-gpg-sign', '-m', `[studio] ${ticket.id}${title ? ` ${title}` : ''}`,
+    // 提交信息的前缀与分支前缀同源：这条提交进的是**用户自己的仓**，
+    // 落款写着 studio 而实际是 platform 干的，git log 上就分不清谁改了什么。
+    // 协-009 改分支前缀时漏了这一处，首次真跑的提交上看到才发现（[studio] E2E-1 …）。
+    'commit', '--no-gpg-sign', '-m', `[${wc.branchPrefix}] ${ticket.id}${title ? ` ${title}` : ''}`,
   ]);
   return { committed: true, commit: head(workspace.path), changed: true };
 }
