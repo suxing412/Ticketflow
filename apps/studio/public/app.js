@@ -156,7 +156,7 @@ async function viewHub() {
     const [run, g] = await Promise.all([api('/api/runner'), api('/api/gates')]);
     const el = $('hub-run');
     if (el) el.innerHTML = `<i class="${dotCls(run)}"></i><span style="font-size:14px;font-weight:500">${run.运行 ? '实弹运行中' : '已停'}</span>`;
-    paintGate(g.paused); // H81 单闸：胶囊 + 停/开按钮 + 合闸时的常驻醒目提示
+    paintGate(g.paused, g.OAuth); // H81 单闸：胶囊 + 停/开按钮 + 合闸时的常驻醒目提示（施工令-055：OAuth 死了也挂条）
     // H64 编辑器锁已迁决策台（2026-08-05 制作人指正：锁属验收流程，不落首页）
     setNum($('hub-cx'), g.locks.codex.fivePct != null ? g.locks.codex.fivePct + '%' : '—', 'num ' + (g.locks.codex.locked ? 'err' : 'okc'));
     setNum($('hub-cl'), g.locks.claude.fivePct != null ? g.locks.claude.fivePct + '%' : '—', 'num ' + (g.locks.claude.locked ? 'err' : 'dim'));
@@ -408,15 +408,21 @@ function gatebarHtml(g) {
 // H81 常开单闸制：唯一总闸，一个停/开按钮
 window.togglePause = async (v) => { await post('/api/gate/pause', { value: v }); gateCache = null; route(); };
 // hub 闸位：状态胶囊 + 停/开按钮；合闸时顶部挂常驻红条（醒目，不埋角落）
-function paintGate(paused) {
+function paintGate(paused, oauth) {
   const el = $('hub-gate');
   if (el) el.innerHTML = `<span class="pill sm ${paused ? 'red' : 'ok'}" style="font-weight:700">${paused ? '已合闸' : '开闸中'}</span>`
     + `<button class="btn h32" style="height:26px;margin-left:8px" onclick="togglePause(${!paused})">${paused ? '开' : '停'}</button>`;
   const b = $('gate-banner');
-  if (b) b.innerHTML = paused ? `<div class="gatealert" role="alert"><i class="dot err breathe-err"></i>
+  // 施工令-055：OAuth 过期/未登录也是一道闸——claude 池（含判官三席）此刻拉一个死一个（401）。
+  // 与合闸红条同一位置、可并存：两件事都成立时制作人要一眼看见两件事，不是二选一。
+  const oa = oauth ? `<div class="gatealert" role="alert"><i class="dot err breathe-err"></i>
+      <b>OAuth ${oauth.态 === '未登录' ? '未登录' : '已过期'} · claude 池会话一律 401</b>
+      <span class="subnote">${esc(oauth.文案 || '')}——重登后自动恢复，无需改配置</span>
+      <code class="mono" style="margin-left:auto;font-size:11.5px" title="复制到 cmd 跑">${esc(oauth.配方 || '')}</code></div>` : '';
+  if (b) b.innerHTML = (paused ? `<div class="gatealert" role="alert"><i class="dot err breathe-err"></i>
       <b>全链路已合闸 · 放行单一律不派发</b>
       <span class="subnote">跑是常态、停是例外（H81）——不是有意停工就立刻开闸</span>
-      <button class="btn h32 primary" style="margin-left:auto" onclick="togglePause(false)">开闸</button></div>` : '';
+      <button class="btn h32 primary" style="margin-left:auto" onclick="togglePause(false)">开闸</button></div>` : '') + oa;
 }
 // D43 批量投池：当前项目语境的待投整批释放（人闸=这一次确认）
 window.releaseAll = async () => {

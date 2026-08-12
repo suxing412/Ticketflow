@@ -1174,7 +1174,10 @@ app.get('/api/gates', async (req, res) => {
       已越: require('./lib/pm/dispatch').moatBlocked(cfg, gi, 'claude') };
     // 预算闸失效位（施工令-046）：三候选全失守时 lib/budget 落的是空实现——不落账、不冻结、零症状。
     // 这一位是那台哑火保险丝在 API 面的唯一出口，参数页额度卡据此挂红标。正常命中时返回体逐字节不变。
+    // OAuth 门禁横幅（施工令-055 要件 1）：已过期/未登录才出条（临期只走急件），纯读盘无副作用。
+    // 挂在 /api/gates 而不是新开端点——门禁位本来就是「为什么不派单」的唯一问答处，凭据死了也是一种闸。
     res.json({ paused: require('./lib/core/state').read(ROOT).paused, locks: gi, 推荐: rec, 护城河: moat,
+      OAuth: require('./lib/oauth').横幅(cfg),
       ...require('./lib/budget-resolve').失效位(require('./lib/budget')) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1570,6 +1573,9 @@ function start() {
             require('./lib/pm/patrol').打点停滞(ROOT, cfg);
             // 施工令-010 零输出看门狗：会话拉起 ≥config.并发.零输出分钟 仍一个字没吐 → 急件（TK-102 挂死 48 分钟案）
             require('./lib/pm/patrol').零输出(ROOT, cfg);
+            // 施工令-055 OAuth 续命哨兵：拍读凭据 expiresAt，临期/过期/未登录发急件（同状态 30 分钟至多一封）。
+            // 纯本地读盘零外呼——挂在这一拍上，制作人在 401 打脸前半小时就该收到信（08-12 集体 401 案）。
+            require('./lib/oauth').哨兵(ROOT, cfg);
             // H99 池衡巡检（施工令-045）：读三池额度 → 决策 → 受限动作落配置。异步且自吞异常，
             // 不 await——池衡是优化面，它的外呼慢一点不该把同一拍的其余巡检项拖住。
             require('./lib/pm/wake').池衡巡检(ROOT, cfg, { 保存: saveCfg })

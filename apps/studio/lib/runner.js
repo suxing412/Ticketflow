@@ -665,8 +665,8 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   }
 
   // ---- 实弹（D32）：真调无头 CLI。H81 起「运行」即实弹，唯一停手闸是暂停总闸 ----
-  const proj = projectPath(cfg, t);
-  if (!proj) { failLocal('项目未注册或路径不存在（config.项目）'); return true; }
+  // 解析顺序（施工令-055 起）：池/模型/凭据 → OAuth 预检 → 项目定位。凭据死了就是拉不起来，
+  // 项目注册得再对也没用；把预检排在项目定位之前，是让「不该开的会话」在最早的一步就掉头。
   // H67 两检制：初检走便宜池（默认 deepseek-flash），只核格式与规范；深检（代核）保持 opus
   const 两检cfg = (cfg.执行器 || {}).两检 || {};
   const poolName = kind === '初检' ? (两检cfg.池 || 'deepseek') : (t.fm.执行池 || 'claude');
@@ -684,7 +684,28 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       return true;
     }
   }
-  const { cmd, args, stream } = resolveCli((kind === '执行' || kind === '初检') ? poolName : 'claude', compat ? (kind === '初检' ? model : (compat.模型 || model)) : model, (cfg.执行器 || {}).放行工具); // 质检/代核/代裁走 claude
+  // 质检/代核/代裁实际走 claude，流水如实记；初检（二线 LLM 档）走的是 两检.池（默认 deepseek），
+  // 旧样把它也算成 claude——流水失实事小，账记错池事大（施工令-047 起这个名字直接当记账的池名用，
+  // 记到 claude 头上等于拿订阅池的名义记按量池的账，判超会掐错池）。
+  const cliPool = (kind === '执行' || kind === '初检') ? poolName : 'claude';
+  // ---- OAuth 续命预检（施工令-055 要件 2）----
+  // 案源 2026-08-12 22:50：token 到点集体 401，判官席空烧三振、TK-163/164 连坐、人工修复 25 分钟。
+  // 401 不是「跑失败」而是「压根没资格跑」：撞上去会被 failLocal 计进 判官重试上限，三次即钉死等人工。
+  // 只拦真吃 OAuth 订阅登录态的会话（claude 池且没走托管 key）；codex/deepseek/*-key 池另有凭据，不受影响。
+  // 拒派＝不开会话、不计失败次数、不动单——返回 false 让本轮跳过，寿命续上后下一拍照常拉起。
+  {
+    const 预 = require('./oauth').派发预检(root, cfg, { ...(opts.oauth || {}), 池: cliPool, 用托管: !!compat });
+    if (!预.放行) {
+      running.delete(agentId);
+      const 文 = `拒派 ${t.id}（${agentId} · ${kind} · ${cliPool}）：${预.因}`;
+      journal.append(root, 文);
+      try { require('./pm/ledger').event(root, 'OAuth拒派', { 单: t.id, 席: agentId, kind, 池: cliPool, 态: 预.态, 剩余分: 预.剩余分 }); } catch { /* 记账失败不阻塞拒派 */ }
+      return false;
+    }
+  }
+  const proj = projectPath(cfg, t);
+  if (!proj) { failLocal('项目未注册或路径不存在（config.项目）'); return true; }
+  const { cmd, args, stream } = resolveCli(cliPool, compat ? (kind === '初检' ? model : (compat.模型 || model)) : model, (cfg.执行器 || {}).放行工具); // 质检/代核/代裁走 claude
   const receiptPath = path.join(root, '回执', `${t.id}.md`);
   const prompt = kind === '质检' ? buildQaPrompt(root, t, proj, receiptPath)
     : kind === '代核' ? buildAuditPrompt(root, t, proj, receiptPath)
@@ -710,10 +731,6 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     child = spawn(cmd, args, { cwd: proj.path, env, windowsHide: true, shell: cmd.endsWith('.cmd'), stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (e) { failLocal('CLI 启动失败：' + e.message); return true; }
   entry.child = child;
-  // 质检/代核/代裁实际走 claude，流水如实记；初检（二线 LLM 档）走的是 两检.池（默认 deepseek），
-  // 旧样把它也算成 claude——流水失实事小，账记错池事大（施工令-047 起这个名字直接当记账的池名用，
-  // 记到 claude 头上等于拿订阅池的名义记按量池的账，判超会掐错池）。
-  const cliPool = (kind === '执行' || kind === '初检') ? poolName : 'claude';
   // 凭据来源入流水（施工令-029）：迁移后要看得见「这一发到底是从托管取的还是从 config 兜底取的」。
   // 只记来源三个字，key/指纹一律不进流水。
   journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name} · 超时闸 ${rc.执行超时分钟 ?? 30}m 派发时快照${compat ? ' · 凭据' + compat.来源 : ''}）`); // 夜班推演 #3：热改超时不作用于在跑会话，快照值写明防误判
