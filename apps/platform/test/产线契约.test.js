@@ -290,5 +290,72 @@ t('未知适配器：明说受限模式形同虚设', () => {
   assert.ok(/形同虚设/.test(r.警告), '注不进参数就等于没受限，必须说出来：' + r.警告);
 });
 
+// ---- 编排提示：契约不能只存在于代码里（2026-08-11 首次跑 orchestrator 踩到）----
+const 编排提示 = require(path.join(平台根, 'lib', '编排提示.js'));
+const 计划模块 = require(path.join(平台根, 'lib', 'orchestration', 'plan.js'));
+
+t('契约块点名顶层键必须叫 tasks', () => {
+  // 首次真跑：AI 输出 {"tickets":[...]}，拆解本身完全正确——两张子单、角色合法、
+  // 验收标准客观、依赖对——只因顶层键不叫 tasks 就整份作废，白烧 88 秒。
+  // 根因不是 AI 不听话，是**契约只存在于代码里，没人告诉它**。
+  const 块 = 编排提示.契约块({ roles: { backend: {}, reviewer: {} } });
+  assert.ok(/顶层键必须叫 `tasks`/.test(块), '必须显式点名，别指望 AI 猜');
+  assert.ok(/不是 tickets/.test(块), '要点名最容易猜错的那个：AI 第一次就写了 tickets');
+  assert.ok(/backend \/ reviewer/.test(块), '角色词表要从配置里取，不写死');
+});
+
+t('契约与 plan.js 的实际校验不许漂移', () => {
+  // 这条断言的意义：plan.js 改了字段名而提示没跟着改，会重演同一次事故。
+  const 源 = fs.readFileSync(path.join(平台根, 'lib', 'orchestration', 'plan.js'), 'utf8');
+  const 块 = 编排提示.契约块({});
+  // plan.js 认的顶层键
+  assert.ok(/value\.tasks \|\| value\.任务/.test(源), 'plan.js 的顶层键契约变了，契约块要同步改');
+  // 提示里承诺的字段，plan.js 必须真的读
+  for (const 键 of ['acceptance', 'dependsOn', 'writeScope', 'role', 'key', 'title']) {
+    assert.ok(块.includes(键), `契约块应说明 ${键}`);
+    assert.ok(源.includes(键), `plan.js 应真的读 ${键}——契约里承诺了却不读，等于骗 AI`);
+  }
+});
+
+t('只给 orchestrator 附加契约，别的角色不受污染', () => {
+  const a = 编排提示.拼提示({}, 'orchestrator', '原正文');
+  assert.equal(a.附加, true);
+  assert.ok(a.提示.startsWith('原正文'), '原正文必须在前，契约在后');
+  assert.ok(a.提示.length > '原正文'.length);
+  const b = 编排提示.拼提示({}, 'backend', '原正文');
+  assert.equal(b.附加, false);
+  assert.equal(b.提示, '原正文', '给 backend 附计划契约会诱导它去输出计划而不是干活');
+});
+
+t('按契约写的计划，plan.js 真的收', () => {
+  // 端到端闭环：契约块说什么，plan.js 就得收什么。
+  const 计划文本 = '```json\n' + JSON.stringify({
+    summary: '两步',
+    tasks: [
+      { key: 'a', title: '实现', role: 'backend', acceptance: ['能跑'] },
+      { key: 'b', title: '评审', role: 'reviewer', dependsOn: ['a'], acceptance: ['无阻断'] },
+    ],
+  }) + '\n```';
+  const r = 计划模块.resolvePlan({ roles: { backend: {}, reviewer: {} } }, 计划文本, undefined);
+  assert.equal(r.plan.tasks.length, 2);
+  assert.deepEqual(r.plan.tasks[1].dependsOn, ['a']);
+});
+
+// ---- 反复回炉（协-005）----
+t('反复回炉：判不过达阈值才报，且只算工单的锅', () => {
+  const 全 = [{ id: 'X', state: '待投', fm: {} }];
+  const 战 = (n) => Array.from({ length: n }, () => ({ role: 'reviewer', qualityPassed: false, ticket: 'X' }));
+  assert.equal(巡检.反复回炉(全, 战(2), 3).length, 0, '没到阈值不报——单次判不过是正常的');
+  const 告 = 巡检.反复回炉(全, 战(3), 3);
+  assert.equal(告.length, 1);
+  assert.equal(告[0].级别, '急');
+  assert.ok(/继续重跑只是烧钱/.test(告[0].说明), '要说清为什么该停下来看：' + 告[0].说明);
+  // 判官自己失败的不算——那不是工单的错
+  const 判官挂 = Array.from({ length: 5 }, () => ({ role: 'reviewer', qualityPassed: undefined, ticket: 'X' }));
+  assert.equal(巡检.反复回炉(全, 判官挂, 3).length, 0, '判官挂了不该记在工单头上');
+  // 后来过了就不再提
+  assert.equal(巡检.反复回炉([{ id: 'X', state: '完成', fm: {} }], 战(5), 3).length, 0);
+});
+
 fs.rmSync(沙盒, { recursive: true, force: true });
 console.log(`全部通过：${passed} 项`);

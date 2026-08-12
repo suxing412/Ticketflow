@@ -30,6 +30,8 @@ const 调度 = require(path.join(平台根, 'lib', '调度.js'));
 const 巡检 = require(path.join(平台根, 'lib', '巡检.js'));
 const 质检 = require(path.join(平台根, 'lib', '质检.js'));
 const 输出提取 = require(path.join(平台根, 'lib', '输出提取.js'));
+const 计划 = require(path.join(平台根, 'lib', 'orchestration', 'plan.js'));
+const 编排提示 = require(path.join(平台根, 'lib', '编排提示.js'));
 
 function 读JSON(p, 缺省) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return 缺省; }
@@ -260,7 +262,7 @@ const 服务 = http.createServer((req, res) => {
         const 抽 = 输出提取.抽正文(r.输出, 调用.outputFormat);
         const 判 = 质检.判定(r.退出码, 抽.正文);
         记战绩({
-          provider: 派.选中, role: 'reviewer', ticket: id,
+          provider: 派.选中, role: 'reviewer', ticket: id, kind: '质检',
           ok: 判.结论 !== '判官失败', dry: false, durationMs: r.耗时毫秒,
           qualityPassed: 判.结论 === '通过', _输出: r.输出,
         });
@@ -309,6 +311,7 @@ const 服务 = http.createServer((req, res) => {
 
     const 告警 = 巡检.巡一轮(配置, {
       全部工单: 全部, 现在: Date.now(), 冻结: 冻.挡,
+      战绩: 路由历史.read(账本根, 300),
       本轮派出: 排.派.length, 本轮跳过: 排.跳过,
     });
 
@@ -373,7 +376,7 @@ const 服务 = http.createServer((req, res) => {
       };
 
       if (干跑) {
-        记战绩({ provider: 派.选中, role: 共同.角色, ticket: id, ok: true, dry: true, durationMs: 0 });
+        记战绩({ provider: 派.选中, role: 共同.角色, ticket: id, kind: '执行', ok: true, dry: true, durationMs: 0 });
         return 发JSON(res, 200, { ...共同, 干跑: true, 说明: '干跑：全链路走完但未拉起任何进程，零计费。真跑需 {"干跑": false} 且满足另两闸。' });
       }
 
@@ -415,10 +418,14 @@ const 服务 = http.createServer((req, res) => {
         const 落 = 派单.落单(工单库, 工单根.根, id, 派);
         if (!落.ok) return 发JSON(res, 409, { ...共同, ok: false, error: 落.error });
 
-        拉起(调用, (体 && 体.提示词) || t.body || '', 工作目录, async (r) => {
+        // orchestrator 的输出契约由平台附加，不指望工单作者去背 plan.js 的字段名。
+        // 首次真跑就栽在这上面：AI 输出 {"tickets":[...]}，拆解完全正确，
+        // 只因顶层键不叫 tasks 就整份作废，白烧 88 秒。
+        const 拼 = 编排提示.拼提示(配置, 共同.角色, (体 && 体.提示词) || t.body || '');
+        拉起(调用, 拼.提示, 工作目录, async (r) => {
         const 判 = 加固.成败判定({ 退出码: r.退出码, 输出: r.输出 });
         记战绩({
-          provider: 派.选中, role: 共同.角色, ticket: id,
+          provider: 派.选中, role: 共同.角色, ticket: id, kind: '执行',
           ok: 判.成, dry: false, durationMs: r.耗时毫秒, _输出: r.输出,
         });
 
@@ -453,8 +460,43 @@ const 服务 = http.createServer((req, res) => {
           }
         }
 
+        // Orchestrator 的产出是**一份计划**，不是代码。跑完先把计划解析出来给人看，
+        // **不自动物化**——AI 提的拆解方案没经人眼就落成一批工单，那是把「AI 只提计划、
+        // 确定性内核负责校验」这条原则从中间掐断。物化是单独一个动作（/api/plan/materialize）。
+        let 计划预览 = null;
+        if ((共同.角色 === 'orchestrator') && 判.成) {
+          try {
+            const 抽 = 输出提取.抽正文(r.输出, 调用.outputFormat);
+            const { plan, source } = 计划.resolvePlan(配置, 抽.正文, undefined);
+            计划预览 = {
+              合规: true, 来源: source, 摘要: plan.summary || '', 任务数: plan.tasks.length,
+              任务: plan.tasks.map((x) => ({ key: x.key, 标题: x.title, 角色: x.role, 依赖: x.dependsOn })),
+              // 原文一并带回。物化时要把它原样回填给 /api/plan/materialize——
+              // 那边**自己再解析一次**，不信任这里已经解析好的结构：
+              // 经过前端的东西不该成为落盘的依据。顺带，人可以在物化前手改计划。
+              正文预览: String(抽.正文 || '').slice(0, 8000),
+              下一步: `确认无误后物化：POST /api/plan/materialize {"输出": <正文预览原样回填>, "父单": "${id}"}`,
+            };
+          } catch (e) {
+            // 校验不过是**正常业务结果**：AI 的拆解方案不合规，该打回重提，不是执行失败。
+            //
+            // 但必须把 AI 的**原话**带出来。只报「未找到合法的 JSON 计划」，人无从判断
+            // 是 AI 没按格式、还是我们抽错了正文——两者的处置完全相反（改提示词 vs 改代码）。
+            // 首次跑 orchestrator 就卡在这儿：回执说不合规，却看不到它到底说了什么。
+            const 抽 = 输出提取.抽正文(r.输出, 调用.outputFormat);
+            计划预览 = {
+              合规: false, 原因: e.message,
+              正文来源: 抽.来源,
+              正文预览: String(抽.正文 || '').slice(0, 1200),
+              说明: '拆解方案不合规，未物化任何子单——这是内核在挡，不是执行失败。'
+                + '看「正文预览」判断是 AI 没按格式（改提示词）还是抽取有误（改代码）。',
+            };
+          }
+        }
+
         return 发JSON(res, 200, {
           ...共同, 干跑: false, 成: 判.成,
+          ...(计划预览 ? { 计划预览 } : {}),
           ...(判.成 ? {} : { 失败原因: 判.原因 }),
           耗时毫秒: r.耗时毫秒,
           ...(r.验尸 ? { 验尸: r.验尸, 活尾巴: r.活尾巴 } : {}),

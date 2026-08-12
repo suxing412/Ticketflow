@@ -56,6 +56,12 @@
   <select id="滤状态"><option value="">全部</option><option>草稿</option><option>待投</option><option>在途</option><option>质检</option><option>完成</option></select>
   <button onclick="刷工单()">刷新</button>
   <button onclick="开建单()">＋ 新建工单</button>
+  <button onclick="批量投出()">批量投出草稿</button>
+  <button onclick="按调度干跑()">按调度干跑本轮可派</button>
+</div>
+<div class="提示">
+  批量操作**只做干跑与流转，从不真跑**——真跑逐张点，每张独立过三闸。
+  一个按钮同时花掉几张单的钱，不该存在。
 </div>
 <table>
   <thead><tr><th>编号</th><th>状态</th><th>角色</th><th>标题</th><th>项目</th><th>执行池</th><th>操作</th></tr></thead>
@@ -106,8 +112,16 @@
   </div>
 
   <div>
-    <!-- ── 预算与战绩 ── -->
-    <h2>战绩与预算</h2>
+    <!-- ── 消耗报表 ── -->
+    <h2>消耗<span class="右 淡" id="消耗提示"></span></h2>
+    <table>
+      <thead><tr><th>池</th><th>今日 token</th><th>本月 token</th><th>上限</th><th></th></tr></thead>
+      <tbody id="消耗体"><tr><td colspan="5" class="淡">读取中…</td></tr></tbody>
+    </table>
+    <div class="提示" id="消耗按单"></div>
+
+    <!-- ── 战绩 ── -->
+    <h2>战绩</h2>
     <div class="栏">
       <div class="卡"><div class="淡">真实运行</div><div class="数" id="真跑数">—</div></div>
       <div class="卡"><div class="淡">干跑</div><div class="数" id="干跑数">—</div></div>
@@ -168,13 +182,16 @@ async function 刷工单() {
     $('工单来源').textContent = j.根目录 || '';
     if (!j.工单 || !j.工单.length) { $('工单体').innerHTML = '<tr><td colspan="7" class="淡">还没有工单</td></tr>'; return; }
     const 序 = { 草稿: 0, 待投: 1, 在途: 2, 质检: 3, 完成: 4 };
-    j.工单.sort((a, b) => (序[a.state] - 序[b.state]) || a.id.localeCompare(b.id));
+    // 先按状态，再让子单紧跟父单——DAG 平铺在列表里就看不出结构了。
+    const 键 = (t) => ((t.fm && t.fm.父单) ? t.fm.父单 + '' + t.id : t.id);
+    j.工单.sort((a, b) => (序[a.state] - 序[b.state]) || 键(a).localeCompare(键(b)));
     $('工单体').innerHTML = j.工单.map((t) => {
       const f = t.fm || {};
       const 可派 = t.state === '待投';
       const 可判 = t.state === '质检';
       const 可投 = t.state === '草稿';
-      return '<tr><td><code>' + 转义(t.id) + '</code></td>'
+      const 层 = f.父单 ? '<span class="淡">└ </span>' : '';   // 子单缩进，DAG 一眼可辨
+      return '<tr><td>' + 层 + '<a href="#" onclick="看单(\'' + 转义(t.id) + '\');return false"><code>' + 转义(t.id) + '</code></a></td>'
         + '<td><span class="态 ' + 转义(t.state) + '">' + 转义(t.state) + '</span></td>'
         + '<td>' + 转义(f.role || f.职能 || '') + '</td>'
         + '<td>' + 转义(f.title || '') + '</td>'
@@ -189,6 +206,39 @@ async function 刷工单() {
         + '</td></tr>';
     }).join('');
   } catch (e) { $('工单体').innerHTML = '<tr><td colspan="7" class="级急">工单接口不可达</td></tr>'; }
+}
+
+// 单张详情。看板一行只有摘要——正文、质检意见、依赖链、流转痕迹都在 fm 里，
+// 不给个地方看，出问题时只能去翻磁盘上的 .md。
+async function 看单(id) {
+  $('运行区').style.display = '';
+  $('运行').textContent = '读取中…';
+  try {
+    const { 码, 体: j } = await 取JSON('/api/tickets/' + encodeURIComponent(id));
+    if (码 !== 200) { $('运行').textContent = j.error || '读取失败'; return; }
+    const fm = j.fm || {};
+    const 行 = [];
+    行.push('# ' + id + '　[' + j.状态 + ']　' + (fm.title || ''));
+    if (fm.项目) 行.push('项目：' + fm.项目);
+    if (fm.执行池) 行.push('执行池：' + fm.执行池 + '　权限：' + (fm.权限模式 || '—'));
+    if (fm.依赖) 行.push('依赖：' + [].concat(fm.依赖).join('、'));
+    if (fm.父单) 行.push('父单：' + fm.父单);
+    if (fm.检查点) 行.push('检查点：' + fm.检查点);
+    if (fm.发布提交) 行.push('发布提交：' + fm.发布提交);
+    if (fm.降级留痕) 行.push('降级留痕：' + JSON.stringify(fm.降级留痕));
+    if (fm.免检原因) 行.push('免检：' + fm.免检原因);
+    if (fm.质检结论) {
+      行.push('');
+      行.push('## 质检：' + fm.质检结论 + '（判官 ' + (fm.质检判官 || '?') + '，' + (fm.质检时间 || '') + '）');
+      const 意 = fm.质检意见 || {};
+      if ((意.问题 || []).length) 行.push('阻断问题：\n' + 意.问题.map((x) => '  - ' + x).join('\n'));
+      if ((意.证据 || []).length) 行.push('验收证据：\n' + 意.证据.map((x) => '  - ' + x).join('\n'));
+    }
+    行.push('');
+    行.push('## 正文');
+    行.push(j.正文 || '（空）');
+    $('运行').textContent = 行.join('\n');
+  } catch (e) { $('运行').textContent = '读取失败：' + e.message; }
 }
 
 async function 迁移(id, 到) {
@@ -210,22 +260,93 @@ async function 跑(id, 干跑) {
       method: 'POST', body: JSON.stringify({ 干跑 }),
     });
     $('运行').textContent = JSON.stringify(j, null, 2);
+    // orchestrator 跑出合规计划时给一个物化入口。**不自动物化**——
+    // AI 提的拆解没经人眼就落成一批工单，等于把「AI 只提计划、确定性内核负责校验」
+    // 这条原则从中间掐断。物化是一个独立的、人点下去的动作。
+    const 头 = $('运行区').querySelector('h2');
+    const 旧 = 头.querySelector('.物化钮'); if (旧) 旧.remove();
+    if (j.计划预览 && j.计划预览.合规) {
+      const b = document.createElement('button');
+      b.className = '主 物化钮';
+      b.textContent = '物化这 ' + j.计划预览.任务数 + ' 张子单';
+      b.onclick = () => 物化(id);
+      头.appendChild(b);
+    }
   } catch (e) { $('运行').textContent = '调用失败：' + e.message; }
-  刷工单(); 刷战绩(); 刷排名(); 刷调度();
+  刷工单(); 刷战绩(); 刷排名(); 刷调度(); 刷消耗();
+}
+
+// 物化：把 orchestrator 的计划落成真实子单。
+// 需要把**原始输出**回填给 /api/plan/materialize——它自己再解析一次，
+// 而不是信任前端传来的已解析结构：前端能改的东西，不该成为落盘的依据。
+async function 物化(父单) {
+  const 文 = $('运行').textContent;
+  let 原始 = '';
+  try { 原始 = (JSON.parse(文).计划预览 || {}).正文预览 || ''; } catch { /* 下面兜底 */ }
+  if (!原始) {
+    alert('拿不到原始计划文本。请改用接口物化：\nPOST /api/plan/materialize {"输出": <orchestrator 的原始回复>, "父单": "' + 父单 + '"}');
+    return;
+  }
+  const { 体: j } = await 取JSON('/api/plan/materialize', {
+    method: 'POST', body: JSON.stringify({ 输出: 原始, 父单 }),
+  });
+  $('运行').textContent = JSON.stringify(j, null, 2);
+  刷工单(); 刷调度();
 }
 
 async function 判(id, 干跑) {
-  if (!干跑 && !confirm('真判会调用另一个 AI CLI 做质检、产生费用。
-
-工单：' + id + '
-
-确定继续？')) return;
+  if (!干跑 && !confirm('真判会调用另一个 AI CLI 做质检、产生费用。\n\n工单：' + id + '\n\n确定继续？')) return;
   $('运行区').style.display = '';
   $('运行').textContent = (干跑 ? '试判' : '真判') + '中…';
   try {
     const { 体: j } = await 取JSON('/api/exec/qa/' + encodeURIComponent(id), { method: 'POST', body: JSON.stringify({ 干跑 }) });
     $('运行').textContent = JSON.stringify(j, null, 2);
   } catch (e) { $('运行').textContent = '调用失败：' + e.message; }
+  刷工单(); 刷战绩(); 刷调度();
+}
+
+// 批量操作。**只做干跑与流转，绝不批量真跑**——
+// 一个按钮同时花掉几张单的钱，不该存在。真跑必须逐张点，每张独立过三闸。
+async function 批量投出() {
+  const { 体: j } = await 取JSON('/api/tickets?state=' + encodeURIComponent('草稿'));
+  const 单 = (j.工单 || []).map((t) => t.id);
+  if (!单.length) { alert('没有草稿单'); return; }
+  if (!confirm('把这 ' + 单.length + ' 张草稿投出到「待投」？\n\n' + 单.join('、'))) return;
+  const 结果 = [];
+  for (const id of 单) {
+    const { 体: r } = await 取JSON('/api/tickets/' + encodeURIComponent(id) + '/move', {
+      method: 'POST', body: JSON.stringify({ 到: '待投' }),
+    });
+    结果.push(id + (r.ok ? ' ✓' : ' ✗ ' + r.error));
+  }
+  $('运行区').style.display = '';
+  $('运行').textContent = '批量投出：\n' + 结果.join('\n');
+  刷工单(); 刷调度();
+}
+
+// 按调度算出来的「本轮可派」逐张干跑。干跑零计费，用来在真跑前把一批单的
+// 选人、权限、依赖一次看完——比一张张点省事，又不会花钱。
+async function 按调度干跑() {
+  const { 码, 体: t } = await 取JSON('/api/exec/tick');
+  if (码 !== 200) { alert('执行器未拉起：npm run executor'); return; }
+  const 可派 = t.本轮可派 || [];
+  if (!可派.length) {
+    $('运行区').style.display = '';
+    $('运行').textContent = '本轮无可派工单。\n\n跳过原因：\n'
+      + (t.跳过 || []).map((s) => '  ' + s.id + '：' + s.原因).join('\n');
+    return;
+  }
+  $('运行区').style.display = '';
+  $('运行').textContent = '干跑 ' + 可派.length + ' 张…';
+  const 行 = [];
+  for (const x of 可派) {
+    const { 体: r } = await 取JSON('/api/exec/run/' + encodeURIComponent(x.id), {
+      method: 'POST', body: JSON.stringify({ 干跑: true }),
+    });
+    行.push(x.id + '  → ' + (r.ok ? (r.provider + '（' + (r.权限 && r.权限.模式) + '）') : ('✗ ' + r.error)));
+  }
+  $('运行').textContent = '批量干跑（零计费）：\n' + 行.join('\n')
+    + '\n\n真跑请逐张点——每张独立过三闸，批量真跑不提供。';
   刷工单(); 刷战绩(); 刷调度();
 }
 
@@ -298,6 +419,29 @@ async function 刷排名() {
   } catch { $('排名体').innerHTML = '<tr><td colspan="3" class="级急">路由接口不可达</td></tr>'; }
 }
 
+// ── 消耗报表 ──
+// 平台会真的花钱之后，「花了多少」就不再是可选信息。账记着没人看，等于没记。
+async function 刷消耗() {
+  try {
+    const { 码, 体: j } = await 取JSON('/api/budget');
+    if (码 !== 200 || !j.ok) { $('消耗体').innerHTML = '<tr><td colspan="5" class="淡">' + 转义(j.error || '不可用') + '</td></tr>'; return; }
+    $('消耗提示').textContent = j.codex提示 ? 'codex 消耗不计入' : '';
+    const 千 = (n) => (n == null ? '—' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n));
+    $('消耗体').innerHTML = (j.池 || []).map((p) => {
+      const 日上限 = p.上限 && (p.上限.日token || p.上限.日金额);
+      return '<tr><td><code>' + 转义(p.池) + '</code></td>'
+        + '<td>' + 千(p.汇总 && p.汇总.日 && p.汇总.日.token) + '</td>'
+        + '<td>' + 千(p.汇总 && p.汇总.月 && p.汇总.月.token) + '</td>'
+        + '<td class="淡">' + 转义(日上限 ? '日 ' + 千(日上限) : '—') + '</td>'
+        + '<td>' + (p.超 ? '<span class="级急">超</span>' : '<span style="color:var(--绿)">正常</span>') + '</td></tr>';
+    }).join('') || '<tr><td colspan="5" class="淡">' + 转义(j.说明 || '还没有配预算上限') + '</td></tr>';
+    const 按单 = (j.按工单 || []).slice(0, 5);
+    $('消耗按单').textContent = 按单.length
+      ? '花得最多的单：' + 按单.map((o) => o.单 + '（' + 千(o.输入 + o.输出) + ' token，' + o.次数 + ' 次）').join('　')
+      : '';
+  } catch { $('消耗体').innerHTML = '<tr><td colspan="5" class="级急">预算接口不可达</td></tr>'; }
+}
+
 // ── 战绩 ──
 async function 刷战绩() {
   try {
@@ -365,7 +509,7 @@ for (const 选 of ['新角色', '排名角色']) {
 $('排名角色').value = 'backend';
 $('滤状态').onchange = 刷工单;
 
-刷健康(); 刷工单(); 刷调度(); 刷排名(); 刷战绩(); 刷providers(); 刷瞭望塔();
+刷健康(); 刷工单(); 刷调度(); 刷排名(); 刷战绩(); 刷消耗(); 刷providers(); 刷瞭望塔();
 setInterval(刷瞭望塔, 5000);
 setInterval(刷健康, 30000);
 </script>

@@ -13,7 +13,7 @@
 //   orchestration/plan                                              纯计算那半已接（store 改注入）
 //   workspace/worktree   引 child_process，**不进本文件的依赖闭包**——它住独立进程
 //                        scripts/工作区服务.js，本文件只用 http 转发过去。
-//   执行加固 / 派单 / 调度 / 巡检 / 质检 / 输出提取   同理**隔离**进 scripts/执行器.js。它们自身是纯计算，
+//   执行加固/派单/调度/巡检/质检/输出提取/编排提示   同理**隔离**进 scripts/执行器.js。它们自身是纯计算，
 //                        但只服务于「拉起 AI CLI」那条链，跟着能力走比跟着纯度走更清楚：
 //                        谁要用它们，谁就得先有那个能力面。本文件只转发 /api/exec/*。
 // 全部台账见 docs/接线说明.md 第四、六、八节。
@@ -44,6 +44,7 @@ const 门禁 = require('./lib/门禁');
 // 工单库（协-001）：纯 fs+path，落盘是文件操作不需要 git，故住本进程即可。
 // 但它让本进程有了往仓外写文件的能力，三条约束见 lib/工单库.js 头部。
 const 工单库 = require('./lib/工单库');
+const 自检 = require('./lib/自检');
 const 工单根 = 工单库.解析根目录(仓根);
 
 // ——————————————————————————————————————————————————————————
@@ -366,6 +367,31 @@ const 服务 = http.createServer((req, res) => {
       });
     }
 
+    // 运行历史必须在「单张详情」**之前**判——不然会被块尾的 404 吃掉。
+    // 全局战绩看不出「这一张跑过几轮、每轮什么结果」，而判不过会回待投重跑，
+    // 一张单跑三四轮是常态：不按单归集，就没法回答「它为什么还没完成」。
+    const 单史 = url路径.match(/^\/api\/tickets\/([^/]+)\/runs$/);
+    if (单史 && req.method === 'GET') {
+      try {
+        const id = decodeURIComponent(单史[1]);
+        const 全 = 路由历史.read(账本根, 1000).filter((r) => r.ticket === id);
+        const 真 = 全.filter((r) => !r.dry);
+        return 发JSON(res, 200, {
+          ok: true, 工单: id, 总次数: 全.length, 真实次数: 真.length, 干跑次数: 全.length - 真.length,
+          // 按 kind 分而不是按 role：**reviewer 角色的工单本身也要被执行**，
+          // 只按 role 分会把「执行一张 reviewer 单」错记成「对它做了质检」。
+          // 实测踩到：R-1 是 reviewer 单，它的首次执行被归进了质检列。
+          // 老记录没有 kind，回退到 qualityPassed 是否存在来判——
+          // 那个字段只有质检才写，是可靠的区分依据。
+          执行: 真.filter((r) => (r.kind ? r.kind === '执行' : r.qualityPassed === undefined))
+            .map((r) => ({ 时刻: r.at, provider: r.provider, 成: r.ok, 耗时毫秒: r.durationMs })),
+          质检: 真.filter((r) => (r.kind ? r.kind === '质检' : r.qualityPassed !== undefined))
+            .map((r) => ({ 时刻: r.at, 判官: r.provider, 判过: r.qualityPassed, 耗时毫秒: r.durationMs })),
+          ...(全.length ? {} : { 说明: '这张单还没跑过' }),
+        });
+      } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+    }
+
     const 单张 = url路径.match(/^\/api\/tickets\/([^/]+)$/);
     if (单张 && req.method === 'GET') {
       try {
@@ -398,6 +424,74 @@ const 服务 = http.createServer((req, res) => {
         });
       } catch (e) { return 发JSON(res, 400, { ok: false, error: e.message }); }
     });
+  }
+
+  // ——— 自检（协-005）：这台机器现在能干什么、不能干什么、为什么 ———
+  // 免令牌？不。它会吐出配置路径与已注册项目——那些不该给未授权者看。
+  if (url路径 === '/api/selfcheck' && req.method === 'GET') {
+    try {
+      const 条 = 自检.查(仓根, 配置, 工单根);
+      return 发JSON(res, 200, {
+        ok: true, ...自检.结论(条), 能力: 条,
+        本地覆盖: 本地覆盖.摘要(生效的覆盖),
+        说明: '自检只报事实**不做修复**：自动补配置意味着替你决定业务数据落哪、要不要花钱，'
+          + '那些不该由一个自检函数拍板。',
+      });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+  }
+
+  // ——— 消耗报表（协-005）：钱花在哪 ———
+  // 平台会真的花钱之后，「花了多少」就不再是可选信息。budget.view 早就有，
+  // 但一直没有消费方——账记着没人看，等于没记。
+  if (url路径 === '/api/budget' && req.method === 'GET') {
+    try {
+      const budget = 公用件.载入('budget', 'budget.js');
+      const 池表 = budget.view(配置, 账本根);
+      const 明细 = budget.读账(账本根).slice(-200);
+      // 按工单归集：一张单可能跑过多次（判不过回炉重跑），成本要算总账。
+      const 按单 = {};
+      for (const r of 明细) {
+        const k = r.单 || '(无单号)';
+        const o = 按单[k] || (按单[k] = { 单: k, 次数: 0, 输入: 0, 缓存: 0, 输出: 0, 池: new Set() });
+        o.次数 += 1; o.输入 += r.输入 || 0; o.缓存 += r.缓存 || 0; o.输出 += r.输出 || 0;
+        o.池.add(r.池);
+      }
+      return 发JSON(res, 200, {
+        ok: true, 账本: budget.账本(账本根), 池: 池表,
+        按工单: Object.values(按单).map((o) => ({ ...o, 池: [...o.池] }))
+          .sort((a, b) => (b.输入 + b.输出) - (a.输入 + a.输出)).slice(0, 20),
+        条数: 明细.length,
+        ...(池表.length ? {} : { 说明: '还没有配任何池的预算上限——没有上限就没有刹车，也无从判超' }),
+        codex提示: 'codex 非 stream-json 输出，取不到 usage，其消耗**不计入本账**（见 packages/budget/README.md）',
+      });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: `预算闸不可用：${e.message}` }); }
+  }
+
+  // ——— 工单树（协-005）：把 plan.materialize 生成的 DAG 显出来 ———
+  // 父子关系与依赖一直写在 fm 里，但看板是平的——DAG 存在却看不见，
+  // 等于每次都要人肉在几十张单里拼出结构。
+  if (url路径 === '/api/tickets-tree' && req.method === 'GET') {
+    if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
+    try {
+      const 全 = 工单库.list(工单根.根).map((t) => {
+        const d = 工单库.find(工单根.根, t.id);
+        const fm = (d && d.fm) || {};
+        const 依 = fm.依赖;
+        return {
+          id: t.id, 状态: t.state, 角色: fm.role || fm.职能 || '', 标题: fm.title || '',
+          父单: fm.父单 || null, 项目: fm.项目 || '', 执行池: fm.执行池 || '',
+          依赖: Array.isArray(依) ? 依 : (依 ? [依] : []),
+          质检结论: fm.质检结论 || null,
+        };
+      });
+      const 子 = {};
+      for (const t of 全) if (t.父单) (子[t.父单] = 子[t.父单] || []).push(t.id);
+      return 发JSON(res, 200, {
+        ok: true, 条数: 全.length, 工单: 全,
+        根单: 全.filter((t) => !t.父单).map((t) => t.id),
+        子表: 子,
+      });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
   }
 
   // ——— 执行链：转发给执行器进程，本文件绝不自己拉起 AI CLI ———

@@ -61,6 +61,16 @@ t('worktree 只被隔离进程持有，server.js 碰不到它', () => {
   assert.ok(/workspace['\\/]+worktree/.test(服务源), '隔离进程应当是持有 worktree 的那一个');
 });
 
+t('驾驶舱内联脚本语法必须合法（坏了整页只显示「读取中」）', () => {
+  // 2026-08-11 踩到：用脚本改 HTML 时把 '\n' 写成了真换行，字符串断在半路。
+  // 后果特别隐蔽——页面**照常渲染**，只是所有数据永远停在「读取中…」，
+  // 因为整段 <script> 根本没执行。不看控制台就以为是后端没响应。
+  const 页 = fs.readFileSync(path.join(平台根, 'public', 'index.html'), 'utf8');
+  const m = 页.match(/<script>([\s\S]*)<\/script>/);
+  assert.ok(m, 'index.html 应有内联脚本');
+  assert.doesNotThrow(() => new Function(m[1]), '内联脚本语法错——整页会静默停在「读取中」');
+});
+
 t('每条转发路径都必须转发请求体（少一个 pipe 就静默丢 body）', () => {
   // 2026-08-10 实测踩到：/api/workspace/* 那条写的是裸 代理.end()，**请求体被整个丢掉**，
   // 于是经 server 调任何 /write/* 都收到空 body，报「项目(空)不在注册表里」。
