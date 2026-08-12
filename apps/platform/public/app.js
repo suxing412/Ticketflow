@@ -203,7 +203,7 @@ async function 批量投出() {
 // 选人、权限、依赖一次看完——比一张张点省事，又不会花钱。
 async function 按调度干跑() {
   const { 码, 体: t } = await 取JSON('/api/exec/tick');
-  if (码 !== 200) { alert('执行器未拉起：npm run executor'); return; }
+  if (码 !== 200) { alert("执行器没在 4372 应答。npm start 会带起它——单独起过 server 才会缺；也可能是它刚崩了，看终端。"); return; }
   const 可派 = t.本轮可派 || [];
   if (!可派.length) {
     $('运行区').style.display = '';
@@ -265,7 +265,7 @@ async function 刷调度() {
   try {
     const { 码, 体: j } = await 取JSON('/api/exec/tick');
     if (码 !== 200) {
-      $('调度概览').innerHTML = '<span class="淡">' + 转义(j.error || '执行器未拉起（npm run executor）') + '</span>';
+      $('调度概览').innerHTML = '<span class="淡">' + 转义(j.error || "执行器没在 4372 应答。npm start 会带起它——单独起过 server 才会缺；也可能是它刚崩了，看终端。") + '</span>';
       $('告警区').innerHTML = ''; $('跳过区').innerHTML = '';
       return;
     }
@@ -289,7 +289,7 @@ async function 刷调度() {
       ? '<div class="提示">本轮跳过：' + 跳.map((s) => 转义(s.id) + '（' + 转义(s.原因) + '）').join('、') + '</div>'
       : '';
   } catch {
-    $('调度概览').innerHTML = '<span class="淡">执行器未拉起（npm run executor）</span>';
+    $('调度概览').innerHTML = '<span class="淡">' + "执行器没在 4372 应答。npm start 会带起它——单独起过 server 才会缺；也可能是它刚崩了，看终端。" + '</span>';
   }
 }
 

@@ -134,6 +134,37 @@ t('每个 lib 模块都从入口可达（测试全绿但产品里走不到，是
     + 不可达.join('\n  '));
 });
 
+t('一条命令能带起整个产品，且桌面与命令行走同一条路', () => {
+  // 2026-08-12 之前：npm start 只起 server，工作区(4371)和执行器(4372) 要另开两个终端；
+  // 桌面壳更糟——它 require('./server.js') 塞进 electron 主进程，另外两个压根不起。
+  // 双击打开是半个产品：看板能看，派活点了没反应也不报错。
+  const 包 = JSON.parse(fs.readFileSync(path.join(平台根, 'package.json'), 'utf8'));
+  assert.ok(/开机\.js/.test(包.scripts.start || ''),
+    'npm start 必须走总启动器。让人开三个终端才能用，不叫可跑的产品');
+
+  const 开机 = fs.readFileSync(path.join(平台根, 'scripts', '开机.js'), 'utf8');
+  for (const s of ['server.js', '工作区服务.js', '执行器.js']) {
+    assert.ok(开机.includes(s), `总启动器没带上 ${s}——少一个就是半个产品`);
+  }
+  // 一个死了必须全停。半个产品比全停难查得多：界面照常开，按钮照常点，没反应也没报错。
+  assert.ok(/on\('exit'/.test(开机) && /收摊/.test(开机), '总启动器要在子进程死掉时一并收摊');
+
+  // 剥掉注释再查。不剥的话，main.js 里那句解释「原先这里是 require('./server.js')」
+  // 会被当成真代码——断言当场自己咬了自己。查代码的断言必须看代码，不能看字面。
+  const 主 = fs.readFileSync(path.join(平台根, 'main.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/require\(\s*['"]\.\/server(\.js)?['"]\s*\)/.test(主),
+    'main.js 不能把 server 塞进 electron 主进程：\n'
+    + '  ① 桌面路径会漏掉工作区和执行器，双击打开是半个产品；\n'
+    + '  ② server 与 electron 主进程同居，「server 物理上起不了 CLI 进程」这条保证就打折了——'
+    + '主进程什么都能干。改成起 scripts/开机.js 当子进程。');
+  assert.ok(/开机\.js/.test(主), 'main.js 要通过总启动器起后台，别自己另起一套');
+  // 打包清单漏了 scripts/ 的话，开发态一切正常、打出来的 exe 一开就挂——
+  // 这种「只在打包后才炸」的问题最贵，放这儿看着。
+  assert.ok((包.build.files || []).some((f) => String(f).startsWith('scripts')),
+    'build.files 少了 scripts/**：开发态没事，打包后 main.js 找不到 开机.js，exe 一开就挂');
+});
+
 t('工单正文里的「写入范围」真的会被执行（不能只是装饰）', () => {
   const wt = require(path.join(平台根, 'lib', 'workspace', 'worktree.js'));
   // 正例：模板生成的那一节，填上真路径后要能被认出来

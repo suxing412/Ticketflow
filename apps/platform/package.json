@@ -5,16 +5,17 @@
   "description": "通用软件开发平台 · 交钥匙壳（施工令-025 出厂）。零第三方依赖，node 内置模块 only。",
   "main": "main.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node scripts/开机.js",
+    "server": "node server.js",
     "desktop": "electron .",
     "dist": "electron-builder --win portable",
-    "watchtower": "node scripts/watchtower.js",
-    "watchtower:install": "node scripts/watchtower.js --install",
-    "watchtower:status": "node scripts/watchtower.js --status",
-    "check": "node --check main.js && node --check server.js && node --check scripts/watchtower.js && node --check lib/toolchain.js && node --check lib/review-opinion.js && node --check lib/routing/router.js && node --check lib/routing/history.js && node --check lib/orchestration/plan.js && node --check lib/workspace/worktree.js && node --check scripts/工作区服务.js && node --check lib/门禁.js && node --check lib/工单库.js && node --check scripts/执行器.js && node --check lib/执行加固.js && node --check lib/派单.js && node --check lib/本地覆盖.js && node --check lib/调度.js && node --check lib/巡检.js && node --check lib/质检.js && node --check lib/输出提取.js && node --check lib/自检.js && node --check lib/编排提示.js && node --check lib/提示装配.js && node --check lib/工单模板.js",
+    "check": "node scripts/自查语法.js",
     "test": "node test/公用件契约.test.js && node test/接线契约.test.js && node test/工单库契约.test.js && node test/执行链契约.test.js && node test/产线契约.test.js && node test/资产接线.test.js",
     "workspace": "node scripts/工作区服务.js",
-    "executor": "node scripts/执行器.js"
+    "executor": "node scripts/执行器.js",
+    "watchtower": "node scripts/watchtower.js",
+    "watchtower:install": "node scripts/watchtower.js --install",
+    "watchtower:status": "node scripts/watchtower.js --status"
   },
   "author": "robinwang2",
   "license": "UNLICENSED",
