@@ -969,30 +969,43 @@ function timelineHtml(agents, all, opts) {
     </div></div></div></div>`;
 }
 /* ===== 在途 · 派发制视图（H49）：执行者因单而生、完成即销毁，常备的只有审检 ===== */
-// 进度渲染三件套（施工令-004）：口径全在服务端 lib/progress.js 算好，这里只负责画。
+// 进度渲染三件套（施工令-004 结构 · 049 改口径）：口径全在服务端 lib/progress.js 算好，这里只负责画。
 const 进度态 = (p) => (p && p.超时 ? 'warn' : p && p.判官 ? 'judge' : '');
+// 当前段标签（施工令-049 要件③）：超预期时段名后缀「· 超预期 X%」，配合警示色——
+// 条子停在段上限不装满，超了多少由这行字说，不由长度说（长度一旦装满就成了谎）。
+const 段名Html = (s) => esc(s.名 + (s.超期pct ? ` · 超预期 ${s.超期pct}%` : ''));
 function segbarHtml(p, id) {
   const cls = 进度态(p);
   return `<div class="segbar"${id ? ` id="${esc(id)}"` : ''}>${((p && p.段) || []).map((s) => `<div class="seg ${s.态}${s.态 === 'cur' && cls ? ' ' + cls : ''}">
-      <i>${s.态 === 'cur' ? `<em style="--fill:${Math.round((s.填充 || 0) * 100)}%"></em>` : ''}</i><span>${esc(s.名)}</span></div>`).join('')}</div>`;
+      <i>${s.态 === 'cur' ? `<em style="--fill:${Math.round((s.填充 || 0) * 100)}%"></em>` : ''}</i><span>${段名Html(s)}</span></div>`).join('')}</div>`;
 }
-// 计时：判官阶段报「本步 · 全程」，执行阶段报「已跑 · 预估」（超时转红，一眼可捞）
+// 计时：判官阶段报「本步 · 全程」，执行阶段报「已跑 · 预期」（超预期转红，一眼可捞）
 // 施工令-041 §四：这一行是**时长**，不是进度。原样式写「已跑 24分 / 预估 50分」，那道斜杠
-// 被当成分数读（巡礼 F2：同一张单头上 28%、这行读出 49%），改成「·」分隔并直书「时长」二字，
-// 页面上关于进度的百分比从此只有卡头那一个数。
+// 被当成分数读（巡礼 F2：同一张单头上 28%、这行读出 49%），改成「·」分隔并直书「时长」二字。
+// 施工令-049：预算时间制下这两个数与卡头百分比同源同分母（百分比就是它俩的商），
+// 读出来必然一致——041 §四那道「同一张单两个百分比」的病从根上没了。
 function 计时Html(p, 环节起时, 领单时间) {
   const tm = (iso, over) => iso && !Number.isNaN(Date.parse(iso))
     ? `<span class="tm${over ? ' over' : ''}" data-since="${esc(iso)}">${fmtElapsed(Date.now() - Date.parse(iso))}</span>` : '<span>--:--</span>';
-  if (p && p.判官) return `${tm(环节起时)} 本步${领单时间 ? ` · ${tm(领单时间)} 全程` : ''}`;
-  const est = p && p.预估分钟 ? fmtElapsed(p.预估分钟 * 60000) : null;
-  return `已跑 ${tm(环节起时 || 领单时间, !!(p && p.超时))}${est ? ` · 预估 ${est}<span class="tmnote">（时长）</span>` : '<span class="tmnote">（无预估）</span>'}`;
+  const bud = p && p.预期分钟 ? fmtElapsed(p.预期分钟 * 60000) : null;
+  const 超 = !!(p && p.超时);
+  if (p && p.判官) {
+    return `${tm(环节起时, 超)} 本步${bud ? ` · 预期 ${bud}` : ''}${领单时间 ? ` · ${tm(领单时间)} 全程` : ''}`;
+  }
+  return `已跑 ${tm(环节起时 || 领单时间, 超)}${bud ? ` · 预期 ${bud}<span class="tmnote">（时长）</span>` : '<span class="tmnote">（无时长数据 · 停锚点）</span>'}`;
 }
-// 百分比的出处（施工令-041 §四）：打点 → 「打点 3/7」；无打点 → 「阶段锚点（无打点）」。
-// 悬浮说得出这个数怎么来的，才谈得上信任；两页共用这一句，口径不许各说各话。
+// 百分比的出处（施工令-041 §四立规矩，049 换口径）：预算时间制下这个数 = 本阶段已耗时 ÷ 预期时长，
+// 悬浮把三级取数中的哪一级说清楚——「按 5 单滚动均时推的」和「按手配缺省表推的」信任度天差地别。
+const 取数名 = { 滚动均时: '滚动均时', 配置均时: '配置 阶段均时 表', 工单预计: '工单 预计时间' };
 function pctTitle(p) {
   const q = p || {};
-  if (q.打点) return `会话打点 ${q.打点.k}/${q.打点.n} · ${q.阶段名 || ''}`;
-  return `${q.阶段名 || ''} · 阶段锚点${q.锚点 != null ? ' ' + q.锚点 + '%' : ''}（本阶段无会话打点，不按耗时折算）`;
+  if (q.来源 === '时间' && q.预期分钟) {
+    const 源 = (取数名[q.时长来源] || q.时长来源 || '—') + (q.样本数 ? ` ${q.样本数} 单中位` : '');
+    return `${q.阶段名 || ''} · 预算时间制：本阶段已跑 ${fmtElapsed((q.耗时分钟 || 0) * 60000)}`
+      + ` / 预期 ${fmtElapsed(q.预期分钟 * 60000)}（取数：${源}）`
+      + (q.超时 ? ` · 超预期 ${q.超期pct}%，条子停在段上限不装满` : '');
+  }
+  return `${q.阶段名 || ''} · 阶段锚点${q.锚点 != null ? ' ' + q.锚点 + '%' : ''}（本阶段无会话起时或无时长数据，不编进度）`;
 }
 // 无会话已等时长（建设性①）：基准取「进本状态的时刻」= 更新时间，回落领单时间。
 // 用更新时间而非领单时间，是因为质检态无会话时领单时间早已过期，报出来的分钟数会失真。
@@ -1865,14 +1878,22 @@ async function viewDetail(id) {
       const curName = live ? (live.kind === '执行' ? '执行' : live.kind === '质检' ? '质检' : judge)
         : (d.state === '在途' ? '执行' : d.state === '质检' ? '质检' : null);
       const di = names.indexOf(doneUpto);
-      const segs = names.map((k, i) => [k, k === curName ? (live ? 'cur' : 'wait') : i <= di ? 'done' : 'todo']);
+      // 段与填充口径同源（施工令-049）：有会话时直接吃 /api/runner 随行下发的 进度.段——
+      // 详情页自己那套按状态硬排的段名只当无会话时的兜底，两处不许各画各的。
+      const pg = (live && live.进度) || null;
+      const segs = pg && pg.段 && pg.段.length
+        ? pg.段.map((s) => [s.名, s.态, s.态 === 'cur' ? (s.填充 || 0) : (s.态 === 'done' ? 1 : 0), s.超期pct || 0])
+        : names.map((k, i) => [k, k === curName ? (live ? 'cur' : 'wait') : i <= di ? 'done' : 'todo', 0, 0]);
       liveHtml = `<div class="livecard card r16" id="lvcard">
         <div class="lv-top"><b style="font-size:13px">执行进度</b>
           <span class="pill sm ${live ? 'ok' : 'mut'}" id="lv-who">${live ? esc(live.agent) + ' · ' + esc(live.kind) : '等待执行器衔接（间隔 ' + (run.间隔秒 || 15) + 's）'}</span>
+          ${pg ? `<span class="lv-pct mono" title="${esc(pctTitle(pg))}">${pg.百分比}%</span>` : ''}
           <span class="sp"></span>
           <span class="lv-t mono" id="lv-step-t" data-live>--:--</span><span class="subnote">本步</span>
           <span class="lv-t mono" id="lv-all-t" data-live>--:--</span><span class="subnote">全程</span></div>
-        <div class="lv-bar">${segs.map(([k, s]) => `<div class="lv-seg ${s}"><i></i><span>${esc(k)}</span></div>`).join('')}</div>
+        <div class="lv-bar">${segs.map(([k, s, f, over]) => `<div class="lv-seg ${s}${s === 'cur' && over ? ' warn' : ''}">
+          <i>${s === 'cur' ? `<em style="--fill:${Math.round(f * 100)}%"></em>` : ''}</i>
+          <span>${esc(k + (over ? ` · 超预期 ${over}%` : ''))}</span></div>`).join('')}</div>
         <div class="lv-tail mono" id="lv-tail">${live && live.tail ? esc(live.tail) : '（尚无输出）'}</div></div>`;
       setTimeout(() => lvStart(id, live ? live.startedAt : null, fm.领单时间 || fm.更新时间 || null, live ? live.kind : null), 0);
     }

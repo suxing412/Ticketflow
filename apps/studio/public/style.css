@@ -34,6 +34,10 @@
   --accent-glow:rgba(79,70,229,.30);
   --bar-from:rgba(79,70,229,.45); --bar-to:#4F46E5;
   --sweep:rgba(255,255,255,.55); /* 在跑段右缘扫光（施工令-004）：只在实色进度条上滑，两主题同强度 */
+  /* 活跃段流光（施工令-049 要件④）：制作人点名「质检中看不到进度条闪烁」。--sweep 是白色，
+     只在填充实色上看得见；空槽（刚进本阶段、填充还是 0）需要一道在**槽底**跑的流光，
+     所以另立两只带色令牌——常态靛蓝、超预期转红，与段条填充色同族。 */
+  --flow:rgba(79,70,229,.22); --flow-warn:rgba(180,35,31,.20);
   --ease-out:cubic-bezier(0.22,1,0.36,1); /* out-quint：干脆的减速，不弹跳 */
   /* 纸张层次阴影（墨色染影，不用纯黑）：sm=桌上的纸页 md=拿起来的纸页（双层=贴地+浮起） lg=悬浮层 */
   --shadow-sm:0 1px 2px rgba(26,29,33,.04);
@@ -63,6 +67,7 @@ html[data-theme="glass"] {
   --accent-glow:rgba(110,99,255,.45);
   --bar-from:rgba(110,99,255,.5); --bar-to:#6E63FF;
   --sweep:rgba(255,255,255,.55);
+  --flow:rgba(110,99,255,.32); --flow-warn:rgba(255,93,87,.28); /* 夜间玻璃底更暗，流光提两档才看得见 */
   --shadow-sm:0 1px 2px rgba(0,0,0,.4);
   --shadow-md:0 6px 18px rgba(0,0,0,.5), 0 1px 2px rgba(0,0,0,.35);
   --shadow-lg:0 16px 40px rgba(0,0,0,.6), 0 2px 8px rgba(0,0,0,.4);
@@ -555,17 +560,31 @@ a.gear { text-decoration:none; }
 .lv-t { font-size:16px; font-weight:600; margin-left:16px; font-variant-numeric:tabular-nums; }
 .lv-bar { display:flex; gap:6px; margin-top:14px; }
 .lv-seg { flex:1; min-width:0; }
-.lv-seg i { display:block; height:6px; border-radius:3px; background:var(--chip); }
+.lv-seg i { display:block; height:6px; border-radius:3px; background:var(--chip); position:relative; overflow:hidden; }
 .lv-seg span { display:block; font-size:10px; color:var(--ink3); margin-top:5px; text-align:center; }
 .lv-seg.done i { background:var(--ok); opacity:.5; }
 .lv-seg.done span { color:var(--ok); }
-.lv-seg.cur i { background:var(--accent); animation:lvpulse 1.2s ease-in-out infinite; }
+/* 当前段（施工令-049）：详情页这条以前是「整段涂满 accent 呼吸」——看不出段内走了多少。
+   改成与在途卡段条同一口径：槽底流光示意活着，em 是按预算时间推进的填充。 */
+.lv-seg.cur i { background:var(--chip); }
+.lv-seg.cur i::before { content:''; position:absolute; inset:0;
+  background:linear-gradient(90deg, transparent, var(--flow), transparent); animation:segflow 2.4s linear infinite; }
+.lv-seg.cur i em { position:absolute; inset:0; width:var(--fill,0%); border-radius:3px;
+  background:var(--accent); transition:width .4s var(--ease-out); }
+.lv-seg.cur.warn i::before { background:linear-gradient(90deg, transparent, var(--flow-warn), transparent); }
+.lv-seg.cur.warn i em { background:var(--danger); }
+.lv-seg.cur.warn span { color:var(--danger); }
 .lv-seg.cur span { color:var(--ink); font-weight:700; }
 .lv-seg.wait i { background:var(--gateln); animation:lvpulse 2s ease-in-out infinite; }
+/* 详情页百分比（与在途卡同源，悬浮同一句出处说明） */
+.lv-pct { font-size:13px; font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums; }
 .lv-tail { margin-top:10px; font-size:11px; color:var(--ink2); white-space:nowrap; overflow:hidden;
   direction:rtl; unicode-bidi:plaintext; text-align:left; } /* 只看得见尾部=最新输出 */
 @keyframes lvpulse { 50% { opacity:.4; } }
-@media (prefers-reduced-motion: reduce) { .lv-seg i { animation:none !important; } }
+@media (prefers-reduced-motion: reduce) {
+  .lv-seg i, .lv-seg.cur i em { animation:none !important; transition:none; }
+  .lv-seg.cur i::before { animation:none; opacity:.35; transform:none; }
+}
 
 /* ===== P10 树形 · 已退役（施工令-028）=====
    .ttools / .tree2 / .trow2 族 / .twist2 / .tid2 / .tt2 / .kids / .mid / .prog / .acts /
@@ -642,22 +661,33 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .segbar .seg { flex:1 1 0; width:0; min-width:0; } /* width:0 加在父 flex 项：阶段名 span 是块级子元素带 nowrap，同 .arow2 .ar-id 的处理 */
 .segbar .seg i { display:block; height:5px; border-radius:99px; background:var(--chip); position:relative; overflow:hidden; }
 .segbar .seg.done i { background:var(--ok); }
+/* 活跃段流光（施工令-049 要件④）：槽底整条来回跑一道带色流光＝「这一段此刻活着」。
+   041 时代只有填充实色上的白扫光，判官段填充恒为 0 → 一整段质检期间条子纹丝不动，
+   制作人 21:13 点名的「质检中看不到进度条闪烁」正是这一格。流光挂在槽（i）上而不是填充（em）上，
+   所以填充 0% 也照样看得见活性；超预期只换色不停跑——单还在跑，停了才是说谎。 */
+.segbar .seg.cur i::before { content:''; position:absolute; inset:0;
+  background:linear-gradient(90deg, transparent, var(--flow), transparent); animation:segflow 2.4s linear infinite; }
+.segbar .seg.cur.warn i::before { background:linear-gradient(90deg, transparent, var(--flow-warn), transparent); }
 .segbar .seg.cur i em { position:absolute; inset:0; width:var(--fill,0%); border-radius:99px;
   background:var(--accent); box-shadow:0 0 10px var(--accent-glow); transition:width .4s var(--ease-out); }
 .segbar .seg.cur i em::after { content:''; position:absolute; top:0; right:0; width:14px; height:100%;
   background:linear-gradient(90deg, transparent, var(--sweep)); animation:arsweep 1.8s ease-out infinite; }
 .segbar .seg.cur.judge i em { background:var(--fn-qa); box-shadow:none; }
 .segbar .seg.cur.warn i em { background:var(--danger); box-shadow:0 0 10px var(--glow-live); }
-.segbar .seg.cur.warn i em::after { animation:none; opacity:0; } /* 超时：填满转红、停扫光 */
+.segbar .seg.cur.warn i em::after { animation:none; opacity:0; } /* 超预期：条停在段上限转红、停右缘扫光（槽底流光照跑） */
 .segbar .seg span { display:block; font-size:10px; color:var(--ink3); margin-top:5px; text-align:center;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .segbar .seg.cur span { color:var(--ink); font-weight:600; }
 .segbar .seg.done span { color:var(--ok); }
+/* 超预期标签（要件③）：段名后缀「· 超预期 X%」——超了多少由字说，不由条长说（装满就是谎） */
+.segbar .seg.cur.warn span { color:var(--danger); }
 @keyframes arsweep { 0% { opacity:0; } 50% { opacity:1; } 100% { opacity:0; } }
+@keyframes segflow { 0% { transform:translateX(-100%); } 100% { transform:translateX(100%); } }
 @media (prefers-reduced-motion: reduce) {
   .arow2 .ar-stage .dot { animation:none; }
   .segbar .seg.cur i em { transition:none; }
   .segbar .seg.cur i em::after { animation:none; opacity:0; }
+  .segbar .seg.cur i::before { animation:none; opacity:.35; transform:none; } /* 系统要静：留一层静态底色示意活跃，不跑 */
 }
 /* 总览在跑摘要（施工令-004 第 4 条）：规格从简，一行一单——百分比 + 阶段名 */
 .ovrun { padding:6px 14px; margin-bottom:12px; }

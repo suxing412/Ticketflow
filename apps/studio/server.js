@@ -442,12 +442,29 @@ const runner = require('./lib/runner');
 const progress = require('./lib/progress');
 // 执行进度（施工令-004）：口径唯一在 lib/progress.js，服务端算好随 /api/runner /api/agents 下发，
 // 前端只负责显示——两处视图不许各算各的。
+// 滚动均时（施工令-049 / H100 要件② ① 级取数）：近 N 张完结单的「同职能×同阶段」实测中位。
+// 每次 /api/runner 都全库扫一遍太贵（脉冲 3s 一次），这里 60s 一算缓存住；读盘失败沿用上次，
+// 拿不到就是空表——自动降级到 ② 配置表 / ③ 工单预计时间，进度不会因为取不到均时就断供。
+let 均时缓存 = { t: 0, 表: {} };
+function 均时表() {
+  const now = Date.now();
+  if (now - 均时缓存.t < 60000) return 均时缓存.表;
+  let 表 = 均时缓存.表;
+  try {
+    const 完结 = [...store.list(ROOT, '完成'), ...store.list(ROOT, '已归档')];
+    表 = progress.滚动均时(progress.阶段样本(完结), { N: (cfg.进度 && cfg.进度.均时样本数) || 8 });
+  } catch { /* 读盘失败：沿用上次的表，不炸接口 */ }
+  均时缓存 = { t: now, 表 };
+  return 表;
+}
 function 进度Of(t, live) {
   return progress.compute({
     state: t ? t.state : '', kind: live ? live.kind : null,
     QA: t && t.fm ? t.fm.QA : '开', 验收方式: t && t.fm ? t.fm.验收方式 : '委托',
+    职能: t && t.fm ? t.fm.职能 : null,
     预计时间: t && t.fm ? t.fm.预计时间 : null, 初检: !!(t && t.fm && t.fm.初检),
     阶段起时: live ? live.startedAt : null, tail: live ? live.tail : null,
+    均时: 均时表(), 阶段均时: cfg.阶段均时 || null,
   });
 }
 function runnerStatus() {
