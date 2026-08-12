@@ -11,7 +11,8 @@
 //   ③ 该池在 预算.池 里配了上限            防没有刹车就上路
 // 三条各自独立，不互相替代。
 //
-// 默认不随 server 启动：npm run executor
+// 2026-08-12 起随 npm start 一并起（scripts/开机.js 带的）。单起：npm run executor
+// 进程活着不等于会花钱——上面三闸照旧。不想让它活着：PLATFORM_NO_EXECUTOR=1 npm start
 'use strict';
 
 const http = require('http');
@@ -32,6 +33,7 @@ const 质检 = require(path.join(平台根, 'lib', '质检.js'));
 const 输出提取 = require(path.join(平台根, 'lib', '输出提取.js'));
 const 计划 = require(path.join(平台根, 'lib', 'orchestration', 'plan.js'));
 const 编排提示 = require(path.join(平台根, 'lib', '编排提示.js'));
+const 提示装配 = require(path.join(平台根, 'lib', '提示装配.js'));
 
 function 读JSON(p, 缺省) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return 缺省; }
@@ -45,7 +47,15 @@ const 允许真跑 = (配置.执行 && 配置.执行.允许真跑) === true;
 const 上限毫秒 = Number((配置.执行 && 配置.执行.超时毫秒) || 900000);
 const 静默毫秒 = Number((配置.执行 && 配置.执行.静默毫秒) || 120000);
 const { 令牌 } = 门禁.取令牌(平台根);
-const 工单根 = 工单库.解析根目录(平台根);
+// 每次用的时候现解，不在开机时定死。
+//
+// 定死会出这个事（打包件冒烟时实测）：人在界面上把工单库配好了，server 那边当场生效，
+// 但**执行器是另一个进程**，它启动时拿到的还是「未配置」，于是点干跑照样报未配置。
+// 从人的角度看就是「明明配好了，它说没配」——最没头绪的一类问题，
+// 因为界面上每一处都显示配好了。
+//
+// 代价只是每次请求读一个几十字节的 JSON。为省这个而让配置改不动，不划算。
+const 取工单根 = () => 工单库.解析根目录(平台根);
 
 let registry = null;
 try { registry = 公用件.载入('providers', 'registry.js'); } catch { /* 下面报 */ }
@@ -215,6 +225,7 @@ const 服务 = http.createServer((req, res) => {
   const q = 路径.match(/^\/qa\/([^/]+)$/);
   if (q && req.method === 'POST') {
     if (!registry) return 发JSON(res, 503, { ok: false, error: 'providers 注册表加载失败' });
+    const 工单根 = 取工单根();
     if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
     const id = decodeURIComponent(q[1]);
 
@@ -294,6 +305,7 @@ const 服务 = http.createServer((req, res) => {
   // GET 只算不派，POST 才真派。分开是因为「看看会派什么」是个高频且无害的动作，
   // 而它和「真的派出去」只差一个 HTTP 方法时，人迟早会点错。
   if (路径 === '/tick') {
+    const 工单根 = 取工单根();
     if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
     const 全部 = 工单库.list(工单根.根);
     const 待投表 = 全部.filter((t) => t.state === '待投').map((t) => 工单库.find(工单根.根, t.id)).filter(Boolean);
@@ -324,6 +336,7 @@ const 服务 = http.createServer((req, res) => {
   }
 
   if (路径 === '/health') {
+    const 工单根 = 取工单根();          // 现解：健康接口报的是**此刻**的状态，不是开机那一刻的
     return 发JSON(res, 200, {
       ok: true, 服务: '执行器', 端口, 允许真跑, 上限毫秒, 静默毫秒,
       工单库: 工单根.ok ? 工单根.根 : null,
@@ -341,6 +354,7 @@ const 服务 = http.createServer((req, res) => {
   const m = 路径.match(/^\/run\/([^/]+)$/);
   if (m && req.method === 'POST') {
     if (!registry) return 发JSON(res, 503, { ok: false, error: 'providers 注册表加载失败' });
+    const 工单根 = 取工单根();
     if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
     const id = decodeURIComponent(m[1]);
 
@@ -421,7 +435,11 @@ const 服务 = http.createServer((req, res) => {
         // orchestrator 的输出契约由平台附加，不指望工单作者去背 plan.js 的字段名。
         // 首次真跑就栽在这上面：AI 输出 {"tickets":[...]}，拆解完全正确，
         // 只因顶层键不叫 tasks 就整份作废，白烧 88 秒。
-        const 拼 = 编排提示.拼提示(配置, 共同.角色, (体 && 体.提示词) || t.body || '');
+        // 先装配：工单正文 + 通用/角色协议 + 上一轮的回炉要求。
+        // 角色协议出厂就在库里，此前从没有人喂给过 AI；回炉要求让重做时
+        // 至少知道上次为什么没过——不然同一个坑会照踩不误，每踩一次都是真实付费。
+        const 装 = (体 && 体.提示词) ? { 提示: 体.提示词, 装配记录: { 来源: '请求体覆盖' } } : 提示装配.装配(平台根, t);
+        const 拼 = 编排提示.拼提示(配置, 共同.角色, 装.提示);
         拉起(调用, 拼.提示, 工作目录, async (r) => {
         const 判 = 加固.成败判定({ 退出码: r.退出码, 输出: r.输出 });
         记战绩({
@@ -496,6 +514,7 @@ const 服务 = http.createServer((req, res) => {
 
         return 发JSON(res, 200, {
           ...共同, 干跑: false, 成: 判.成,
+          装配: 装.装配记录,
           ...(计划预览 ? { 计划预览 } : {}),
           ...(判.成 ? {} : { 失败原因: 判.原因 }),
           耗时毫秒: r.耗时毫秒,

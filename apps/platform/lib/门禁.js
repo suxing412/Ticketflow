@@ -22,8 +22,10 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const 配置位置 = require('./配置位置.js');
 
-const 令牌文件 = (仓根) => path.join(仓根, 'config', '接口令牌.local.json');
+// 令牌要写盘，故走可写目录：打包态在 asar 里写不进去（实测踩到）。
+const 令牌文件 = (仓根) => path.join(配置位置.可写配置目录(仓根), '接口令牌.local.json');
 // 明文副本，纯 ASCII 路径 + 纯 ASCII 内容（只有 64 位十六进制，无换行歧义）。
 //
 // 为什么非要多一个文件：Windows PowerShell 5.1 的 Get-Content 按系统 ANSI 码页读文件，
@@ -31,7 +33,7 @@ const 令牌文件 = (仓根) => path.join(仓根, 'config', '接口令牌.local
 // ConvertFrom-Json 当场失败——**在 JSON 里加个 token 别名救不了，因为坏的是整份文件**。
 // 实测两次才定位到这一点（2026-08-10）。明文文件让 PowerShell 一句话拿到令牌：
 //   $T = Get-Content config\api-token.txt
-const 明文令牌文件 = (仓根) => path.join(仓根, 'config', 'api-token.txt');
+const 明文令牌文件 = (仓根) => path.join(配置位置.可写配置目录(仓根), 'api-token.txt');
 // 免令牌路径。加条目前先问一句：这条接口泄露什么、能改什么。
 const 免令牌 = new Set(['/api/health']);
 

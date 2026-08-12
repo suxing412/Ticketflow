@@ -14,6 +14,14 @@ const 公用件 = require('../lib/公用件');
 let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
 console.log('公用件契约测试（消费面）');
 
+// 扫源码时要跳过的目录。
+// 三条断言原先各自内联一份 `node_modules / .git / test`——重复的清单必然各自漏，
+// 而且漏的表现是**测试无故变红**：2026-08-12 跑了一次 npm run dist，
+// dist/win-unpacked 里带着一份 packages 副本，三条断言当场把它当成新增依赖报了。
+// 被测代码一个字没动，红的是测试自己。所以清单只留一份。
+const 不扫 = new Set(['node_modules', '.git', 'test', 'dist', 'release', 'out',
+  'workspaces', 'journal', 'watchtower-out']);
+
 t('公用件解析：仓根的 packages/（一仓拓扑），TICKETFLOW_PACKAGES 可覆盖', () => {
   // 按**长相**认仓根，不按目录名认。此前这里断言 basename === 'Ticketflow'，
   // 于是把仓 clone 成任何别的目录名（或在 worktree 里跑）测试就无故变红——
@@ -44,7 +52,7 @@ t('依赖面只有 providers / watchtower / budget 三个包（变宽必须是�
   const 命中 = new Set();
   const 扫 = (dir) => {
     for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (d.name === 'node_modules' || d.name === '.git' || d.name === 'test') continue;
+      if (不扫.has(d.name)) continue;
       const p = path.join(dir, d.name);
       if (d.isDirectory()) { 扫(p); continue; }
       if (!d.name.endsWith('.js')) continue;
@@ -69,7 +77,7 @@ t('不得直引另一个产品的内部模块（公用件走 packages/，不走 
   const 违规 = [];
   const 扫 = (dir) => {
     for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (d.name === 'node_modules' || d.name === '.git' || d.name === 'test') continue;
+      if (不扫.has(d.name)) continue;
       const p = path.join(dir, d.name);
       if (d.isDirectory()) { 扫(p); continue; }
       if (!d.name.endsWith('.js')) continue;
@@ -113,7 +121,7 @@ t('公用件解析只有 lib/公用件 一份（自抄一份即红）', () => {
   const 违规 = [];
   const 扫 = (dir) => {
     for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (d.name === 'node_modules' || d.name === '.git' || d.name === 'test') continue;
+      if (不扫.has(d.name)) continue;
       const p = path.join(dir, d.name);
       if (d.isDirectory()) { 扫(p); continue; }
       if (!d.name.endsWith('.js')) continue;

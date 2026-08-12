@@ -41,7 +41,8 @@ function 应用(平台根, 配置) {
   // 测试要测的是**入库默认**的行为。不给这个出口的话，「谁本地开了真跑，
   // 谁的测试就变个样」——测试就不再是共同基准了。
   if (process.env.PLATFORM_NO_LOCAL) return { 配置, 生效的覆盖: [], 跳过本地: true };
-  const 目录 = path.join(平台根, 'config');
+  // .local.json 是**本机的**东西：打包态它们在 exe 同级，不在 asar 里。
+  const 目录 = require('./配置位置.js').可写配置目录(平台根);
   let 出 = 配置;
   const 生效 = [];
   for (const [文件名, 键] of Object.entries(覆盖表)) {

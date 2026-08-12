@@ -1,0 +1,231 @@
+/* AI-DevPlatform 驾驶舱视觉
+ *
+ * ⚠ 令牌层与通用组件层**摘自 apps/studio/public/style.css**，是一次有意的复制。
+ *
+ * 为什么复制而不是引用：CSS 没有业务逻辑，跨产品直接 <link> 对方的静态资源会让
+ * platform 的页面在 studio 改版时无声变样；而抽成公用件要走双签，当下不值得。
+ * 但**这是分叉，不假装它不是**：studio 那边调配色/对比度时，这里不会自动跟上。
+ * 两边都要动的那天，提到 packages/ui-kit 双签共建。
+ *
+ * 只抄了产品无关的部分：
+ *   · 语义令牌（双主题：暖纸 paper / 暗色玻璃 glass）——对比度是 studio 实测过的
+ *   · 基础元素、通用组件（.card/.pill/.btn）、交互反馈与状态动画
+ * **没抄** studio 的业务样式：职能色令牌（--fn-plan/--fn-art 对应策划/美术，
+ * 而 platform 的角色是 backend/frontend/integrator/reviewer）、工单池、流程管线、
+ * 风格库、凭据卡等——那些是 studio 的产品形状，抄过来是死代码。
+ * platform 自己的业务样式写在本文件下半部分。
+ */
+
+:root {
+  color-scheme: light;
+  --paper:#FAFAF8; --card:#FFFFFF; --ink:#1A1D21; --ink2:#4B5563; --ink3:#6B7380;
+  --line:#E4E2DC; --ok:#0D7A5F; --okbg:#EBF7F1; --okln:#B9E0D2; --danger:#B4231F;
+  --dangerbg:#FBEAE9; --accent:#4F46E5; --sect:#F0EFEA; --chip:#E3E2DD;
+  --inbg:#FCFCFB;
+  --warn:#7A5A1E; --warnbg:#FDF3E3; --warnln:#E8CFA0;
+  --accent-ink:#4F46E5;
+  --now:#9E5412; --nowtint:rgba(158,84,18,.07); --accenttint:rgba(79,70,229,.10);
+  --mono:"Roboto Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --on-accent:#fff; --st-done-bg:#EAE9E4;
+  --frost:rgba(255,255,255,.82); --frost-blur:14px;
+  --groove:rgba(26,29,33,.08);
+  --edge-hl:rgba(255,255,255,.65);
+  --glow-ok:rgba(13,122,95,.35); --glow-live:rgba(180,35,31,.45); --glow-warn:rgba(122,90,30,.4);
+  --accent-glow:rgba(79,70,229,.30);
+  --ease-out:cubic-bezier(0.22,1,0.36,1);
+  --shadow-sm:0 1px 2px rgba(26,29,33,.04);
+  --shadow-md:0 4px 14px rgba(26,29,33,.07), 0 1px 2px rgba(26,29,33,.04);
+  --shadow-lg:0 12px 32px rgba(26,29,33,.12), 0 2px 8px rgba(26,29,33,.06);
+  /* platform 专属：池色与角色色。studio 的职能色对不上我们的角色词表，所以另起一套。 */
+  --pool-claude:#6B5BC7; --pool-codex:#2E7D5B; --pool-echo:#8A8F98;
+  --role-backend:#0D7A5F; --role-frontend:#4F46E5; --role-integrator:#0E7490;
+  --role-reviewer:#4B5563; --role-orchestrator:#9333A8;
+}
+
+/* 夜间「暗色玻璃」：只换令牌值，几何与组件规则零改动 */
+html[data-theme="glass"] {
+  color-scheme: dark;
+  --paper:#0B0D10; --card:rgba(255,255,255,.05); --ink:#F2F4F8; --ink2:#B9C1CD; --ink3:#76808F;
+  --line:rgba(255,255,255,.10); --ok:#2FD6A0; --okbg:rgba(47,214,160,.12); --okln:rgba(47,214,160,.32);
+  --danger:#FF5D57; --dangerbg:rgba(255,93,87,.13); --accent:#6E63FF; --accent-ink:#9D93FF;
+  --now:#FF9D4D; --nowtint:rgba(255,157,77,.08); --accenttint:rgba(110,99,255,.12);
+  --sect:rgba(255,255,255,.04); --chip:rgba(255,255,255,.09);
+  --inbg:rgba(255,255,255,.05);
+  --warn:#E8B45A; --warnbg:rgba(232,180,90,.12); --warnln:rgba(232,180,90,.35);
+  --on-accent:#fff; --st-done-bg:rgba(255,255,255,.08);
+  --frost:rgba(20,23,28,.78); --frost-blur:28px;
+  --groove:rgba(0,0,0,.5); --edge-hl:rgba(255,255,255,.10);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+  --shadow-md:0 4px 14px rgba(0,0,0,.5), 0 1px 2px rgba(0,0,0,.3);
+  --shadow-lg:0 12px 32px rgba(0,0,0,.6), 0 2px 8px rgba(0,0,0,.4);
+  --pool-claude:#9D8FFF; --pool-codex:#3ED6A8; --pool-echo:#9BA6B5;
+  --role-backend:#2FD6A0; --role-frontend:#8F84FF; --role-integrator:#4CC3E0;
+  --role-reviewer:#9BA6B5; --role-orchestrator:#D08BE8;
+}
+html[data-theme="glass"] .card { backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
+html[data-theme="glass"] body::after { opacity:.02; }
+
+/* ===== 基础 ===== */
+* { box-sizing:border-box; }
+html { background:var(--paper); scrollbar-gutter:stable; scroll-behavior:smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } }
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-thumb { background:var(--line); border-radius:999px; border:2px solid var(--paper); }
+::-webkit-scrollbar-track { background:transparent; }
+body { margin:0 auto; max-width:1280px; padding:0 40px 60px;
+  font-family:"Noto Sans SC", -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color:var(--ink); line-height:1.55; font-size:14px; }
+/* 纸纹颗粒：2.5% 静态噪点，把「纸面」从颜色落到质感（穿透点击，无动画零开销） */
+body::after { content:''; position:fixed; inset:0; pointer-events:none; z-index:1; opacity:.025;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+.mono, code { font-family:var(--mono); }
+button { font:inherit; cursor:pointer; background:none; border:none; padding:0; color:inherit; }
+/* ⚠ 上面这行是从 studio 抄来的 reset：它把按钮剥光，靠 .btn 类补回来。
+   而本产品的 index.html 里 7 个按钮**一个都没写 class="btn"**（app.js 动态生成的那批写了）。
+   结果整页按钮渲染成纯文字，能点但看不出能点——截图上「刷新」「+ 新建工单」全是黑字。
+   抄样式最容易漏的就是这种：token 没错，是标记用的类对不上。
+   与其去每个标签补 class，不如让裸 button 默认就长成 .btn——见下方选择器。 */
+input, select, textarea { font:inherit; color:var(--ink); background:var(--inbg);
+  border:1px solid var(--line); border-radius:9px; padding:7px 12px; }
+input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outline-offset:1px; }
+:focus-visible { outline:2px solid var(--ink); outline-offset:2px; }
+a { color:var(--accent-ink); text-decoration:none; }
+a:hover { text-decoration:underline; }
+
+/* ===== 壳 ===== */
+.topbar { display:flex; align-items:flex-start; justify-content:space-between; padding-top:30px; gap:16px; }
+.topbar h1 { margin:0; font-size:26px; font-weight:700; line-height:1.2; }
+.tagline { margin:3px 0 0; font-size:12px; color:var(--ink3); }
+.tright { display:flex; align-items:center; gap:10px; margin-top:4px; flex-shrink:0; }
+.gear { width:38px; height:38px; border-radius:19px; background:var(--card);
+  border:1px solid var(--line); font-size:16px; color:var(--ink2);
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  transition:border-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out); }
+.gear:hover { border-color:var(--ink3); color:var(--ink); }
+.gear:active { transform:scale(.94); }
+
+h2 { font-size:15px; font-weight:700; margin:30px 0 10px; display:flex; align-items:center; gap:10px; }
+h2 .右 { margin-left:auto; font-weight:400; font-size:12px; }
+
+/* ===== 通用组件 ===== */
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  box-shadow:var(--shadow-sm); padding:14px 18px; }
+.pill { display:inline-flex; align-items:center; justify-content:center; height:24px; padding:0 11px;
+  border-radius:999px; font-size:11.5px; font-weight:500; background:var(--chip); color:var(--ink); white-space:nowrap; }
+.pill.ok { background:var(--okbg); color:var(--ok); }
+.pill.red { background:var(--dangerbg); color:var(--danger); }
+.pill.warn { background:var(--warnbg); color:var(--warn); }
+.pill.mut { background:var(--chip); color:var(--ink3); }
+/* .gear 有自己一整套（圆形图标钮），排除掉；其余按钮无论写没写 class 都长这样。 */
+.btn, button:not(.gear) {
+  display:inline-flex; align-items:center; justify-content:center; height:32px; padding:0 16px;
+  border-radius:16px; font-size:12.5px; font-weight:500; background:var(--card);
+  border:1px solid var(--line); color:var(--ink2); white-space:nowrap;
+  transition:color 150ms var(--ease-out), border-color 150ms var(--ease-out),
+    background 150ms var(--ease-out), transform 120ms var(--ease-out), box-shadow 150ms var(--ease-out); }
+.btn:hover, button:not(.gear):hover { border-color:var(--ink3); color:var(--ink); }
+.btn:active, button:not(.gear):active { transform:scale(.97); }
+/* 主行动钮：index.html 里写的是 class="主"（建单），CSS 只认过 .accent——
+   又一处「类名对不上」，一并接上。 */
+.btn.accent, button.主 { background:var(--accent); color:var(--on-accent); border-color:var(--accent);
+  box-shadow:0 4px 12px var(--accent-glow); }
+.btn.accent:hover, button.主:hover { opacity:.88; color:var(--on-accent); }
+/* 会花钱的按钮：描边红。实心红留给「已经出事」，不给「即将花钱」——
+   两者语义不同，用同一个视觉会让人对红色脱敏。 */
+.btn.danger-o { color:var(--danger); border-color:var(--danger); }
+.btn.danger-o:hover { background:var(--dangerbg); }
+.dim { color:var(--ink3); } .err { color:var(--danger); } .okc { color:var(--ok); }
+.subnote { font-size:12px; color:var(--ink3); margin-top:4px; }
+
+table { border-collapse:collapse; width:100%; font-size:13px; }
+th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { font-weight:600; background:var(--sect); font-size:12px; color:var(--ink2); }
+tbody tr { transition:background 120ms var(--ease-out); }
+tbody tr:hover { background:var(--sect); }
+
+pre { background:var(--sect); border:1px solid var(--line); border-radius:10px; padding:12px;
+  overflow-x:auto; font-size:12px; white-space:pre-wrap; word-break:break-all; max-height:420px;
+  font-family:var(--mono); line-height:1.5; }
+code { background:var(--sect); border:1px solid var(--line); border-radius:5px; padding:0 5px; font-size:12px; }
+
+.灯 { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:8px;
+  vertical-align:-1px; background:var(--ink3); }
+.灯.绿 { background:var(--ok); animation:breathe 2.4s var(--ease-out) infinite; }
+.灯.红 { background:var(--danger); }
+@keyframes breathe { 0%,100% { box-shadow:0 0 0 0 var(--glow-ok); } 50% { box-shadow:0 0 0 5px transparent; } }
+
+/* ===== platform 业务层 ===== */
+/* 工单状态。颜色编码要和「一张单的一生」对应：
+   草稿灰（还没定）→ 待投靛（等着被派）→ 在途琥珀（正在花钱）→ 质检靛（等判）→ 完成绿。
+   在途用琥珀而不是绿，是因为它**不是好消息**——它意味着钱正在被花掉。 */
+/* white-space:nowrap 不是可选的：不加的话「待投」两个字会在 22px 高的胶囊里换行，
+   挤成一个看不懂的小圆点。实测截图里就是这样。 */
+.态 { display:inline-flex; align-items:center; justify-content:center; height:22px; padding:0 10px;
+  border-radius:999px; font-size:11.5px; font-weight:500; white-space:nowrap;
+  border:1px solid var(--line); background:var(--card); }
+.态.草稿 { color:var(--ink3); }
+.态.待投 { color:var(--accent-ink); border-color:var(--accent); }
+.态.在途 { color:var(--warn); border-color:var(--warnln); background:var(--warnbg); }
+.态.质检 { color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+.态.完成 { color:var(--ok); border-color:var(--okln); background:var(--okbg); }
+
+.角色 { font-size:11.5px; font-weight:500; }
+.角色.backend { color:var(--role-backend); } .角色.frontend { color:var(--role-frontend); }
+.角色.integrator { color:var(--role-integrator); } .角色.reviewer { color:var(--role-reviewer); }
+.角色.orchestrator { color:var(--role-orchestrator); }
+
+.池 { font-size:11.5px; font-weight:500; }
+.池.claude { color:var(--pool-claude); } .池.codex { color:var(--pool-codex); } .池.echo { color:var(--pool-echo); }
+
+.列 { display:grid; grid-template-columns:1fr 1fr; gap:26px; align-items:start; }
+@media (max-width:900px) { .列 { grid-template-columns:1fr; } body { padding:0 20px 40px; } }
+.栏 { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:10px 0; }
+
+.数卡 { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0; }
+.数卡 .card { padding:10px 16px; min-width:96px; }
+.数卡 .数 { font-size:22px; font-weight:700; line-height:1.2; font-family:var(--mono); }
+.数卡 .标 { font-size:11.5px; color:var(--ink3); }
+
+/* 告警：急=红，常=琥珀。级别决定颜色，不由内容长短决定 */
+ul.账本 { list-style:none; padding:0; margin:0; }
+ul.账本 li { padding:7px 0; border-bottom:1px dashed var(--line); font-size:12.5px; }
+ul.账本 li:last-child { border-bottom:none; }
+.级急 { color:var(--danger); font-weight:700; margin-right:6px; }
+.级常 { color:var(--warn); margin-right:6px; }
+
+/* 子单缩进：DAG 平铺在列表里就看不出结构 */
+.子 { color:var(--ink3); margin-right:2px; }
+
+textarea { width:100%; min-height:96px; font-family:var(--mono); font-size:12.5px; }
+.提示 { font-size:12px; color:var(--ink3); margin-top:6px; line-height:1.6; }
+.提示 b, .提示 strong { color:var(--ink2); }
+
+/* 表格里的操作列：按钮横排不换行。默认 inline-flex 的按钮之间只有空白符，
+   窄列下会被折行——实测截图里「干跑 / 真跑」堆成了两行。 */
+td .btn { margin:0 4px 0 0; }
+td:last-child { white-space:nowrap; }
+/* 编号列不折行：ORCH-1-1 被折成两行时，那个短横看起来像连字符，读起来像两个不同的单号 */
+td:first-child { white-space:nowrap; }
+/* 行高收紧一档：默认 1.55 在密集表格里显得空 */
+table td { line-height:1.4; }
+
+/* 首次使用的落位输入行：路径可能很长，输入框吃掉剩余宽度，按钮不被挤扁 */
+.设置行 { display:flex; gap:8px; align-items:center; margin:10px 0 4px; max-width:640px; }
+.设置行 input { flex:1 1 auto; min-width:0; font-family:var(--mono); font-size:12.5px; }
+.设置行 button { flex:0 0 auto; }
+/* 折叠里的原始修法：等宽 + 自动折行，Windows 路径里的反斜杠不该撑破卡片 */
+details.提示 summary { cursor:pointer; }
+details.提示 pre { white-space:pre-wrap; word-break:break-all; font-family:var(--mono);
+  font-size:11.5px; background:var(--bg2); padding:8px; border-radius:6px; margin-top:6px; }
+
+/* ===== 标记实际在用的中文类 =====
+   这几个是 2026-08-12 换样式表时漏掉的：样式表抄自 studio，用的是
+   `.数卡 > .card / .数 / .标` 那一套；而 index.html 用的是 `.栏 > .卡 > .淡 + .数`。
+   两代标记撞在一起，结果是统计卡整块没有样式——而且不报任何错，只是看着「有点空」。
+   以标记为准补齐：改 CSS 一处，比改两个文件里 15 处 class 稳妥。 */
+.卡 { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  box-shadow:var(--shadow-sm); padding:10px 16px; min-width:96px; }
+.淡 { font-size:11.5px; color:var(--ink3); }
+.卡 .数 { font-size:22px; font-weight:700; line-height:1.2; font-family:var(--mono); color:var(--ink); }
+/* 表格里的 .淡 是「读取中…」「还没有工单」这类占位文案，不该被压到 11.5px */
+td.淡, td .淡 { font-size:12.5px; }

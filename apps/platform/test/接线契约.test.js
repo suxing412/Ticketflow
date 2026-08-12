@@ -61,14 +61,60 @@ t('worktree 只被隔离进程持有，server.js 碰不到它', () => {
   assert.ok(/workspace['\\/]+worktree/.test(服务源), '隔离进程应当是持有 worktree 的那一个');
 });
 
-t('驾驶舱内联脚本语法必须合法（坏了整页只显示「读取中」）', () => {
+t('驾驶舱脚本语法必须合法（坏了整页只显示「读取中」）', () => {
   // 2026-08-11 踩到：用脚本改 HTML 时把 '\n' 写成了真换行，字符串断在半路。
   // 后果特别隐蔽——页面**照常渲染**，只是所有数据永远停在「读取中…」，
-  // 因为整段 <script> 根本没执行。不看控制台就以为是后端没响应。
+  // 因为整段脚本根本没执行。不看控制台就以为是后端没响应。
+  //
+  // 2026-08-12 起脚本外置成 public/app.js（内联脚本正是上面那个坑的温床），
+  // 断言跟着搬家。
+  const 脚本 = fs.readFileSync(path.join(平台根, 'public', 'app.js'), 'utf8');
+  assert.doesNotThrow(() => new Function(脚本), 'app.js 语法错——整页会静默停在「读取中」');
+});
+
+t('首页引用的静态资源必须真的存在（404 的 css 不会报错，只会让页面变丑）', () => {
+  // 漏发一个 css/js 不会有任何报错：浏览器静默 404，页面照常渲染，只是没有样式。
+  // 这类问题肉眼看「好像哪里不对」但说不出所以然，所以让断言去数。
   const 页 = fs.readFileSync(path.join(平台根, 'public', 'index.html'), 'utf8');
-  const m = 页.match(/<script>([\s\S]*)<\/script>/);
-  assert.ok(m, 'index.html 应有内联脚本');
-  assert.doesNotThrow(() => new Function(m[1]), '内联脚本语法错——整页会静默停在「读取中」');
+  const 引用 = [...页.matchAll(/(?:href|src)="([^"]+)"/g)].map((m) => m[1])
+    .filter((u) => !/^https?:|^data:|^#/.test(u));
+  assert.ok(引用.length >= 2, '至少该引用 style.css 与 app.js');
+  for (const u of 引用) {
+    assert.ok(fs.existsSync(path.join(平台根, 'public', u)), `首页引用了不存在的资源：${u}`);
+  }
+});
+
+t('页面里用到的类名，样式表里必须真的定义过（类名对不上不会报错，只会看着不像能点）', () => {
+  // 2026-08-12 实测踩到：样式层是从 studio 抄的，它的 reset 把 button 剥光
+  // （background:none;border:none），再靠 class="btn" 补回外观。而本产品 index.html 里
+  // **7 个按钮一个都没写 btn**，动态生成的那批倒是写了。结果整页按钮渲染成纯文字：
+  // 能点，但看不出能点。token 一个没错，错在标记用的类和样式认的类不是一套。
+  //
+  // 抄样式最容易漏的就是这个，而它不产生任何错误信号——只能靠断言去对。
+  const 页 = fs.readFileSync(path.join(平台根, 'public', 'index.html'), 'utf8');
+  const 脚 = fs.readFileSync(path.join(平台根, 'public', 'app.js'), 'utf8');
+  const 样 = fs.readFileSync(path.join(平台根, 'public', 'style.css'), 'utf8');
+  const 用到 = new Set();
+  for (const 源 of [页, 脚]) {
+    for (const m of 源.matchAll(/class=\\?["']([^"'\\]+)/g)) {
+      for (const c of m[1].split(/\s+/)) if (c) 用到.add(c);
+    }
+  }
+  // 用边界匹配，不能用 includes：`.数` 会被样式表里的 `.数卡` 蒙混过关——
+  // 而 `.数` 其实只在 `.数卡` 后代选择器里生效，标记里根本没有 `.数卡`，等于没定义。
+  // 这个假阴性是当场撞见的，写在这里免得有人图省事再改回 includes。
+  const 缺 = [...用到].filter((c) => {
+    const 词 = new RegExp('\\.' + c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w一-龥-])');
+    return !词.test(样);
+  });
+  assert.deepEqual(缺, [], '这些类名在页面里用了，样式表里却没有——写了等于没写：\n  ' + 缺.join('\n  '));
+
+  // 反过来守一道：裸 <button> 必须也能长成按钮。
+  // 光查类名存在还不够——index.html 里写的就是裸 button，一个类都没有，
+  // 上面那条查不出来。这条盯的是「有没有人管没写类的按钮」。
+  assert.ok(/button:not\(\.gear\)|^button\s*\{[^}]*border\s*:\s*1px/m.test(样),
+    '样式表把 button 给 reset 了，却没有任何规则让裸 <button> 恢复成按钮外观。'
+    + `index.html 里现在有 ${(页.match(/<button(?![^>]*class=)/g) || []).length} 个裸 button，它们会渲染成纯文字。`);
 });
 
 t('每条转发路径都必须转发请求体（少一个 pipe 就静默丢 body）', () => {
@@ -119,7 +165,14 @@ t('lib/ 下的模块要么被接线，要么在 server.js 里写明为何不接'
       .filter((f) => f.endsWith('.js'))
       .some((f) => fs.readFileSync(path.join(平台根, 'scripts', f), 'utf8').includes(短名));
     const 隔离了 = new RegExp(`(${短名}|${无后缀})[^\\n]*(独立进程|隔离)`).test(源) && 被隔离进程持有;
-    if (!接线了 && !交代了 && !隔离了) 漏网.push(`  lib/${m}`);
+    // 被另一个 lib 模块引用同样是正经接线。这条原先没有，于是
+    // lib/配置位置.js 一加进来就被判成孤儿——它被 门禁/本地覆盖/工单库 三家引着，
+    // 只是不被 server.js 直接引。「只认 server.js 直接引」把底层工具模块全判成孤儿了。
+    // 真正的可达性由 test/资产接线.test.js 的入口闭包守，那条不看引用形式，看能不能走到。
+    const 被别的库引 = fs.readdirSync(path.join(平台根, 'lib'), { recursive: true })
+      .filter((f) => String(f).endsWith('.js') && !String(f).endsWith(m.replace(/\//g, path.sep)))
+      .some((f) => fs.readFileSync(path.join(平台根, 'lib', String(f)), 'utf8').includes(短名));
+    if (!接线了 && !交代了 && !隔离了 && !被别的库引) 漏网.push(`  lib/${m}`);
   }
   assert.deepEqual(漏网, [], '这些模块既没接线，也没写明为何不接（孤儿模块不会报错，只会安静地不存在）：\n' + 漏网.join('\n'));
 });

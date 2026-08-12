@@ -90,6 +90,69 @@ t('环境变量优先于配置文件', () => {
   }
 });
 
+// ---- 落位（协-005）----
+// 「不替你猜位置」原则的另一半：位置仍然人给，但别逼人去翻文档手搓 JSON。
+// 这一组要守住的是——**收进来的值必须经得起推敲**，因为它决定业务数据落在哪儿。
+t('落位：拒空、拒相对路径、拒装进产品自己的目录', () => {
+  const 假平台 = fs.mkdtempSync(path.join(os.tmpdir(), 'platform-fake-'));
+  try {
+    assert.equal(库.落位(假平台, '').ok, false);
+    assert.equal(库.落位(假平台, '   ').ok, false);
+    // 相对路径的基准是进程工作目录，换个启动方式就指向别处——业务数据不能挂这上面
+    const 相对 = 库.落位(假平台, './单');
+    assert.equal(相对.ok, false);
+    assert.ok(/绝对路径/.test(相对.错误));
+    // 装进产品自己目录是真踩过的坑：portable 打包每次解到新临时目录，
+    // 工单下次启动就没了，而且不报错——表现成一个空看板，像数据凭空蒸发。
+    const 自身 = 库.落位(假平台, path.join(假平台, '单'));
+    assert.equal(自身.ok, false);
+    assert.ok(/portable|临时目录/.test(自身.错误), '得说清为什么不行，不能只说「不允许」：' + 自身.错误);
+  } finally { fs.rmSync(假平台, { recursive: true, force: true }); }
+});
+
+t('落位：正常路径建齐五个状态目录，写出的配置能被解析回来', () => {
+  const 假平台 = fs.mkdtempSync(path.join(os.tmpdir(), 'platform-fake-'));
+  const 目标 = fs.mkdtempSync(path.join(os.tmpdir(), 'platform-store-'));
+  const 存 = process.env.PLATFORM_TICKETS;
+  delete process.env.PLATFORM_TICKETS;              // 免得环境变量盖住，测的就不是配置文件了
+  try {
+    const r = 库.落位(假平台, 目标);
+    assert.equal(r.ok, true, r.错误);
+    assert.deepEqual(fs.readdirSync(目标).sort(), [...库.STATES].sort());
+    // 写完要能读回来——写进去和读出来是两件事，这个仓栽过一次
+    const 回 = 库.解析根目录(假平台);
+    assert.equal(回.ok, true);
+    assert.equal(path.resolve(回.根), path.resolve(目标));
+    // 换根要如实上报：不报的话，看板上原来的单看着像凭空消失了
+    const 目标2 = fs.mkdtempSync(path.join(os.tmpdir(), 'platform-store2-'));
+    const r2 = 库.落位(假平台, 目标2);
+    assert.equal(r2.换根, true);
+    assert.equal(path.resolve(r2.旧根), path.resolve(目标));
+    fs.rmSync(目标2, { recursive: true, force: true });
+  } finally {
+    if (存) process.env.PLATFORM_TICKETS = 存;
+    fs.rmSync(假平台, { recursive: true, force: true });
+    fs.rmSync(目标, { recursive: true, force: true });
+  }
+});
+
+t('落位：被 PLATFORM_TICKETS 盖住时必须明说', () => {
+  // 配了却不生效，是最难自查的一种「没反应」——它长得跟成功一模一样。
+  const 假平台 = fs.mkdtempSync(path.join(os.tmpdir(), 'platform-fake-'));
+  const 目标 = fs.mkdtempSync(path.join(os.tmpdir(), 'platform-store-'));
+  const 存 = process.env.PLATFORM_TICKETS;
+  process.env.PLATFORM_TICKETS = 目标;
+  try {
+    const r = 库.落位(假平台, 目标);
+    assert.equal(r.ok, true);
+    assert.equal(r.被环境变量盖住, true, '设了环境变量还回 false，人会以为配好了然后对着空看板发懵');
+  } finally {
+    if (存) process.env.PLATFORM_TICKETS = 存; else delete process.env.PLATFORM_TICKETS;
+    fs.rmSync(假平台, { recursive: true, force: true });
+    fs.rmSync(目标, { recursive: true, force: true });
+  }
+});
+
 // ---- 序列化往返 ----
 t('JSON frontmatter 往返精确，嵌套对象与数组不丢', () => {
   // 这正是不手搓 YAML 的原因：plan.js 往 fm 里写 routing、计划生成 都是嵌套结构
@@ -211,6 +274,29 @@ const 取 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
       const 坏 = await 取(port, '/api/tickets?state=' + encodeURIComponent('不存在的态'));
       assert.equal(坏.码, 400);
       assert.ok(/合法/.test(坏.体.error), 坏.体.error);
+    });
+
+    // ⚠ 这里**只测被拒的路径**，故意不测成功路径。
+    // 成功一次就会把真的 config/工单库.local.json 改掉——测试进程用的是真仓根，
+    // 不是沙盒。手工验的时候正是这样把用户配置覆盖了，11 张单当场从看板上消失。
+    // 成功路径已在上面用假平台根做过单测；这里守的是门禁与入参校验。
+    await ta('POST /api/setup/tickets 校验入参，且不因为是配置接口就松门禁', async () => {
+      const 相对 = await 取(port, '/api/setup/tickets', { method: 'POST', 体: { root: './单' } });
+      assert.equal(相对.码, 400);
+      assert.ok(/绝对路径/.test(相对.体.error), 相对.体.error);
+      const 空 = await 取(port, '/api/setup/tickets', { method: 'POST', 体: {} });
+      assert.equal(空.码, 400);
+      const 自身 = await 取(port, '/api/setup/tickets', { method: 'POST', 体: { root: path.join(平台根, '单') } });
+      assert.equal(自身.码, 400);
+      // 无令牌必须 401——这个口子能决定业务数据落在哪儿，比读接口更该守
+      const 裸 = await new Promise((resolve, reject) => {
+        const q = http.request({ host: '127.0.0.1', port, path: '/api/setup/tickets', method: 'POST',
+          headers: { 'Content-Type': 'application/json' } }, (res) => {
+          let s = ''; res.on('data', (d) => s += d); res.on('end', () => resolve({ 码: res.statusCode }));
+        });
+        q.on('error', reject); q.write(JSON.stringify({ root: 'D:/x' })); q.end();
+      });
+      assert.equal(裸.码, 401);
     });
 
     await ta('POST /api/tickets 建单，穿越编号被拒且仓外无文件', async () => {

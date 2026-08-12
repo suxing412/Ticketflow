@@ -9,7 +9,7 @@
 //   server.js 通过 http 转发过来，它自己从头到尾只用 http 模块。
 //   于是 test/接线契约.test.js 里那条传递闭包断言**一个字都不用改**，继续守着 server。
 //
-// 默认不随 server 启动，要用手动拉：npm run workspace
+// 2026-08-12 起随 npm start 一并起（scripts/开机.js 带的）。单起：npm run workspace
 //
 // 写操作（worktree add / add -A / commit / merge）默认**关闭**。
 // 打开要在 config/platform.config.json 里显式写 workspace.允许写: true。

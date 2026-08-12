@@ -47,7 +47,8 @@ const TRANSITIONS = {
 // 工单是业务数据不是产品代码，按总说明书第一章的切分判据归私仓，公开仓里只有机器。
 // **缺配置时不猜、不兜底、不建默认目录**——猜一个路径然后往里写业务数据，
 // 是比报错严重得多的事：等你发现写错地方，数据已经散在两处了。
-const 配置文件 = (平台根) => path.join(平台根, 'config', '工单库.local.json');
+// 走可写目录：这份配置是界面上填出来的，打包态必须落在 asar 外，否则写不进去。
+const 配置文件 = (平台根) => path.join(require('./配置位置.js').可写配置目录(平台根), '工单库.local.json');
 
 function 解析根目录(平台根) {
   const 来自环境 = String(process.env.PLATFORM_TICKETS || '').trim();
@@ -99,6 +100,47 @@ const 工单路径 = (根, 状态, id) => path.join(状态目录(根, 状态), `
 
 function 建目录(根) {
   for (const s of STATES) fs.mkdirSync(状态目录(根, s), { recursive: true });
+}
+
+// 落位：把用户填的路径写进 工单库.local.json（协-005）。
+//
+// 这不违反上面「不替你选位置」的原则——**位置仍然是人给的**，本函数只负责
+// 把人给的那个值收好。原则要挡的是「产品自作主张猜一个路径就往里写业务数据」，
+// 不是「让人配起来必须去翻文档手搓 JSON」。后者只是难用，不是稳妥。
+function 落位(平台根, 值) {
+  const 原 = String(值 || '').trim();
+  if (!原) return { ok: false, 错误: '没填路径。工单库根目录要指向你的业务私仓，本产品不替你选。' };
+  if (!path.isAbsolute(原)) {
+    return { ok: false, 错误: `请填绝对路径（实得 ${原}）。相对路径的基准是服务进程的工作目录，`
+      + '换个方式启动就指向别处了——业务数据不能挂在这么飘的东西上。' };
+  }
+  const 根 = path.resolve(原);
+  // 挡住「装进应用自己目录里」。这是真踩过的坑：打包成 portable 时，exe 每次运行
+  // 都解到一个新的临时目录，写进去的工单下次启动就找不着了——而且不会报错，
+  // 只会显示成一个空看板，像是数据凭空蒸发。
+  const 相对 = path.relative(path.resolve(平台根), 根);
+  if (!相对.startsWith('..') && !path.isAbsolute(相对)) {
+    return { ok: false, 错误: `不能放在产品自己的目录里（${根}）。工单是业务数据：`
+      + '放这儿会被升级或重装抹掉，打包成 portable 运行时更是每次都换临时目录，'
+      + '工单下次启动就消失且不报错。请指向你的业务私仓。' };
+  }
+  try {
+    建目录(根);
+  } catch (e) {
+    return { ok: false, 错误: `建不出目录 ${根}：${e.message}` };
+  }
+  const 文件 = 配置文件(平台根);
+  fs.mkdirSync(path.dirname(文件), { recursive: true });
+  const 旧 = (() => { try { return String(JSON.parse(fs.readFileSync(文件, 'utf8')).根目录 || ''); } catch { return ''; } })();
+  fs.writeFileSync(文件, JSON.stringify({ 根目录: 根 }, null, 2) + '\n', 'utf8');
+  return {
+    ok: true, 根, 文件,
+    换根: !!(旧 && path.resolve(旧) !== 根),
+    旧根: 旧 || null,
+    // 环境变量优先级更高。人在界面上配了却不生效，是最让人抓狂的一种「没反应」，
+    // 所以这里主动把它顶出来讲明白。
+    被环境变量盖住: !!String(process.env.PLATFORM_TICKETS || '').trim(),
+  };
 }
 
 // ——————————————————————————————————————————————————————————
@@ -221,6 +263,6 @@ function update(根, id, mutator) {
 
 module.exports = {
   STATES, TERMINAL, TRANSITIONS, isLegal,
-  解析根目录, 配置文件, 校验编号, 建目录, 状态目录, 工单路径, 解析, 序列化,
+  解析根目录, 落位, 配置文件, 校验编号, 建目录, 状态目录, 工单路径, 解析, 序列化,
   find, list, create, move, update,
 };
