@@ -22,11 +22,14 @@ node enginectl.js unity-test --project D:/GitHub/TK [--filter A,B] [--fresh] [--
 
 - 工程级互斥锁 `.enginectl-lock`（孤儿锁自愈）；`Temp/UnityLockfile` 有活编辑器时永不抢占；
 - 测试数字只从落盘 `enginectl-results.xml` 取（禁 tail 截尾推数）；全量成功自动归档 `enginectl-baselines/`（留最近 10 份）；
+- **结果新鲜度自校**（施工令-056，案源 TK-144「旧件被读成本轮 523 全绿」）：`unity-test` 起跑前记时刻、把在位的旧 `enginectl-results.xml` 挪进 `enginectl-baselines/results-stale-<旧件mtime>.xml`（挪不动即报错停手，不开编辑器）；收尾核 `mtime ≥ 起跑时刻`，不达标则 `status=error`、`error=stale_results：…`，**passed/failed/total 一个字段都不输出**（监听器自己的说法留在 `listenerStatus` 里存证）。放行时输出 `resultsMtime` 供外部复核。`unity-run` 不产结果文件，此闸整体不进；
 - 引擎定位：env（`ENGINECTL_UNITY_EXE` 等）> 同目录 `enginectl.config.json` > ProjectVersion→Hub；版本不匹配拒开（防静默升级工程）。
 
 ## 测试
 
-`npm test` = `node enginectl.js 探测`（本地文件系统探测冒烟，零引擎调用）。真实通道取证按 TK 侧 `unity-evidence` 细则走。
+`npm test` = `node test.js`（包自测 30 项，零引擎调用）：新鲜度三分支（陈旧/新鲜/挪件失败）单元 + 端到端——端到端在系统临时目录造假工程、起一个照 TK-103 协议应答的**假监听器**（本地 TCP），走 enginectl 自己的 attach 正路取真输出；另含探测冒烟与 `unity-run`/参数校验零回归。`npm run probe` = 原来的 `node enginectl.js 探测`（本地文件系统探测冒烟）。真实通道取证按 TK 侧 `unity-evidence` 细则走。
+
+`enginectl.js` 被 `require` 时只交出算子（`freshnessGate` / `stashStaleResults` / `readCounts` 等），不跑主流程；命令行调用行为一字未变。
 
 ## 迁移与兼容
 

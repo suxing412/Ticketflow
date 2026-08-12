@@ -165,6 +165,7 @@ function readCounts(xml) {
 // —— 基线归档：全量（无 --filter）结果落盘成功后存一份带 UTC 时间戳的副本，只留最近 10 份
 const BASELINE_DIR = 'enginectl-baselines';
 const BASELINE_KEEP = 10;
+const STALE_PREFIX = 'results-stale-'; // 挪走的旧件也叫 results-*.xml，一并吃 keep-10 的清理，不会无限堆
 function archiveBaseline(proj, xml) {
   try {
     if (!fs.existsSync(xml)) return null;
@@ -177,6 +178,47 @@ function archiveBaseline(proj, xml) {
     for (const f of olds.slice(BASELINE_KEEP)) { try { fs.unlinkSync(path.join(dir, f)); } catch { /* 下次再清 */ } }
     return dest;
   } catch { return null; } // 归档是附加品，失败不影响测试结论
+}
+
+// ——————————————————————————————————————————————————————————
+// 结果新鲜度自校（施工令-056）——案源 TK-144（2026-08-11 22:05）：上一轮遗留的 results.xml
+// 被收尾读成本轮成绩，523 全绿是假的。总监当时的手工三步（杀净/挪件/核 mtime）在此机器化：
+//   一、起跑前记时刻，并把在位的旧 results.xml 挪进 enginectl-baselines/（挪不动就停手报错，绝不带旧件开跑）；
+//   二、收尾核 mtime ≥ 起跑时刻，不达标 status=error（stale_results），一个数字都不报；
+//   三、输出 resultsMtime 供外部复核。
+// 归档是附加品可以失败，新鲜度不是：宁可红着停，也不端出一份来路不明的绿。
+// ——————————————————————————————————————————————————————————
+function statMtimeMs(f) { try { return fs.statSync(f).mtimeMs; } catch { return null; } } // 不存在/读不到 → null
+const 时戳 = (ms) => new Date(ms).toISOString();
+
+// 起跑净场：旧件在位就挪走（改名，不是复制——原位必须空出来）。返回 { stashed } 或 { err }。
+// 时间戳取旧件自己的 mtime：文件名直接说明「这是哪一轮的成绩」。
+function stashStaleResults(proj, xml) {
+  const mtimeMs = statMtimeMs(xml);
+  if (mtimeMs === null) return { stashed: null }; // 本就没有旧件 = 已是净场
+  try {
+    const dir = path.join(proj, BASELINE_DIR);
+    fs.mkdirSync(dir, { recursive: true });
+    const dest = path.join(dir, `${STALE_PREFIX}${时戳(mtimeMs).replace(/[-:.]/g, '')}.xml`);
+    fs.renameSync(xml, dest);
+    if (fs.existsSync(xml)) return { err: `起跑前挪走上一轮 ${path.basename(xml)} 后它仍在原位（${xml}）——拒绝带着旧件开跑` };
+    return { stashed: dest, mtimeMs };
+  } catch (e) {
+    return { err: `起跑前挪走上一轮 ${path.basename(xml)} 失败：${e.message}——旧件还在原位（${xml}），继续开跑就可能把上一轮成绩读成本轮的（TK-144 案）。请手动移走该文件、或修好 ${BASELINE_DIR}/ 的目录权限后重跑` };
+  }
+}
+
+// 收尾闸：放行返回 { stale:false, resultsMtime }，拦下返回 { stale:true, error, resultsMtime }。
+// 无容差——起跑时刻在挪件之前取，本轮真跑出来的文件 mtime 必晚于它；早于它只有一种解释：不是本轮的。
+function freshnessGate(results, startedAtMs) {
+  const mtimeMs = statMtimeMs(results);
+  if (mtimeMs === null) {
+    return { stale: true, resultsMtime: null, error: `stale_results：收尾读不到结果文件（${results}）——没有可核的 mtime，绝不报数；请看编辑器内「SLG/任务监听器」窗口是否真跑完了本轮任务` };
+  }
+  if (mtimeMs < startedAtMs) {
+    return { stale: true, resultsMtime: 时戳(mtimeMs), error: `stale_results：结果文件 mtime（${时戳(mtimeMs)}）早于本轮起跑时刻（${时戳(startedAtMs)}）——这是上一轮的旧件，本轮没落盘新结果，绝不报数（TK-144 案）；请看编辑器内「SLG/任务监听器」窗口是否真跑了本轮任务` };
+  }
+  return { stale: false, resultsMtime: 时戳(mtimeMs), mtimeMs };
 }
 
 const args = {};
@@ -276,7 +318,7 @@ async function requestEditorRestart(proj, hit, probeMs, waitMin) {
   }
 }
 
-(async () => {
+async function main() {
   if (channel === '探测' || channel === 'probe') {
     return out({ ok: true, godot: findGodot(), unity: findUnityEditors().map((e) => e.版本), unreal: findUnreal(), 通道: ['godot-import', 'godot-test', 'godot-export', 'unity-test', 'unity-run', 'unity-build(占位)', 'unreal-*(未装/预留)'] });
   }
@@ -297,6 +339,17 @@ async function requestEditorRestart(proj, hit, probeMs, waitMin) {
     const bootMin = Number(args['boot-timeout-min'] ?? 5);
     const lockWaitMin = Number(args['lock-wait-min'] || 30);
 
+    const xml = path.join(proj, 'enginectl-results.xml');
+    // 起跑时刻 + 净场（施工令-056）：只对 unity-test——unity-run 不产结果文件，此段整体不进，行为零变化。
+    // 位置讲究：在拉编辑器之前。挪不动旧件就当场停手，别为一场注定读不准的测试开一个 Unity。
+    let startedAtMs = null;
+    if (isTest) {
+      startedAtMs = Date.now();
+      const st = stashStaleResults(proj, xml);
+      if (st.err) return out({ ok: false, channel, mode: 'visible', error: st.err });
+      if (st.stashed) console.error(`[enginectl] 上一轮遗留的结果文件已挪走：${st.stashed}（mtime ${时戳(st.mtimeMs)}）`);
+    }
+
     let hit = discoverAttach(proj);
     let boot = null;
     if (hit && args.fresh) { // 净室：礼貌请求自退 → 等它退干净 → 下面重新可见拉起
@@ -311,7 +364,6 @@ async function requestEditorRestart(proj, hit, probeMs, waitMin) {
     }
     const 编辑器 = { port: hit.port, editorPid: hit.pid, ...(boot && boot.launched ? { launched: true, bootMs: boot.bootMs, 版本: boot.版本, 发现: boot.发现 } : { launched: false }), ...(args.fresh ? { fresh: true } : {}) };
 
-    const xml = path.join(proj, 'enginectl-results.xml');
     const runLog = path.join(proj, 'enginectl-run.log');
     const testLog = path.join(proj, 'enginectl-test.log');
     const id = `enginectl-${process.pid}-${Date.now()}`;
@@ -328,9 +380,15 @@ async function requestEditorRestart(proj, hit, probeMs, waitMin) {
       return out({ ok: ATTACH.okOf(m), channel, mode: 'visible', ...编辑器, status: m.status, method: String(args.method), log: ATTACH.pathOf(proj, m.logPath, runLog), durationMs: m.durationMs, ...(m.summary ? { summary: m.summary } : {}), ...(err ? { error: err } : {}) });
     }
     const results = ATTACH.pathOf(proj, m.resultsPath, xml);
+    // 新鲜度闸（施工令-056）：过不了闸就 status=error，passed/failed/total 一个都不出现在输出里——
+    // 「没有数字」比「有一组来路不明的数字」安全得多。listenerStatus 留着，供人对照监听器自己怎么说。
+    const 新鲜 = freshnessGate(results, startedAtMs);
+    if (新鲜.stale) {
+      return out({ ok: false, channel, mode: 'visible', ...编辑器, status: 'error', listenerStatus: m.status, ...(filters.length ? { filter: filters } : {}), results, resultsMtime: 新鲜.resultsMtime, log: ATTACH.pathOf(proj, m.logPath, testLog), durationMs: m.durationMs, error: [新鲜.error, err].filter(Boolean).join('；另：') });
+    }
     const c = readCounts(results); // 数字以落盘 XML 为准（口径唯一，禁 tail 截尾推数），summary 只作旁证
     const baseline = (filters.length === 0 && c.passed !== null) ? archiveBaseline(proj, results) : null;
-    return out({ ok: ATTACH.okOf(m) && c.failed === '0', channel, mode: 'visible', ...编辑器, status: m.status, passed: c.passed, failed: c.failed, total: c.total, ...(filters.length ? { filter: filters } : {}), results, log: ATTACH.pathOf(proj, m.logPath, testLog), durationMs: m.durationMs, ...(baseline ? { baseline } : {}), ...(err ? { error: err } : {}) });
+    return out({ ok: ATTACH.okOf(m) && c.failed === '0', channel, mode: 'visible', ...编辑器, status: m.status, passed: c.passed, failed: c.failed, total: c.total, ...(filters.length ? { filter: filters } : {}), results, resultsMtime: 新鲜.resultsMtime, log: ATTACH.pathOf(proj, m.logPath, testLog), durationMs: m.durationMs, ...(baseline ? { baseline } : {}), ...(err ? { error: err } : {}) });
   }
 
   // 互斥 + 自愈（godot 通道）：抢不到锁=有同工程会话在跑，排队等待而非撞锁三振
@@ -363,4 +421,8 @@ async function requestEditorRestart(proj, hit, probeMs, waitMin) {
 
   if (channel && channel.startsWith('unreal')) return out({ ok: false, error: '预留通道：本机未装 UE；装后按 RunUAT/BuildCookRun 补实现（见 引擎适配调研报告）' });
   return out({ ok: false, error: '未知通道。可用：探测 / godot-import / godot-test / godot-export / unity-test / unity-run' });
-})();
+}
+
+// 命令行照旧直接跑；被 require 时只交出算子（test.js 拿去实测新鲜度三分支），一行都不执行。
+module.exports = { readCounts, archiveBaseline, statMtimeMs, stashStaleResults, freshnessGate, BASELINE_DIR, BASELINE_KEEP, STALE_PREFIX };
+if (require.main === module) main();

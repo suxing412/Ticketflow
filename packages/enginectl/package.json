@@ -5,7 +5,8 @@
   "description": "引擎通道注册表：通道只认名字，换引擎不换协议。现挂 Unity（可见编辑器+任务投递，施工令-011 无头整族退役）与 Godot（headless 三通道）。Unity 专用工具包，现仅 studio 产线侧消费——公共件只放 packages，不等于双方必用。",
   "main": "enginectl.js",
   "scripts": {
-    "test": "node enginectl.js 探测"
+    "test": "node test.js",
+    "probe": "node enginectl.js 探测"
   },
   "author": "suxing412"
 }
