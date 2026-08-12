@@ -125,4 +125,19 @@ async function 池衡巡检(root, cfg, opts = {}) {
   return { 开: true, 读数, ...r };
 }
 
-module.exports = { onCampaignFinalized, onChildDispatched, checkCloseouts, checkChainFailures, isCampaign, childrenOf, 池衡巡检 };
+// ⑤ 台账对齐拍（H102 · 施工令-052）：工单实况 ↔ 排程台账粒的差量对齐。
+// 案源：编辑器专项 11 张子单，台账只见 5 粒——156~161 六张总监忘登。手工登粒废止，改由机器盯。
+// 挂在 runner.tick 这条**既有**巡检环上（30s 一轮），判频由 ledger-sync 自己决（事件去抖 30s
+// + 5 分钟例行兜底）。不另起 setInterval：多一根定时器就多一处崩溃恢复要管，而这活对实时性
+// 的要求（分钟级）远低于 tick 本身的频率，蹭现成的环足矣。
+// 一律只回结果不抛：对齐是账，账记不上不该把派发主干带崩（同 checkCloseouts 待遇）。
+function 台账对齐拍(root, opts = {}) {
+  try {
+    return require('./ledger-sync').拍(root, opts);
+  } catch (e) {
+    journal.append(root, `台账对齐拍异常：${String(e.message).slice(0, 80)}`);
+    return { 触发: null, error: String(e.message).slice(0, 80) };
+  }
+}
+
+module.exports = { onCampaignFinalized, onChildDispatched, checkCloseouts, checkChainFailures, isCampaign, childrenOf, 池衡巡检, 台账对齐拍 };
