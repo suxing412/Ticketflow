@@ -245,6 +245,95 @@ ${好回执}`;
   assert.equal(r.初检, '过', '末轮干净就该过：' + JSON.stringify(r.缺项));
 });
 
+// ============ 场景五之前：追加轮识别（施工令-053，四夹具照案源）============
+// 案源：2026-08-12/13 连续 8 张单机判 0/N 全靠人工裁。回执按轮追加后，旧机判读的是**第一轮**
+// 的「## 自测结果」——末轮改叫「逐条自证」就整节找不到，誊录版整段带 `>` 前缀更是一条认不出。
+// 夹具在 test/fixtures/回执-TK-*.md：TK-144 多轮追加、TK-168 抢救誊录、TK-156/160 单轮老格式。
+// 后两张是施工令-051 留下的真形态回执（无自测节），在此当「零回归」的对照组。
+const 夹具 = (id) => fs.readFileSync(path.join(__dirname, 'fixtures', `回执-${id}.md`), 'utf8');
+const 标准表 = (...条) => '## 验收标准\n\n' + 条.map((x, i) => `${i + 1}. ${x}`).join('\n');
+const TK144标准 = 标准表(
+  '废弃单落 `完成` 而非 `撤销`', '末次说明写明废弃闭合理由', '差量归零',
+  '事件流水留痕', '六粒逐条列出含落态与因', '全量测试零回归');
+const TK168标准 = 标准表(
+  '导出前置校验拦得住空字段', '拦下时报到具体字段名', '合法数据零误拦',
+  '校验耗时不劣化导出', '新增测试类在位且全绿');
+
+await t('追加轮·TK-144（3 轮，末轮节名「逐条自证」）：判末轮 6/6，旧法读首轮读成 0/6', () => {
+  const root = makeRoot();
+  const t1 = 铺(root, 'TK-144', 夹具('TK-144'), { body: TK144标准, fm: { 返修轮: 2 } });
+  const r = precheck.run(root, t1, CFG);
+  assert.equal(r.统计.轮数, 3, '三轮都切得出来');
+  assert.equal(r.统计.标准条数, 6);
+  assert.equal(r.统计.应答条数, 6, '末轮「### 逐条自证」六条全认（人工判读同数）：' + JSON.stringify(r.缺项));
+  assert.equal(r.初检, '过', JSON.stringify(r.缺项));
+  assert.ok(!r.缺项.some((x) => x.includes('空壳标志')), '首轮的「待誊入 / In progress」是历史，不算末轮空壳');
+  assert.ok(r.备注.includes('（3 轮，判末轮）'), '备注写明判的是哪一轮：' + r.备注.split('\n')[0]);
+  // 反证：旧法的判材选取（只认「自测结果」节名）在这份回执上取不到任何应答
+  assert.equal(precheck.章节(precheck.末轮(夹具('TK-144')), '自测结果'), null, '末轮确实没有「自测结果」节名');
+});
+
+await t('追加轮·TK-168（抢救誊录，整段引用 + 按语前缀）：剥引用后 5/5，旧法 0/5', () => {
+  const root = makeRoot();
+  const t1 = 铺(root, 'TK-168', 夹具('TK-168'), { body: TK168标准 });
+  const r = precheck.run(root, t1, CFG);
+  assert.equal(r.统计.轮数, 2, '半份原件 + 誊录版 = 两轮');
+  assert.equal(r.统计.应答条数, 5, '誊录版表格逐条认出（人工判读同数）：' + JSON.stringify(r.缺项));
+  assert.equal(r.初检, '过', JSON.stringify(r.缺项));
+  assert.ok(!r.缺项.some((x) => x.includes('缺章节')), '章节在引用里也认得出：' + JSON.stringify(r.缺项));
+  assert.ok(!r.缺项.some((x) => x.includes('空壳标志')), '首轮的 Waiting / 跑完后补 属上一轮');
+  // 反证：不剥引用则整份誊录体一个标题都解析不出
+  const 原样 = 夹具('TK-168').split('---')[1] || '';
+  assert.equal(precheck.章节(原样, '自测结果'), null, '带 `>` 前缀时旧法看不见任何章节');
+});
+
+await t('单轮老格式零回归·TK-156 / TK-160：不误切轮、判材仍是全文、结论与改前一致', () => {
+  const root = makeRoot();
+  for (const id of ['TK-156', 'TK-160']) {
+    const raw = 夹具(id);
+    assert.equal(precheck.轮段(raw).length, 1, `${id} 是单轮，不该被切成多段`);
+    assert.equal(precheck.末轮(raw).trim(), precheck.去引(raw).trim(), `${id} 末轮即全文`);
+    const t1 = 铺(root, id, raw, { body: 标准表('产出清单在位', '数据可复核', '异议已交代') });
+    const r = precheck.run(root, t1, CFG);
+    assert.equal(r.统计.应答条数, 0, `${id} 本就没有自测节，人工判读也是 0`);
+    assert.equal(r.初检, '不过');
+    const 章 = r.缺项.find((x) => x.includes('缺章节'));
+    assert.ok(章 && 章.includes('自测结果') && 章.includes('实际消耗'), `${id} 缺章报法照旧：` + 章);
+    assert.ok(!r.备注.includes('判末轮'), '单轮不加轮次标注');
+  }
+});
+
+await t('追加轮·边角：轮头与轮身分家、末尾追加机判章不夺判卷面', () => {
+  // 轮头单独一行、报告体另起 `# 完工报告`——两段属同一轮，返修说明不该判缺
+  const 分家 = `# 完工报告 Y-01\n\n## 自测结果\n第 1-3 条待誊入。\n\n## 实际消耗\n5 分钟 / 900 token\n\n## 异议\n无\n\n## 第 2 轮回执（返修后）\n\n---\n\n${好回执}`;
+  const root = makeRoot();
+  const a = 铺(root, 'Y-01', 分家, { fm: { 返修轮: 1 } });
+  const ra = precheck.run(root, a, CFG);
+  assert.equal(ra.初检, '过', '轮头与轮身合段：' + JSON.stringify(ra.缺项));
+  assert.equal(ra.统计.应答条数, 3);
+  // 机判自己回写的「## 两检初检（机判）」追在末尾，不含自测节 → 判卷面仍是上一段
+  const b = 铺(root, 'Y-02', 好回执 + '\n\n## 两检初检（机判）\n结论：过\n', {});
+  const rb = precheck.run(root, b, CFG);
+  assert.equal(rb.统计.应答条数, 3, '末尾追加节不夺判卷面');
+  assert.equal(rb.初检, '过', JSON.stringify(rb.缺项));
+  // 轮标出现在自测节**之后**（如「## 完工报告格式说明」）：头一截也是一轮，不能被切丢
+  const 尾标 = 好回执.split('\n').slice(1).join('\n') + '\n\n## 完工报告格式说明\n照抄模板即可。\n';
+  const c = 铺(root, 'Y-03', 尾标, {});
+  const rc = precheck.run(root, c, CFG);
+  assert.equal(rc.统计.应答条数, 3, '首个轮标之前的自测节仍是判卷面');
+  assert.equal(rc.初检, '过', JSON.stringify(rc.缺项));
+});
+
+await t('追加轮·工具函数：去引 / 轮段 / 章节并 各司其职', () => {
+  assert.equal(precheck.去引('> ## 自测结果\n>> 深引\n  > 缩进引\n正文'), '## 自测结果\n深引\n  缩进引\n正文');
+  assert.equal(precheck.轮段('无标题的散文回执').length, 1, '没标题就是一段');
+  const 两节 = '## 自测结果\n1. ✓ 甲\n\n## 补充自证\n2. ✓ 乙\n';
+  assert.ok(precheck.章节并(两节, ...precheck.自测别名).includes('甲'), '同轮多节合并计数');
+  assert.ok(precheck.章节并(两节, ...precheck.自测别名).includes('乙'));
+  const { map } = precheck.应答表('| 第 3 条 | ✓ | 证据 |\n4）✓ 丁\n5：✓ 戊\n耗时 1.5 秒 ✓');
+  assert.deepEqual([...map.keys()].sort(), [3, 4, 5], '第 N 条 / 全角括号 / 冒号都认，「1.5 秒」不误读成第 1 条');
+});
+
 // ================= 场景五：缺章 / 缺字段 / 报数 =================
 await t('缺章：自测结果 / 实际消耗 / 异议 少一节即缺项', () => {
   const root = makeRoot();
