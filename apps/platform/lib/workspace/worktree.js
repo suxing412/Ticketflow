@@ -349,7 +349,10 @@ function 遗留工作区(monitorRoot, cfg, project, 工单表) {
     if (!名 || path.resolve(w.path) === path.resolve(repo)) continue;   // 主工作区不算
     const t = 表.get(名);
     if (!t) { 出.push({ 单: 名, 路径: w.path, 分支: w.branch, 因: '工单库里找不到这张单' }); continue; }
-    if (t.state === '完成') 出.push({ 单: 名, 路径: w.path, 分支: w.branch, 因: '工单已完成' });
+    // 已归档的单同样该收：它已经退出产线，工作区留着没有任何用处。
+    if (t.state === '完成' || t.state === '已归档') {
+      出.push({ 单: 名, 路径: w.path, 分支: w.branch, 因: `工单已${t.state === '完成' ? '完成' : '归档'}` });
+    }
   }
   return 出;
 }
