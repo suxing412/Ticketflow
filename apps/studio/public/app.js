@@ -21,11 +21,17 @@ function toast(msg) { const t = document.createElement('div'); t.className = 'to
 // 数值跳字确认（步进器改完后调用）：重触发 animation
 function bump(el) { if (!el) return; el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
 // 视图内活体轮询：guard 元素还在页上就每 ms 跑一次 fn，离开视图自动停
+// 施工令-048：同一 guardId 只留最新一条。旧样只认「元素还在」，而原地重绘（repaint）会把
+// 视图函数再跑一遍、再挂一条同名轮询——morph 之下 guard 元素恰恰一直在，于是每重绘一次就
+// 多一条在跑，十分钟后十条 fetch 抢着刷同一块地方（viewQueue 早就自己发号躲过这坑，这里收归公用）。
+const _loopGen = {};
 function pollLoop(guardId, ms, fn) {
+  const gen = _loopGen[guardId] = (_loopGen[guardId] || 0) + 1;
+  const 活 = () => $(guardId) && _loopGen[guardId] === gen;
   setTimeout(async function loop() {
-    if (!$(guardId)) return;
+    if (!活()) return;
     try { await fn(); } catch { /* 下轮再试 */ }
-    if ($(guardId)) setTimeout(loop, ms);
+    if (活()) setTimeout(loop, ms);
   }, ms);
 }
 // 执行器状态灯：红呼吸=实弹运行中（H81：运行即实弹）；灰=已停（传状态非装饰）
@@ -484,6 +490,10 @@ async function viewBoard() {
     if (!b || !hs || !w) return;
     w.style.width = b.scrollWidth + 'px';
     hs.style.display = b.scrollWidth > b.clientWidth ? '' : 'none';
+    // 施工令-048：原地重绘不换节点，接线只能挂一次——否则每 3s 多两条 scroll 监听，
+    // 挂几百条之后横向拖动会明显发涩。记号写在节点属性上（morph 只管 HTML 属性，碰不到它）。
+    if (b.__hsLinked) return;
+    b.__hsLinked = hs.__hsLinked = true;
     const token = (window.__hsT = (window.__hsT || 0) + 1);
     const link = (src, dst) => src.addEventListener('scroll', () => {
       if (dst.scrollLeft !== src.scrollLeft) dst.scrollLeft = src.scrollLeft;
@@ -733,7 +743,7 @@ async function viewFlow() {
   const sig0 = sig(ag);
   pollLoop('fg-board', 15000, async () => {
     const nd = agentsScoped(await api('/api/agents'), all);
-    if (sig(nd) !== sig0) { route(); return; } // 派发/收工 = 条位要换，整页重排
+    if (sig(nd) !== sig0) { repaint('在跑名册变'); return; } // 派发/收工 = 条位要换，原地重排本视图（施工令-048：不再整页）
     for (const r of (nd.在跑 || [])) {
       const v = 活体(r, r.state);
       const pe = $('fgp-' + r.id); if (pe) { pe.innerHTML = `${v.百分比 == null ? '—' : v.百分比}<small>%</small>`; pe.title = v.提示; }
@@ -861,7 +871,7 @@ async function viewQueue() {
   pollLoop('q-board', 30000, async () => {
     if (号 !== window._qSeq) return;
     const nd = await api('/api/schedule/队列' + (p ? '?项目=' + encodeURIComponent(p) : '')).catch(() => null);
-    if (号 === window._qSeq && nd && nd.摘要 && sig(nd) !== sig0) route();
+    if (号 === window._qSeq && nd && nd.摘要 && sig(nd) !== sig0) repaint('队列批次变');
   });
   return `<div class="qtop"><span class="qsum">${esc(s.文)}</span>
       <span class="subnote">按 批 → 序 排（口径同排程台账）· 点批头折叠 · 悬浮任一行看来源全文</span>
@@ -948,7 +958,9 @@ function timelineHtml(agents, all, opts) {
     return `<span class="tlseg ${g.inflight ? 'on' : ''}${suspCls(g.t)}" style="--i:${si++};left:${x}px;width:${w}px;background:${c}${byFn ? `;top:${3 + (g.lv || 0) * 30}px` : ''}" title="${esc(g.t.id)} ${esc(g.t.title)}（${suspOf(g.t) ? '已挂起' : g.inflight ? '进行中' : '已交付'}）${suspOf(g.t) ? '\n' + esc(suspTip(g.t)) : ''}" onclick="location.hash='#/t/${esc(g.t.id)}'">${suspOf(g.t) ? '<i class="tlseglb snowb">❄</i>' : label}</span>`;
   }).join('')}</div>`).join('');
   const colH = ids.reduce((a, id) => a + rowH(id), 0);
-  setTimeout(() => { const el = $('tlscroll'); if (el) el.scrollLeft = el.scrollWidth; }, 0);
+  // 首次落地时钉到最右（最新时间在右端）；此后原地重绘不再抢方向盘——
+  // 施工令-048：不加这道记号的话，制作人往左看历史，每 3s 就被脉冲弹回最右。
+  setTimeout(() => { const el = $('tlscroll'); if (el && !el.__tlHomed) { el.__tlHomed = true; el.scrollLeft = el.scrollWidth; } }, 0);
   return `<div class="tlcard card r14">${head}
     <div class="tlflex"><div class="tlwhocol"><div class="tlsp"></div>${ids.map((id) => `<div class="tlwho" style="height:${rowH(id)}px">${esc(id)}</div>`).join('')}</div>
     <div class="tlscroll" id="tlscroll"><div style="position:relative;width:${W + 20}px">
@@ -1044,7 +1056,7 @@ function viewAgentsDispatch(d, all) {
   const 在跑数 = (d.在跑 || []).length;
   pollLoop('ag-cards', 15000, async () => {
     const nd = agentsScoped(await api('/api/agents'), all); // 与首屏同一道项目闸，否则张数永远对不上→无限整页重画
-    if ((nd.在跑 || []).length !== 在跑数) { route(); return; }
+    if ((nd.在跑 || []).length !== 在跑数) { repaint('在跑张数变'); return; }
     for (const r of (nd.在跑 || [])) {
       const pe = $('agp-' + r.id); if (pe) pe.innerHTML = pctHtml(r);
       const se = $('ags-' + r.id); if (se) se.outerHTML = segbarHtml(r.进度 || {}, 'ags-' + r.id);
@@ -1858,8 +1870,8 @@ async function viewDetail(id) {
         <div class="lv-top"><b style="font-size:13px">执行进度</b>
           <span class="pill sm ${live ? 'ok' : 'mut'}" id="lv-who">${live ? esc(live.agent) + ' · ' + esc(live.kind) : '等待执行器衔接（间隔 ' + (run.间隔秒 || 15) + 's）'}</span>
           <span class="sp"></span>
-          <span class="lv-t mono" id="lv-step-t">--:--</span><span class="subnote">本步</span>
-          <span class="lv-t mono" id="lv-all-t">--:--</span><span class="subnote">全程</span></div>
+          <span class="lv-t mono" id="lv-step-t" data-live>--:--</span><span class="subnote">本步</span>
+          <span class="lv-t mono" id="lv-all-t" data-live>--:--</span><span class="subnote">全程</span></div>
         <div class="lv-bar">${segs.map(([k, s]) => `<div class="lv-seg ${s}"><i></i><span>${esc(k)}</span></div>`).join('')}</div>
         <div class="lv-tail mono" id="lv-tail">${live && live.tail ? esc(live.tail) : '（尚无输出）'}</div></div>`;
       setTimeout(() => lvStart(id, live ? live.startedAt : null, fm.领单时间 || fm.更新时间 || null, live ? live.kind : null), 0);
@@ -2087,13 +2099,19 @@ window.remoteToggle = async (开, regen) => {
 window.openArt = async (id, p, mode) => { const r = await post('/api/open', { id, 路径: p, 方式: mode }); if (!r.ok) toast(r.error || '调起失败'); };
 // 秒级走表：1s 本地跳字，每 3s 拉一次 runner 刷活尾巴；步骤切换/落袋整页重渲；离开详情自动熄火
 window.lvStart = (id, stepIso, allIso, kind) => {
+  // 施工令-048 要件3：脉冲原地重绘会把 viewDetail 再跑一遍、再叫一次 lvStart。
+  // 同一条走表（单号/步骤/起时都没变）就让它继续走——重开表会把 n 计数清零（3s 那次
+  // runner 对账永远轮不到），两个 data-live 格子也会被新表从 --:-- 重新起跳，看着就是闪。
+  const key = [id, stepIso, allIso, kind].join('|');
+  if (window._lv && window._lvKey === key && $('lv-step-t')) return;
+  window._lvKey = key;
   clearInterval(window._lv || 0);
   let n = 0, had = !!stepIso, step = stepIso;
   const fmt = (ms) => { if (ms == null || ms < 0) return '--:--'; const s = Math.floor(ms / 1000);
     return (s >= 3600 ? Math.floor(s / 3600) + ':' : '') + String(Math.floor(s / 60) % 60).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
   window._lv = setInterval(async () => {
     const el = $('lv-step-t');
-    if (!el) { clearInterval(window._lv); return; } // 已离开详情页
+    if (!el) { clearInterval(window._lv); window._lv = 0; window._lvKey = ''; return; } // 已离开详情页
     el.textContent = step ? fmt(Date.now() - Date.parse(step)) : '--:--';
     const at = $('lv-all-t'); if (at && allIso) at.textContent = fmt(Date.now() - Date.parse(allIso));
     if (++n % 3 !== 0) return;
@@ -2101,10 +2119,10 @@ window.lvStart = (id, stepIso, allIso, kind) => {
       const run = await api('/api/runner');
       const e = (run.执行中 || []).find((x) => x.id === id);
       if (e) { had = true; step = e.startedAt;
-        if (e.kind !== kind) { route(); return; } // 换步骤 → 重渲进度条
+        if (e.kind !== kind) { repaint('换步骤'); return; } // 换步骤 → 重渲进度条（原地，不整页）
         const tl = $('lv-tail'); if (tl && e.tail) tl.textContent = e.tail;
         const who = $('lv-who'); if (who) { who.textContent = e.agent + ' · ' + e.kind; who.className = 'pill sm ok'; }
-      } else if (had) { route(); return; } // 本步收线（流转/落袋）→ 重渲拿新状态
+      } else if (had) { repaint('本步收线'); return; } // 本步收线（流转/落袋）→ 重渲拿新状态
     } catch { /* 单次失败下轮再试 */ }
   }, 1000);
 };
@@ -2571,6 +2589,11 @@ window.wkReject = async (f) => { if (!await ask('退回将删除该待审稿（a
 async function wkGraph(proj) {
   const cv = $('wk-g'); if (!cv) return;
   const g = await api('/api/wiki/graph?项目=' + encodeURIComponent(proj)).catch(() => null); if (!g) return;
+  // 施工令-048：图谱是力导向物理模拟，重跑=重新从环形起点弹一遍。原地重绘保留同一张画布，
+  // 图没变就别再弹（否则脉冲每 3s 把已经站定的图重新抖散——这正是频闪最刺眼的一处）。
+  const 签 = JSON.stringify([g.nodes.map((n) => n.id + n.分类), g.edges]);
+  if (cv.__g签 === 签) return;
+  cv.__g签 = 签;
   const ctx = cv.getContext('2d');
   const W = cv.width, H = cv.height;
   const CAT = { 世界观: '#7f77dd', 地图: '#1d9e75', 势力: '#d85a30', 系统: '#378add', 数值: '#ba7517', 未建: '#6b7280' };
@@ -2860,7 +2883,167 @@ window.editorLock = async (关) => {
   route();
 };
 const markIn = (key) => { if (window._lastViewKey !== key) { const v = $('view') || $('app').firstElementChild; if (v) v.classList.add('vin'); } window._lastViewKey = key; };
+// 详情页面包屑上的状态胶囊：目录态≠现场态——审检会话在跑时按会话报（制作人 03:18 指正）。
+// 施工令-048 抽出：首渲（route）与脉冲原地重绘（repaint）共用一份口径，不许两处各说各话。
+async function 详情徽章(id, state) {
+  if (state == null) { const d = await api('/api/ticket?id=' + encodeURIComponent(id)).catch(() => ({})); state = d.state; }
+  if (!state) return '';
+  if (['待验收', '待定夺'].includes(state)) {
+    const run = await api('/api/runner').catch(() => ({}));
+    const live = (run.执行中 || []).find((x) => x.id === id);
+    if (live) return `<span class="pill st-review">${esc(({ 初检: '初检中', 代核: '核查中', 核查: '核查中', 仲裁: '仲裁中' })[live.kind] || live.kind + '中')}</span>`;
+  }
+  return stPill(state);
+}
+
+/* ===== 脉冲刷新（施工令-048：频闪根治）=====
+   病灶：3s 变更令牌轮询一见令牌变就 route() —— 整页推倒重建。管线繁忙期（QA 重试、
+   journal 连环写）令牌逐拍皆变，于是整个界面每 3 秒重来一次：肉眼是频闪，实际是
+   滚动位归零、折叠态复位、输入焦点丢失。制作人 08-11 晚、08-12 15:38 两次实报。
+   修法三件：
+     ① 决策归纯函数（pulsePlan / pulseTarget）：令牌事实 + 视图态 → 动作，可单测；
+     ② 刷新归原地（repaint + morph）：只重算当前视图的数据区，逐节点对齐，
+        没变的节点一个字节都不碰 —— 三态（滚动/展开/焦点）于是天然不动，而非事后补救；
+     ③ 整页重建降为兜底：30s 一道闸，且用户手还在页面上就顺延。 */
+
+// ---- 用户交互水位（要件2：整页重建要给操作让路）----
+let _uxAt = 0, _整页At = 0, _脉冲待办 = false, _重绘中 = false;
+for (const ev of ['pointerdown', 'wheel', 'scroll', 'keydown', 'input', 'touchstart'])
+  window.addEventListener(ev, () => { _uxAt = Date.now(); }, { passive: true, capture: true });
+// 「手还在页面上」的三种活口供：刚动过（4s 内）、焦点在输入框里、搜索下拉正挂着
+function 交互中() {
+  if (Date.now() - _uxAt < PULSE.交互静默) return true;
+  const a = document.activeElement;
+  if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return true;
+  const gs = $('gsr');
+  return !!(gs && gs.style.display === 'block');
+}
+const 弹窗开着 = () => !!document.querySelector('.mwrap, .ask-ov');
+
+// @testable-begin pulsePlan
+/* 脉冲决策（要件1/2）：纯函数、零 DOM、零 fetch —— 喂状态取动作，测试直接驱动。
+   入参 s：{ 变了, 待办, 免打扰, 可局部, 交互中, 现在, 上次整页 }
+   出参：{ 动作, 因 }，四种动作——
+     skip  令牌没动，什么都不做（脉冲的常态）
+     patch 原地重绘当前视图数据区（要件1 的正路，绝大多数刷新走这里）
+     hold  起草/参数页/弹窗开着：不打扰，但把这笔变更记成待办，等状态解除再补
+     defer 整页重建被节流或被用户操作顶掉，同样记待办、下一拍再议
+     full  兜底整页重建（未登记视图）*/
+const PULSE = { 整页最小间隔: 30000, 交互静默: 4000 };
+function pulsePlan(s) {
+  if (!(s.变了 || s.待办)) return { 动作: 'skip', 因: '令牌未变' };
+  if (s.免打扰) return { 动作: 'hold', 因: '起草/参数/弹窗中，不打扰（记待办）' };
+  if (s.可局部) return { 动作: 'patch', 因: '原地重绘数据区' };
+  const 距上次 = s.上次整页 ? s.现在 - s.上次整页 : Infinity;
+  if (距上次 < PULSE.整页最小间隔)
+    return { 动作: 'defer', 因: `整页节流：距上次 ${Math.round(距上次 / 1000)}s < ${PULSE.整页最小间隔 / 1000}s` };
+  if (s.交互中) return { 动作: 'defer', 因: '用户正在操作，整页重建顺延' };
+  return { 动作: 'full', 因: '兜底整页重建' };
+}
+// @testable-end pulsePlan
+
+// @testable-begin pulseTarget
+/* 视图 → 刷新目标（要件1「局部刷新选择」）：纯函数，只吃 hash 与已登记视图键。
+   视图键由调用方给（app 传 Object.keys(ROUTES)），免得这里另抄一份路由表跟真表走散。 */
+const PULSE_免打扰 = ['draft', 'proj-new', 'params'];
+function pulseTarget(hash, 视图键) {
+  const 头 = String(hash || '').replace(/^#\//, '').split('?')[0];
+  const 键们 = 视图键 || [];
+  if (PULSE_免打扰.includes(头)) return { 类: 'hold', 因: `${头} 页上有正在填的东西` };
+  const m = 头.match(/^t\/(.+)$/);
+  if (m) return { 类: 'patch', 视图: 'detail', id: decodeURIComponent(m[1]) };
+  if (头 === 'hub') return { 类: 'patch', 视图: 'hub' };
+  const 键 = 键们.includes(头) ? 头 : '';                      // 同 route()：认不出的 hash 落总览
+  if (键们.includes(键)) return { 类: 'patch', 视图: 键 };
+  return { 类: 'full', 因: `未登记视图 ${头}` };
+}
+// @testable-end pulseTarget
+
+// @testable-begin morph
+/* ---- 逐节点对齐（morph）：整块 innerHTML 覆写会重建每一个节点——滚动位归零、
+   展开态复位、焦点丢失、图片重解码，这正是「频闪」的观感来源。改成拿新 HTML 与
+   现有 DOM 一一比对：整枝没变就整枝跳过，变了的也只改那几个属性/那一段文字。
+   三态（滚动/展开/焦点）不是事后补救回来的，是根本没被碰过。 ---- */
+function morph(dst, html) {
+  if (!dst) return;
+  const 焦 = document.activeElement, 焦id = 焦 && 焦.id, 焦选 = [];
+  if (焦 && /^(INPUT|TEXTAREA)$/.test(焦.tagName)) { try { 焦选.push(焦.selectionStart, 焦.selectionEnd); } catch { /* type 不支持选区 */ } }
+  const y = window.scrollY;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  morphKids(dst, tmp);
+  // 兜底：极端情况下（节点被整段替换）焦点/滚动位仍可能掉，按 id 认回来
+  if (焦id && document.activeElement !== 焦) {
+    const el = $(焦id);
+    if (el && typeof el.focus === 'function') { el.focus(); if (焦选.length) try { el.setSelectionRange(焦选[0], 焦选[1]); } catch { /* 同上 */ } }
+  }
+  if (window.scrollY !== y) window.scrollTo(0, y);
+}
+function morphKids(dst, src) {
+  const 旧 = [...dst.childNodes], 新 = [...src.childNodes];
+  for (let i = 0; i < Math.max(旧.length, 新.length); i++) {
+    const o = 旧[i], w = 新[i];
+    if (!w) { dst.removeChild(o); continue; }
+    if (!o) { dst.appendChild(w); continue; }
+    morphNode(dst, o, w);
+  }
+}
+function morphNode(parent, o, w) {
+  if (o.nodeType !== w.nodeType || (o.nodeType === 1 && o.tagName !== w.tagName)) { parent.replaceChild(w, o); return; }
+  if (o.nodeType !== 1) { if (o.nodeValue !== w.nodeValue) o.nodeValue = w.nodeValue; return; } // 文本/注释
+  if (o.hasAttribute('data-live')) return;    // 活体格子归它自己的计时器管（要件3：秒表不许被脉冲拨回 --:--）
+  if (o.tagName === 'CANVAS') return;         // 画布内容不在 HTML 里，重建即白屏
+  if (o.outerHTML === w.outerHTML) return;    // 整枝一字未变：一个字节都不碰（morph 的全部价值在这一行）
+  morphAttrs(o, w);
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(o.tagName)) {
+    if (document.activeElement !== o && o.value !== w.value) o.value = w.value; // 正在敲的框不动它
+    return;
+  }
+  morphKids(o, w);
+}
+function morphAttrs(o, w) {
+  for (const a of [...w.attributes]) if (o.getAttribute(a.name) !== a.value) o.setAttribute(a.name, a.value);
+  for (const a of [...o.attributes]) if (!w.hasAttribute(a.name)) o.removeAttribute(a.name);
+}
+// @testable-end morph
+
+/* ---- 原地重绘：重跑当前视图的渲染函数，morph 进原容器；骨架（顶栏/导航/搜索框/面包屑）
+   一律不重建。取不到容器（首渲还没落地）才退回整页。 ---- */
+const 脉冲日志 = window.__pulse日志 = [];
+const 记刷新 = (动作, 因) => {
+  脉冲日志.push({ t: new Date().toISOString().slice(11, 19), 动作, 因 });
+  if (脉冲日志.length > 200) 脉冲日志.shift();
+};
+async function repaint(因) {
+  if (_重绘中) return 'busy';
+  _重绘中 = true;
+  try {
+    const tg = pulseTarget(location.hash, Object.keys(ROUTES));
+    const box = $('view');
+    if (tg.类 !== 'patch') { await route(); 记刷新('full', 因 + ' · ' + (tg.因 || tg.类)); return 'full'; }
+    if (tg.视图 === 'hub') { morph($('app'), await viewHub()); 记刷新('patch', 因 + ' · hub'); return 'patch'; }
+    if (!box) { await route(); 记刷新('full', 因 + ' · 无 #view 容器'); return 'full'; }
+    if (tg.视图 === 'detail') {
+      morph(box, await viewDetail(tg.id));
+      // 面包屑那颗状态胶囊也得跟着走，否则单子都落袋了头上还挂着「在途」
+      const 徽 = document.querySelector('.bhead .pill'), 新徽 = await 详情徽章(tg.id);
+      const bc2 = document.querySelector('.bhead .bc2');
+      if (新徽 && 徽) { if (徽.outerHTML !== 新徽) 徽.outerHTML = 新徽; }
+      else if (新徽 && bc2) bc2.insertAdjacentHTML('afterend', 新徽);
+      记刷新('patch', 因 + ' · ' + tg.id);
+      return 'patch';
+    }
+    morph(box, await ROUTES[tg.视图]());
+    记刷新('patch', 因 + ' · ' + (tg.视图 || '总览'));
+    return 'patch';
+  } catch (e) {
+    记刷新('error', 因 + ' · ' + (e && e.message));   // 一次取数失败不留残页，下一拍再来
+    return 'error';
+  } finally { _重绘中 = false; }
+}
+
 async function route() {
+  _整页At = Date.now();   // 任何整页重建都记账：脉冲兜底的 30s 闸按这个走
   const h = location.hash.replace(/^#\//, '');
   const app = $('app');
   let m;
@@ -2884,12 +3067,7 @@ async function route() {
     if ((m = h.match(/^t\/(.+)$/))) {
       const id = decodeURIComponent(m[1]);
       const d = await api('/api/ticket?id=' + encodeURIComponent(id)).catch(() => ({}));
-      let stBadge = d.state ? stPill(d.state) : '';
-      if (['待验收', '待定夺'].includes(d.state)) { // 目录态≠现场态：审检会话在跑时头部按会话报（制作人 03:18 指正）
-        const run = await api('/api/runner').catch(() => ({}));
-        const live = (run.执行中 || []).find((x) => x.id === id);
-        if (live) stBadge = `<span class="pill st-review">${esc(({ 初检: '初检中', 代核: '核查中', 核查: '核查中', 仲裁: '仲裁中' })[live.kind] || live.kind + '中')}</span>`;
-      }
+      const stBadge = await 详情徽章(id, d.state);
       app.innerHTML = bshell(`${id} · ${d.fm ? d.fm.title : ''}`, stBadge, await viewDetail(id));
       if (window._lastViewKey !== h) { const v = $('view'); if (v) v.classList.add('vin'); }
       window._lastViewKey = h;
@@ -2961,12 +3139,27 @@ window.gEnter = (e) => {
 
 window.addEventListener('hashchange', route);
 route();
-// 3s 变更令牌轮询：数据动了才刷新；起草页/弹窗打开时不打扰
+// 3s 变更令牌轮询：数据动了才刷新。动作由 pulsePlan 判，刷新由 repaint 原地做（施工令-048）——
+// 令牌照旧每拍都收，但令牌变≠整页重来：绝大多数变化只换数据区的那几个节点。
 let lastPulse = null;
 setInterval(async () => {
-  if (location.hash.startsWith('#/draft') || location.hash.startsWith('#/proj-new')) return;
-  if (document.querySelector('.modal2')) return;
-  try { const d = await api('/api/pulse'); if (lastPulse && d.token !== lastPulse) route(); lastPulse = d.token; } catch { /* offline */ }
+  let 变了 = false;
+  try { const d = await api('/api/pulse'); 变了 = !!(lastPulse && d.token !== lastPulse); lastPulse = d.token; }
+  catch { return; } // 离线：版面维持原样，不拿空数据洗掉现场
+  const tg = pulseTarget(location.hash, Object.keys(ROUTES));
+  const p = pulsePlan({
+    变了, 待办: _脉冲待办,
+    免打扰: tg.类 === 'hold' || 弹窗开着(),
+    可局部: tg.类 === 'patch',
+    交互中: 交互中(),
+    现在: Date.now(), 上次整页: _整页At,
+  });
+  if (p.动作 === 'skip') return;
+  if (p.动作 === 'hold' || p.动作 === 'defer') { _脉冲待办 = true; 记刷新(p.动作, p.因); return; }
+  _脉冲待办 = false;
+  if (p.动作 === 'full') { await route(); 记刷新('full', p.因); return; }
+  const r = await repaint('脉冲');
+  if (r === 'busy' || r === 'error') _脉冲待办 = true; // 撞车或取数失败：这笔变更留到下一拍，不许无声吞掉
 }, 3000);
 
 /* 兼容池编辑（0.22.1）：轻量四问式，密钥留空=保留旧值；仅本机端点会拒远程
