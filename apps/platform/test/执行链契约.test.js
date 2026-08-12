@@ -144,7 +144,10 @@ t('本地覆盖：深合并而非整段替换，且只认白名单文件', () =>
   assert.deepEqual(合.权限.放开, ['backend'], '嵌套段也要保留');
   // 白名单：只有表里的文件名能覆盖对应的顶层键。
   // 不做白名单的话，随手建个 .local.json 就能改任意配置——覆盖机制会变成后门。
-  assert.deepEqual(Object.values(覆盖.覆盖表).sort(), ['workspace', '执行', '预算', '项目'].sort());
+  // 加一项就要在这里显式确认——这条断言的价值就在于「多一个覆盖口子」不能悄悄发生。
+  // 计费于 2026-08-12（协-008）加入：订阅是**账号级事实**（这台机器上的 Pro/Plus 登录态），
+  // 跟机器走不跟代码走，入库那份只能是空的；而空的含义是「未声明」＝按会计费对待。
+  assert.deepEqual(Object.values(覆盖.覆盖表).sort(), ['workspace', '执行', '预算', '项目', '计费'].sort());
   assert.equal(覆盖.覆盖表['执行.local.json'], '执行');
   assert.ok(!覆盖.覆盖表['providers.local.json'], 'providers 不在白名单内，不许被本地覆盖');
 });
@@ -155,7 +158,7 @@ t('无覆盖文件时摘要说清「全部按入库默认，即最严」', () =>
   assert.ok(/生效/.test(覆盖.摘要([{ 文件: '执行.local.json', 键: '执行', 字段: ['允许真跑'] }])));
 });
 
-// ---- 接口层：三闸各自独立 ----
+// ---- 接口层：四闸各自独立 ----
 const 门禁令牌 = () => JSON.parse(fs.readFileSync(path.join(平台根, 'config', '接口令牌.local.json'), 'utf8')).令牌;
 const 沙盒 = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-tickets-'));
 工单库.建目录(沙盒);
@@ -220,7 +223,7 @@ const 请求 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
       // 令牌文件同理有 token 别名。这两处别名不是洁癖：Windows PowerShell 5.1
       // 按系统 ANSI 码页读写，中文键在读文件和发请求两个方向上都会坏。实测踩过两次。
       const r = await 请求(port, '/run/X-2', { method: 'POST', 体: { dry_run: false } });
-      assert.equal(r.码, 403, 'dry_run:false 应与 干跑:false 一样触发真跑三闸');
+      assert.equal(r.码, 403, 'dry_run:false 应与 干跑:false 一样触发真跑四闸');
       assert.ok(/允许真跑/.test(r.体.error), r.体.error);
       const 令牌文件 = JSON.parse(fs.readFileSync(path.join(平台根, 'config', '接口令牌.local.json'), 'utf8'));
       assert.equal(令牌文件.token, 令牌文件.令牌, 'token 与 令牌 必须同值');

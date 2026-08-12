@@ -16,9 +16,10 @@
     <p class="tagline" id="健康行">开机检查中…</p>
   </div>
  <div class="tright">
-    <!-- 项目选择器（协-007）。放顶栏不放看板里：它统管看板、流程、建单默认值，
-         是**全局作用域**而不是看板的一个筛选条件。 -->
-    <select id="项目选" title="项目 = 一个 git 仓。选定后看板与流程都只看这个项目"></select>
+    <!-- 项目胶囊（协-009）。原先是个 <select>——下拉把「我在哪个项目上干活」
+         降格成一个表单控件，而它其实是**当前所处的语境**。照 studio 的做法：
+         胶囊显示当前项目，点它回项目页重选。 -->
+    <button class="项目钮" id="项目钮" onclick="location.hash='#/hub'" title="切换项目"></button>
     <span class="pill mut" id="模式徽">读取中…</span>
     <span class="pill" id="自检徽" title="配置自检"></span>
     <button class="gear" id="主题钮" title="切换日间/夜间" onclick="切主题()">◐</button>
@@ -35,6 +36,8 @@
   <a href="#/" data-页="驾驶舱">驾驶舱</a>
   <a href="#/flow" data-页="流程" title="现在卡在哪、接下来能干什么">流程</a>
   <a href="#/wiki" data-页="知识库" title="角色协议 / 说明书 / 施工令 / 配置示例">知识库</a>
+  <a href="#/hub" data-页="项目" title="项目 = 一个 git 仓">项目</a>
+  <a href="#/设置" data-页="设置" title="Providers · 消耗 · 战绩 · 瞭望塔 · 自检">设置</a>
 </nav>
 
 <div id="页-驾驶舱">
@@ -78,6 +81,9 @@
 </div>
 
 <!-- ── 产线状态：一眼看出「为什么没在跑」 ── -->
+<!-- 静默计费风险：订阅池但环境里带着 API key，CLI 可能在耗尽后自己切到计费。
+     这是唯一一个「不问就会花钱」的口子，所以摆在产线状态上方而不是折叠里。 -->
+<div class="提示" id="计费提示"></div>
 <h2>产线状态<span class="右"><button onclick="刷调度()">重算</button></span></h2>
 <div class="栏" id="调度概览"><span class="淡">读取中…</span></div>
 <div id="告警区"></div>
@@ -88,6 +94,36 @@
   <h2>运行结果<span class="右"><button onclick="document.getElementById('运行区').style.display='none'">收起</button></span></h2>
   <pre id="运行"></pre>
 </div>
+</div><!-- /页-驾驶舱 -->
+
+<div id="页-流程" style="display:none">
+  <h2>流程<span class="右"><button onclick="刷流程()">重算</button></span></h2>
+  <div class="提示">看板是平的，答不了「为什么这张不动」。这里按<b>依赖深度</b>分层：第 0 层不等任何人，第 N 层等着第 N-1 层。</div>
+  <div id="流程小结" class="栏"></div>
+  <div id="状态机"></div>
+  <div id="流程层"></div>
+</div>
+
+<div id="页-知识库" style="display:none">
+  <h2>知识库<span class="右 淡">只读——改这些文件请走 PR</span></h2>
+  <div class="栏" id="知识分区"></div>
+  <div class="知识两栏">
+    <div id="知识目录"><div class="提示">选一个分区</div></div>
+    <div id="知识正文"><div class="提示">选一篇文档</div></div>
+  </div>
+</div>
+
+<div id="页-项目" style="display:none">
+  <h2>项目<span class="右 淡">项目 = 一个 git 仓；注册表同时是写操作白名单</span></h2>
+  <div class="提示">选一个项目进去干活。看板、流程、建单默认值都会跟着它走。</div>
+  <div id="项目卡" class="项目栅"></div>
+</div>
+
+<div id="页-设置" style="display:none">
+  <div class="面包屑"><button class="返回" onclick="location.hash='#/'" title="回驾驶舱">←</button>
+    <span class="淡">驾驶舱</span><span class="分">/</span><b>设置与观测</b></div>
+  <div class="提示" id="计费提示"></div>
+  <div id="设置体">
 
 <div class="列">
   <div>
@@ -141,22 +177,6 @@
 
 <h2>未读账本 <span class="淡" id="账本计数"></span></h2>
 <ul class="账本" id="账本"><li class="淡">读取中…</li></ul>
-</div><!-- /页-驾驶舱 -->
-
-<div id="页-流程" style="display:none">
-  <h2>流程<span class="右"><button onclick="刷流程()">重算</button></span></h2>
-  <div class="提示">看板是平的，答不了「为什么这张不动」。这里按<b>依赖深度</b>分层：第 0 层不等任何人，第 N 层等着第 N-1 层。</div>
-  <div id="流程小结" class="栏"></div>
-  <div id="状态机"></div>
-  <div id="流程层"></div>
-</div>
-
-<div id="页-知识库" style="display:none">
-  <h2>知识库<span class="右 淡">只读——改这些文件请走 PR</span></h2>
-  <div class="栏" id="知识分区"></div>
-  <div class="知识两栏">
-    <div id="知识目录"><div class="提示">选一个分区</div></div>
-    <div id="知识正文"><div class="提示">选一篇文档</div></div>
   </div>
 </div>
 

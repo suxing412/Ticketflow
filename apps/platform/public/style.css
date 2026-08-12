@@ -284,3 +284,48 @@ td.淡, td .淡 { font-size:12.5px; }
 .md table.md表 { border-collapse:collapse; width:100%; font-size:12.5px; }
 .md table.md表 th, .md table.md表 td { border:1px solid var(--line); padding:6px 10px; text-align:left; vertical-align:top; }
 .md table.md表 th { background:var(--sect); font-weight:600; white-space:nowrap; }
+
+/* 项目列不折行：「靶仓」被拆成「靶／仓」两行时，读起来像两个不同的词。
+   列变多之后表格挤，宁可让标题列吸收换行——那里折行不会改变语义。 */
+td:nth-child(5), th:nth-child(5) { white-space:nowrap; }
+/* ===== 项目页与胶囊（协-009）=====
+   原先顶栏是个 <select>。下拉把「我在哪个项目上干活」降格成一个筛选控件，
+   而它其实是整个界面的语境。改成：胶囊显示当前在哪，点它进项目页重选。 */
+.项目钮 { height:30px; padding:0 14px; border-radius:15px; font-size:12.5px; font-weight:600;
+  background:var(--accenttint); color:var(--accent-ink); border:1px solid transparent;
+  white-space:nowrap; max-width:220px; overflow:hidden; text-overflow:ellipsis;
+  transition:border-color 150ms var(--ease-out), background 150ms var(--ease-out); }
+.项目钮:hover { border-color:var(--accent); }
+.项目钮.全 { background:var(--chip); color:var(--ink2); }
+/* 项目不可用时胶囊就该看出来，不能等人点进去建单才发现 */
+.项目钮.坏 { background:var(--dangerbg); color:var(--danger); }
+
+.项目栅 { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:14px; margin-top:14px; }
+.项目卡 { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 18px;
+  box-shadow:var(--shadow-sm); cursor:pointer;
+  transition:transform 150ms var(--ease-out), border-color 150ms var(--ease-out), box-shadow 150ms var(--ease-out); }
+.项目卡:hover { transform:translateY(-2px); border-color:var(--ink3); box-shadow:var(--shadow-md); }
+.项目卡:active { transform:translateY(0); }
+.项目卡:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.项目卡.在 { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset, var(--shadow-sm); }
+.项目卡.坏 { border-color:var(--danger); }
+.项目卡 .卡头 { display:flex; align-items:center; gap:8px; font-size:15px; flex-wrap:wrap; }
+.项目卡 .卡路 { font-size:10.5px; color:var(--ink3); margin-top:5px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.项目卡 .卡注 { font-size:11.5px; color:var(--ink2); margin-top:7px; line-height:1.55; }
+.项目卡 .卡数 { display:flex; gap:18px; margin-top:14px; }
+.项目卡 .卡计 { font-size:11px; color:var(--ink3); display:flex; flex-direction:column; gap:1px; }
+.项目卡 .卡计 i { font-style:normal; font-family:var(--mono); font-size:17px; font-weight:600; color:var(--ink); }
+/* 零值灰显：一排都是 0 的时候，不该每个 0 都像有内容 */
+.项目卡 .卡计 i.零 { color:var(--ink3); font-weight:400; }
+.项目卡.加 { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+  border-style:dashed; color:var(--ink3); text-align:center; }
+.项目卡.加 .加号 { font-size:22px; line-height:1; }
+.项目卡.加 .卡注 { margin-top:2px; }
+
+/* ===== 设置页 ===== */
+.面包屑 { display:flex; align-items:center; gap:8px; margin:22px 0 4px; font-size:13.5px; }
+.面包屑 .分 { color:var(--ink3); }
+.返回 { width:28px; height:28px; border-radius:14px; padding:0; flex:0 0 auto;
+  background:var(--card); border:1px solid var(--line); color:var(--ink2); font-size:15px; }
+.返回:hover { border-color:var(--ink3); color:var(--ink); }
