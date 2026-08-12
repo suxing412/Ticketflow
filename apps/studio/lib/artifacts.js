@@ -1,20 +1,57 @@
 // artifacts.js — 回执产出定位（验收动线：点进工单三秒看到产出在哪）
 // 优先吃结构化「## 产出」章节（通用章程 v1.1：策划/美术必写、装配一条入口、程序/QA 免写）；
 // 无该章节走 fallback 正则抓路径（旧回执如 TK-24 不用重跑）。
+//
+// 施工令-051（案源 TK-160/TK-156 满屏假红）：判据从「含斜杠」收紧到「像仓内文件」。
+// 旧判据只问一句「有没有 /」，于是 Unity 菜单路径 `Tools/TK/汉代地图/手修编辑器`、
+// 度量串 `2.21/2.46 km`、`0.00/0.00 km` 全被当成交付文件拿去磁盘找，找不到就扣红「缺失」——
+// 假红一多，真缺失反而没人信。新判据：含目录分隔 **且** 带扩展名，或磁盘实测存在。
 const fs = require('fs');
 const path = require('path');
 
 // 像"项目内文件路径"的 token：含 / 且带扩展名；排除 URL 与盘符绝对路径（产出必须相对项目仓）
 // 裸路径段不含空格（带空格的路径走反引号通道）；避免把前置中文动词吞进 token
 const PATH_RE = /(?<![:\w/.])([\w一-鿿][\w一-鿿.\-]*(?:\/[\w一-鿿][\w一-鿿.\-]*)+\.\w{1,6})(?![\w/])/g;
-const looksLikePath = (s) => /\//.test(s) && !/^[a-zA-Z]+:\/\//.test(s) && !/^[a-zA-Z]:[\\/]/.test(s);
 
-function extract(receiptRaw) {
+// 扩展名须以字母打头：挡住 `Docs/方案v1.2`、`进度/3.7` 这类拿版本号/小数冒充扩展名的串
+const EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,5}$/;
+const URL_RE = /^[a-zA-Z][\w+.-]*:\/\//;
+const DRIVE_RE = /^[a-zA-Z]:[\\/]/;
+// 数字/单位串：回执正文里的度量天然带斜杠（「2.21/2.46 km」＝实测/目标），最像路径也最不是路径
+const UNIT = '(?:km|m|cm|mm|kg|ms|s|h|min|%|MB|KB|GB|TB|fps|px|万|次|秒|分|分钟|小时|个|倍|条|张|轮)';
+const NUM_RE = new RegExp(`^\\d+(?:[.,]\\d+)?(?:\\s*[/／]\\s*\\d+(?:[.,]\\d+)?)*\\s*${UNIT}?$`, 'i');
+// 编辑器菜单路径：说的是「从哪打开」，不是「交了什么」。带扩展名的（Assets/Create/x.asset）不在此列
+const MENU_RE = /^(?:Tools|SLG|Window|GameObject|Component|Assets\/Create|Edit|Help)\//;
+
+// 路径解析 + 越界防护（同 stylelib 铁律：越出项目仓 → null）
+function resolveIn(root, rel) {
+  if (!root || !rel) return null;
+  const abs = path.resolve(root, rel);
+  const r = path.resolve(root);
+  if (abs !== r && !abs.startsWith(r + path.sep)) return null;
+  return abs;
+}
+
+// 候选串够不够格当产出物。projRoot 可缺省（纯解析场景）——缺省时只剩「带扩展名」这一条路
+function isArtifactPath(s, projRoot) {
+  const k = String(s == null ? '' : s).trim().replace(/\\/g, '/');
+  if (!k || !k.includes('/')) return false;
+  if (URL_RE.test(k) || DRIVE_RE.test(k)) return false;
+  if (NUM_RE.test(k)) return false;
+  if (MENU_RE.test(k) && !EXT_RE.test(k)) return false;
+  if (EXT_RE.test(k)) return true;
+  // 无扩展名：只有磁盘实测存在才认（LICENSE、Dockerfile、无后缀脚本这类真交付物）
+  const abs = resolveIn(projRoot, k);
+  if (!abs) return false;
+  try { fs.statSync(abs); return true; } catch { return false; }
+}
+
+function extract(receiptRaw, projRoot) {
   if (!receiptRaw) return { 来源: null, 路径: [] };
   const secs = receiptRaw.split(/^## /m);
   const out = [];
   const seen = new Set();
-  const add = (p) => { const k = p.trim().replace(/\\/g, '/'); if (k && looksLikePath(k) && !seen.has(k)) { seen.add(k); out.push(k); } };
+  const add = (p) => { const k = p.trim().replace(/\\/g, '/'); if (k && isArtifactPath(k, projRoot) && !seen.has(k)) { seen.add(k); out.push(k); } };
   // 结构化：## 产出 章节逐行（去列表符/反引号/行尾注释）
   const sec = secs.find((s) => s.split('\n')[0].trim() === '产出');
   if (sec) {
@@ -30,18 +67,9 @@ function extract(receiptRaw) {
   return { 来源: out.length ? 'fallback' : null, 路径: out.slice(0, 20) };
 }
 
-// 路径解析 + 越界防护（同 stylelib 铁律：越出项目仓 → null）
-function resolveIn(root, rel) {
-  if (!root || !rel) return null;
-  const abs = path.resolve(root, rel);
-  const r = path.resolve(root);
-  if (abs !== r && !abs.startsWith(r + path.sep)) return null;
-  return abs;
-}
-
 // 详情页数据：抽取 + 落盘核验
 function locate(receiptRaw, projRoot) {
-  const { 来源, 路径 } = extract(receiptRaw);
+  const { 来源, 路径 } = extract(receiptRaw, projRoot);
   return { 来源, 产出: 路径.map((p) => {
     const abs = resolveIn(projRoot, p);
     let 大小 = null;
@@ -50,4 +78,4 @@ function locate(receiptRaw, projRoot) {
   }) };
 }
 
-module.exports = { extract, resolveIn, locate };
+module.exports = { extract, resolveIn, locate, isArtifactPath };

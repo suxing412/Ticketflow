@@ -1861,6 +1861,28 @@ function escalReason(fm, lines, id) {
 }
 // @testable-end escalReason
 
+// @testable-begin artifactsPanel
+// 产出速览（施工令-051）：解析出真路径才列表；一条都没有时给中性占位，绝不出红「缺失」。
+// 案源 TK-160：菜单路径与「2.21/2.46 km」被当交付文件去磁盘找，满屏假红把真缺失淹了——
+// 红色是「回执声称交了、仓里却没有」的专用信号，声称本身不成立时它没有资格出现。
+function artifactsPanel(id, 产出) {
+  if (!产出) return '';                                  // 无回执 / 无所属项目：整块不出
+  const 行 = 产出.产出 || [];
+  const 头 = '<div class="p8main card r16"><b style="font-size:13px">产出速览</b>';
+  if (!行.length) {
+    return `${头}<span class="subnote" style="margin-left:8px">无产出物声明 · 回执未写明仓内文件路径</span></div>`;
+  }
+  return `${头}
+        <span class="subnote" style="margin-left:8px">${产出.来源 === '结构化' ? '回执产出章节' : '从回执正文解析'} · 点击调起本机查看</span>
+        ${行.map((a) => `<div class="prow" style="margin-top:8px">
+          <span class="pv mono" style="flex:1" title="${esc(a.路径)}">${esc(a.路径)}</span>
+          ${a.存在 ? `<span class="pill sm ok">${a.大小 > 1048576 ? (a.大小 / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(a.大小 / 1024)) + ' KB'}</span>
+            <button class="btn h32" style="height:26px;padding:0 12px;font-size:11px" onclick="openArt('${esc(id)}','${esc(a.路径)}','文件')">打开</button>
+            <button class="btn h32" style="height:26px;padding:0 10px;font-size:11px" onclick="openArt('${esc(id)}','${esc(a.路径)}','文件夹')">文件夹</button>`
+    : '<span class="pill sm red" title="回执声称的产出在项目仓找不到">缺失</span>'}</div>`).join('')}</div>`;
+}
+// @testable-end artifactsPanel
+
 async function viewDetail(id) {
   const d = await api('/api/ticket?id=' + encodeURIComponent(id));
   if (d.error) return `<p class="err" style="margin-top:30px">${esc(d.error)}</p>`;
@@ -2050,14 +2072,7 @@ async function viewDetail(id) {
           ${chainRow('依赖', (c.依赖 || []).map((x) => `${esc(x.id)}(${esc(x.state)})`).join('、'), 'okc')}</div></div>
       ${kidsTable}
       ${escalHtml}
-      ${d.产出 && d.产出.产出.length ? `<div class="p8main card r16"><b style="font-size:13px">产出速览</b>
-        <span class="subnote" style="margin-left:8px">${d.产出.来源 === '结构化' ? '回执产出章节' : '从回执正文解析'} · 点击调起本机查看</span>
-        ${d.产出.产出.map((a) => `<div class="prow" style="margin-top:8px">
-          <span class="pv mono" style="flex:1" title="${esc(a.路径)}">${esc(a.路径)}</span>
-          ${a.存在 ? `<span class="pill sm ok">${a.大小 > 1048576 ? (a.大小 / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(a.大小 / 1024)) + ' KB'}</span>
-            <button class="btn h32" style="height:26px;padding:0 12px;font-size:11px" onclick="openArt('${esc(id)}','${esc(a.路径)}','文件')">打开</button>
-            <button class="btn h32" style="height:26px;padding:0 10px;font-size:11px" onclick="openArt('${esc(id)}','${esc(a.路径)}','文件夹')">文件夹</button>`
-    : '<span class="pill sm red" title="回执声称的产出在项目仓找不到">缺失</span>'}</div>`).join('')}</div>` : ''}
+      ${artifactsPanel(id, d.产出)}
       <div class="p8main card r16"><b style="font-size:13px">正文</b><div class="doc2">${d.html || '<p class="dim">无正文</p>'}</div></div>
     </div><div>
       <div class="rside card r16"><h3>回执 · 完工报告</h3>${rsecs || '<p class="dim" style="margin-top:10px">尚无回执（完工后生成）</p>'}</div>
