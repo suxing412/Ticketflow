@@ -13,7 +13,7 @@
 //   orchestration/plan                                              纯计算那半已接（store 改注入）
 //   workspace/worktree   引 child_process，**不进本文件的依赖闭包**——它住独立进程
 //                        scripts/工作区服务.js，本文件只用 http 转发过去。
-//   执行加固/派单/调度/巡检/质检/输出提取/编排提示   同理**隔离**进 scripts/执行器.js。它们自身是纯计算，
+//   执行加固/派单/调度/巡检/质检/输出提取/编排提示/提示装配   同理**隔离**进 scripts/执行器.js。它们自身是纯计算，
 //                        但只服务于「拉起 AI CLI」那条链，跟着能力走比跟着纯度走更清楚：
 //                        谁要用它们，谁就得先有那个能力面。本文件只转发 /api/exec/*。
 // 全部台账见 docs/接线说明.md 第四、六、八节。
@@ -45,6 +45,7 @@ const 门禁 = require('./lib/门禁');
 // 但它让本进程有了往仓外写文件的能力，三条约束见 lib/工单库.js 头部。
 const 工单库 = require('./lib/工单库');
 const 自检 = require('./lib/自检');
+const 工单模板 = require('./lib/工单模板');
 const 工单根 = 工单库.解析根目录(仓根);
 
 // ——————————————————————————————————————————————————————————
@@ -348,9 +349,27 @@ const 服务 = http.createServer((req, res) => {
         if (!体 || !体.id) return 发JSON(res, 400, { ok: false, error: '需要 JSON 体 { "id": "<编号>", "fm"?: {}, "正文"?: "" }' });
         try {
           const r = 工单库.create(根, String(体.id), 体.fm || {}, 体.正文 || '');
-          return 发JSON(res, r.ok ? 201 : 400, r.ok ? { ok: true, ...r } : { ok: false, error: r.error });
+          if (!r.ok) return 发JSON(res, 400, { ok: false, error: r.error });
+          // 验收标准体检：**只提醒不拦**。标准是人对「做对了」的定义，
+          // 机器无权替人改写，也不该因为写得不够好就拒绝建单——
+          // 但把毛病说出来，比等它跑三轮判不过再由巡检报「反复回炉」便宜得多。
+          const 检 = 工单模板.体检(体.正文 || '');
+          return 发JSON(res, 201, {
+            ok: true, ...r,
+            验收标准: { 条数: 检.条数, ...(检.病.length ? { 体检: 检.病 } : {}) },
+            ...(检.病.length ? { 提醒: '验收标准有可改进处（已建单，不影响使用）。写不清的标准会让判官只能靠猜，最后表现为反复回炉。' } : {}),
+          });
         } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
       });
+    }
+
+    // 模板：按角色给出带**可验证验收标准**的骨架。
+    // 验收标准写不好 → 判官判不过 → 回炉重跑 → 再判不过，每轮都是真实付费。
+    // 与其等巡检报「反复回炉」，不如建单那一刻就把结构给对。
+    if (url路径 === '/api/tickets/template' && req.method === 'GET') {
+      const 角色 = 查询.get('role') || 查询.get('角色') || '';
+      const t = 工单模板.取(角色);
+      return 发JSON(res, 200, { ok: true, 角色, ...t });
     }
 
     const 迁移 = url路径.match(/^\/api\/tickets\/([^/]+)\/move$/);

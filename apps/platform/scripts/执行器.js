@@ -32,6 +32,7 @@ const 质检 = require(path.join(平台根, 'lib', '质检.js'));
 const 输出提取 = require(path.join(平台根, 'lib', '输出提取.js'));
 const 计划 = require(path.join(平台根, 'lib', 'orchestration', 'plan.js'));
 const 编排提示 = require(path.join(平台根, 'lib', '编排提示.js'));
+const 提示装配 = require(path.join(平台根, 'lib', '提示装配.js'));
 
 function 读JSON(p, 缺省) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return 缺省; }
@@ -421,7 +422,11 @@ const 服务 = http.createServer((req, res) => {
         // orchestrator 的输出契约由平台附加，不指望工单作者去背 plan.js 的字段名。
         // 首次真跑就栽在这上面：AI 输出 {"tickets":[...]}，拆解完全正确，
         // 只因顶层键不叫 tasks 就整份作废，白烧 88 秒。
-        const 拼 = 编排提示.拼提示(配置, 共同.角色, (体 && 体.提示词) || t.body || '');
+        // 先装配：工单正文 + 通用/角色协议 + 上一轮的回炉要求。
+        // 角色协议出厂就在库里，此前从没有人喂给过 AI；回炉要求让重做时
+        // 至少知道上次为什么没过——不然同一个坑会照踩不误，每踩一次都是真实付费。
+        const 装 = (体 && 体.提示词) ? { 提示: 体.提示词, 装配记录: { 来源: '请求体覆盖' } } : 提示装配.装配(平台根, t);
+        const 拼 = 编排提示.拼提示(配置, 共同.角色, 装.提示);
         拉起(调用, 拼.提示, 工作目录, async (r) => {
         const 判 = 加固.成败判定({ 退出码: r.退出码, 输出: r.输出 });
         记战绩({
@@ -496,6 +501,7 @@ const 服务 = http.createServer((req, res) => {
 
         return 发JSON(res, 200, {
           ...共同, 干跑: false, 成: 判.成,
+          装配: 装.装配记录,
           ...(计划预览 ? { 计划预览 } : {}),
           ...(判.成 ? {} : { 失败原因: 判.原因 }),
           耗时毫秒: r.耗时毫秒,
