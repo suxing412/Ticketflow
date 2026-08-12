@@ -65,6 +65,11 @@ async function 刷工单() {
       const 可派 = t.state === '待投';
       const 可判 = t.state === '质检';
       const 可投 = t.state === '草稿';
+      // 在途单原先一个操作都没有。于是巡检报「已在途 682 分钟，执行器可能已挂」之后，
+      // 人在界面上无事可做——只能去磁盘上手挪文件。**报了问题却不给解法**，
+      // 比不报还难受：你知道它坏了，还得自己想办法。
+      // 状态机本来就允许 在途 → 待投（退回重投），把它接出来即可。
+      const 可退 = t.state === '在途';
       const 层 = f.父单 ? '<span class="淡">└ </span>' : '';   // 子单缩进，DAG 一眼可辨
       return '<tr><td>' + 层 + '<a href="#" onclick="看单(\'' + 转义(t.id) + '\');return false"><code>' + 转义(t.id) + '</code></a></td>'
         + '<td><span class="态 ' + 转义(t.state) + '">' + 转义(t.state) + '</span></td>'
@@ -76,6 +81,7 @@ async function 刷工单() {
         + (可投 ? '<button class="btn" onclick="迁移(\'' + 转义(t.id) + '\',\'待投\')">投出</button> ' : '')
         + (可派 ? '<button class="btn" onclick="跑(\'' + 转义(t.id) + '\',true)">干跑</button> '
                 + '<button class="btn danger-o" onclick="跑(\'' + 转义(t.id) + '\',false)">真跑（花钱）</button>' : '')
+        + (可退 ? '<button class="btn" onclick="退回待投(\'' + 转义(t.id) + '\')">退回待投</button>' : '')
         + (可判 ? '<button class="btn" onclick="判(\'' + 转义(t.id) + '\',true)">试判</button> '
                 + '<button class="btn danger-o" onclick="判(\'' + 转义(t.id) + '\',false)">真判（花钱）</button>' : '')
         + '</td></tr>';
@@ -114,6 +120,21 @@ async function 看单(id) {
     行.push(j.正文 || '（空）');
     $('运行').textContent = 行.join('\n');
   } catch (e) { $('运行').textContent = '读取失败：' + e.message; }
+}
+
+// 把卡在途的单退回待投重跑。
+// 多问一句，因为这个动作有个隐蔽的坏情况：如果那个 CLI 其实**还活着**，
+// 退回之后再派一次，同一张单会有两个 agent 同时在改同一片代码。
+// 巡检说「可能已挂」是推断不是事实——它只能看见「很久没动静」。
+async function 退回待投(id) {
+  if (!confirm('把 ' + id + ' 退回待投，之后可以重新派活。\n\n'
+    + '先确认那次执行**真的已经停了**：巡检只能看见「很久没动静」，推断不出进程死没死。\n'
+    + '若它还活着，重派会让两个 agent 同时改同一片代码。\n\n确定退回？')) return;
+  const { 体: j } = await 取JSON('/api/tickets/' + encodeURIComponent(id) + '/move', {
+    method: 'POST', body: JSON.stringify({ 到: '待投' }),
+  });
+  if (!j.ok) { alert('退回失败：' + j.error); return; }
+  刷工单(); 刷调度();
 }
 
 async function 迁移(id, 到) {
@@ -278,10 +299,18 @@ async function 刷调度() {
       + '<b>不存在后台自动连跑</b>：这里只算该派谁，真派要逐张点，每张独立过真跑三闸。</div>';
 
     const 告 = j.告警 || [];
+    // 告警要**带着手段**。原先只有一段文字：巡检说「已在途 682 分钟，执行器可能已挂」，
+    // 人看完在界面上无事可做，只能去磁盘上手挪文件。
+    // 报了问题不给解法，比不报还难受——你知道它坏了，还得自己想办法。
+    // 只给「在途超时」配动作：其余告警（依赖缺失/预算冻结/反复回炉）的正解都是
+    // 去改单或改配置，硬塞一个按钮反而会引导人做错的事。
+    const 动作 = (a) => (a.类型 === '在途超时' && a.单
+      ? ' <button class="btn" onclick="退回待投(\'' + 转义(a.单) + '\')">退回待投</button>' : '');
     $('告警区').innerHTML = 告.length
       ? '<ul class="账本">' + 告.map((a) =>
         '<li><span class="' + (a.级别 === '急' ? '级急' : '级常') + '">' + 转义(a.级别) + '</span>'
-        + '<b>' + 转义(a.类型) + '</b>' + (a.单 ? ' <code>' + 转义(a.单) + '</code>' : '') + '　' + 转义(a.说明) + '</li>').join('') + '</ul>'
+        + '<b>' + 转义(a.类型) + '</b>' + (a.单 ? ' <code>' + 转义(a.单) + '</code>' : '') + '　' + 转义(a.说明)
+        + 动作(a) + '</li>').join('') + '</ul>'
       : '<div class="提示">巡检无告警</div>';
 
     const 跳 = j.跳过 || [];
