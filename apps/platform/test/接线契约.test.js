@@ -84,6 +84,39 @@ t('首页引用的静态资源必须真的存在（404 的 css 不会报错，�
   }
 });
 
+t('页面里用到的类名，样式表里必须真的定义过（类名对不上不会报错，只会看着不像能点）', () => {
+  // 2026-08-12 实测踩到：样式层是从 studio 抄的，它的 reset 把 button 剥光
+  // （background:none;border:none），再靠 class="btn" 补回外观。而本产品 index.html 里
+  // **7 个按钮一个都没写 btn**，动态生成的那批倒是写了。结果整页按钮渲染成纯文字：
+  // 能点，但看不出能点。token 一个没错，错在标记用的类和样式认的类不是一套。
+  //
+  // 抄样式最容易漏的就是这个，而它不产生任何错误信号——只能靠断言去对。
+  const 页 = fs.readFileSync(path.join(平台根, 'public', 'index.html'), 'utf8');
+  const 脚 = fs.readFileSync(path.join(平台根, 'public', 'app.js'), 'utf8');
+  const 样 = fs.readFileSync(path.join(平台根, 'public', 'style.css'), 'utf8');
+  const 用到 = new Set();
+  for (const 源 of [页, 脚]) {
+    for (const m of 源.matchAll(/class=\\?["']([^"'\\]+)/g)) {
+      for (const c of m[1].split(/\s+/)) if (c) 用到.add(c);
+    }
+  }
+  // 用边界匹配，不能用 includes：`.数` 会被样式表里的 `.数卡` 蒙混过关——
+  // 而 `.数` 其实只在 `.数卡` 后代选择器里生效，标记里根本没有 `.数卡`，等于没定义。
+  // 这个假阴性是当场撞见的，写在这里免得有人图省事再改回 includes。
+  const 缺 = [...用到].filter((c) => {
+    const 词 = new RegExp('\\.' + c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w一-龥-])');
+    return !词.test(样);
+  });
+  assert.deepEqual(缺, [], '这些类名在页面里用了，样式表里却没有——写了等于没写：\n  ' + 缺.join('\n  '));
+
+  // 反过来守一道：裸 <button> 必须也能长成按钮。
+  // 光查类名存在还不够——index.html 里写的就是裸 button，一个类都没有，
+  // 上面那条查不出来。这条盯的是「有没有人管没写类的按钮」。
+  assert.ok(/button:not\(\.gear\)|^button\s*\{[^}]*border\s*:\s*1px/m.test(样),
+    '样式表把 button 给 reset 了，却没有任何规则让裸 <button> 恢复成按钮外观。'
+    + `index.html 里现在有 ${(页.match(/<button(?![^>]*class=)/g) || []).length} 个裸 button，它们会渲染成纯文字。`);
+});
+
 t('每条转发路径都必须转发请求体（少一个 pipe 就静默丢 body）', () => {
   // 2026-08-10 实测踩到：/api/workspace/* 那条写的是裸 代理.end()，**请求体被整个丢掉**，
   // 于是经 server 调任何 /write/* 都收到空 body，报「项目(空)不在注册表里」。

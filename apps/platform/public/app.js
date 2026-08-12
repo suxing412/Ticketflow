@@ -14,15 +14,43 @@ async function 刷健康() {
   } catch { $('健康行').innerHTML = '<span class="级急">服务不可达</span>'; }
 }
 
+// 第一次打开的那一步：把人填的目录落成配置。
+// 服务端配完当场生效（server.js 里 工单根 是 let），所以这里刷一下就能看到空看板。
+async function 落位工单库() {
+  const 值 = ($('工单根输入').value || '').trim();
+  const 回 = $('落位回执');
+  回.textContent = '正在建目录…';
+  try {
+    const { 码, 体: j } = await 取JSON('/api/setup/tickets', { method: 'POST', body: JSON.stringify({ 根目录: 值 }) });
+    if (码 !== 200 || !j.ok) { 回.innerHTML = '<span class="级急">没配上</span> ' + 转义(j.error || ('HTTP ' + 码)); return; }
+    // 警告要显示得比成功更醒目：配了却不生效（被环境变量盖住）是最难自查的一种情况，
+    // 它长得跟成功一模一样，人会以为配好了然后对着空看板发懵。
+    回.innerHTML = j.警告
+      ? '<span class="级急">配是写进去了，但不会生效</span> ' + 转义(j.警告)
+      : '已落位：' + 转义(j.根目录) + (j.换根 ? '（原来是 ' + 转义(j.旧根 || '') + '）' : '');
+    if (!j.警告) setTimeout(() => { 刷工单(); 刷自检(); }, 300);
+  } catch (e) { 回.innerHTML = '<span class="级急">没配上</span> ' + 转义(e.message); }
+}
+
 // ── 工单看板 ──
 async function 刷工单() {
   const 滤 = $('滤状态').value;
   try {
     const { 码, 体: j } = await 取JSON('/api/tickets' + (滤 ? '?state=' + encodeURIComponent(滤) : ''));
     if (码 === 503) {
-      // 未配工单库根是<b>最常见的首次使用障碍</b>，直接把修法摆在界面上，
-      // 而不是让人去翻日志或文档。
-      $('工单体').innerHTML = '<tr><td colspan="7"><span class="级急">工单库未配置</span><div class="提示">' + 转义(j.error) + '</div></td></tr>';
+      // 未配工单库根是**最常见的首次使用障碍**——第一次打开必撞。
+      // 光把修法印出来还是个死胡同：人得去开编辑器、手搓一份 JSON、再重启服务。
+      // 这里直接给一个输入框当场配掉。产品仍然不猜路径，只是不再让人翻文档。
+      $('工单体').innerHTML =
+        '<tr><td colspan="7">'
+        + '<div><span class="级急">工单库还没配</span> —— 工单是业务数据，得放你自己的私仓，本产品不替你选位置。</div>'
+        + '<div class="设置行"><input id="工单根输入" placeholder="D:\\你的私仓\\工单" spellcheck="false">'
+        + '<button id="工单根落位">就用这个目录</button></div>'
+        + '<div class="提示" id="落位回执">填绝对路径。目录不存在会替你建好（草稿/待投/在途/质检/完成 五个子目录）。</div>'
+        + '<details class="提示"><summary>或者用配置文件/环境变量</summary><pre>' + 转义(j.error) + '</pre></details>'
+        + '</td></tr>';
+      $('工单根落位').onclick = 落位工单库;
+      $('工单根输入').onkeydown = (e) => { if (e.key === 'Enter') 落位工单库(); };
       $('工单来源').textContent = '';
       return;
     }

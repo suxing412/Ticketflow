@@ -80,6 +80,11 @@ body::after { content:''; position:fixed; inset:0; pointer-events:none; z-index:
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
 .mono, code { font-family:var(--mono); }
 button { font:inherit; cursor:pointer; background:none; border:none; padding:0; color:inherit; }
+/* ⚠ 上面这行是从 studio 抄来的 reset：它把按钮剥光，靠 .btn 类补回来。
+   而本产品的 index.html 里 7 个按钮**一个都没写 class="btn"**（app.js 动态生成的那批写了）。
+   结果整页按钮渲染成纯文字，能点但看不出能点——截图上「刷新」「+ 新建工单」全是黑字。
+   抄样式最容易漏的就是这种：token 没错，是标记用的类对不上。
+   与其去每个标签补 class，不如让裸 button 默认就长成 .btn——见下方选择器。 */
 input, select, textarea { font:inherit; color:var(--ink); background:var(--inbg);
   border:1px solid var(--line); border-radius:9px; padding:7px 12px; }
 input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outline-offset:1px; }
@@ -111,16 +116,20 @@ h2 .右 { margin-left:auto; font-weight:400; font-size:12px; }
 .pill.red { background:var(--dangerbg); color:var(--danger); }
 .pill.warn { background:var(--warnbg); color:var(--warn); }
 .pill.mut { background:var(--chip); color:var(--ink3); }
-.btn { display:inline-flex; align-items:center; justify-content:center; height:32px; padding:0 16px;
+/* .gear 有自己一整套（圆形图标钮），排除掉；其余按钮无论写没写 class 都长这样。 */
+.btn, button:not(.gear) {
+  display:inline-flex; align-items:center; justify-content:center; height:32px; padding:0 16px;
   border-radius:16px; font-size:12.5px; font-weight:500; background:var(--card);
   border:1px solid var(--line); color:var(--ink2); white-space:nowrap;
   transition:color 150ms var(--ease-out), border-color 150ms var(--ease-out),
     background 150ms var(--ease-out), transform 120ms var(--ease-out), box-shadow 150ms var(--ease-out); }
-.btn:hover { border-color:var(--ink3); color:var(--ink); }
-.btn:active { transform:scale(.97); }
-.btn.accent { background:var(--accent); color:var(--on-accent); border-color:var(--accent);
+.btn:hover, button:not(.gear):hover { border-color:var(--ink3); color:var(--ink); }
+.btn:active, button:not(.gear):active { transform:scale(.97); }
+/* 主行动钮：index.html 里写的是 class="主"（建单），CSS 只认过 .accent——
+   又一处「类名对不上」，一并接上。 */
+.btn.accent, button.主 { background:var(--accent); color:var(--on-accent); border-color:var(--accent);
   box-shadow:0 4px 12px var(--accent-glow); }
-.btn.accent:hover { opacity:.88; color:var(--on-accent); }
+.btn.accent:hover, button.主:hover { opacity:.88; color:var(--on-accent); }
 /* 会花钱的按钮：描边红。实心红留给「已经出事」，不给「即将花钱」——
    两者语义不同，用同一个视觉会让人对红色脱敏。 */
 .btn.danger-o { color:var(--danger); border-color:var(--danger); }
@@ -199,3 +208,24 @@ td:last-child { white-space:nowrap; }
 td:first-child { white-space:nowrap; }
 /* 行高收紧一档：默认 1.55 在密集表格里显得空 */
 table td { line-height:1.4; }
+
+/* 首次使用的落位输入行：路径可能很长，输入框吃掉剩余宽度，按钮不被挤扁 */
+.设置行 { display:flex; gap:8px; align-items:center; margin:10px 0 4px; max-width:640px; }
+.设置行 input { flex:1 1 auto; min-width:0; font-family:var(--mono); font-size:12.5px; }
+.设置行 button { flex:0 0 auto; }
+/* 折叠里的原始修法：等宽 + 自动折行，Windows 路径里的反斜杠不该撑破卡片 */
+details.提示 summary { cursor:pointer; }
+details.提示 pre { white-space:pre-wrap; word-break:break-all; font-family:var(--mono);
+  font-size:11.5px; background:var(--bg2); padding:8px; border-radius:6px; margin-top:6px; }
+
+/* ===== 标记实际在用的中文类 =====
+   这几个是 2026-08-12 换样式表时漏掉的：样式表抄自 studio，用的是
+   `.数卡 > .card / .数 / .标` 那一套；而 index.html 用的是 `.栏 > .卡 > .淡 + .数`。
+   两代标记撞在一起，结果是统计卡整块没有样式——而且不报任何错，只是看着「有点空」。
+   以标记为准补齐：改 CSS 一处，比改两个文件里 15 处 class 稳妥。 */
+.卡 { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  box-shadow:var(--shadow-sm); padding:10px 16px; min-width:96px; }
+.淡 { font-size:11.5px; color:var(--ink3); }
+.卡 .数 { font-size:22px; font-weight:700; line-height:1.2; font-family:var(--mono); color:var(--ink); }
+/* 表格里的 .淡 是「读取中…」「还没有工单」这类占位文案，不该被压到 11.5px */
+td.淡, td .淡 { font-size:12.5px; }
