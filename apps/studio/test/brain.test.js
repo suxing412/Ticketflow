@@ -108,6 +108,43 @@ t('切单提示词带校准步：纪律条目 + 校准表 + 输出契约里的�
   assert.ok(/无历史可校/.test(空) && /不得自由拍值/.test(空));
 });
 
+/* ===================== 拒切候期出口（施工令-054 · TK-146 案）=====================
+ * 解析层这半边只回答一个问题：这坨没有 ticket 块的输出，是「模型判现在不该切」还是「模型跑飞了」。
+ * 认块不认话——散文里飘一句「建议候期」不算数，否则一句吐槽就能把真·坏输出洗成合法出口。 */
+t('parse拒切：verdict 块 → 理由/复切时机/判语全文都拿得到', () => {
+  const { parse拒切 } = require('../lib/pm/brain');
+  const 出 = '前置盘点如下……\n\n```verdict\n拒切: 候期\n理由: 承重方案 TK-200 未落袋\n复切时机: TK-200 落袋并定案后\n```\n\n'
+    + '## 拒切判语\n硬切出来的实现单必因接口变动整批返修。';
+  const r = parse拒切(出);
+  assert.ok(r && r.候期 === true, '认出候期结论');
+  assert.equal(r.理由, '承重方案 TK-200 未落袋');
+  assert.equal(r.复切时机, 'TK-200 落袋并定案后');
+  assert.ok(/^## 拒切判语/.test(r.判语) && /整批返修/.test(r.判语), '判语取整段');
+  // 中文冒号也认（模型手滑的高频面）；判语段缺失则退回整篇输出——判语宁可宽，不可空
+  const r2 = parse拒切('```verdict\n拒切：候期\n理由：需求含糊\n```\n尾巴一句话');
+  assert.ok(r2 && r2.理由 === '需求含糊', '全角冒号同样解析');
+  assert.ok(/尾巴一句话/.test(r2.判语), '无「## 拒切判语」段时退回整篇，不留空判语');
+});
+
+t('parse拒切：无块 / 只有散文喊候期 / 块里不是拒切 → 一律 null（真失败仍是真失败）', () => {
+  const { parse拒切 } = require('../lib/pm/brain');
+  assert.equal(parse拒切(''), null, '空输出不是候期');
+  assert.equal(parse拒切('我觉得这单应该候期，建议等等再切。'), null, '散文喊候期不认——认块不认话');
+  assert.equal(parse拒切('```verdict\n拒切: 否\n理由: 能切\n```'), null, '块在但结论不是候期');
+  assert.equal(parse拒切(块(基本, '## 范围\n照切')), null, 'ticket 块不是 verdict 块');
+});
+
+t('切单提示词带拒切出口：合法结论声明 + verdict 契约字段 + 真失败边界', () => {
+  const { buildCutPrompt } = require('../lib/pm/brain');
+  const root = makeRoot();
+  const p = buildCutPrompt(root, {}, { id: 'TK-S9', fm: { 项目: 'SLG' }, body: '造地图' }, '');
+  assert.ok(/拒切候期出口（合法结论 · 施工令-054）/.test(p), '出口段在——不写等于不许拒切');
+  assert.ok(/```verdict[\s\S]*拒切: 候期[\s\S]*理由:[\s\S]*复切时机:/.test(p), '机器可读契约三行齐');
+  assert.ok(/## 拒切判语/.test(p), '判语段要求在');
+  assert.ok(/不记切单失败/.test(p) && /才判切单失败/.test(p), '两侧边界都写明：候期不记失败、空输出才是失败');
+  assert.ok(/=== 拍板父单 ===[\s\S]*造地图/.test(p), '父单正文仍在最后，出口段没挤掉它');
+});
+
 t('起草提示词带校准步（buildDraftPrompt 抽成纯函数才断言得了）', () => {
   const { buildDraftPrompt } = require('../lib/pm/brain');
   const 表 = estimate.校准表({ 时间: [], token: [] });

@@ -17,16 +17,48 @@ function childrenOf(root, parentId) {
   return out;
 }
 
+// 切单结果落账（施工令-054 · TK-146 案）：切单有**三个**出口，不是两个。
+//   切成 → 子单已建，简报待审（brain.cut 里已落 待审 事件）
+//   拒切候期 → 模型判「现在不该切」（承重方案未落袋/前置在途/需求含糊）。这是判断力的产出：
+//              记「切单候期」事件存判语全文、父单原位不动等复切，**不记失败**——TK-146 就是
+//              判语被当坏输出吞了，父单纪律明写候期而机器记了一笔失败，还没人看得到理由。
+//   真失败 → 空输出/格式坏到既无 ticket 块又无判语块，照旧记「切单失败」。
+// 抽成导出函数而非留在回调里：三分支的落账口径必须能单测，而回调在 opts.test 下根本不跑。
+// 两条调用链（定稿自动唤醒 / server.js 手工切单 API）共用这一份，免得出口在一边合法在另一边失败。
+function onCutResult(root, parentId, r = {}) {
+  if (r.ok) {
+    journal.append(root, `项管切单完成：${parentId} → ${(r.子单 || []).join('、')}（简报待审）`);
+    return { 出口: '切成' };
+  }
+  if (r.候期) {
+    const 理由 = String(r.理由 || '').trim();
+    const 时机 = String(r.复切时机 || '').trim();
+    ledger.event(root, '切单候期', { 父单: parentId, 理由, 复切时机: 时机, 判语: r.判语 || '' });
+    journal.append(root, `项管拒切候期：${parentId}——${理由 || '未述理由'}；建议复切时机：${时机 || '未述'}（父单原位不动，等条件齐了复切）`);
+    // 存档不等于呈报：判语落了台账还得让制作人看见，否则等于换个地方吞（TK-146 的下半截病）。
+    // relay 单条硬顶 4000 字且超限是**静默拒收**（返 ok:false 不抛），所以这里先自剪——
+    // 宁可信道上是节选（全文在台账事件里），也不要整条呈报凭空消失。
+    try {
+      const 头 = `拒切候期：${parentId}（父单原位不动，未记失败）\n\n理由：${理由 || '（未述）'}\n建议复切时机：${时机 || '（未述）'}\n\n`;
+      const 余 = 3900 - 头.length;
+      const 正 = String(r.判语 || '（无判语正文）');
+      require('../relay').append(root, '项管', 头 + (正.length > 余 ? 正.slice(0, 余) + '…（判语全文见台账事件「切单候期」）' : 正));
+    } catch { /* 信道失败不阻塞落账 */ }
+    return { 出口: '候期', 理由, 复切时机: 时机 };
+  }
+  const err = r.error || '未知错误';
+  journal.append(root, `项管切单失败：${parentId}（${err}）`);
+  ledger.event(root, '切单失败', { 父单: parentId, error: err });
+  return { 出口: '失败', error: err };
+}
+
 // ① 战役父单定稿 → 自动切单（拍板的下半步）
 function onCampaignFinalized(root, cfg, t, projPath, opts = {}) {
   if (!isCampaign(t)) return { woke: false };
   ledger.event(root, '切单启动', { 父单: t.id, 触发: '定稿自动' });
   journal.append(root, `项管唤醒：${t.id} 专项定稿 → 自动切单（fable）`);
   if (!opts.test) {
-    require('./brain').cut(root, cfg, t.id, projPath, (r) => {
-      journal.append(root, r.ok ? `项管切单完成：${t.id} → ${r.子单.join('、')}（简报待审）` : `项管切单失败：${t.id}（${r.error}）`);
-      if (!r.ok) ledger.event(root, '切单失败', { 父单: t.id, error: r.error });
-    });
+    require('./brain').cut(root, cfg, t.id, projPath, (r) => onCutResult(root, t.id, r));
   }
   return { woke: true };
 }
@@ -140,4 +172,4 @@ function 台账对齐拍(root, opts = {}) {
   }
 }
 
-module.exports = { onCampaignFinalized, onChildDispatched, checkCloseouts, checkChainFailures, isCampaign, childrenOf, 池衡巡检, 台账对齐拍 };
+module.exports = { onCampaignFinalized, onCutResult, onChildDispatched, checkCloseouts, checkChainFailures, isCampaign, childrenOf, 池衡巡检, 台账对齐拍 };

@@ -166,6 +166,21 @@ function buildCutPrompt(root, cfg, parent, projPath, 校准块) {
     '全部子单之后，输出「## 拆单简报」：切法理由、依赖图、红链、预计总耗时与总 token，'
       + '外加「估时校准引用」一段（逐张写 基准估值 × 引用的系数格 = 最终估值；无样本就写「无样本，未校准」）。',
     '',
+    // 施工令-054（TK-146 案）：拒切是合法结论，不是故障。此前只要没有 ticket 块就一律记「切单失败」，
+    // 连带把「为什么现在不能切」的判语一起吞掉——父单纪律明写候期时，机器仍按坏输出处理。
+    '=== 拒切候期出口（合法结论 · 施工令-054）===',
+    '父单**确实不具备切单条件**时（承重方案未落袋、前置依赖还在途、需求含糊到切出来必返工、父单正文自身写明候期），',
+    '既不许硬切凑数，也不许空手交白卷——输出下面这个块作为结论，一个块即是完整判断：',
+    '```verdict',
+    '拒切: 候期',
+    '理由: <为什么现在不能切：指名缺的到底是什么（单号／文件／悬着未定的取舍）>',
+    '复切时机: <什么条件达成即可复切，写成可判定的条件，不写「等等看」>',
+    '```',
+    '块之后另起「## 拒切判语」一段写完整论证：缺的前置、硬切会烂在哪、候期期间建议先做什么。',
+    '机器侧待遇：记台账事件「切单候期」并存判语全文、父单原位不动等复切，**不记切单失败**。',
+    '反过来——空输出、或格式坏到既无 ticket 块又无本块——才判切单失败。',
+    '别拿本块当超时/跑飞的挡箭牌：判语会存档并呈制作人复读，理由立不住比切错更难看。',
+    '',
     '=== 拍板父单 ===',
     parent.body || '',
     '',
@@ -189,6 +204,26 @@ function parseTickets(text) {
   }
   const brief = (text.match(/## 拆单简报[\s\S]*$/) || [''])[0].trim();
   return { tickets: out, brief };
+}
+
+// 解析「拒切候期」结论（施工令-054 · TK-146 案）。切单三出口里最难判的一态：
+// **无子单块未必是失败**——模型可能是在说「现在不该切」，那是判断力的产出，不是故障。
+// 认块不认话：必须是 verdict 块里明写「拒切: 候期」才算数，散文里飘一句「建议候期」不认——
+// 否则一句吐槽就能把真·坏输出洗成合法出口，机器从此分不出模型跑飞和模型拒切。
+const 判语上限 = 4000; // 台账是单个 JSON 文件，判语不设限会把它撑成负担；4000 字装得下完整论证
+function parse拒切(text) {
+  const s = String(text || '');
+  const m = s.match(/```verdict\s*\n([\s\S]*?)```/);
+  if (!m) return null;
+  const head = m[1];
+  if (!/^\s*拒切\s*[:：]\s*候期/m.test(head)) return null;
+  const pick = (k) => {
+    const mm = head.match(new RegExp('^\\s*' + k + '\\s*[:：]\\s*(.*)$', 'm'));
+    return mm ? mm[1].trim() : '';
+  };
+  // 判语取「## 拒切判语」整段；模型没另起段落就退回整篇输出——判语宁可宽，不可空（TK-146 就是空的）
+  const seg = (s.match(/## 拒切判语[\s\S]*$/) || [''])[0].trim();
+  return { 候期: true, 理由: pick('理由'), 复切时机: pick('复切时机'), 判语: (seg || s.trim()).slice(0, 判语上限) };
 }
 
 // 子单 frontmatter 白名单：ticket 块解析出来的字段，只有列在这里的才落得到盘。
@@ -248,7 +283,13 @@ function cut(root, cfg, parentId, projPath, cb) {
     billFee(root, '切单', out);
     const text = require('../runner').extractClaudeText(out);
     const { tickets, brief } = parseTickets(text);
-    if (!tickets.length) return cb({ ok: false, error: '切单输出无子单块', raw: text.slice(0, 500) });
+    if (!tickets.length) {
+      // 施工令-054：无子单块先问一句「是不是拒切」——是则走候期出口（判语存档、父单原位不动），
+      // 判不出才是真失败。顺序不能反：先记失败再补判语，等于 TK-146 再演一遍。
+      const 拒 = parse拒切(text);
+      if (拒) return cb({ ok: false, error: '拒切候期', ...拒 });
+      return cb({ ok: false, error: '切单输出无子单块', raw: text.slice(0, 500) });
+    }
     // 派号 + 建草稿（依赖引用同批序号→实际编号）
     const px = (String(parentId).match(/^(.+)-(\d+)$/) || [])[1] || 'TK';
     let mx = 0;
@@ -509,4 +550,4 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
 }
 
 module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, buildCutPrompt, buildDraftPrompt,
-  parseTickets, childFm, draftFm, getWorking, 历史样本, 备校准, 校准落fm };
+  parseTickets, parse拒切, childFm, draftFm, getWorking, 历史样本, 备校准, 校准落fm };

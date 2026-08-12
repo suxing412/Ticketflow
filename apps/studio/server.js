@@ -951,10 +951,10 @@ app.post('/api/pm/cut', (req, res) => {
   const proj = t.fm.项目 && cfg.项目 && cfg.项目.注册 && cfg.项目.注册[t.fm.项目];
   journal.append(ROOT, `项管切单启动：${父单}（fable 档，完成后简报待审）`);
   pmLedger.event(ROOT, '切单启动', { 父单 });
-  require('./lib/pm/brain').cut(ROOT, cfg, String(父单), proj && proj.路径, (r) => {
-    journal.append(ROOT, r.ok ? `项管切单完成：${父单} → ${r.子单.join('、')}（简报待审）` : `项管切单失败：${父单}（${r.error}）`);
-    if (!r.ok) pmLedger.event(ROOT, '切单失败', { 父单, error: r.error });
-  });
+  // 落账口径与定稿自动唤醒共用 wake.onCutResult（施工令-054）：三出口（切成/拒切候期/真失败）
+  // 只此一份实现——手工切单也走同一个判语存档路径，免得「候期」在自动链合法、在手工链记失败。
+  require('./lib/pm/brain').cut(ROOT, cfg, String(父单), proj && proj.路径,
+    (r) => require('./lib/pm/wake').onCutResult(ROOT, String(父单), r));
   res.json({ ok: true, 状态: `切单进行中（${(cfg.模型 || {}).项管 || '项管档'}），完成后拆单简报进台账待审` });
 });
 
