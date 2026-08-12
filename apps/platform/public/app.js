@@ -36,7 +36,8 @@ async function 落位工单库() {
 async function 刷工单() {
   const 滤 = $('滤状态').value;
   try {
-    const { 码, 体: j } = await 取JSON('/api/tickets' + (滤 ? '?state=' + encodeURIComponent(滤) : ''));
+    const 参 = (滤 ? '?state=' + encodeURIComponent(滤) : '') + 项目参(滤 ? '&' : '?');
+    const { 码, 体: j } = await 取JSON('/api/tickets' + 参);
     if (码 === 503) {
       // 未配工单库根是**最常见的首次使用障碍**——第一次打开必撞。
       // 光把修法印出来还是个死胡同：人得去开编辑器、手搓一份 JSON、再重启服务。
@@ -258,6 +259,15 @@ async function 换模板() {
 
 function 开建单() {
   $('建单区').style.display = '';
+  // 项目下拉现填，并默认选中顶栏当前选的那个：在某个项目上干活时建的单，
+  // 十有八九属于那个项目。让人每次重选一遍是白费一次点击，还容易漏选。
+  const 当前 = 取选中项目();
+  const 就绪的 = 项目表.filter((p) => p.就绪);
+  $('新项目').innerHTML = '<option value="">（不带项目：只跑不提交）</option>'
+    + 就绪的.map((p) => '<option value="' + 转义(p.名) + '"'
+      + (p.名 === 当前 ? ' selected' : '') + '>' + 转义(p.名) + '</option>').join('');
+  // 不就绪的项目不进下拉：选了它建单会被服务端拒（校验走同一份注册表），
+  // 摆在那里只是让人白点一次。
   换模板();
   $('新编号').focus();
 }
@@ -355,9 +365,17 @@ async function 刷消耗() {
         + '<td>' + (p.超 ? '<span class="级急">超</span>' : '<span style="color:var(--绿)">正常</span>') + '</td></tr>';
     }).join('') || '<tr><td colspan="5" class="淡">' + 转义(j.说明 || '还没有配预算上限') + '</td></tr>';
     const 按单 = (j.按工单 || []).slice(0, 5);
-    $('消耗按单').textContent = 按单.length
-      ? '花得最多的单：' + 按单.map((o) => o.单 + '（' + 千(o.输入 + o.输出) + ' token，' + o.次数 + ' 次）').join('　')
-      : '';
+    // 项目在前、工单在后。「这个项目花了多少」是先问的那个问题——
+    // 工单级明细只有在知道是哪个项目超了之后才有用。
+    const 按项 = j.按项目 || [];
+    $('消耗按单').innerHTML =
+      (按项.length
+        ? '<div>按项目：' + 按项.map((o) => '<b>' + 转义(o.项目) + '</b> ' + 千(o.输入 + o.输出)
+          + ' token（' + o.单数 + ' 张单，' + o.次数 + ' 次）').join('　') + '</div>'
+        : '')
+      + (按单.length
+        ? '<div>花得最多的单：' + 按单.map((o) => 转义(o.单) + '（' + 千(o.输入 + o.输出) + ' token，' + o.次数 + ' 次）').join('　') + '</div>'
+        : '');
   } catch { $('消耗体').innerHTML = '<tr><td colspan="5" class="级急">预算接口不可达</td></tr>'; }
 }
 
@@ -429,7 +447,16 @@ $('排名角色').value = 'backend';
 $('滤状态').onchange = 刷工单;
 $('新角色').onchange = 换模板;
 
-刷健康(); 刷工单(); 刷调度(); 刷排名(); 刷战绩(); 刷消耗(); 刷providers(); 刷瞭望塔();
+// ⚠ 开机调用**不在这里**，在文件末尾那个 async 自执行里。
+//
+// 原先就在这一行，协-007 加项目筛之后当场炸了：刷工单() 会用到 项目参，
+// 而那是文件末尾的一个 const —— 函数声明会提升，const 不会（暂时性死区），
+// 于是这里调用时它还不存在，抛 ReferenceError，被 刷工单 自己的 catch 吞掉，
+// 显示成「工单接口不可达」。**接口好好的**，人会去查服务端、查端口、查门禁，
+// 全都对，而真因在前端的声明顺序上。
+//
+// 所以开机调用统一挪到末尾：那里所有声明都已就位，不必每加一个模块级常量
+// 就回来数一遍谁在谁前面。
 setInterval(刷瞭望塔, 5000);
 setInterval(刷健康, 30000);
 
@@ -463,3 +490,287 @@ async function 刷自检() {
 }
 刷自检();
 setInterval(刷自检, 60000);
+
+// ══════════════════════════════════════════════════════════════
+// 页签路由（协-006）
+// ══════════════════════════════════════════════════════════════
+// 原先整个产品是一页往下滚。加了流程与知识库两块之后滚不完了，
+// 而且「我刚才看的是哪儿」在刷新后就丢了。照 studio 的做法走 hash 路由：
+// 地址栏能回到同一页，刷新不丢位置，浏览器的前进后退也照常用。
+const 页表 = { '': '驾驶舱', '/': '驾驶舱', '/flow': '流程', '/wiki': '知识库' };
+
+function 当前页() {
+  const h = (location.hash || '').replace(/^#/, '');
+  return 页表[h] || '驾驶舱';
+}
+
+function 切页() {
+  const 页 = 当前页();
+  for (const 名 of ['驾驶舱', '流程', '知识库']) {
+    const el = $('页-' + 名);
+    if (el) el.style.display = 名 === 页 ? '' : 'none';
+  }
+  for (const a of document.querySelectorAll('#页签 a')) {
+    a.classList.toggle('在', a.dataset.页 === 页);
+  }
+  // 进哪页才拉哪页的数据。三页全开着定时器的话，看知识库时后台还在每 10 秒
+  // 打一遍工单接口——白费，而且真跑时那些请求会跟执行抢日志。
+  if (页 === '流程') 刷流程();
+  if (页 === '知识库') 刷知识分区();
+}
+window.addEventListener('hashchange', 切页);
+
+// ══════════════════════════════════════════════════════════════
+// 流程页
+// ══════════════════════════════════════════════════════════════
+async function 刷流程() {
+  try {
+    const { 码, 体: j } = await 取JSON('/api/flow' + 项目参('?'));
+    if (码 !== 200) {
+      $('流程小结').innerHTML = '<div class="提示 级急">' + 转义(j.error || ('HTTP ' + 码)) + '</div>';
+      $('状态机').innerHTML = ''; $('流程层').innerHTML = '';
+      return;
+    }
+    const s = j.小结 || {};
+    // 「依赖缺失」单独给红：其余两项是正常的产线状态，它不是——
+    // 那些单永远不会就绪，摆在一起会被当成「等等就好了」。
+    $('流程小结').innerHTML =
+      '<div class="卡"><div class="淡">在办</div><div class="数">' + s.在办 + '</div></div>'
+      + '<div class="卡"><div class="淡">就绪可派</div><div class="数">' + s.就绪 + '</div></div>'
+      + '<div class="卡"><div class="淡">等上游</div><div class="数">' + s.等上游 + '</div></div>'
+      + (s.依赖缺失 ? '<div class="卡 坏"><div class="淡">依赖缺失</div><div class="数">' + s.依赖缺失 + '</div></div>' : '');
+
+    // 状态机：表驱动写在代码里，用的人看不见。画出来，顺带把每态几张摆上。
+    $('状态机').innerHTML = '<div class="流程带">' + (j.状态机 || []).map((x, i) =>
+      '<div class="流程节' + (x.张数 ? '' : ' 空') + '">'
+      + '<div class="态 ' + 转义(x.状态) + '">' + 转义(x.状态) + '</div>'
+      + '<div class="数">' + x.张数 + '</div>'
+      + (x.去向.length ? '<div class="淡">→ ' + x.去向.map(转义).join(' / ') + '</div>' : '<div class="淡">终态</div>')
+      + '</div>' + (i < j.状态机.length - 1 ? '<div class="流程箭">›</div>' : '')).join('') + '</div>';
+
+    const 层 = j.层 || [];
+    $('流程层').innerHTML = 层.length ? 层.map((l) =>
+      '<h3 class="层头">第 ' + l.深度 + ' 层 <span class="淡">' + 转义(l.说明) + '　' + l.工单.length + ' 张</span></h3>'
+      + '<table><tbody>' + l.工单.map((t) => {
+        const k = t.卡因 || {};
+        const 色 = k.类型 === '依赖缺失' ? '级急' : (k.类型 === '就绪' ? 'okc' : '淡');
+        return '<tr>'
+          + '<td><a href="#/flow" onclick="看单(\'' + 转义(t.id) + '\');return false"><code>' + 转义(t.id) + '</code></a></td>'
+          + '<td><span class="态 ' + 转义(t.状态) + '">' + 转义(t.状态) + '</span></td>'
+          + '<td><span class="角色 ' + 转义(t.角色) + '">' + 转义(t.角色) + '</span></td>'
+          + '<td>' + 转义(t.标题) + '</td>'
+          + '<td class="' + 色 + '">' + 转义(k.说 || '') + '</td>'
+          + '</tr>';
+      }).join('') + '</tbody></table>').join('')
+      : '<div class="提示">没有在办的单。完成的单不铺在这里——想看历史去看板筛「完成」。</div>';
+  } catch (e) {
+    $('流程小结').innerHTML = '<div class="提示 级急">流程接口不可达：' + 转义(e.message) + '</div>';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// 知识库页
+// ══════════════════════════════════════════════════════════════
+let 知识区 = '';
+
+async function 刷知识分区() {
+  if ($('知识分区').dataset.已载) return;              // 分区表是静态的，拉一次够了
+  try {
+    const { 体: j } = await 取JSON('/api/knowledge');
+    $('知识分区').innerHTML = (j.分区 || []).map((z) =>
+      '<button class="btn" title="' + 转义(z.说) + '" onclick="选知识区(\'' + 转义(z.键) + '\')">' + 转义(z.键) + '</button>').join('');
+    $('知识分区').dataset.已载 = '1';
+    if (!知识区 && (j.分区 || []).length) 选知识区(j.分区[0].键);
+  } catch (e) { $('知识分区').innerHTML = '<span class="提示 级急">知识库接口不可达</span>'; }
+}
+
+async function 选知识区(区) {
+  知识区 = 区;
+  for (const b of document.querySelectorAll('#知识分区 button')) {
+    b.classList.toggle('accent', b.textContent === 区);
+  }
+  $('知识目录').innerHTML = '<div class="提示">读取中…</div>';
+  try {
+    const { 码, 体: j } = await 取JSON('/api/knowledge?区=' + encodeURIComponent(区));
+    if (码 !== 200) { $('知识目录').innerHTML = '<div class="提示 级急">' + 转义(j.error) + '</div>'; return; }
+    $('知识目录').innerHTML =
+      '<div class="提示">' + 转义(j.说) + '<br><code>' + 转义(j.目录) + '/</code>　' + j.条数 + ' 篇</div>'
+      + '<ul class="知识目">' + (j.文档 || []).map((d) =>
+        '<li><a href="#/wiki" onclick="读知识(\'' + 转义(区) + '\',\'' + 转义(d.rel) + '\');return false">'
+        + 转义(d.标题) + '</a><div class="淡">' + 转义(d.rel) + '</div></li>').join('') + '</ul>';
+  } catch (e) { $('知识目录').innerHTML = '<div class="提示 级急">' + 转义(e.message) + '</div>'; }
+}
+
+async function 读知识(区, rel) {
+  $('知识正文').innerHTML = '<div class="提示">读取中…</div>';
+  try {
+    const { 码, 体: j } = await 取JSON('/api/knowledge/file?区=' + encodeURIComponent(区) + '&rel=' + encodeURIComponent(rel));
+    if (码 !== 200) { $('知识正文').innerHTML = '<div class="提示 级急">' + 转义(j.error) + '</div>'; return; }
+    $('知识正文').innerHTML = '<div class="文头"><b>' + 转义(j.标题) + '</b>　<code class="淡">' + 转义(j.rel) + '</code></div>'
+      + '<article class="md">' + 渲染md(j.正文) + '</article>';
+    $('知识正文').scrollTop = 0;
+  } catch (e) { $('知识正文').innerHTML = '<div class="提示 级急">' + 转义(e.message) + '</div>'; }
+}
+
+// 极简 markdown → HTML。
+//
+// ⚠ **顺序是安全边界，不是风格问题**：必须先整体转义，再往转义后的文本上套格式。
+// 反过来（先套格式再转义，或只转义一部分）就等于把文件内容当 HTML 执行。
+// 这些文件里有大量 <script>、<!--blk--> 之类的字面量，而知识库读的是磁盘上的文件——
+// 谁能往那几个目录写文件，谁就能在这个页面上执行脚本。
+//
+// 为什么手写不引库：运行时零第三方依赖是既定口径。代价是只支持一个子集——
+// 标题、列表、围栏代码、行内代码、粗体、引用、水平线。表格与图片不支持，
+// 原样显示成文本，**不假装渲染成功**。
+function 渲染md(原文) {
+  const 行 = 转义(String(原文 || '')).split(/\r?\n/);
+  const 出 = [];
+  let 在码块 = false; let 在列表 = false;
+  let i = -1;                                  // 表格要往前看一行，所以得有下标
+  const 收列表 = () => { if (在列表) { 出.push('</ul>'); 在列表 = false; } };
+  const 行内 = (s) => s
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  // 表格。原先不支持，说明书那几篇整页都是表，吐出来一堆 `|---|---|---|`
+  // ——那行是纯噪音，人得在竖线里自己数列。「不假装渲染成功」是诚实的兜底，
+  // 但这里真正该做的是支持它，而不是把诚实当成不做的理由。
+  const 是表行 = (s) => /^\s*\|.*\|\s*$/.test(s || '');
+  const 是分隔行 = (s) => /^\s*\|[\s:|-]+\|\s*$/.test(s || '') && /-/.test(s || '');
+  const 切格 = (s) => s.trim().replace(/^\||\|$/g, '').split('|').map((c) => 行内(c.trim()));
+
+  while (++i < 行.length) {
+    const l = 行[i];
+    if (/^```/.test(l)) {
+      收列表();
+      出.push(在码块 ? '</code></pre>' : '<pre class="码"><code>');
+      在码块 = !在码块;
+      continue;
+    }
+    if (在码块) { 出.push(l); continue; }
+    // 认表：表头行 + 分隔行。少了分隔行就不是表——正文里一句话带两个竖线
+    // 也会长得像表行，只靠「有竖线」判会把普通段落吃掉。
+    if (是表行(l) && 是分隔行(行[i + 1])) {
+      收列表();
+      const 头 = 切格(l);
+      i += 2;
+      const 体 = [];
+      while (i < 行.length && 是表行(行[i])) { 体.push(切格(行[i])); i++; }
+      i--;                                       // 退一格：外层 ++i 会再往前走
+      出.push('<div class="表包"><table class="md表"><thead><tr>'
+        + 头.map((c) => '<th>' + c + '</th>').join('') + '</tr></thead><tbody>'
+        + 体.map((r) => '<tr>' + r.map((c) => '<td>' + c + '</td>').join('') + '</tr>').join('')
+        + '</tbody></table></div>');
+      continue;
+    }
+    const h = l.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { 收列表(); const n = Math.min(6, h[1].length + 2); 出.push('<h' + n + '>' + 行内(h[2]) + '</h' + n + '>'); continue; }
+    if (/^\s*[-*]\s+/.test(l)) {
+      if (!在列表) { 出.push('<ul>'); 在列表 = true; }
+      出.push('<li>' + 行内(l.replace(/^\s*[-*]\s+/, '')) + '</li>');
+      continue;
+    }
+    收列表();
+    // 转义之后 `>` 已经变成 &gt;，引用行要按转义后的形态认——
+    // 照着原文写 /^>/ 会一条都匹配不上，而且不会报错，只是引用块永远不出现。
+    if (/^\s*&gt;\s?/.test(l)) { 出.push('<blockquote>' + 行内(l.replace(/^\s*&gt;\s?/, '')) + '</blockquote>'); continue; }
+    if (/^\s*(-{3,}|={3,})\s*$/.test(l)) { 出.push('<hr>'); continue; }
+    if (!l.trim()) { 出.push(''); continue; }
+    出.push('<p>' + 行内(l) + '</p>');
+  }
+  收列表();
+  if (在码块) 出.push('</code></pre>');       // 文件里围栏没闭合也不能把后面的内容吞掉
+  return 出.join('\n');
+}
+
+// 开机顺序有讲究：先把项目表拉下来，再切页。
+// 反过来的话，切页会先按「全部项目」渲一遍，项目表到了再渲一遍——闪一下。
+// 包在 async 自执行里：**顶层 await 在浏览器的经典脚本里是语法错误**，
+// 整个文件解析失败、全页静默死掉。写的时候就这么错了一次，被接线契约的
+// 「驾驶舱脚本语法必须合法」当场抓住（node --check 反而放过了它）。
+
+
+// ══════════════════════════════════════════════════════════════
+// 项目（协-007）：项目是全局作用域，不是看板的一个筛选条件
+// ══════════════════════════════════════════════════════════════
+// 选定一个项目后，看板、流程、建单默认值都跟着走。所以选择器在顶栏，
+// 不在看板的筛选条里——放看板里会让人以为它只管那一张表。
+//
+// 选择记在 localStorage：这是「我现在在哪个项目上干活」，跨刷新、跨页签都该保持。
+// 记在 URL 里更「正确」，但每次切页都要拼参数，而且用户手打的链接会丢掉它。
+let 项目表 = [];
+const 取选中项目 = () => { try { return localStorage.getItem('platform-项目') || ''; } catch { return ''; } };
+const 存选中项目 = (v) => { try { localStorage.setItem('platform-项目', v); } catch { /* 隐私模式 */ } };
+// 拼查询串。空 = 全部，不带这个参数。
+const 项目参 = (前缀) => {
+  const v = 取选中项目();
+  return v ? 前缀 + '项目=' + encodeURIComponent(v) : '';
+};
+
+async function 刷项目() {
+  try {
+    const { 体: j } = await 取JSON('/api/projects');
+    项目表 = j.项目 || [];
+    const 选 = $('项目选');
+    const 当前 = 取选中项目();
+    // 「(无项目)」是个真实类别不是「全部」的同义词：不带项目的单只跑不提交，
+    // 它们是一群需要单独看见的单。
+    选.innerHTML = '<option value="">全部项目</option>'
+      + 项目表.map((p) => '<option value="' + 转义(p.名) + '"' + (p.名 === 当前 ? ' selected' : '') + '>'
+        + (p.就绪 ? '' : '⚠ ') + 转义(p.名) + '</option>').join('')
+      + '<option value="(无项目)"' + (当前 === '(无项目)' ? ' selected' : '') + '>（无项目）</option>'
+      + '<option value="__新增__">＋ 登记项目…</option>';
+    // 选中的项目不在表里了（改过配置/换了机器）——静默留着会让看板永远空着，
+    // 而人看不出为什么。退回全部并说一声。
+    if (当前 && 当前 !== '(无项目)' && !项目表.some((p) => p.名 === 当前)) {
+      存选中项目(''); 选.value = '';
+      alert('原先选的项目「' + 当前 + '」已不在注册表里，已退回「全部项目」。');
+    }
+    const 坏 = 项目表.filter((p) => !p.就绪);
+    选.title = 项目表.length
+      ? '项目 = 一个 git 仓。选定后看板与流程只看这个项目。'
+        + (坏.length ? '\n\n⚠ 有问题的项目：\n' + 坏.map((p) => p.名 + '：' + p.说).join('\n') : '')
+      : '还没登记任何项目。选「＋ 登记项目…」';
+  } catch { /* 服务没起时健康行已经会报 */ }
+}
+
+async function 换项目() {
+  const v = $('项目选').value;
+  if (v === '__新增__') { $('项目选').value = 取选中项目(); 开登记项目(); return; }
+  存选中项目(v);
+  刷工单();
+  if (当前页() === '流程') 刷流程();
+}
+
+// 登记一个项目。与工单库落位同一个路子：位置人给，产品只负责收好并挡住危险的那几种。
+async function 开登记项目() {
+  const 名 = prompt('项目名（工单的「项目」字段填这个）：');
+  if (!名) return;
+  const 路径 = prompt('这个项目的 git 仓根目录（绝对路径）：\n\n'
+    + '注册表同时是**写操作白名单**——登记它就等于允许 AI 往这个仓里提交。');
+  if (!路径) return;
+  try {
+    const { 码, 体: j } = await 取JSON('/api/setup/project', {
+      method: 'POST', body: JSON.stringify({ 名, 路径 }),
+    });
+    if (码 !== 200 || !j.ok) { alert('登记失败：\n\n' + (j.error || ('HTTP ' + 码))); return; }
+    存选中项目(j.名);
+    await 刷项目();
+    刷工单();
+    alert('已登记 ' + j.名 + '\n→ ' + j.路径 + (j.覆盖 ? '\n\n（覆盖了同名的旧登记）' : ''));
+  } catch (e) { alert('登记失败：' + e.message); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// 开机（必须是本文件的最后一段）
+// ══════════════════════════════════════════════════════════════
+// 位置是硬要求，不是风格：上面用到的模块级常量（项目表、项目参…）都是 const/let，
+// 不会像函数声明那样提升。开机段放在它们**前面**的话，调用时撞暂时性死区，
+// 抛 ReferenceError，而各个刷新函数自己的 catch 会把它吞成「接口不可达」——
+// 接口好好的，人却会去查服务端、端口、门禁，全都对。协-007 实测踩了两次。
+(async () => {
+  $('项目选').onchange = 换项目;
+  // 项目表要先到：看板与流程的取数都带项目参数，晚一步会先按「全部」渲一遍再重渲。
+  await 刷项目();
+  刷健康(); 刷工单(); 刷调度(); 刷排名(); 刷战绩(); 刷消耗(); 刷providers(); 刷瞭望塔();
+  切页();
+})();

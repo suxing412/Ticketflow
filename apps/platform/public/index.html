@@ -15,7 +15,10 @@
     <h1 id="标题">AI-DevPlatform</h1>
     <p class="tagline" id="健康行">开机检查中…</p>
   </div>
-  <div class="tright">
+ <div class="tright">
+    <!-- 项目选择器（协-007）。放顶栏不放看板里：它统管看板、流程、建单默认值，
+         是**全局作用域**而不是看板的一个筛选条件。 -->
+    <select id="项目选" title="项目 = 一个 git 仓。选定后看板与流程都只看这个项目"></select>
     <span class="pill mut" id="模式徽">读取中…</span>
     <span class="pill" id="自检徽" title="配置自检"></span>
     <button class="gear" id="主题钮" title="切换日间/夜间" onclick="切主题()">◐</button>
@@ -24,6 +27,17 @@
 
 
 
+
+
+<!-- 页签（协-006）。原先整个产品是一页往下滚，加两块内容就滚不完了。
+     studio 用 hash 路由分页，这里照做：地址栏能回到同一页，刷新不丢位置。 -->
+<nav class="页签" id="页签">
+  <a href="#/" data-页="驾驶舱">驾驶舱</a>
+  <a href="#/flow" data-页="流程" title="现在卡在哪、接下来能干什么">流程</a>
+  <a href="#/wiki" data-页="知识库" title="角色协议 / 说明书 / 施工令 / 配置示例">知识库</a>
+</nav>
+
+<div id="页-驾驶舱">
 
 <!-- ── 工单看板：这是产品的主界面，放最上面 ── -->
 <h2>工单看板<span class="右 淡" id="工单来源"></span></h2>
@@ -50,7 +64,9 @@
     <input id="新编号" placeholder="编号 如 T-1" size="12">
     <select id="新角色"></select>
     <input id="新标题" placeholder="标题" size="30">
-    <input id="新项目" placeholder="项目（留空则只跑不提交）" size="22">
+    <!-- 下拉不是自由文本（协-007）：项目名打错了，工单照样建得出来、投得出去、派得下去，
+         直到真跑那一刻才报「项目未注册」——错得越晚越贵。能选就不让填。 -->
+    <select id="新项目" title="留空 = 只跑不提交"></select>
   </div>
   <textarea id="新正文" placeholder="## 范围&#10;要做什么&#10;&#10;## 不要做&#10;- …&#10;&#10;## 验收标准&#10;- [ ] …"></textarea>
   <div class="栏">
@@ -125,6 +141,25 @@
 
 <h2>未读账本 <span class="淡" id="账本计数"></span></h2>
 <ul class="账本" id="账本"><li class="淡">读取中…</li></ul>
+</div><!-- /页-驾驶舱 -->
+
+<div id="页-流程" style="display:none">
+  <h2>流程<span class="右"><button onclick="刷流程()">重算</button></span></h2>
+  <div class="提示">看板是平的，答不了「为什么这张不动」。这里按<b>依赖深度</b>分层：第 0 层不等任何人，第 N 层等着第 N-1 层。</div>
+  <div id="流程小结" class="栏"></div>
+  <div id="状态机"></div>
+  <div id="流程层"></div>
+</div>
+
+<div id="页-知识库" style="display:none">
+  <h2>知识库<span class="右 淡">只读——改这些文件请走 PR</span></h2>
+  <div class="栏" id="知识分区"></div>
+  <div class="知识两栏">
+    <div id="知识目录"><div class="提示">选一个分区</div></div>
+    <div id="知识正文"><div class="提示">选一篇文档</div></div>
+  </div>
+</div>
+
 <script src="app.js"></script>
 </body>
 </html>

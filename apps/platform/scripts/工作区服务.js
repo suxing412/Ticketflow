@@ -31,6 +31,13 @@ function 读JSON(p, 缺省) {
 const 本地覆盖 = require(path.join(平台根, 'lib', '本地覆盖.js'));
 // 允许写 同样是危险开关，只能从不入库的 config/workspace.local.json 打开。
 const { 配置, 生效的覆盖 } = 本地覆盖.应用(平台根, 读JSON(path.join(平台根, 'config', 'platform.config.json'), {}));
+// 只有注册表现读。其余配置（端口、允许写）开机定死是对的——那些是这个进程的形状，
+// 中途换掉只会让「我现在到底跑在什么设置下」变得说不清。
+// 注册表不一样：它由界面写入，而且是写操作白名单，捧着旧表 = 刚登记的项目用不了。
+const 现读注册表 = () => {
+  const c = 本地覆盖.应用(平台根, 读JSON(path.join(平台根, 'config', 'platform.config.json'), {})).配置;
+  return (c.项目 && c.项目.注册) || {};
+};
 const 端口 = Number(process.env.WORKSPACE_PORT || (配置.workspace && 配置.workspace.port) || 4371);
 const 允许写 = (配置.workspace && 配置.workspace.允许写) === true;
 const { 令牌 } = 门禁.取令牌(平台根);
@@ -120,7 +127,10 @@ const 服务 = http.createServer((req, res) => {
 
       // 项目路径同样过路径闸：写操作能改的仓，必须是显式配置过的，不是请求想指哪就指哪。
       const 项目名 = String(体.项目 || '').trim();
-      const 注册 = (配置.项目 && 配置.项目.注册) || {};
+      // 现读注册表，不用开机时那份。人在界面上登记完项目，这个进程还捧着旧表的话，
+      // 表现是「刚登记好的项目，一提交就说不在注册表里」——界面上每一处都显示登记成功。
+      // 同一类问题在执行器的工单根上踩过一次（协-005），不重蹈。
+      const 注册 = 现读注册表();
       const 项 = 注册[项目名];
       if (!项 || !项.路径) {
         return 发JSON(res, 400, {
