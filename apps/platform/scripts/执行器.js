@@ -11,7 +11,8 @@
 //   ③ 该池在 预算.池 里配了上限            防没有刹车就上路
 // 三条各自独立，不互相替代。
 //
-// 默认不随 server 启动：npm run executor
+// 2026-08-12 起随 npm start 一并起（scripts/开机.js 带的）。单起：npm run executor
+// 进程活着不等于会花钱——上面三闸照旧。不想让它活着：PLATFORM_NO_EXECUTOR=1 npm start
 'use strict';
 
 const http = require('http');

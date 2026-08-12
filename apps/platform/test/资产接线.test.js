@@ -214,6 +214,29 @@ t('界面上改的配置，别的进程也得认（开机时定死一次就等�
     '落位成功后必须重解一次工单根，否则本进程也要等到重启才认');
 });
 
+t('README 说的开机方式与产品实际一致（说明书骗人比没有说明书更糟）', () => {
+  // 这一路改了两次启动方式，README 每次都落后一拍。文档落后的伤害不对称：
+  // 没有文档，人会去看代码；文档写着一套错的，人会照着做，然后怀疑产品坏了。
+  // 2026-08-12 就发现 README 里还写着「打包后需自行改 main.js 那行硬编码」——
+  // 那行三次提交前就没了，照着做纯属白费工夫。
+  const 文 = fs.readFileSync(path.join(平台根, 'README.md'), 'utf8');
+  const 包 = JSON.parse(fs.readFileSync(path.join(平台根, 'package.json'), 'utf8'));
+
+  // 文档里出现的 npm run <x> 必须真的存在
+  const 提到 = [...文.matchAll(/npm run ([\w:-]+)/g)].map((m) => m[1]);
+  const 不存在 = [...new Set(提到)].filter((x) => !(包.scripts || {})[x]);
+  assert.deepEqual(不存在, [], 'README 提到了不存在的 npm 脚本：' + 不存在.join('、'));
+
+  // 已作废的说法不许留在文档里
+  const 作废 = [
+    [/换机需自行改那一行/, '打包解析已不需要改源码（c147a9a），这句会让人白费工夫'],
+    [/默认不随 server 启动/, 'npm start 现在会带起工作区与执行器'],
+  ];
+  for (const [re, 说] of 作废) {
+    assert.ok(!re.test(文), `README 里有已作废的说法：${说}`);
+  }
+});
+
 t('工单正文里的「写入范围」真的会被执行（不能只是装饰）', () => {
   const wt = require(path.join(平台根, 'lib', 'workspace', 'worktree.js'));
   // 正例：模板生成的那一节，填上真路径后要能被认出来

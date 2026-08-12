@@ -20,13 +20,13 @@
 
 ## 这是什么（安全形状）
 
-三个进程各管一种能力，**默认只起第一个**，可以单独关掉任意一个：
+三个进程各管一种能力。**`npm start` 一条命令全起**，也可以单独起、单独关：
 
 | 进程 | 能力面 | 默认 |
 |---|---|---|
 | `server.js` :4370 | 只转发，**物理上不引 `child_process`** | 起 |
-| `scripts/工作区服务.js` :4371 | 唯一能起 **git** 的地方 | 不起 |
-| `scripts/执行器.js` :4372 | 唯一能拉起 **AI CLI** 的地方 | 不起 |
+| `scripts/工作区服务.js` :4371 | 唯一能起 **git** 的地方 | 起 |
+| `scripts/执行器.js` :4372 | 唯一能拉起 **AI CLI** 的地方 | 起（`PLATFORM_NO_EXECUTOR=1` 可关）|
 
 契约测试里有一条**传递闭包断言**盯着 `server.js` 的依赖闭包不得出现 `child_process`——
 桩模式是物理保证，不是自觉。
@@ -125,8 +125,13 @@ npm run desktop      # 开发态桌面窗口
 npm run dist         # 出 portable exe（会下载约 109MB electron 二进制）
 ```
 
-打包态 `__dirname` 落在 asar 内，仓根解析不成立，此时靠 `main.js` 里那行硬编码兜底
-（**换机需自行改那一行**），或预先设好 `TICKETFLOW_PACKAGES`。
+打包态 `__dirname` 落在 asar 内，仓根解析不成立。解析序四条**都不需要改源码**：
+`TICKETFLOW_PACKAGES` 环境变量 → 仓内相对（开发态）→ exe 同级 `packages/` → exe 同级
+`平台配置.json` 里的路径。四条都不中时弹窗说清缺什么怎么补，不静默启动。
+
+**可写配置也在 asar 外**：`*.local.json` 与令牌落 exe 同级的 `config/`（见 `lib/配置位置.js`）。
+asar 是只读的，配置写在里面会失败且不报错——首次配置那一步会整个用不了。
+随包的只有出厂默认；本机的 `*.local.json` 与 `api-token.txt` 已从 `build.files` 排除，不跟着二进制走。
 
 
 ## 怎么真的用它（完整流程）
@@ -155,7 +160,7 @@ npm start          # 总启动器：一次带起下面三个，任一个死掉�
 
 | 文件 | 作用 | 不配的后果 |
 |---|---|---|
-| `config/工单库.local.json` | 工单落哪（业务私仓） | 工单接口 503，**不猜位置** |
+| `config/工单库.local.json` | 工单落哪（业务私仓） | 工单接口 503。**不猜位置**，但界面上有输入框可当场配 |
 | `config/执行.local.json` | `允许真跑: true` | 只能干跑 |
 | `config/预算.local.json` | 各池 token 上限 | 该池不许真跑 |
 | `config/项目.local.json` | 项目注册表（写操作白名单） | 带项目的工单起不了隔离工作区 |
@@ -183,7 +188,7 @@ npm start          # 总启动器：一次带起下面三个，任一个死掉�
 ## 工作区服务（唯一能起 git 进程的地方）
 
 ```
-npm run workspace    # 独立进程，默认 4371；要用 /api/workspace/* 才需要拉
+npm start            # 会一并带起它；只想单起这一个：npm run workspace
 ```
 
 `server.js` 自己**不碰 `child_process`**——桩模式是物理保证，不是自觉。git 能力全部
@@ -201,10 +206,11 @@ public/              驾驶舱：工单看板 + 派活 + 路由排名 + 战绩 +
                        （令牌由服务发页时注入，无需手工填）
 lib/公用件.js         消费 packages/ 的唯一入口
 lib/门禁.js           令牌 + Origin + Content-Type 三道闸
-lib/工单库.js         目录即状态机（草稿/待投/在途/完成），工单落业务私仓
+lib/工单库.js         目录即状态机（草稿/待投/在途/质检/完成），工单落业务私仓
 lib/派单.js           选人 + 权限判定 + 工单流转
 lib/执行加固.js       软超时验尸 / 判官失败不打整单 / 空输出不作数 / 候选链降级
 lib/本地覆盖.js       危险开关只能从不入库的 *.local.json 打开
+lib/配置位置.js       出厂默认随包只读；本机覆盖与令牌走可写目录（打包态在 exe 同级）
 lib/                 业务零件：orchestration/plan.js · routing/{router,history}.js ·
                        toolchain.js · review-opinion.js（均已接线）
                        workspace/worktree.js（引 child_process，只被隔离进程持有）
@@ -213,9 +219,10 @@ config/              platform.config.json · 瞭望塔.config.json（正本）·
                        接口令牌.local.json（运行时生成，gitignore）
 瞭望塔.config.json    仓根同步副本（--install 计划任务寻径用，见文件内说明）
 scripts/watchtower.js 瞭望塔启动器（经 lib/公用件 找正本代为拉起）
-scripts/工作区服务.js  唯一被允许起 git 进程的地方，:4371，默认不随 server 启动
-scripts/执行器.js      唯一被允许拉起 AI CLI 的地方，:4372，默认不随 server 启动
-test/                公用件契约 9 · 接线契约 22 · 工单库契约 16 · 执行链契约 22
+scripts/开机.js       总启动器：一条命令带起下面三个，任一个死掉就全停
+scripts/工作区服务.js  唯一被允许起 git 进程的地方，:4371
+scripts/执行器.js      唯一被允许拉起 AI CLI 的地方，:4372
+test/                公用件 9 · 接线 26 · 工单库 20 · 执行链 22 · 产线 40 · 资产接线 8
 docs/                边界与协作.md · 接线说明.md（接线台账/门禁/隔离/执行链）
 工程队/              协-001 工单库 · 协-002 执行链 · 协-003 提交链（施工令档案）
 journal/ 呼叫/       运行时流水与本地信箱（占位入库，内容 gitignore）
