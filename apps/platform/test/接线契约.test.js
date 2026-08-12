@@ -61,14 +61,27 @@ t('worktree 只被隔离进程持有，server.js 碰不到它', () => {
   assert.ok(/workspace['\\/]+worktree/.test(服务源), '隔离进程应当是持有 worktree 的那一个');
 });
 
-t('驾驶舱内联脚本语法必须合法（坏了整页只显示「读取中」）', () => {
+t('驾驶舱脚本语法必须合法（坏了整页只显示「读取中」）', () => {
   // 2026-08-11 踩到：用脚本改 HTML 时把 '\n' 写成了真换行，字符串断在半路。
   // 后果特别隐蔽——页面**照常渲染**，只是所有数据永远停在「读取中…」，
-  // 因为整段 <script> 根本没执行。不看控制台就以为是后端没响应。
+  // 因为整段脚本根本没执行。不看控制台就以为是后端没响应。
+  //
+  // 2026-08-12 起脚本外置成 public/app.js（内联脚本正是上面那个坑的温床），
+  // 断言跟着搬家。
+  const 脚本 = fs.readFileSync(path.join(平台根, 'public', 'app.js'), 'utf8');
+  assert.doesNotThrow(() => new Function(脚本), 'app.js 语法错——整页会静默停在「读取中」');
+});
+
+t('首页引用的静态资源必须真的存在（404 的 css 不会报错，只会让页面变丑）', () => {
+  // 漏发一个 css/js 不会有任何报错：浏览器静默 404，页面照常渲染，只是没有样式。
+  // 这类问题肉眼看「好像哪里不对」但说不出所以然，所以让断言去数。
   const 页 = fs.readFileSync(path.join(平台根, 'public', 'index.html'), 'utf8');
-  const m = 页.match(/<script>([\s\S]*)<\/script>/);
-  assert.ok(m, 'index.html 应有内联脚本');
-  assert.doesNotThrow(() => new Function(m[1]), '内联脚本语法错——整页会静默停在「读取中」');
+  const 引用 = [...页.matchAll(/(?:href|src)="([^"]+)"/g)].map((m) => m[1])
+    .filter((u) => !/^https?:|^data:|^#/.test(u));
+  assert.ok(引用.length >= 2, '至少该引用 style.css 与 app.js');
+  for (const u of 引用) {
+    assert.ok(fs.existsSync(path.join(平台根, 'public', u)), `首页引用了不存在的资源：${u}`);
+  }
 });
 
 t('每条转发路径都必须转发请求体（少一个 pipe 就静默丢 body）', () => {
