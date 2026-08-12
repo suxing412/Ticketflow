@@ -165,6 +165,55 @@ t('一条命令能带起整个产品，且桌面与命令行走同一条路', ()
     'build.files 少了 scripts/**：开发态没事，打包后 main.js 找不到 开机.js，exe 一开就挂');
 });
 
+t('打包态的可写配置必须落在 asar 之外（不然首次配置在成品里根本写不进去）', () => {
+  // 拿打包好的 exe 真跑了一次才发现的：日志里写着
+  //   门禁：沿用既有令牌 → …\resources\app.asar\config\接口令牌.local.json
+  // asar 只读，所有 .local.json 的写入在打包态都会失败——包括「首次打开填个目录
+  // 就能开工」那一步，而那正是拿到成品的人必走的第一步。开发态一切正常。
+  const 位置 = require(path.join(平台根, 'lib', '配置位置.js'));
+  const 包内 = path.join('C:', 'app', 'resources', 'app.asar', 'x');
+  assert.ok(!位置.可写配置目录(包内).includes('app.asar'),
+    '打包态的可写配置目录不能落在 asar 里——那是只读的，写入会失败且不报错');
+  // 开发态维持原样，别为了修打包把日常跑法改坏
+  assert.equal(位置.可写配置目录(平台根), path.join(平台根, 'config'));
+  // 出厂默认随包只读，本来就该在 asar 里
+  assert.ok(位置.只读配置目录(包内).includes('app.asar'));
+
+  // 三个写盘方必须都走可写目录，漏一个就在打包态失败
+  for (const f of ['门禁.js', '本地覆盖.js', '工单库.js']) {
+    const s = fs.readFileSync(path.join(平台根, 'lib', f), 'utf8');
+    assert.ok(/可写配置目录/.test(s), `lib/${f} 要写 config，必须走 配置位置.可写配置目录`);
+  }
+
+  // 本机配置不许跟着二进制走。实测那份 exe 里带着开发机的接口令牌与私仓绝对路径。
+  const 包 = JSON.parse(fs.readFileSync(path.join(平台根, 'package.json'), 'utf8'));
+  const 清单 = (包.build.files || []).map(String);
+  assert.ok(清单.includes('!config/*.local.json'), 'build.files 必须排除 *.local.json：'
+    + '否则开发机的私仓路径会被打进分发件');
+  assert.ok(清单.includes('!config/api-token.txt'), 'build.files 必须排除 api-token.txt：'
+    + '那是 API 令牌，不该随二进制分发');
+});
+
+t('界面上改的配置，别的进程也得认（开机时定死一次就等于改不动）', () => {
+  // 打包件冒烟时实测：在界面上把工单库配好，server 当场生效（它的 工单根 是 let），
+  // 但执行器是**另一个进程**，它开机时拿到的还是「未配置」，于是点干跑照样报未配置。
+  // 从人的角度看是「明明配好了，它说没配」——界面上每一处都显示配好了，最没头绪。
+  //
+  // 这类问题的通用形状：**跨进程的配置缓存**。多进程架构必然带这个坑，
+  // 每加一个进程就得想一遍「它缓存了什么，谁会改那个东西」。
+  const 执行器 = fs.readFileSync(path.join(平台根, 'scripts', '执行器.js'), 'utf8');
+  assert.ok(!/^const 工单根 = 工单库\.解析根目录/m.test(执行器),
+    '执行器不能在开机时把工单根定死——界面上配好之后它不会知道，'
+    + '表现成「配好了却说没配」。改成每次请求现解（读一个几十字节的 JSON 而已）。');
+  assert.ok(/取工单根/.test(执行器), '执行器要有一个现解工单根的入口');
+
+  // server 那边靠 let + 落位后重解；两条路都要在，缺一就是半个功能
+  const 服务 = fs.readFileSync(path.join(平台根, 'server.js'), 'utf8');
+  assert.ok(/let 工单根/.test(服务), 'server.js 的 工单根 必须是 let：配完要当场生效，不能让人重启');
+  assert.ok(/工单根 = 工单库\.解析根目录/.test(服务.split('/api/setup/tickets')[1] || ''),
+    '落位成功后必须重解一次工单根，否则本进程也要等到重启才认');
+});
+
 t('工单正文里的「写入范围」真的会被执行（不能只是装饰）', () => {
   const wt = require(path.join(平台根, 'lib', 'workspace', 'worktree.js'));
   // 正例：模板生成的那一节，填上真路径后要能被认出来

@@ -47,7 +47,8 @@ const TRANSITIONS = {
 // 工单是业务数据不是产品代码，按总说明书第一章的切分判据归私仓，公开仓里只有机器。
 // **缺配置时不猜、不兜底、不建默认目录**——猜一个路径然后往里写业务数据，
 // 是比报错严重得多的事：等你发现写错地方，数据已经散在两处了。
-const 配置文件 = (平台根) => path.join(平台根, 'config', '工单库.local.json');
+// 走可写目录：这份配置是界面上填出来的，打包态必须落在 asar 外，否则写不进去。
+const 配置文件 = (平台根) => path.join(require('./配置位置.js').可写配置目录(平台根), '工单库.local.json');
 
 function 解析根目录(平台根) {
   const 来自环境 = String(process.env.PLATFORM_TICKETS || '').trim();

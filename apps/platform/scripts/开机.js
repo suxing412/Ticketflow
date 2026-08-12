@@ -20,6 +20,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const 平台根 = path.resolve(__dirname, '..');
 
+
 const 无执行器 = String(process.env.PLATFORM_NO_EXECUTOR || '') === '1';
 
 const 名单 = [
@@ -78,7 +79,15 @@ function 收摊(码) {
 
 for (const 条 of 名单) {
   const 子 = spawn(process.execPath, [条.脚本], {
-    cwd: 平台根,
+    // ⚠ 这里**不传 cwd**，是踩出来的。
+    // 打包成 asar 后 平台根 落在 resources\app.asar 里，那是个文件；拿它当 cwd，
+    // spawn 直接 ENOENT——而且 Windows 把错误挂在可执行文件名上，报
+    // 「spawn AI-DevPlatform.exe ENOENT」，看着像 exe 自己没了，完全指不到真原因。
+    //
+    // 第一版想用 statSync().isDirectory() 挡一道，没用：**electron 给 fs 打了补丁，
+    // asar 内部路径在 statSync 眼里就是个正经目录**，守卫返回 true 照样传下去。
+    // 判断「这路径能不能当 cwd」在 electron 里问 fs 是问错了对象。
+    // 三个子进程都从 __dirname 算自己的路径，本来就不依赖 cwd，索性不传。
     // ELECTRON_RUN_AS_NODE：桌面壳里 process.execPath 是 electron.exe，
     // 不带这个变量它会当成一个 app 去开窗口，而不是跑脚本。命令行下这变量无害。
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },

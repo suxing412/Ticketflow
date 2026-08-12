@@ -46,7 +46,15 @@ const 允许真跑 = (配置.执行 && 配置.执行.允许真跑) === true;
 const 上限毫秒 = Number((配置.执行 && 配置.执行.超时毫秒) || 900000);
 const 静默毫秒 = Number((配置.执行 && 配置.执行.静默毫秒) || 120000);
 const { 令牌 } = 门禁.取令牌(平台根);
-const 工单根 = 工单库.解析根目录(平台根);
+// 每次用的时候现解，不在开机时定死。
+//
+// 定死会出这个事（打包件冒烟时实测）：人在界面上把工单库配好了，server 那边当场生效，
+// 但**执行器是另一个进程**，它启动时拿到的还是「未配置」，于是点干跑照样报未配置。
+// 从人的角度看就是「明明配好了，它说没配」——最没头绪的一类问题，
+// 因为界面上每一处都显示配好了。
+//
+// 代价只是每次请求读一个几十字节的 JSON。为省这个而让配置改不动，不划算。
+const 取工单根 = () => 工单库.解析根目录(平台根);
 
 let registry = null;
 try { registry = 公用件.载入('providers', 'registry.js'); } catch { /* 下面报 */ }
@@ -216,6 +224,7 @@ const 服务 = http.createServer((req, res) => {
   const q = 路径.match(/^\/qa\/([^/]+)$/);
   if (q && req.method === 'POST') {
     if (!registry) return 发JSON(res, 503, { ok: false, error: 'providers 注册表加载失败' });
+    const 工单根 = 取工单根();
     if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
     const id = decodeURIComponent(q[1]);
 
@@ -295,6 +304,7 @@ const 服务 = http.createServer((req, res) => {
   // GET 只算不派，POST 才真派。分开是因为「看看会派什么」是个高频且无害的动作，
   // 而它和「真的派出去」只差一个 HTTP 方法时，人迟早会点错。
   if (路径 === '/tick') {
+    const 工单根 = 取工单根();
     if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
     const 全部 = 工单库.list(工单根.根);
     const 待投表 = 全部.filter((t) => t.state === '待投').map((t) => 工单库.find(工单根.根, t.id)).filter(Boolean);
@@ -325,6 +335,7 @@ const 服务 = http.createServer((req, res) => {
   }
 
   if (路径 === '/health') {
+    const 工单根 = 取工单根();          // 现解：健康接口报的是**此刻**的状态，不是开机那一刻的
     return 发JSON(res, 200, {
       ok: true, 服务: '执行器', 端口, 允许真跑, 上限毫秒, 静默毫秒,
       工单库: 工单根.ok ? 工单根.根 : null,
@@ -342,6 +353,7 @@ const 服务 = http.createServer((req, res) => {
   const m = 路径.match(/^\/run\/([^/]+)$/);
   if (m && req.method === 'POST') {
     if (!registry) return 发JSON(res, 503, { ok: false, error: 'providers 注册表加载失败' });
+    const 工单根 = 取工单根();
     if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
     const id = decodeURIComponent(m[1]);
 

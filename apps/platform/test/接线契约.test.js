@@ -165,7 +165,14 @@ t('lib/ 下的模块要么被接线，要么在 server.js 里写明为何不接'
       .filter((f) => f.endsWith('.js'))
       .some((f) => fs.readFileSync(path.join(平台根, 'scripts', f), 'utf8').includes(短名));
     const 隔离了 = new RegExp(`(${短名}|${无后缀})[^\\n]*(独立进程|隔离)`).test(源) && 被隔离进程持有;
-    if (!接线了 && !交代了 && !隔离了) 漏网.push(`  lib/${m}`);
+    // 被另一个 lib 模块引用同样是正经接线。这条原先没有，于是
+    // lib/配置位置.js 一加进来就被判成孤儿——它被 门禁/本地覆盖/工单库 三家引着，
+    // 只是不被 server.js 直接引。「只认 server.js 直接引」把底层工具模块全判成孤儿了。
+    // 真正的可达性由 test/资产接线.test.js 的入口闭包守，那条不看引用形式，看能不能走到。
+    const 被别的库引 = fs.readdirSync(path.join(平台根, 'lib'), { recursive: true })
+      .filter((f) => String(f).endsWith('.js') && !String(f).endsWith(m.replace(/\//g, path.sep)))
+      .some((f) => fs.readFileSync(path.join(平台根, 'lib', String(f)), 'utf8').includes(短名));
+    if (!接线了 && !交代了 && !隔离了 && !被别的库引) 漏网.push(`  lib/${m}`);
   }
   assert.deepEqual(漏网, [], '这些模块既没接线，也没写明为何不接（孤儿模块不会报错，只会安静地不存在）：\n' + 漏网.join('\n'));
 });

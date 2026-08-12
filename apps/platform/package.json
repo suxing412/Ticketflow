@@ -28,10 +28,12 @@
       "server.js",
       "public/**",
       "lib/**",
-      "config/**",
       "角色协议模板/**",
       "docs/**",
-      "scripts/**"
+      "scripts/**",
+      "config/**",
+      "!config/*.local.json",
+      "!config/api-token.txt"
     ],
     "win": {
       "target": "portable",
