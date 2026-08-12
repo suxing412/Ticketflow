@@ -107,14 +107,51 @@ function globRegex(pattern) {
   return new RegExp(`^${source}$`);
 }
 
+// 从正文的「## 写入范围」一节里捡出真的 glob（协-005）。
+//
+// 为什么要有这个兜底：write_scope 原本只认 frontmatter，而只有 orchestrator
+// 拆出来的子单会写 frontmatter（plan.js:157）。人手建的单——工单模板给的正是
+// 「## 写入范围」这一节——写在**正文**里，于是这一节形同虚设：单子上白纸黑字
+// 写着只许改 public/**，AI 改遍全仓也没有任何东西拦。这是典型的安静的失败。
+//
+// 解析必须偏保守。方向性很重要：**多认一条 glob 只是放宽，错认一条占位符
+// 却会让每次改动都判违规、checkpoint 抛错、活白干**。所以只收明确像路径的行，
+// 占位符 `<...>`、说明性括号、以及不含路径特征的散文一律跳过。
+function 正文写入范围(body) {
+  const 段 = (String(body || '').match(/##\s*写入范围\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/) || [])[1] || '';
+  const 出 = [];
+  for (const 行 of 段.split(/\r?\n/)) {
+    let s = 行.trim().replace(/^[-*]\s*/, '').replace(/^`|`$/g, '').trim();
+    if (!s) continue;
+    if (/^[（(]/.test(s)) continue;               // 「（留空——只读角色…）」这类说明
+    if (/[<>]/.test(s)) continue;                 // 「<允许改的文件或 glob>」占位符
+    if (/\s/.test(s)) continue;                   // 带空格的是散文，不是路径
+    if (!/[\/.*]/.test(s)) continue;              // 连 / . * 都没有，不像路径
+    出.push(s);
+  }
+  return 出;
+}
+
 function enforceWriteScope(ticket, dir) {
   const role = ticket && ticket.fm && (ticket.fm.role || ticket.fm.角色 || ticket.fm.职能);
   if (role === 'integrator') return [];
   const scopes = toArr(ticket && ticket.fm && (ticket.fm.write_scope || ticket.fm.writeScope || ticket.fm.写入范围));
+  let 出处 = 'frontmatter 的 write_scope';
+  if (!scopes.length) {
+    scopes.push(...正文写入范围(ticket && ticket.body));
+    出处 = '正文的「## 写入范围」一节';
+  }
   if (!scopes.length) return [];
   const patterns = scopes.map(globRegex);
   const violations = changedFiles(dir).filter((file) => !patterns.some((pattern) => pattern.test(file)));
-  if (violations.length) throw new Error(`改动超出工单 write_scope：${violations.join('、')}`);
+  // 出处要说清楚。人手建的单，范围是从**正文**读出来的——不讲的话，
+  // 他对着 frontmatter 找半天也找不到这条约束是哪来的。
+  if (violations.length) {
+    throw new Error(
+      `改动超出工单允许的写入范围：${violations.join('、')}。\n`
+      + `允许范围 ${scopes.join('、')}，来自${出处}。\n`
+      + '改动还在工作区里没丢，只是没打检查点。要么收窄改动，要么改这张单的写入范围。');
+  }
   return scopes;
 }
 
@@ -234,4 +271,5 @@ function publish(project, workspace) {
 module.exports = {
   configOf, isGitRepo, repoTop, workspaceRoot, worktreeList,
   prepare, integrate, checkpoint, dependencyTickets, publish, changedFiles, enforceWriteScope,
+  正文写入范围,
 };
