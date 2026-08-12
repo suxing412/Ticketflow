@@ -25,6 +25,17 @@
 
 
 
+
+<!-- 页签（协-006）。原先整个产品是一页往下滚，加两块内容就滚不完了。
+     studio 用 hash 路由分页，这里照做：地址栏能回到同一页，刷新不丢位置。 -->
+<nav class="页签" id="页签">
+  <a href="#/" data-页="驾驶舱">驾驶舱</a>
+  <a href="#/flow" data-页="流程" title="现在卡在哪、接下来能干什么">流程</a>
+  <a href="#/wiki" data-页="知识库" title="角色协议 / 说明书 / 施工令 / 配置示例">知识库</a>
+</nav>
+
+<div id="页-驾驶舱">
+
 <!-- ── 工单看板：这是产品的主界面，放最上面 ── -->
 <h2>工单看板<span class="右 淡" id="工单来源"></span></h2>
 <div class="栏">
@@ -125,6 +136,25 @@
 
 <h2>未读账本 <span class="淡" id="账本计数"></span></h2>
 <ul class="账本" id="账本"><li class="淡">读取中…</li></ul>
+</div><!-- /页-驾驶舱 -->
+
+<div id="页-流程" style="display:none">
+  <h2>流程<span class="右"><button onclick="刷流程()">重算</button></span></h2>
+  <div class="提示">看板是平的，答不了「为什么这张不动」。这里按<b>依赖深度</b>分层：第 0 层不等任何人，第 N 层等着第 N-1 层。</div>
+  <div id="流程小结" class="栏"></div>
+  <div id="状态机"></div>
+  <div id="流程层"></div>
+</div>
+
+<div id="页-知识库" style="display:none">
+  <h2>知识库<span class="右 淡">只读——改这些文件请走 PR</span></h2>
+  <div class="栏" id="知识分区"></div>
+  <div class="知识两栏">
+    <div id="知识目录"><div class="提示">选一个分区</div></div>
+    <div id="知识正文"><div class="提示">选一篇文档</div></div>
+  </div>
+</div>
+
 <script src="app.js"></script>
 </body>
 </html>

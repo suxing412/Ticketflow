@@ -46,6 +46,8 @@ const 门禁 = require('./lib/门禁');
 const 工单库 = require('./lib/工单库');
 const 自检 = require('./lib/自检');
 const 工单模板 = require('./lib/工单模板');
+const 流程视图 = require('./lib/流程视图');
+const 知识库 = require('./lib/知识库');
 // let 不是 const：界面上配好工单库之后要能当场生效。
 // 让人「配完请重启」是 studio 级产品不该有的台阶——尤其这还是第一次打开就撞上的那一步。
 let 工单根 = 工单库.解析根目录(仓根);
@@ -150,10 +152,14 @@ function 发静态(res, url路径) {
     // 令牌只随首页出门：跨站页面读不到本页内容，拿不到它。
     if (绝对 === path.join(静态根, 'index.html')) {
       const 注入 = String(buf).replace('</head>', 门禁.注入脚本(令牌) + '\n</head>');
-      res.writeHead(200, { 'Content-Type': 类型 });
+      res.writeHead(200, { 'Content-Type': 类型, 'Cache-Control': 'no-store' });
       return res.end(注入);
     }
-    res.writeHead(200, { 'Content-Type': 类型 });
+    // no-store：前端随服务一起分发，没有版本化文件名。不加这个头，
+    // 改完 app.js 刷新看不到变化——人会以为改动没生效，然后去代码里找一个
+    // 根本不存在的 bug。2026-08-12 实测被它骗了一次：接口发的是新的，
+    // 浏览器拿的是旧的，而两边都不报错。全是本机小文件，不缓存的代价可以忽略。
+    res.writeHead(200, { 'Content-Type': 类型, 'Cache-Control': 'no-store' });
     res.end(buf);
   });
 }
@@ -506,6 +512,35 @@ const 服务 = http.createServer((req, res) => {
         codex提示: 'codex 非 stream-json 输出，取不到 usage，其消耗**不计入本账**（见 packages/budget/README.md）',
       });
     } catch (e) { return 发JSON(res, 500, { ok: false, error: `预算闸不可用：${e.message}` }); }
+  }
+
+  // ——— 流程（协-006）：现在卡在哪、接下来能干什么 ———
+  // 看板答不了这个。一张单不动，可能是等上游、可能上游根本不存在、也可能它早就绪了
+  // 只是没人点——三种在列表里长得一模一样，都只是「待投」。
+  if (url路径 === '/api/flow' && req.method === 'GET') {
+    if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
+    try {
+      // list 只带 fm 摘要，依赖字段就在 fm 里，够用；不必逐张 find 读正文。
+      const 全 = 工单库.list(工单根.根);
+      return 发JSON(res, 200, {
+        ok: true, 根目录: 工单根.根,
+        ...流程视图.铺(全, { 转移表: 工单库.TRANSITIONS }),
+      });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+  }
+
+  // ——— 知识库（协-006）：把散在磁盘上的规矩搬进界面 ———
+  // 只读。不给编辑入口是有意的：这些文件多数入库，改它们该走 PR 与评审，
+  // 而不是在网页上点两下——那等于给「绕过评审改规矩」开一条路。
+  if (url路径 === '/api/knowledge' && req.method === 'GET') {
+    const 区 = 查询.get('区');
+    if (!区) return 发JSON(res, 200, { ok: true, 分区: 知识库.分区() });
+    const r = 知识库.列区(仓根, 区);
+    return 发JSON(res, r.ok ? 200 : 400, r.ok ? r : { ok: false, error: r.错误 });
+  }
+  if (url路径 === '/api/knowledge/file' && req.method === 'GET') {
+    const r = 知识库.读(仓根, 查询.get('区'), 查询.get('rel'));
+    return 发JSON(res, r.ok ? 200 : (r.码 || 400), r.ok ? r : { ok: false, error: r.错误 });
   }
 
   // ——— 工单树（协-005）：把 plan.materialize 生成的 DAG 显出来 ———

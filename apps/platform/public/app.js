@@ -463,3 +463,196 @@ async function 刷自检() {
 }
 刷自检();
 setInterval(刷自检, 60000);
+
+// ══════════════════════════════════════════════════════════════
+// 页签路由（协-006）
+// ══════════════════════════════════════════════════════════════
+// 原先整个产品是一页往下滚。加了流程与知识库两块之后滚不完了，
+// 而且「我刚才看的是哪儿」在刷新后就丢了。照 studio 的做法走 hash 路由：
+// 地址栏能回到同一页，刷新不丢位置，浏览器的前进后退也照常用。
+const 页表 = { '': '驾驶舱', '/': '驾驶舱', '/flow': '流程', '/wiki': '知识库' };
+
+function 当前页() {
+  const h = (location.hash || '').replace(/^#/, '');
+  return 页表[h] || '驾驶舱';
+}
+
+function 切页() {
+  const 页 = 当前页();
+  for (const 名 of ['驾驶舱', '流程', '知识库']) {
+    const el = $('页-' + 名);
+    if (el) el.style.display = 名 === 页 ? '' : 'none';
+  }
+  for (const a of document.querySelectorAll('#页签 a')) {
+    a.classList.toggle('在', a.dataset.页 === 页);
+  }
+  // 进哪页才拉哪页的数据。三页全开着定时器的话，看知识库时后台还在每 10 秒
+  // 打一遍工单接口——白费，而且真跑时那些请求会跟执行抢日志。
+  if (页 === '流程') 刷流程();
+  if (页 === '知识库') 刷知识分区();
+}
+window.addEventListener('hashchange', 切页);
+
+// ══════════════════════════════════════════════════════════════
+// 流程页
+// ══════════════════════════════════════════════════════════════
+async function 刷流程() {
+  try {
+    const { 码, 体: j } = await 取JSON('/api/flow');
+    if (码 !== 200) {
+      $('流程小结').innerHTML = '<div class="提示 级急">' + 转义(j.error || ('HTTP ' + 码)) + '</div>';
+      $('状态机').innerHTML = ''; $('流程层').innerHTML = '';
+      return;
+    }
+    const s = j.小结 || {};
+    // 「依赖缺失」单独给红：其余两项是正常的产线状态，它不是——
+    // 那些单永远不会就绪，摆在一起会被当成「等等就好了」。
+    $('流程小结').innerHTML =
+      '<div class="卡"><div class="淡">在办</div><div class="数">' + s.在办 + '</div></div>'
+      + '<div class="卡"><div class="淡">就绪可派</div><div class="数">' + s.就绪 + '</div></div>'
+      + '<div class="卡"><div class="淡">等上游</div><div class="数">' + s.等上游 + '</div></div>'
+      + (s.依赖缺失 ? '<div class="卡 坏"><div class="淡">依赖缺失</div><div class="数">' + s.依赖缺失 + '</div></div>' : '');
+
+    // 状态机：表驱动写在代码里，用的人看不见。画出来，顺带把每态几张摆上。
+    $('状态机').innerHTML = '<div class="流程带">' + (j.状态机 || []).map((x, i) =>
+      '<div class="流程节' + (x.张数 ? '' : ' 空') + '">'
+      + '<div class="态 ' + 转义(x.状态) + '">' + 转义(x.状态) + '</div>'
+      + '<div class="数">' + x.张数 + '</div>'
+      + (x.去向.length ? '<div class="淡">→ ' + x.去向.map(转义).join(' / ') + '</div>' : '<div class="淡">终态</div>')
+      + '</div>' + (i < j.状态机.length - 1 ? '<div class="流程箭">›</div>' : '')).join('') + '</div>';
+
+    const 层 = j.层 || [];
+    $('流程层').innerHTML = 层.length ? 层.map((l) =>
+      '<h3 class="层头">第 ' + l.深度 + ' 层 <span class="淡">' + 转义(l.说明) + '　' + l.工单.length + ' 张</span></h3>'
+      + '<table><tbody>' + l.工单.map((t) => {
+        const k = t.卡因 || {};
+        const 色 = k.类型 === '依赖缺失' ? '级急' : (k.类型 === '就绪' ? 'okc' : '淡');
+        return '<tr>'
+          + '<td><a href="#/flow" onclick="看单(\'' + 转义(t.id) + '\');return false"><code>' + 转义(t.id) + '</code></a></td>'
+          + '<td><span class="态 ' + 转义(t.状态) + '">' + 转义(t.状态) + '</span></td>'
+          + '<td><span class="角色 ' + 转义(t.角色) + '">' + 转义(t.角色) + '</span></td>'
+          + '<td>' + 转义(t.标题) + '</td>'
+          + '<td class="' + 色 + '">' + 转义(k.说 || '') + '</td>'
+          + '</tr>';
+      }).join('') + '</tbody></table>').join('')
+      : '<div class="提示">没有在办的单。完成的单不铺在这里——想看历史去看板筛「完成」。</div>';
+  } catch (e) {
+    $('流程小结').innerHTML = '<div class="提示 级急">流程接口不可达：' + 转义(e.message) + '</div>';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// 知识库页
+// ══════════════════════════════════════════════════════════════
+let 知识区 = '';
+
+async function 刷知识分区() {
+  if ($('知识分区').dataset.已载) return;              // 分区表是静态的，拉一次够了
+  try {
+    const { 体: j } = await 取JSON('/api/knowledge');
+    $('知识分区').innerHTML = (j.分区 || []).map((z) =>
+      '<button class="btn" title="' + 转义(z.说) + '" onclick="选知识区(\'' + 转义(z.键) + '\')">' + 转义(z.键) + '</button>').join('');
+    $('知识分区').dataset.已载 = '1';
+    if (!知识区 && (j.分区 || []).length) 选知识区(j.分区[0].键);
+  } catch (e) { $('知识分区').innerHTML = '<span class="提示 级急">知识库接口不可达</span>'; }
+}
+
+async function 选知识区(区) {
+  知识区 = 区;
+  for (const b of document.querySelectorAll('#知识分区 button')) {
+    b.classList.toggle('accent', b.textContent === 区);
+  }
+  $('知识目录').innerHTML = '<div class="提示">读取中…</div>';
+  try {
+    const { 码, 体: j } = await 取JSON('/api/knowledge?区=' + encodeURIComponent(区));
+    if (码 !== 200) { $('知识目录').innerHTML = '<div class="提示 级急">' + 转义(j.error) + '</div>'; return; }
+    $('知识目录').innerHTML =
+      '<div class="提示">' + 转义(j.说) + '<br><code>' + 转义(j.目录) + '/</code>　' + j.条数 + ' 篇</div>'
+      + '<ul class="知识目">' + (j.文档 || []).map((d) =>
+        '<li><a href="#/wiki" onclick="读知识(\'' + 转义(区) + '\',\'' + 转义(d.rel) + '\');return false">'
+        + 转义(d.标题) + '</a><div class="淡">' + 转义(d.rel) + '</div></li>').join('') + '</ul>';
+  } catch (e) { $('知识目录').innerHTML = '<div class="提示 级急">' + 转义(e.message) + '</div>'; }
+}
+
+async function 读知识(区, rel) {
+  $('知识正文').innerHTML = '<div class="提示">读取中…</div>';
+  try {
+    const { 码, 体: j } = await 取JSON('/api/knowledge/file?区=' + encodeURIComponent(区) + '&rel=' + encodeURIComponent(rel));
+    if (码 !== 200) { $('知识正文').innerHTML = '<div class="提示 级急">' + 转义(j.error) + '</div>'; return; }
+    $('知识正文').innerHTML = '<div class="文头"><b>' + 转义(j.标题) + '</b>　<code class="淡">' + 转义(j.rel) + '</code></div>'
+      + '<article class="md">' + 渲染md(j.正文) + '</article>';
+    $('知识正文').scrollTop = 0;
+  } catch (e) { $('知识正文').innerHTML = '<div class="提示 级急">' + 转义(e.message) + '</div>'; }
+}
+
+// 极简 markdown → HTML。
+//
+// ⚠ **顺序是安全边界，不是风格问题**：必须先整体转义，再往转义后的文本上套格式。
+// 反过来（先套格式再转义，或只转义一部分）就等于把文件内容当 HTML 执行。
+// 这些文件里有大量 <script>、<!--blk--> 之类的字面量，而知识库读的是磁盘上的文件——
+// 谁能往那几个目录写文件，谁就能在这个页面上执行脚本。
+//
+// 为什么手写不引库：运行时零第三方依赖是既定口径。代价是只支持一个子集——
+// 标题、列表、围栏代码、行内代码、粗体、引用、水平线。表格与图片不支持，
+// 原样显示成文本，**不假装渲染成功**。
+function 渲染md(原文) {
+  const 行 = 转义(String(原文 || '')).split(/\r?\n/);
+  const 出 = [];
+  let 在码块 = false; let 在列表 = false;
+  let i = -1;                                  // 表格要往前看一行，所以得有下标
+  const 收列表 = () => { if (在列表) { 出.push('</ul>'); 在列表 = false; } };
+  const 行内 = (s) => s
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  // 表格。原先不支持，说明书那几篇整页都是表，吐出来一堆 `|---|---|---|`
+  // ——那行是纯噪音，人得在竖线里自己数列。「不假装渲染成功」是诚实的兜底，
+  // 但这里真正该做的是支持它，而不是把诚实当成不做的理由。
+  const 是表行 = (s) => /^\s*\|.*\|\s*$/.test(s || '');
+  const 是分隔行 = (s) => /^\s*\|[\s:|-]+\|\s*$/.test(s || '') && /-/.test(s || '');
+  const 切格 = (s) => s.trim().replace(/^\||\|$/g, '').split('|').map((c) => 行内(c.trim()));
+
+  while (++i < 行.length) {
+    const l = 行[i];
+    if (/^```/.test(l)) {
+      收列表();
+      出.push(在码块 ? '</code></pre>' : '<pre class="码"><code>');
+      在码块 = !在码块;
+      continue;
+    }
+    if (在码块) { 出.push(l); continue; }
+    // 认表：表头行 + 分隔行。少了分隔行就不是表——正文里一句话带两个竖线
+    // 也会长得像表行，只靠「有竖线」判会把普通段落吃掉。
+    if (是表行(l) && 是分隔行(行[i + 1])) {
+      收列表();
+      const 头 = 切格(l);
+      i += 2;
+      const 体 = [];
+      while (i < 行.length && 是表行(行[i])) { 体.push(切格(行[i])); i++; }
+      i--;                                       // 退一格：外层 ++i 会再往前走
+      出.push('<div class="表包"><table class="md表"><thead><tr>'
+        + 头.map((c) => '<th>' + c + '</th>').join('') + '</tr></thead><tbody>'
+        + 体.map((r) => '<tr>' + r.map((c) => '<td>' + c + '</td>').join('') + '</tr>').join('')
+        + '</tbody></table></div>');
+      continue;
+    }
+    const h = l.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { 收列表(); const n = Math.min(6, h[1].length + 2); 出.push('<h' + n + '>' + 行内(h[2]) + '</h' + n + '>'); continue; }
+    if (/^\s*[-*]\s+/.test(l)) {
+      if (!在列表) { 出.push('<ul>'); 在列表 = true; }
+      出.push('<li>' + 行内(l.replace(/^\s*[-*]\s+/, '')) + '</li>');
+      continue;
+    }
+    收列表();
+    // 转义之后 `>` 已经变成 &gt;，引用行要按转义后的形态认——
+    // 照着原文写 /^>/ 会一条都匹配不上，而且不会报错，只是引用块永远不出现。
+    if (/^\s*&gt;\s?/.test(l)) { 出.push('<blockquote>' + 行内(l.replace(/^\s*&gt;\s?/, '')) + '</blockquote>'); continue; }
+    if (/^\s*(-{3,}|={3,})\s*$/.test(l)) { 出.push('<hr>'); continue; }
+    if (!l.trim()) { 出.push(''); continue; }
+    出.push('<p>' + 行内(l) + '</p>');
+  }
+  收列表();
+  if (在码块) 出.push('</code></pre>');       // 文件里围栏没闭合也不能把后面的内容吞掉
+  return 出.join('\n');
+}
+
+切页();
