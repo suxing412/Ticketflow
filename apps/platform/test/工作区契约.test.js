@@ -141,6 +141,24 @@ t('分支名以工单记着的为准，配置前缀只用于新建', () => {
   } finally { 清(仓, 根); }
 });
 
+t('检查点的提交信息用同一个前缀，不写死 studio', () => {
+  // 这条提交进的是**用户自己的仓**，落款写着 studio 而实际是 platform 干的，
+  // git log 上就分不清谁改了什么。协-009 改分支前缀时漏了这一处，
+  // 首次真跑之后在靶仓的提交上看到才发现（`[studio] E2E-1 …`）。
+  const 仓 = 建仓();
+  const 根 = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-cp-'));
+  try {
+    const 配 = { workspace: { mode: 'worktree', root: 根, branchPrefix: 'platform' } };
+    const 单 = { id: 'T-11', fm: { title: '加个函数' } };
+    const w = 工作区.prepare(根, 配, 单, { name: 'p', path: 仓 });
+    fs.writeFileSync(path.join(w.path, 'n.txt'), 'x\n');
+    工作区.checkpoint(配, w, 单);
+    const 信 = git(仓, ['log', '-1', '--format=%s', 'platform/p/T-11']);
+    assert.ok(信.startsWith('[platform]'), '提交信息前缀不对：' + 信);
+    assert.ok(!/\[studio\]/.test(信), '还写着 [studio]');
+  } finally { 清(仓, 根); }
+});
+
 t('默认分支前缀是 platform，不是 studio', () => {
   // 这个前缀出现在**用户自己的仓**里。建它的是 platform 不是 studio——
   // 两个产品都往同一个仓写的时候，光看分支名分不清是谁建的。
