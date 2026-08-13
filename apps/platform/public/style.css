@@ -403,3 +403,21 @@ th { white-space:nowrap; }
   .问框 { padding:18px 18px 14px; }
   .吐司 { right:12px; bottom:12px; left:12px; max-width:none; }
 }
+
+/* ═══ 编制（协-015）═══
+   池序是有序偏好，所以要能一眼看出**顺序**和**谁被冻着**——
+   这两件事决定了「这个角色现在到底派得出去吗」。 */
+.池片 { display:inline-flex; align-items:center; height:22px; padding:0 9px; border-radius:11px;
+  font-size:11.5px; font-family:var(--mono); background:var(--chip); color:var(--ink2); white-space:nowrap; }
+/* 指定过的实心一点：区分「我明确挂了它」和「它只是碰巧在全局排名里」 */
+.池片.指 { background:var(--accenttint); color:var(--accent-ink); font-weight:600; }
+/* 冻结的划掉——不是变灰。灰只是弱化，划掉才是「它现在派不出去」 */
+.池片.冻 { background:var(--dangerbg); color:var(--danger); text-decoration:line-through; }
+.箭 { color:var(--ink3); margin:0 5px; font-size:11px; }
+
+.编制选 { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+.池选 { position:relative; }
+.池选.选中 { background:var(--accent); color:var(--on-accent); border-color:var(--accent); }
+.池选 .序 { display:inline-flex; align-items:center; justify-content:center;
+  width:16px; height:16px; margin-right:6px; border-radius:8px;
+  background:var(--on-accent); color:var(--accent); font-size:10px; font-weight:700; font-family:var(--mono); }

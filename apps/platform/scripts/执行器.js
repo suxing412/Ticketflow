@@ -63,6 +63,19 @@ const { 令牌 } = 门禁.取令牌(平台根);
 // 代价只是每次请求读一个几十字节的 JSON。为省这个而让配置改不动，不划算。
 const 取工单根 = () => 工单库.解析根目录(平台根);
 
+// 编制（协-015）同理现读：界面上改完「哪个角色归哪个模型」，这个进程还捧着开机那份的话，
+// 派活仍按旧编制走——而界面上每一处都显示改成功了。同一类问题在工单根、项目注册表上
+// 各踩过一次，不第三次。
+//
+// 只重读 routing 一段，其余照旧开机定死：那些是这个进程的形状（端口、允许真跑），
+// 中途换掉只会让「我现在到底跑在什么设置下」说不清。
+function 现配置() {
+  try {
+    const c = 本地覆盖.应用(平台根, 读JSON(path.join(平台根, 'config', 'platform.config.json'), {})).配置;
+    return { ...配置, routing: c.routing };
+  } catch { return 配置; }
+}
+
 let registry = null;
 try { registry = 公用件.载入('providers', 'registry.js'); } catch { /* 下面报 */ }
 
@@ -288,7 +301,7 @@ const 服务 = http.createServer((req, res) => {
 
       // 判官走「评审」类别：router 的 crossProviderReview 会优先挑**别家**，
       // 降低同源盲区——自己判自己是最没有价值的一种评审。
-      const 派 = 派单.选派(平台根, 配置, { 角色: 'reviewer', 类别: '评审', 公用件, 账本根, 工单: t });
+      const 派 = 派单.选派(平台根, 现配置(), { 角色: 'reviewer', 类别: '评审', 公用件, 账本根, 工单: t });
       if (!派.ok) return 发JSON(res, 409, { ok: false, ...派 });
 
       let 调用;
@@ -432,7 +445,7 @@ const 服务 = http.createServer((req, res) => {
       待投表, 在跑,
       依赖就绪: (单) => 派单.依赖就绪(工单库, 工单根.根, 单).ok,
       选池: (单) => {
-        const p = 派单.选派(平台根, 配置, { 角色: (单.fm && (单.fm.role || 单.fm.职能)) || '', 公用件, 账本根 });
+        const p = 派单.选派(平台根, 现配置(), { 角色: (单.fm && (单.fm.role || 单.fm.职能)) || '', 公用件, 账本根 });
         return p.ok ? p.选中 : null;
       },
     });
@@ -497,7 +510,7 @@ const 服务 = http.createServer((req, res) => {
       const t = 工单库.find(工单根.根, id);
       if (!t) return 发JSON(res, 404, { ok: false, error: `工单不存在：${id}` });
 
-      const 派 = 派单.选派(平台根, 配置, {
+      const 派 = 派单.选派(平台根, 现配置(), {
         角色: t.fm.role || t.fm.职能 || '',
         公用件, 账本根: 平台根,
       });

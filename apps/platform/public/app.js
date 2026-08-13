@@ -788,7 +788,7 @@ function 切页() {
   // 设置页装的是观测数据（排名/消耗/战绩/Providers/瞭望塔/账本），进去才拉。
   // 常驻驾驶舱时后台每隔几秒把这些接口全打一遍，纯属白费——
   // 而且真跑时这些请求会跟执行抢日志。
-  if (页 === '设置') { 刷排名(); 刷消耗(); 刷战绩(); 刷providers(); 刷瞭望塔(); 刷账本(); 刷计费(); }
+  if (页 === '设置') { 刷编制(); 刷排名(); 刷消耗(); 刷战绩(); 刷providers(); 刷瞭望塔(); 刷账本(); 刷计费(); }
 }
 window.addEventListener('hashchange', 切页);
 
@@ -1165,6 +1165,107 @@ function 进项目(名) {
   项目胶囊();
   location.hash = '#/';
 }
+
+// ══════════════════════════════════════════════════════════════
+// 编制：哪个角色归哪个模型（协-015）
+// ══════════════════════════════════════════════════════════════
+// 照抄 studio 的 lib/roster：每角色一行，值是**有序池序**而不是单选——
+// 单选表达不了「优先 claude，它冻结了就用 codex」，而那恰是最常见的真实需求。
+//
+// 一处与 studio 不同：它的编制由项管 agent 调接口改，「监制台不提供编辑界面」。
+// platform 没有项管 agent，人就是项管，所以这边给界面。
+let 编制表 = [];
+let 编制池 = [];
+
+async function 刷编制() {
+  const 位 = $('编制体');
+  if (!位) return;
+  try {
+    const { 码, 体: j } = await 取JSON('/api/roster');
+    if (码 !== 200) { 位.innerHTML = '<tr><td colspan="4" class="级急">' + 转义(j.error || ('HTTP ' + 码)) + '</td></tr>'; return; }
+    编制表 = j.编制 || [];
+    编制池 = j.池 || [];
+    const 说 = $('编制说明');
+    if (说) 说.textContent = j.说明 || '';
+    换(位, 编制表.map((r) => {
+      // 冻结的池要在这一行上就看得见——「已指定 codex」而 codex 正冻着，
+      // 是一个必须当场知道的事实，不该等派活失败才发现。
+      const 池串 = r.池态.map((p) => '<span class="池片' + (p.冻结 ? ' 冻' : '') + (p.指定 ? ' 指' : '')
+        + '" title="' + (p.冻结 ? '预算闸冻结中' : p.冻结 === null ? '额度读数中' : '可用')
+        + (p.指定 ? '（已指定）' : '（按全局排名）') + '">' + 转义(p.池) + '</span>').join('<span class="箭">→</span>');
+      const 态类 = r.可用 === true ? 'ok' : r.可用 === false ? 'red' : 'warn';
+      return '<tr><td><b>' + 转义(r.角色) + '</b></td>'
+        + '<td>' + (池串 || '<span class="淡">无</span>') + '</td>'
+        + '<td><span class="pill ' + 态类 + '">' + 转义(r.态) + '</span></td>'
+        + '<td><button class="btn" onclick="改编制(\'' + 转义(r.角色) + '\')">改</button></td></tr>';
+    }).join(''));
+  } catch (e) { 位.innerHTML = '<tr><td colspan="4" class="级急">' + 转义(e.message) + '</td></tr>'; }
+}
+
+// 改一个角色的池序。
+// 用一个「按顺序点池名」的交互而不是拖拽：拖拽在窄屏和键盘下都难用，
+// 而这里最多三五个池，点两下就排完了。
+async function 改编制(角色) {
+  const 行 = 编制表.find((r) => r.角色 === 角色);
+  if (!行) return;
+  let 选 = [...行.池序];
+
+  const 画 = () => '<p>点池名按顺序排：<b>从左到右取第一个没被冻结的</b>。</p>'
+    + '<div class="编制选">'
+    + 编制池.map((p) => {
+      const i = 选.indexOf(p);
+      return '<button class="btn 池选' + (i >= 0 ? ' 选中' : '') + '" data-池="' + 转义(p) + '">'
+        + (i >= 0 ? '<span class="序">' + (i + 1) + '</span>' : '') + 转义(p) + '</button>';
+    }).join('')
+    + '</div>'
+    + '<div class="提示">当前：<b>' + 转义(选.length ? 选.join(' → ') : '（未指定，按全局排名）') + '</b>'
+    + '<br>清空 = 回到全局排名（路由排名页那套分数）。</div>'
+    + '<div class="提示">改动要写理由——三个月后回头看「为什么 reviewer 挂在 codex 上」，'
+    + '没有理由就只能靠猜。</div>'
+    + '<input id="编制理由" placeholder="为什么这么改" spellcheck="false" style="width:100%;margin-top:8px">';
+
+  const 罩 = document.createElement('div');
+  罩.className = '罩';
+  罩.innerHTML = '<div class="问框"><div class="问题">' + 转义(角色) + ' 归谁</div>'
+    + '<div class="问文" id="编制文"></div>'
+    + '<div class="问钮"><button class="btn" data-选="否">取消</button>'
+    + '<button class="btn accent" data-选="是">保存</button></div></div>';
+  document.body.appendChild(罩);
+  const 文 = 罩.querySelector('#编制文');
+
+  const 重画 = () => {
+    const 理由 = (罩.querySelector('#编制理由') || {}).value || '';
+    文.innerHTML = 画();
+    罩.querySelector('#编制理由').value = 理由;      // 重画不该把人写了一半的理由冲掉
+    for (const b of 罩.querySelectorAll('.池选')) {
+      b.onclick = () => {
+        const p = b.dataset.池;
+        const i = 选.indexOf(p);
+        if (i >= 0) 选.splice(i, 1); else 选.push(p);   // 再点一次取消，顺序按点击序
+        重画();
+      };
+    }
+  };
+  重画();
+
+  const 收 = () => 罩.remove();
+  罩.onclick = (e) => { if (e.target === 罩) 收(); };
+  罩.querySelector('[data-选="否"]').onclick = 收;
+  罩.querySelector('[data-选="是"]').onclick = async () => {
+    const 理由 = (罩.querySelector('#编制理由').value || '').trim();
+    if (!理由) { 吐('请写一句理由——这条改动会影响派给谁、花谁的额度', '坏'); return; }
+    const { 码, 体: j } = await 取JSON('/api/roster', {
+      method: 'POST', body: JSON.stringify({ 改动: [{ 角色, 池序: 选 }], 理由 }),
+    });
+    if (码 !== 200 || !j.ok) { 吐(j.error || ('HTTP ' + 码), '坏'); return; }
+    收();
+    吐(j.生效 && j.生效.length ? j.生效[0].摘 : '没有实际变化');
+    刷编制();
+    刷排名();
+  };
+}
+
+
 
 
 
