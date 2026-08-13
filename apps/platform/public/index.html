@@ -56,10 +56,10 @@
   批量操作<b>只做干跑与流转，从不真跑</b>——真跑逐张点，每张独立过三闸。
   一个按钮同时花掉几张单的钱，不该存在。
 </div>
-<table>
+<div class="表盒"><table>
   <thead><tr><th>编号</th><th>状态</th><th>角色</th><th>标题</th><th>项目</th><th>执行池</th><th>操作</th></tr></thead>
   <tbody id="工单体"><tr><td colspan="7" class="淡">读取中…</td></tr></tbody>
-</table>
+</table></div>
 
 <div id="建单区" style="display:none">
   <h2>新建工单</h2>
@@ -132,20 +132,20 @@
     <div class="栏">
       <span class="淡">角色：</span><select id="排名角色" onchange="刷排名()"></select>
     </div>
-    <table>
+    <div class="表盒"><table>
       <thead><tr><th>Provider</th><th>分数</th><th>理由</th></tr></thead>
       <tbody id="排名体"><tr><td colspan="3" class="淡">读取中…</td></tr></tbody>
-    </table>
+    </table></div>
     <div class="提示" id="排名说明"></div>
   </div>
 
   <div>
     <!-- ── 消耗报表 ── -->
     <h2>消耗<span class="右 淡" id="消耗提示"></span></h2>
-    <table>
+    <div class="表盒"><table>
       <thead><tr><th>池</th><th>今日 token</th><th>本月 token</th><th>上限</th><th></th></tr></thead>
       <tbody id="消耗体"><tr><td colspan="5" class="淡">读取中…</td></tr></tbody>
-    </table>
+    </table></div>
     <div class="提示" id="消耗按单"></div>
 
     <!-- ── 战绩 ── -->
@@ -155,19 +155,19 @@
       <div class="卡"><div class="淡">干跑</div><div class="数" id="干跑数">—</div></div>
       <div class="卡"><div class="淡">成功率</div><div class="数" id="成功率">—</div></div>
     </div>
-    <table>
+    <div class="表盒"><table>
       <thead><tr><th>时刻</th><th>Provider</th><th>工单</th><th>结果</th><th>耗时</th></tr></thead>
       <tbody id="战绩体"><tr><td colspan="5" class="淡">读取中…</td></tr></tbody>
-    </table>
+    </table></div>
   </div>
 </div>
 
 <!-- ── Providers ── -->
 <h2>Providers<span class="右 淡">枚举自仓根 packages/providers</span></h2>
-<table>
+<div class="表盒"><table>
   <thead><tr><th>名称</th><th>adapter</th><th>启用</th><th>说明</th><th>操作</th></tr></thead>
   <tbody id="表体"><tr><td colspan="5" class="淡">读取中…</td></tr></tbody>
-</table>
+</table></div>
 <div id="回声区" style="display:none"><pre id="回声"></pre></div>
 
 <!-- ── 瞭望塔 ── -->

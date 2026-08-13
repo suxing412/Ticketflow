@@ -382,3 +382,24 @@ td .空卡 p { margin:0; }
 @media (prefers-reduced-motion: reduce) {
   .吐司, .罩, .问框 { animation-duration:.01s; }
 }
+
+/* ═══ 窄屏（协-012）═══
+   实测 597px 宽时表头被挤成竖排（「状/态」「角/色」各占一行），整张表读不了。
+   表格不该为了塞进窄屏而牺牲可读性——让它在自己的盒子里横滚，
+   页面主体永远不横向滚动。 */
+.表盒 { overflow-x:auto; -webkit-overflow-scrolling:touch; margin:10px 0; }
+.表盒 > table { min-width:720px; margin:0; }
+/* 表头永不折行：折了就分不清是一列还是两列 */
+th { white-space:nowrap; }
+
+@media (max-width: 860px) {
+  body { padding:0 18px 60px; }
+  .topbar { flex-wrap:wrap; gap:10px; }
+  .topbar h1 { font-size:21px; }
+  /* 页签在窄屏横滚，别折成两行——折行之后「当前在哪一页」的下划线会跑到上面去 */
+  .页签 { overflow-x:auto; flex-wrap:nowrap; }
+  .页签 a { flex:0 0 auto; padding:8px 12px; }
+  .栏 { gap:6px; }
+  .问框 { padding:18px 18px 14px; }
+  .吐司 { right:12px; bottom:12px; left:12px; max-width:none; }
+}

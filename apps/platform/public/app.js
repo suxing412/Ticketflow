@@ -97,9 +97,17 @@ function 换(目标, html) {
   if (焦 && /^(INPUT|TEXTAREA)$/.test(焦.tagName)) {
     try { 选区 = [焦.selectionStart, 焦.selectionEnd]; } catch { /* 某些 type 没有选区 */ }
   }
-  const 临 = document.createElement('div');
+  // ⚠ 临时容器必须跟目标同类型。
+  //
+  // 往 <div> 里塞 `<tr>…</tr>` 时，HTML 解析器**直接把表格标签丢掉**，
+  // 只留下里面的 a/span/button——这是规范行为（表格元素只在表格上下文里合法），
+  // 不报任何错。于是 tbody 被填成一堆散节点，整张表塌成流式文本。
+  // 实测：窄屏截图里工单表变成一坨挤在一起的胶囊，而 DOM 里一个 <tr> 都没有。
+  //
+  // <template> 的内容解析在「片段」上下文里，表格标签能原样保留。
+  const 临 = document.createElement('template');
   临.innerHTML = html;
-  换子(目标, 临);
+  换子(目标, 临.content);
   // 兜底：整段被替换时焦点会掉，按 id 认回来
   if (焦id && document.activeElement !== 焦) {
     const el = $(焦id);

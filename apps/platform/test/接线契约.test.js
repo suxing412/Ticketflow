@@ -177,6 +177,20 @@ t('危险色只给真会多花钱的确认框（红色泛滥就不再是信号�
   assert.ok(/不调用任何 AI/.test(投出段), '要明说它不花钱，否则人会以为批量=批量花钱');
 });
 
+t('增量刷新的临时容器必须是 <template>（div 会把表格标签吃掉）', () => {
+  // 往 <div> 里塞 `<tr>…</tr>`，HTML 解析器**直接把表格标签丢掉**，只留里面的
+  // a/span/button——这是规范行为（表格元素只在表格上下文里合法），**不报任何错**。
+  // 于是 tbody 被填成一堆散节点，整张表塌成流式文本。
+  // 实测在窄屏截图上看到：工单表变成一坨挤在一起的胶囊，而 DOM 里一个 <tr> 都没有。
+  const 脚 = fs.readFileSync(path.join(平台根, 'public', 'app.js'), 'utf8');
+  const 段 = (脚.match(/function 换\(目标, html\)[\s\S]*?\n\}/) || [''])[0];
+  assert.ok(段, '找不到增量刷新函数');
+  assert.ok(/createElement\('template'\)/.test(段),
+    '临时容器不是 <template>——渲染 <tr> 时表格标签会被静默吃掉');
+  assert.ok(!/createElement\('div'\)/.test(段), '用 div 当临时容器会把表拆平');
+  assert.ok(/临\.content/.test(段), '要把 template.content 交给比对，不是 template 本身');
+});
+
 t('空态要给下一步，不能只说「没有」', () => {
   // 空态是**第一次打开时唯一看得见的东西**。一句「还没有工单」把这个位置浪费掉了——
   // 那一刻人最需要知道的是「那我该干什么」。
