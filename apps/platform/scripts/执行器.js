@@ -162,8 +162,13 @@ const 工作区端口 = Number(process.env.WORKSPACE_PORT || (配置.workspace &
 function 工作区请求(路径, 体) {
   return new Promise((resolve) => {
     const 数据 = JSON.stringify(体 || {});
+    // 路径里的中文必须编码。node 的 http.request 对未转义字符**直接抛**
+    // ERR_UNESCAPED_CHARACTERS——不是返回错误，是同步抛，整个执行器进程就此挂掉。
+    // `/write/审阅区`、`/write/收工` 都是中文路径，两条都会踩。
+    // 在助手里统一编码，比让每个调用点自己记得靠谱（今天已经在测试里踩过一次同款）。
+    const 编码路径 = String(路径).split('/').map(encodeURIComponent).join('/');
     const req = http.request({
-      host: '127.0.0.1', port: 工作区端口, path: 路径, method: 'POST',
+      host: '127.0.0.1', port: 工作区端口, path: 编码路径, method: 'POST',
       headers: { Authorization: `Bearer ${令牌}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(数据) },
     }, (上游) => {
       let s = '';
@@ -271,7 +276,9 @@ const 服务 = http.createServer((req, res) => {
     if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
     const id = decodeURIComponent(q[1]);
 
-    return 收体(req, 64 * 1024, (体) => {
+    // async：要 await 工作区服务建审阅区（协-011）。/run 那边本来就是 async，
+    // 这边一直是同步的——加 await 之前先把签名对齐，否则 node 直接语法报错。
+    return 收体(req, 64 * 1024, async (体) => {
       const 干跑 = !(体 && (体.干跑 === false || 体.dry_run === false));
       const t = 工单库.find(工单根.根, id);
       if (!t) return 发JSON(res, 404, { ok: false, error: `工单不存在：${id}` });
@@ -301,7 +308,8 @@ const 服务 = http.createServer((req, res) => {
       // 首次真跑当场撞到（E2E-1 的实现已经合进 master，仍被判不过）；
       // R-1 连挂三次多半也是同一回事，我当时误判成「我自己喂错了测试数据」。
       const 变更文件 = (体 && 体.变更文件) || (t.fm && t.fm.变更文件) || [];
-      const 提示 = 质检.质检提示词(t, 变更文件);
+      // 提示词在**审阅区确定之后**再拼：它要如实告诉判官有没有代码可看。
+      let 提示 = 质检.质检提示词(t, 变更文件);
       const 共同 = { ok: true, 工单: id, 判官: 派.选中, 跨厂: 派.选中 !== t.fm.执行池, 调用 };
 
       if (干跑) {
@@ -321,10 +329,39 @@ const 服务 = http.createServer((req, res) => {
         });
       }
 
-      const 工作 = 取工作目录();
-      if (!工作.ok) return 发JSON(res, 403, { ...共同, ok: false, error: 工作.错 });
+      // 判官要**看得见代码**（协-011）。
+      //
+      // 此前它跑在 取工作目录() 现建的空目录里，跟被评审的东西毫无关系：
+      // 被告知「改了 util.js」，去读，得到 ENOENT。它的判断没错——
+      // 「工作区中不存在 util.js」是它眼前的事实——错的是我们没给它代码。
+      // 实测 QA-VERIFY：实现已合进 master 且功能正确，仍被判不过。
+      //
+      // 给一个 detached worktree 落在该单的检查点上：判官看到的正是它要判的那份代码，
+      // 且是历史上那个点的样子。不直接递项目主仓路径——施工令决定 3 那条是架构保证，
+      // 指望一个无头 agent 因为几个 CLI flag 就不写，是把它降级成自觉。
+      let 工作目录 = null; let 审阅区 = null;
+      // 项目名从工单读——**这里不是 /run 的作用域**，那边的 项目名 变量在这看不见。
+      // 第一版直接引用了它，执行器一收到质检请求就 ReferenceError 整个进程崩掉，
+      // 而 179 项测试一条都没红：质检的真跑路径从来没被覆盖过。
+      const 项目名 = (t.fm && t.fm.项目) || '';
+      const 检查点sha = (t.fm && t.fm.workspace && t.fm.workspace.commit) || t.fm.检查点;
+      if (项目名 && 检查点sha) {
+        const a = await 工作区请求('/write/审阅区', { 项目: 项目名, 工单: id, commit: 检查点sha });
+        if (a.码 === 200 && a.体.ok) { 审阅区 = a.体; 工作目录 = a.体.路径; }
+        else 审阅区 = { ok: false, 错误: (a.体 && a.体.error) || '审阅区建不起来' };
+      }
+      if (!工作目录) {
+        // 没项目、没检查点、或审阅区建不起来 —— 退回空目录，但**必须说出来**。
+        // 不说的话，判官在空目录里得出的「什么都没有」会被当成结论，
+        // 而那其实只说明它没拿到材料。
+        const 工作 = 取工作目录();
+        if (!工作.ok) return 发JSON(res, 403, { ...共同, ok: false, error: 工作.错 });
+        工作目录 = 工作.目录;
+      }
 
-      拉起(调用, 提示, 工作.目录, (r) => {
+      提示 = 质检.质检提示词(t, 变更文件, { 审阅区: !!(审阅区 && 审阅区.ok !== false) });
+
+      拉起(调用, 提示, 工作目录, (r) => {
         // 先按适配器声明的格式抽出 agent 正文，再交给判定——
         // 直接拿整条 JSONL 流去解析，「阻断问题」里会塞满流事件（实测踩过）。
         const 抽 = 输出提取.抽正文(r.输出, 调用.outputFormat);
@@ -339,6 +376,15 @@ const 服务 = http.createServer((req, res) => {
           ok: 判.结论 !== '判官失败', dry: false, durationMs: r.耗时毫秒,
           qualityPassed: 判.结论 === '通过', _输出: r.输出,
         });
+
+        // 审阅区判完就收——否则每判一次多留一个 worktree，
+        // 正是协-009 刚堵掉的那类泄漏，不能在这儿又开一个口。
+        // 用 --force：判官理论上不写，但它是个无头 agent，真留下脏改动时
+        // 不该因此卡住清理；那份快照本来就没有交付价值（detached，无分支）。
+        if (审阅区 && 审阅区.ok !== false && 审阅区.路径) {
+          工作区请求('/write/收工', { 项目: 项目名, 工作区: { path: 审阅区.路径 } })
+            .catch(() => { /* 收不掉不该影响判定结果，遗留会被 /遗留 抓到 */ });
+        }
 
         let 流转 = null;
         if (判.下一步) {

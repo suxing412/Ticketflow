@@ -72,7 +72,13 @@ function 收体(req, 上限, 完成) {
 
 const 服务 = http.createServer((req, res) => {
   const 请求URL = new URL(req.url || '/', 'http://127.0.0.1');
-  const 路径 = 请求URL.pathname;
+  // 解码：本服务的路径带中文（/write/审阅区、/write/收工），
+  // 调用方必须编码才发得出去（node 的 http.request 对未转义字符直接抛），
+  // 于是这边收到的是 %E5%AE%A1%E9%98%85%E5%8C%BA。不解码就永远匹配不上，
+  // 表现为 404「未知路径」——而两边看起来都没错。
+  // try：地址栏里手敲的半截百分号会让 decode 抛，那种就按原样匹配（落 404）。
+  let 路径 = 请求URL.pathname;
+  try { 路径 = decodeURIComponent(路径); } catch { /* 解不开就按原样 */ }
   const 查询 = 请求URL.searchParams;
 
   // 与 server.js 同一套门禁、同一个令牌文件。这里没有免令牌例外——
@@ -192,6 +198,14 @@ const 服务 = http.createServer((req, res) => {
         // 手动收工：给那些没走到发布就停下的单用（人工废弃、判不过放弃、跑挂了）。
         // 不自动做——没发布就意味着那条分支上的提交是这台机器上**唯一的一份**，
         // 该不该扔是人的决定。真要扔，-d 还会再挡一道（未合并的删不掉）。
+        // 审阅区：给判官一份只读的代码视图（协-011）。
+        // 归在 /write/ 下是因为它要建 worktree（动 git），不是因为判官会写——
+        // 判官拿到的是 detached HEAD，没有分支，交付不了任何东西。
+        if (路径 === '/write/审阅区') {
+          if (!体.工单 || !体.commit) return 发JSON(res, 400, { ok: false, error: '需要 工单 与 commit' });
+          const r = 工作区.审阅区(平台根, 配置, 项目, String(体.工单), String(体.commit));
+          return 发JSON(res, r.ok ? 200 : 400, r.ok ? { ok: true, ...r } : { ok: false, error: r.错误 });
+        }
         if (路径 === '/write/收工') {
           if (!体.工作区 && !体.分支) return 发JSON(res, 400, { ok: false, error: '需要 工作区 或 分支' });
           const r = 工作区.收工(项目, 体.工作区 || {}, { 分支: 体.分支 });
