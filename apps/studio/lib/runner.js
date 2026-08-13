@@ -885,7 +885,8 @@ async function tick(root, cfg, opts = {}) {
           pmLedger.event(root, '跨计费降级', { id: p.id, ...p.降级 });
           inbox.post(root, '急', '跨计费降级', `${p.id} ${摘}：从此单起按量计费产生费用`, { 单号: p.id });
         }
-        require('./pm/wake').onChildDispatched(root, t0.fm.父单); // H53：首子单派发 → 战役父单进在途
+        // H53：首子单派发 → 战役父单进在途；施工令-058：专项子单同理推容器 立项→进行
+        require('./pm/wake').onChildDispatched(root, t0.fm.父单, t0.fm.专项);
         result.领单.push(p.id);
         const t1 = store.find(root, p.id);
         if (t1 && await startWork(root, cfg, t1, 主办, '执行', opts)) result.执行.push(p.id);
@@ -893,9 +894,11 @@ async function tick(root, cfg, opts = {}) {
       pmLedger.update(root, (l) => { l.就绪队列 = ready.filter((r2) => !picks.some((pk) => pk.id === r2.id)); l.在跑 = Object.fromEntries([...running.entries()].filter(([, e]) => e.kind === '执行').map(([a, e]) => [e.id, { agent: a, 池: e.池 || '', 拉起时间: e.startedAt }])); });
     }
     // H49 接线②③：战役全落袋→收口报告；连环失败→上呈（台账去重，判断才唤醒）
+    // 施工令-058 追加一路：专项注册表的收口/复工自检（容器不换目录，只改注册表状态字段）。
     try {
       const wake = require('./pm/wake');
       wake.checkCloseouts(root, cfg, { test: !!opts.noBrain || sim });
+      wake.check专项收口(root, cfg, { test: !!opts.noBrain || sim });
       wake.checkChainFailures(root);
     } catch (e) { result.拒因.push('项管巡检异常：' + String(e.message).slice(0, 60)); }
   } else {

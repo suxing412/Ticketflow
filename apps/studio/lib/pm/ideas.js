@@ -3,7 +3,6 @@
 // 从此进入项目组域（项管切单派发）。明文 jsonl 落盘。
 const fs = require('fs');
 const path = require('path');
-const store = require('../core/store');
 
 const FILE = (root) => path.join(root, '想法', 'ideas.jsonl');
 
@@ -38,30 +37,24 @@ function drop(root, id) {
   return { ok: true };
 }
 
-// 拍板：想法 → 父单草稿（人闸的前半步——制作人补齐边界与验收标准后正式生效）
+// 拍板：想法 → **专项注册表条目**（施工令-058 要件2 / H103「专项是容器不是工单」）。
+// 0.26 之前这里造的是一张 `父单类型: 专项` 的工单（旧号形 <项目>-S#），于是容器一出生就带着
+// QA/验收方式/预计时间这些执行者才需要的字段，还得在九态里挑一个假装住着——TK-146/150 的病
+// 就是从这一行开始的。现在它产出注册表条目：S 系列号、四态容器状态机、零工单字段。
+// 前缀参数没退休，改了含义：它是**子单**将来的派号前缀（专项号一律 S-n，见 specials.立项）。
 function 拍板(root, id, 项目, 前缀) {
   const all = list(root);
   const i = all.findIndex((x) => x.id === id && x.状态 === '在池');
   if (i < 0) return { ok: false, error: '想法不存在或已处理' };
-  // 专项 S 系列派号（命名分层：管线 P-# / 专项 <项目>-S# / 单元 <项目>-#；存量战役号不迁移）
-  let mx = 0;
-  const px = String(前缀 || 'TK');
-  for (const s of store.STATES) for (const x of store.list(root, s)) {
-    const m = String(x.id).match(/^(.+)-S(\d+)$/);
-    if (m && m[1] === px) mx = Math.max(mx, Number(m[2]));
-  }
-  const newId = `${px}-S${mx + 1}`;
-  const fm = {
-    id: newId, title: all[i].文本.slice(0, 40), 职能: '策划', 产出物类型: '规格',
-    优先级: 'P1', 规模: '单兵', QA: '关', 验收方式: '保留', 预计时间: '', 预计token: '',
-    项目: String(项目 || ''), 创建时间: new Date().toISOString().slice(0, 10),
-    父单类型: '专项', 想法源: all[i].id,
-  };
-  const body = `## 专项目标（拍板前补齐）\n${all[i].文本}\n${all[i].备注 ? '\n> ' + all[i].备注 + '\n' : ''}\n## 系统边界（必填：写区圈定 + 不要做）\n（补齐后拍板生效）\n\n## 验收标准（必填：可判定条目 + 标注保留项）\n（补齐后拍板生效）\n`;
-  const r = store.create(root, newId, fm, body);
+  const 文 = all[i].文本;
+  const r = require('../specials').立项(root, {
+    名称: 文.slice(0, 40), 目标: 文, 项目: String(项目 || ''), 单号前缀: String(前缀 || 'TK'),
+    因: `想法拍板（${all[i].id}）`, 操作者: '制作人',
+    正文: `## 专项目标（拍板前补齐）\n${文}\n${all[i].备注 ? '\n> ' + all[i].备注 + '\n' : ''}\n## 系统边界（必填：写区圈定 + 不要做）\n（补齐后立项生效）\n\n## 验收标准（必填：可判定条目 + 标注保留项）\n（补齐后立项生效）\n`,
+  });
   if (!r.ok) return r;
-  all[i].状态 = '已拍板'; all[i].父单 = newId; saveAll(root, all);
-  return { ok: true, 父单: newId };
+  all[i].状态 = '已拍板'; all[i].专项 = r.id; saveAll(root, all);
+  return { ok: true, 专项: r.id };
 }
 
 module.exports = { list, add, drop, 拍板, FILE };

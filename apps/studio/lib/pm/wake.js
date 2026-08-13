@@ -9,10 +9,15 @@ const DONE = new Set(['完成', '已归档']);
 
 function isCampaign(t) { return t && t.fm && ['战役','专项'].includes(t.fm.父单类型); }
 
+// 子单盘点：两条挂链一起认（施工令-058）——`专项: S-n` 是新路，`父单: TK-n` 是存量战役老路。
+// 收口/连环检测/收口报告全走这一份，判据只此一处：两处各写一份判据，迟早有一处漏认一条挂链。
 function childrenOf(root, parentId) {
+  const specials = require('../specials');
+  // 专项号走注册表那份归属判据（显式 专项 章 + 别名兜底），不在这里另写一套。
+  if (specials.是专项号(parentId)) return specials.子单(root, parentId);
   const out = [];
   for (const s of store.STATES) for (const t of store.list(root, s)) {
-    if (t.fm.父单 === parentId) out.push({ ...t, state: s });
+    if (t.fm.父单 === parentId && !t.fm.迁移至专项) out.push({ ...t, state: s });
   }
   return out;
 }
@@ -52,13 +57,29 @@ function onCutResult(root, parentId, r = {}) {
   return { 出口: '失败', error: err };
 }
 
-// ① 战役父单定稿 → 自动切单（拍板的下半步）
+// ①-旧 存量战役父单定稿 → 自动切单（拍板的下半步）
+// 施工令-058 起这条只服务**存量战役号**：专项已实体化，它的切单挂钩迁到「立项」那一刻（见 ①-新）。
+// 老路不拆是因为战役号明写「不迁移」（pm/ideas.js 命名分层注），拆了那批单就没人给它切了。
 function onCampaignFinalized(root, cfg, t, projPath, opts = {}) {
   if (!isCampaign(t)) return { woke: false };
   ledger.event(root, '切单启动', { 父单: t.id, 触发: '定稿自动' });
-  journal.append(root, `项管唤醒：${t.id} 专项定稿 → 自动切单（fable）`);
+  journal.append(root, `项管唤醒：${t.id} 战役父单定稿 → 自动切单（fable）`);
   if (!opts.test) {
     require('./brain').cut(root, cfg, t.id, projPath, (r) => onCutResult(root, t.id, r));
+  }
+  return { woke: true };
+}
+
+// ①-新 专项立项 → 自动切单（施工令-058 要件2：H49 的挂钩从「定稿」迁到「立项」）
+// 为什么挂在立项而不是别处：专项已经不是工单，它没有「定稿」这一态可挂——注册表条目一旦成立，
+// 该做的事就已经写在里头了，再等一个仪式性动作只是让人多点一次。候期切单（054 三出口）
+// 语义原样保留：onCutResult 是同一份，拒切候期照旧不记失败、容器原位不动等复切。
+function on专项立项(root, cfg, s, projPath, opts = {}) {
+  if (!s || !s.id) return { woke: false };
+  ledger.event(root, '切单启动', { 父单: s.id, 专项: s.id, 触发: '立项自动' });
+  journal.append(root, `项管唤醒：${s.id}「${(s.fm || {}).名称 || ''}」专项立项 → 自动切单（fable）`);
+  if (!opts.test) {
+    require('./brain').cut(root, cfg, s.id, projPath, (r) => onCutResult(root, s.id, r));
   }
   return { woke: true };
 }
@@ -66,7 +87,9 @@ function onCampaignFinalized(root, cfg, t, projPath, opts = {}) {
 // ② 战役全落袋 → 收口报告（每 tick 巡一遍，台账标记去重）
 // 父单状态诚实映射（H53 案：父单不该躺在待投/草稿装「待投」）：
 // 首个子单派发 → 父单 在途（战役开打）；全落袋+收口 → 父单 待验收（战役签字位）。
-function onChildDispatched(root, parentId) {
+function onChildDispatched(root, parentId, 专项号) {
+  // 施工令-058：专项子单的容器不在工单目录里，走注册表那条推手（立项 → 进行）。
+  if (专项号) { try { require('../specials').首派(root, 专项号); } catch { /* 注册表读写失败不阻塞派发 */ } }
   if (!parentId) return;
   const p = store.find(root, parentId);
   if (!p || !isCampaign(p) || p.state !== '待投') return;
@@ -105,6 +128,53 @@ function checkCloseouts(root, cfg, opts = {}) {
           lift();
         });
       } else lift();
+    }
+  }
+  return woke;
+}
+
+// ②-新 专项收口巡检（施工令-058）：注册表实体版的 checkCloseouts。
+// 与工单版的三处不同，都是实体分立带来的：
+//   ① 容器不换目录——「收口」是注册表里的状态字段，不是搬一次文件；
+//   ② 签字位不是 待验收 而是 关账（唯一人闸），所以这里只把容器推到 收口 并叫人，绝不代签；
+//   ③ 收口后子单又活了会自动复工回 进行（specials.收口自检 一处判完）——工单版做不到这件事，
+//      因为父单一旦挪进 待验收 就得靠人再挪回去。
+function check专项收口(root, cfg, opts = {}) {
+  const specials = require('../specials');
+  const woke = [];
+  let 表;
+  try { 表 = specials.list(root); } catch { return woke; } // 注册表读不到＝这一拍没专项可巡，不是故障
+  const l = ledger.read(root);
+  l.已收口 = l.已收口 || {};
+  const 快照 = opts.快照 || store.snapshot(root);
+  for (const s of 表) {
+    const r = specials.收口自检(root, s.id, { 快照 });
+    if (!r || r.动作 !== '收口') continue;
+    // 去重旗与工单版共用一本账（同名字段、同一份台账）：一个专项只生成一次收口报告。
+    // 复工会把旗抹掉——不然复工后再落袋就再也出不了第二版报告，人只能对着旧报告签字。
+    let 首标 = false;
+    ledger.update(root, (f) => { f.已收口 = f.已收口 || {}; if (!f.已收口[s.id]) { f.已收口[s.id] = true; 首标 = true; } });
+    if (!首标) continue;
+    ledger.event(root, '收口待验', { 父单: s.id, 专项: s.id, 子单数: r.子单数 });
+    journal.append(root, `项管唤醒：${s.id}「${s.fm.名称 || ''}」全部子单落袋 → 收口报告生成中（候关账签字）`);
+    woke.push(s.id);
+    const 叫人 = (报告) => {
+      if (报告) specials.update(root, s.id, (fm) => { fm.收口报告 = 报告; });
+      try { require('../inbox').post(root, '急', '专项待关账', `${s.id}「${s.fm.名称 || ''}」收口完毕，待制作人关账签字`, { 单号: s.id }); } catch { /* 信箱失败不阻塞 */ }
+    };
+    if (!opts.test) {
+      require('./brain').closeout(root, cfg, s.id, (rr) => {
+        journal.append(root, rr.ok ? `收口报告就绪：${s.id}（${rr.报告}）` : `收口报告失败：${s.id}（${rr.error}）`);
+        叫人(rr.ok ? rr.报告 : null);
+      });
+    } else 叫人(null);
+  }
+  // 复工把去重旗抹掉：单独走一遍，免得跟上面那圈的 continue 纠缠。
+  for (const s of 表) {
+    const cur = specials.find(root, s.id);
+    if (cur && cur.fm.状态 === '进行' && (ledger.read(root).已收口 || {})[s.id]) {
+      ledger.update(root, (f) => { if (f.已收口) delete f.已收口[s.id]; });
+      journal.append(root, `专项复工 ${s.id}：收口旗已撤，全部子单再落袋时会重出收口报告`);
     }
   }
   return woke;
@@ -172,4 +242,5 @@ function 台账对齐拍(root, opts = {}) {
   }
 }
 
-module.exports = { onCampaignFinalized, onCutResult, onChildDispatched, checkCloseouts, checkChainFailures, isCampaign, childrenOf, 池衡巡检, 台账对齐拍 };
+module.exports = { onCampaignFinalized, on专项立项, onCutResult, onChildDispatched,
+  checkCloseouts, check专项收口, checkChainFailures, isCampaign, childrenOf, 池衡巡检, 台账对齐拍 };

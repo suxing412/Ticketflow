@@ -32,10 +32,20 @@ function chains(root, id) {
     职能: c.fm.职能 || null, 执行池: c.fm.执行池 || null,
     进度: pctOf(c, 0), 子数: (kids[c.id] || []).length,
   }));
+  // 专项归属（H103 · 施工令-058）：容器已实体化，子单的容器不再是一张能点进去的工单。
+  // 不随行这一格，专项子单的详情页就成了孤儿——「这张单属于哪批活」在页面上无处可读。
+  let 专项 = null;
+  if (fm.专项) {
+    try {
+      const s = require('./specials').find(root, String(fm.专项));
+      专项 = { id: String(fm.专项), 名称: s ? (s.fm.名称 || s.id) : null, 状态: s ? (s.fm.状态 || null) : null, 在册: !!s };
+    } catch { 专项 = { id: String(fm.专项), 名称: null, 状态: null, 在册: false }; }
+  }
   return {
     // 待验收：批量验收子单的射程清单（规则见 待验收子单()）。摆进链里是为了**前端不再自己推一遍规则**——
     // 同一条过滤条件写两处，迟早有一处漏改，那是批量动作最不该出现的事。
     父子: { 父: fm.父单 || null, 子, 待验收: 子.filter((x) => x.state === '待验收').map((x) => x.id) },
+    专项,
     返工自: fm.返工自 || null,
     依据: fm.依据 || null,
     依赖: toArr(fm.依赖).map((d) => { const x = store.find(root, d); return { id: d, state: x ? x.state : '缺失' }; }),

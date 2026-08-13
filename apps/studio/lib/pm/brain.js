@@ -226,22 +226,55 @@ function parse拒切(text) {
   return { 候期: true, 理由: pick('理由'), 复切时机: pick('复切时机'), 判语: (seg || s.trim()).slice(0, 判语上限) };
 }
 
+/* ===== 容器解析（施工令-058 · H103）=====
+ * 切单/收口的对象从此有两形：
+ *   S-n  → 专项注册表条目（专项是容器，不是工单）；
+ *   其余 → 存量战役父单工单（战役号不迁移，这条老路留着）。
+ * 统一成同一个形回给下游：{ id, fm, body, 专项 }。切单主流程只认这个形，不必到处判「这是哪一种」。
+ * 关键差别只有两处，全在这里定死：**子单挂链字段**（专项: S-n / 父单: TK-n）与**派号前缀**
+ * （专项号是 S-n，子单绝不能跟着叫 S-2——那会跟下一个专项号撞车）。 */
+function 容器(root, id) {
+  const specials = require('../specials');
+  if (specials.是专项号(id)) {
+    const s = specials.find(root, id);
+    if (!s) return null;
+    return {
+      id: s.id, body: s.body, 专项: true,
+      前缀: String(s.fm.单号前缀 || 'TK'),
+      挂链: { 专项: s.id },
+      fm: { 项目: s.fm.项目 || '', 管线: s.fm.管线 || null, title: s.fm.名称 || s.id },
+    };
+  }
+  const t = store.find(root, id);
+  if (!t) return null;
+  return {
+    id: t.id, body: t.body, 专项: false,
+    前缀: (String(t.id).match(/^(.+)-(\d+)$/) || [])[1] || 'TK',
+    挂链: { 父单: t.id },
+    fm: t.fm,
+  };
+}
+
 // 子单 frontmatter 白名单：ticket 块解析出来的字段，只有列在这里的才落得到盘。
 // 抽成纯函数是为了能单测——白名单漏字段已经吃过两次（H88 依据、TK-106~116 管线），
 // 都是「提示词要求写了、落盘时被静默吞掉」，肉眼审不出来。
 // ids 用于把 依赖 里的同批序号（1,2…）换成实际编号。
-function childFm(tk, { id, ids, parentId, 项目 }) {
+// 挂链 = {父单: TK-n}（存量战役）或 {专项: S-n}（施工令-058）——由 容器() 定，这里只照抄。
+// 管线兜底同理：专项子单没有工单父链可上溯（pipelines.pipelineOf 走的是 父单 字段），
+// 所以容器的管线章必须在落盘这一刻显式落到子单身上，否则整批子单会齐刷刷掉进散单行。
+function childFm(tk, { id, ids, parentId, 项目, 挂链, 容器管线 }) {
   const dep = String(tk.fm.依赖 || '').split(/[，,\s]+/).filter(Boolean)
     .map((n) => (ids || [])[Number(n) - 1]).filter(Boolean).join('，');
+  const 管线 = tk.fm.管线 || 容器管线 || null;
   return {
     id, title: tk.fm.title || '子单', 职能: tk.fm.职能 || '程序',
     产出物类型: tk.fm.产出物类型 || '代码', 优先级: tk.fm.优先级 || 'P1', 规模: '单兵',
     QA: tk.fm.QA || '开', 验收方式: tk.fm.验收方式 || '委托',
     预计时间: tk.fm.预计时间 || '0.25', 预计token: tk.fm.预计token || '50000',
     项目, 创建时间: new Date().toISOString().slice(0, 10),
-    父单: parentId, ...(dep ? { 依赖: dep } : {}),
+    ...(挂链 || { 父单: parentId }), ...(dep ? { 依赖: dep } : {}),
     ...(tk.fm.依据 ? { 依据: tk.fm.依据 } : {}), // H88：承重实现单挂方案单号，白名单不带就落不到盘
-    ...(tk.fm.管线 ? { 管线: tk.fm.管线 } : {}), // TK-106~116：管线归属同理，不带就只能靠父链继承
+    ...(管线 ? { 管线 } : {}),                   // TK-106~116：管线归属同理，不带就只能靠父链继承
     单型: tk.fm.单型 || '实现单', 切单人: '项管',
   };
 }
@@ -262,10 +295,11 @@ function draftFm(tk, { id, 项目, 粒ID }) {
   };
 }
 
-// 切单主流程：调 fable → 解析 → 建草稿挂父单 → 简报落台账待审
+// 切单主流程：调 fable → 解析 → 建草稿挂容器 → 简报落台账待审
+// parentId 吃两形（见 容器()）：专项号 S-n（施工令-058 新路）或存量战役父单号。
 function cut(root, cfg, parentId, projPath, cb) {
-  const parent = store.find(root, parentId);
-  if (!parent) return cb({ ok: false, error: '父单不存在' });
+  const parent = 容器(root, parentId);
+  if (!parent) return cb({ ok: false, error: parentId && String(parentId).startsWith('S-') ? '专项不存在' : '父单不存在' });
   const 校 = 备校准(root); // H101：切单链的校准步，取数一次，提示词与机器复核共用这张表
   const prompt = buildCutPrompt(root, cfg, parent, projPath, 校.块);
   const cmd = cli();
@@ -291,7 +325,9 @@ function cut(root, cfg, parentId, projPath, cb) {
       return cb({ ok: false, error: '切单输出无子单块', raw: text.slice(0, 500) });
     }
     // 派号 + 建草稿（依赖引用同批序号→实际编号）
-    const px = (String(parentId).match(/^(.+)-(\d+)$/) || [])[1] || 'TK';
+    // 前缀由容器给（施工令-058）：专项号 S-1 的子单要叫 TK-n，不能顺着容器号叫 S-n——
+    // 那会跟下一个专项号 S-2 撞车，一个编号两种实体是账目最难拆的一种烂摊子。
+    const px = parent.前缀 || 'TK';
     let mx = 0;
     for (const s of store.STATES) for (const x of store.list(root, s)) {
       const mm = String(x.id).match(/^(.+)-(\d+)$/);
@@ -301,7 +337,7 @@ function cut(root, cfg, parentId, projPath, cb) {
     const created = [];
     const 校痕 = [];
     tickets.forEach((tk, i) => {
-      const fm = childFm(tk, { id: ids[i], ids, parentId, 项目: parent.fm.项目 });
+      const fm = childFm(tk, { id: ids[i], ids, parentId, 项目: parent.fm.项目, 挂链: parent.挂链, 容器管线: parent.fm.管线 });
       const 记 = 校准落fm(root, ids[i], fm, 校.表); // H101 机器兜底：落盘前用同一张表复核估值
       if (记) 校痕.push(ids[i] + ' ' + estimate.记录一行(记));
       const r = store.create(root, ids[i], fm, tk.body);
@@ -323,8 +359,8 @@ function cut(root, cfg, parentId, projPath, cb) {
 
 // 收口报告：专项全落袋后汇总子单回执 → 验收包（含逐项验收步骤与成本账）
 function closeout(root, cfg, parentId, cb) {
-  const parent = store.find(root, parentId);
-  if (!parent) return cb({ ok: false, error: '父单不存在' });
+  const parent = 容器(root, parentId); // 施工令-058：收口对象同样吃 S-n 与存量战役父单两形
+  if (!parent) return cb({ ok: false, error: parentId && String(parentId).startsWith('S-') ? '专项不存在' : '父单不存在' });
   const wake = require('./wake');
   const kids = wake.childrenOf(root, parentId);
   const receipts = kids.map((k) => {
@@ -550,4 +586,4 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
 }
 
 module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, buildCutPrompt, buildDraftPrompt,
-  parseTickets, parse拒切, childFm, draftFm, getWorking, 历史样本, 备校准, 校准落fm };
+  parseTickets, parse拒切, childFm, draftFm, getWorking, 历史样本, 备校准, 校准落fm, 容器 };

@@ -68,9 +68,17 @@ function 依赖照单(fm) {
 }
 
 // ---- ① 差量探测（纯函数）----
-// 快照 = store.snapshot(root) 形状 { 状态: [单…] }；粒们 = schedule.现态(root)。
+// 快照 = store.snapshot(root) 形状 { 状态: [单…] }；粒们 = schedule.现态(root)；
+// 专项们 = specials.list(root)（施工令-058，可缺——缺了就只剩战役父单那条老路）。
 // 回 { 动作: [...], 异常: [...] }，一个字节都不写盘。
-function 差量(快照, 粒们) {
+//
+// 专项实体化后的挂粒口径（要件3）：**子单挂粒规则一个字没改**，只是「归谁」多了一条正路——
+// 老路 = 父单是 战役/专项 类的工单（存量战役号不迁移，这条得留着）；
+// 新路 = 子单 frontmatter 写着 `专项: S-n` 且注册表认得这个号。批名一律取容器名
+// （专项批名 = 专项名），与老路取父单 title 是同一个意思：批 = 这批活的容器叫什么。
+// 专项实体压根不在 快照 里（它不住工单目录），所以「容器不是活粒」这件事新路上不用判——
+// 判不到的东西不会被登粒，这正是实体分立换来的便宜。
+function 差量(快照, 粒们, 专项们) {
   const 单们 = [];
   for (const s of Object.keys(快照 || {})) for (const t of 快照[s] || []) 单们.push({ ...t, state: t.state || s, fm: t.fm || {} });
   const 按号 = new Map(单们.map((t) => [String(t.id), t]));
@@ -87,18 +95,26 @@ function 差量(快照, 粒们) {
     if (!旧 || (S.终态.includes(旧.状态) && !S.终态.includes(g.状态))) 粒按单号.set(k, g);
   }
 
+  const 专项按号 = new Map();
+  for (const s of 专项们 || []) if (s && s.id) 专项按号.set(String(s.id), s);
+
   const 动作 = [];
   const 已配 = new Set();
   for (const t of 单们) {
     if (战役类.includes(t.fm.父单类型)) continue; // 专项/战役父单是容器，不是活粒
+    if (t.fm.迁移至专项) continue;                // 迁移后的伪单（施工令-058）：纸面留档，更不是活粒
     const 父 = t.fm.父单 ? 按号.get(String(t.fm.父单)) : null;
-    const 归项 = !!(父 && 战役类.includes((父.fm || {}).父单类型));
+    // 归属两路，新路优先：显式 专项 章 → 注册表容器；否则回落战役父单老路。
+    const 专 = t.fm.专项 ? 专项按号.get(String(t.fm.专项)) : null;
+    const 容器 = 专 ? { id: 专.id, 批名: (专.fm || {}).名称 || 专.id } // 专项批名 = 专项名
+      : (父 && 战役类.includes((父.fm || {}).父单类型)) ? { id: 父.id, 批名: (父.fm || {}).title || 父.id }
+        : null;
     let g = t.fm.粒ID ? 粒按ID.get(String(t.fm.粒ID)) : null;
     if (!g) g = 粒按单号.get(String(t.id)) || null;
 
     if (!g) {
       // 新单挂粒：只管专项/战役子单（含返工/推翻新号）。散单不归排程台账，不凭空造粒。
-      if (归项) 动作.push(登粒动作(t, 父, 粒按单号));
+      if (容器) 动作.push(登粒动作(t, 容器, 粒按单号));
       continue;
     }
     已配.add(String(g.粒ID));
@@ -133,18 +149,20 @@ function 差量(快照, 粒们) {
   return { 动作, 异常 };
 }
 
-// 登粒：批名 = 父单专项名，返工/推翻新号则**承袭原粒的批**（不然同一条活会在两个批里各出现一次）。
-function 登粒动作(t, 父, 粒按单号) {
+// 登粒：批名 = 容器名（专项名 / 战役父单题），返工/推翻新号则**承袭原粒的批**
+// （不然同一条活会在两个批里各出现一次）。容器形参是 {id, 批名} 而非一张工单——
+// 施工令-058 起容器可能压根不是工单，登粒只需要这两个字段，多要一格就得多认一种形。
+function 登粒动作(t, 容器, 粒按单号) {
   const 原 = t.fm.返工自 ? 粒按单号.get(String(t.fm.返工自)) : null;
-  const 批 = String((原 && 原.批) || (父.fm || {}).title || 父.id).slice(0, 40);
+  const 批 = String((原 && 原.批) || 容器.批名 || 容器.id).slice(0, 40);
   const 状态 = 目标状态(t) || '计划';
   return {
-    动作: '登粒', 单号: t.id, 父单: 父.id,
+    动作: '登粒', 单号: t.id, 父单: 容器.id,
     批, 序: 序号(t.id), 题: String(t.fm.title || t.id).slice(0, 120), 状态,
     依赖: 依赖照单(t.fm),
     管线: t.fm.职能 || null,
-    来源: `工单库对齐 · ${父.id}/${t.id}`,
-    因: 原 ? `返工自 ${t.fm.返工自}，承袭原粒批「${批}」` : `${父.id}「${批}」子单在台账里无粒`,
+    来源: `工单库对齐 · ${容器.id}/${t.id}`,
+    因: 原 ? `返工自 ${t.fm.返工自}，承袭原粒批「${批}」` : `${容器.id}「${批}」子单在台账里无粒`,
   };
 }
 
@@ -272,7 +290,10 @@ function 同步(root, opts = {}) {
   const 现在 = opts.现在 != null ? Number(opts.现在) : Date.now();
   const 快照 = opts.快照 || store.snapshot(root);
   const 粒们 = opts.粒们 || S.现态(root);
-  const { 动作, 异常 } = 差量(快照, 粒们);
+  // 专项注册表读盘失败不拦对齐：读不到就只剩战役老路，少登几粒总好过整拍崩掉（同 checkCloseouts 待遇）。
+  let 专项们 = opts.专项们;
+  if (!专项们) { try { 专项们 = require('../specials').list(root); } catch { 专项们 = []; } }
+  const { 动作, 异常 } = 差量(快照, 粒们, 专项们);
   if (opts.演练) return { 演练: true, 触发: opts.触发 || '演练', 动作, 异常 };
 
   const r = 动作.length ? 执行(root, 动作) : { 成: [], 败: [] };

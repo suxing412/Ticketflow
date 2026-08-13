@@ -1,0 +1,410 @@
+// specials.js — 专项注册表（H103 · 施工令-058）：**专项是容器，不是工单**。
+//
+// 案源（制作人 2026-08-13 18:21 裁决）：TK-146/150 以工单身份混在 待验收，占 TK 号、
+// 带 QA/验收方式字段、被状态机与机判骚扰——组织容器被塞进执行者的模子里，每一格都别扭。
+// 实体分立律（H52，管线注册表立的先例）照搬：容器与工单的生命周期/不变量/状态机全然不同，
+// 故独立实体——独立目录（专项/）、独立 schema、独立状态机、独立操作。
+//
+// 与管线注册表（lib/pipelines.js）的形制对齐处：目录即注册表、一实体一 .md、frontmatter 即 schema、
+// 顺序派号、状态受限枚举、人闸单点。不同处只有一条：管线是常青树永不完工，专项有终点——
+// 立项 → 进行 → 收口 → 关账，**唯一人闸 = 关账签字**（前三跳都是机器按实况推的）。
+//
+// 三条硬纪律（改一处就是改协议）：
+//   ① 不进工单目录：专项文件住 专项/，store.STATES 扫不到它，故天然不参与机判/QA/派发/预检。
+//      「隔离」不是靠在十几处判断里加 if，而是靠它压根不在那些代码看得见的地方。
+//   ② 子单清单不手维护：由子单 frontmatter 的 `专项: S-n` **反向聚合**。容器里手抄一份子单号
+//      就是给自己造第二个事实源——两处一分叉，谁也说不清哪份是真的。
+//   ③ 关账是人闸：机器可以把专项推到 收口 并备好收口报告，但 关账 只认签字人。
+const fs = require('fs');
+const path = require('path');
+const matter = require('gray-matter');
+
+const DIR = (root) => path.join(root, '专项');
+const STATES = ['立项', '进行', '收口', '关账'];
+// 转移表：主链是单向的（立项→进行→收口→关账）。
+// 唯一的回头路是 收口→进行「复工」：H65 返修让子单同号回草稿，容器若卡死在「收口」就是
+// 在说一句假话（明明还有活在跑）。复工不是新语义，是让状态诚实映射实况的必要退路。
+const 转移表 = { 立项: ['进行'], 进行: ['收口'], 收口: ['进行', '关账'], 关账: [] };
+const 终态 = ['关账'];
+
+function ensure(root) { fs.mkdirSync(DIR(root), { recursive: true }); }
+
+const 是专项号 = (id) => /^S-\d+$/.test(String(id || ''));
+
+function list(root) {
+  ensure(root);
+  return fs.readdirSync(DIR(root)).filter((f) => /^S-\d+\.md$/.test(f)).map((f) => {
+    const g = matter(fs.readFileSync(path.join(DIR(root), f), 'utf8'));
+    return { id: f.replace(/\.md$/, ''), fm: g.data, body: g.content };
+  }).sort((a, b) => Number(a.id.slice(2)) - Number(b.id.slice(2)));
+}
+
+function find(root, id) {
+  if (!是专项号(id)) return null;
+  const file = path.join(DIR(root), `${id}.md`);
+  if (!fs.existsSync(file)) return null;
+  const g = matter(fs.readFileSync(file, 'utf8'));
+  return { id, file, fm: g.data, body: g.content };
+}
+
+function 写盘(root, id, fm, body) {
+  ensure(root);
+  fs.writeFileSync(path.join(DIR(root), `${id}.md`), matter.stringify(String(body || ''), fm), 'utf8');
+}
+
+// 立项（专项的诞生式）：名称必填，其余可后补。状态一律从 立项 起步——
+// 「进行」由首子单派发推、「收口」由全子单落袋推，没有第二个入口手工指定初态。
+function 立项(root, opts = {}) {
+  const 名称 = String(opts.名称 || '').trim();
+  if (!名称) return { ok: false, error: '专项名称必填' };
+  ensure(root);
+  const mx = list(root).reduce((m, s) => Math.max(m, Number(s.id.slice(2))), 0);
+  const id = `S-${mx + 1}`;
+  const now = opts.现在 || new Date().toISOString();
+  const fm = {
+    id, 名称, 目标: String(opts.目标 || '').trim(),
+    管线: opts.管线 || null, 项目: opts.项目 || null,
+    单号前缀: String(opts.单号前缀 || 'TK'),   // 切单派号用：专项号是 S-n，子单号照旧走项目前缀
+    状态: '立项',
+    别名: [].concat(opts.别名 || []).map(String).filter(Boolean), // 迁移前的伪单号（TK-146…）
+    立项时间: now, 更新时间: now,
+    履历: [{ t: now, 从: null, 到: '立项', 因: String(opts.因 || '立项'), 操作者: String(opts.操作者 || '制作人') }],
+  };
+  写盘(root, id, fm, opts.正文 || 正文模板(opts));
+  return { ok: true, id, fm };
+}
+
+function 正文模板(opts) {
+  return `## 专项目标\n${opts.目标 || '（补齐）'}\n\n## 系统边界（写区圈定 + 不要做）\n（补齐）\n\n## 验收标准（可判定条目 + 标注保留项）\n（补齐）\n`;
+}
+
+function update(root, id, mut) {
+  const s = find(root, id);
+  if (!s) return { ok: false, error: '专项不存在：' + id };
+  const r = mut(s.fm, s);
+  if (s.fm.状态 && !STATES.includes(s.fm.状态)) return { ok: false, error: '非法状态：' + s.fm.状态 };
+  s.fm.更新时间 = new Date().toISOString();
+  写盘(root, id, s.fm, (r && typeof r.body === 'string') ? r.body : s.body);
+  return { ok: true, id, fm: s.fm };
+}
+
+// 状态转移：查表，非法一律拒；每跳都往 履历 里记一笔（基线变迁的一半来源就是它）。
+// 幂等：到已在的态返回 ok + 幂等标，不刷履历——巡检拍会反复调它，每拍一条痕就是把履历刷成噪声。
+function 转移(root, id, 到, opts = {}) {
+  const s = find(root, id);
+  if (!s) return { ok: false, error: '专项不存在：' + id };
+  const 从 = s.fm.状态 || '立项';
+  if (从 === 到) return { ok: true, id, 幂等: true, 状态: 到 };
+  if (!(转移表[从] || []).includes(到)) return { ok: false, error: `不合法的转移：${从} → ${到}` };
+  if (到 === '关账' && !String(opts.操作者 || '').trim()) return { ok: false, error: '关账是人闸：必须署签字人' };
+  const now = opts.现在 || new Date().toISOString();
+  return update(root, id, (fm) => {
+    fm.状态 = 到;
+    fm.履历 = [...(fm.履历 || []), { t: now, 从, 到, 因: String(opts.因 || ''), 操作者: String(opts.操作者 || '系统') }];
+    if (到 === '收口') { fm.收口时间 = now; if (opts.收口报告) fm.收口报告 = opts.收口报告; }
+    if (到 === '进行' && 从 === '收口') { fm.收口时间 = null; fm.复工时间 = now; }
+    if (到 === '关账') { fm.关账时间 = now; fm.关账签字 = String(opts.操作者); }
+  });
+}
+
+// 关账（唯一人闸）：只从 收口 出发，必须署名。机器永远调不到这里——它没有签字人。
+function 关账(root, id, 签字人, 说明) {
+  const 人 = String(签字人 || '').trim();
+  if (!人) return { ok: false, error: '关账必须署签字人（唯一人闸）' };
+  const s = find(root, id);
+  if (!s) return { ok: false, error: '专项不存在：' + id };
+  if (s.fm.状态 !== '收口') return { ok: false, error: `只有「收口」态可关账（当前 ${s.fm.状态 || '立项'}）` };
+  return 转移(root, id, '关账', { 操作者: 人, 因: String(说明 || '制作人关账签字') });
+}
+
+/* ================= 子单反向聚合 ================= */
+
+// 归属判定：显式 `专项: S-n` 为正路；`别名` 命中 父单 是迁移兼容路——
+// 迁移把子单的 专项 章补上，但**不动它的 父单**（追溯链保真）。万一某张子单的补章漏了
+// （手写单、迁移中途中断），别名这条路还认得出它是谁的活，聚合不会凭空少一张。
+function 属于(s, fm) {
+  if (!s || !fm) return false;
+  if (fm.专项 && String(fm.专项) === String(s.id)) return true;
+  const 别名 = [].concat(s.fm.别名 || []).map(String);
+  return !!(fm.父单 && 别名.includes(String(fm.父单)));
+}
+
+const 序号 = (id) => { const m = /(\d+)\s*$/.exec(String(id || '')); return m ? Number(m[1]) : 0; };
+
+// 子单清单：扫全部状态目录反向聚合。快照可注入（聚合/差量共用一份，免得一次渲染扫两遍盘）。
+function 子单(root, id, 快照) {
+  const s = typeof id === 'object' ? id : find(root, id);
+  if (!s) return [];
+  const snap = 快照 || require('./core/store').snapshot(root);
+  const out = [];
+  for (const st of Object.keys(snap)) {
+    for (const t of snap[st] || []) {
+      const fm = t.fm || {};
+      if (!属于(s, fm)) continue;
+      // 容器伪单自己不算子单（迁移后它以 已归档 身份留在纸面上，fm.专项 指着新号）
+      if (fm.迁移至专项) continue;
+      out.push({ ...t, state: t.state || st, fm });
+    }
+  }
+  return out.sort((a, b) => 序号(a.id) - 序号(b.id) || String(a.id).localeCompare(String(b.id)));
+}
+
+const 落袋态 = new Set(['完成']);
+const 终结态 = new Set(['完成', '已归档']);
+const 未起态 = new Set(['草稿', '待投']);
+const h = (a, b) => {
+  const x = Date.parse(a || ''); const y = Date.parse(b || '');
+  return (Number.isFinite(x) && Number.isFinite(y) && y > x) ? (y - x) / 3600000 : null;
+};
+
+/**
+ * 聚合视图（要件1）：一个专项的全部读数，一次算齐。
+ * 三段：进度（子单落袋比）· 预算（预计 vs 实耗）· 基线（容器履历 + 子单增删变迁）。
+ * 纯读：不写一个字节。取数口径与既有实现同源——实耗 h 走 领单→交付（同 report.aggregate 那一列），
+ * 实耗 token 走回执解析（同 report.parseReceipt），不另立一把尺。
+ */
+function 聚合(root, id, opts = {}) {
+  const s = typeof id === 'object' ? id : find(root, id);
+  if (!s) return null;
+  const kids = opts.子单 || 子单(root, s, opts.快照);
+  const 落袋 = kids.filter((k) => 落袋态.has(k.state));
+  const 归档 = kids.filter((k) => k.state === '已归档');
+  const 未起 = kids.filter((k) => 未起态.has(k.state));
+  const 在办 = kids.filter((k) => !终结态.has(k.state) && !未起态.has(k.state));
+  const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+  const 报表 = opts.报表 || require('./report');
+
+  let 预计h = 0, 实耗h = 0, 预计token = 0, 实耗token = 0;
+  const 明细 = kids.map((k) => {
+    const fm = k.fm || {};
+    const 实 = h(fm.领单时间, fm.交付时间);
+    let tok = null;
+    try { tok = 报表.parseReceipt(root, k.id).token估计; } catch { tok = null; }
+    预计h += num(fm.预计时间); 实耗h += 实 || 0;
+    预计token += num(fm.预计token); 实耗token += tok || 0;
+    return {
+      id: k.id, title: fm.title || k.id, state: k.state, 职能: fm.职能 || null, 单型: fm.单型 || null,
+      优先级: fm.优先级 || null, 管线: fm.管线 || null, 依赖: fm.依赖 || null,
+      预计时间: fm.预计时间 || null, 预计token: fm.预计token || null,
+      实耗h: 实 != null ? Math.round(实 * 100) / 100 : null, 实耗token: tok,
+      落袋: 落袋态.has(k.state), 挂起: fm.挂起 || null,
+      返工自: fm.返工自 || null, 推翻自: fm.推翻自 || null, 归档原因: fm.归档原因 || null,
+    };
+  });
+
+  return {
+    id: s.id, 名称: s.fm.名称 || s.id, 目标: s.fm.目标 || '', 状态: s.fm.状态 || '立项',
+    管线: s.fm.管线 || null, 项目: s.fm.项目 || null, 单号前缀: s.fm.单号前缀 || 'TK',
+    别名: [].concat(s.fm.别名 || []), 立项时间: s.fm.立项时间 || null,
+    收口时间: s.fm.收口时间 || null, 收口报告: s.fm.收口报告 || null,
+    关账时间: s.fm.关账时间 || null, 关账签字: s.fm.关账签字 || null,
+    子单: 明细,
+    进度: {
+      总数: kids.length, 落袋: 落袋.length, 归档: 归档.length, 在办: 在办.length, 未起: 未起.length,
+      // 百分比 = 落袋 ÷ 总数。归档单**留在分母里**：一张被废的子单不该让整条专项的完成度凭空变好看。
+      // 零子单 = 0%，不是 100%——切单还没出结果的专项不许显示「做完了」（诚实纪律，同 progress.js）。
+      百分比: kids.length ? Math.round(落袋.length / kids.length * 100) : 0,
+    },
+    预算: {
+      预计h: Math.round(预计h * 100) / 100, 实耗h: Math.round(实耗h * 100) / 100,
+      预计token, 实耗token,
+      偏差pct: 预计h > 0 ? Math.round(实耗h / 预计h * 100) : null, // 100=踩点，>100=超预计
+    },
+    基线: 基线变迁(s, 明细),
+  };
+}
+
+// 基线变迁：容器自己的状态履历 + 子单集合的增删事实，按时间铺成一条线。
+// 「基线」在这里就是**当初商定要做的那批活**——它变过几次、怎么变的，是收口时最该讲清楚的账。
+function 基线变迁(s, 明细) {
+  const out = [];
+  for (const e of (s.fm.履历 || [])) {
+    out.push({ t: e.t, 类型: '容器', 说明: `${e.从 ? e.从 + ' → ' : ''}${e.到}${e.因 ? '（' + e.因 + '）' : ''}`, 操作者: e.操作者 || null });
+  }
+  for (const k of 明细) {
+    if (k.返工自) out.push({ t: null, 类型: '返工', 单号: k.id, 说明: `${k.id} 返工自 ${k.返工自}（同活换号，基线不增）` });
+    if (k.推翻自) out.push({ t: null, 类型: '推翻', 单号: k.id, 说明: `${k.id} 推翻重做自 ${k.推翻自}` });
+    if (k.归档原因) out.push({ t: null, 类型: '撤销', 单号: k.id, 说明: `${k.id} 出基线（${k.归档原因}）` });
+  }
+  return out;
+}
+
+/* ================= 机器侧推手（两跳，都不是人闸） ================= */
+
+// 首子单派发 → 立项转进行（状态诚实映射，同 H53 在工单侧立的规矩）
+function 首派(root, 专项号) {
+  if (!是专项号(专项号)) return { ok: false, 跳过: true };
+  const s = find(root, 专项号);
+  if (!s || s.fm.状态 !== '立项') return { ok: false, 跳过: true };
+  const r = 转移(root, 专项号, '进行', { 因: '首子单派发', 操作者: '系统' });
+  if (r.ok && !r.幂等) {
+    try { require('./journal').append(root, `专项启动 ${专项号}（首子单派发 → 进行）`); } catch { /* 留痕失败不阻塞 */ }
+  }
+  return r;
+}
+
+// 全子单落袋 → 进行转收口（收口报告由 pm/brain.closeout 另行生成，报告没出也照样转态：
+// 报告是材料，收口是事实，让事实等材料只会让容器一直说假话）。
+// 反向：收口态下又有子单活了（H65 返修同号回草稿）→ 复工回 进行。
+function 收口自检(root, 专项号, opts = {}) {
+  const s = find(root, 专项号);
+  if (!s) return { ok: false, error: '专项不存在：' + 专项号 };
+  const kids = 子单(root, s, opts.快照);
+  const 全落 = kids.length > 0 && kids.every((k) => 终结态.has(k.state)) && kids.some((k) => k.state === '完成');
+  if (s.fm.状态 === '进行' && 全落) {
+    const r = 转移(root, 专项号, '收口', { 因: `全部子单落袋（${kids.length} 张）`, 操作者: '系统', ...opts });
+    return { ...r, 动作: '收口', 子单数: kids.length };
+  }
+  if (s.fm.状态 === '收口' && kids.length && !全落) {
+    const 活 = kids.filter((k) => !终结态.has(k.state)).map((k) => k.id);
+    const r = 转移(root, 专项号, '进行', { 因: `复工：${活.join('、')} 又起活了`, 操作者: '系统' });
+    return { ...r, 动作: '复工', 活单: 活 };
+  }
+  return { ok: true, 动作: null, 子单数: kids.length };
+}
+
+/* ================= 迁移（要件4） ================= */
+
+// 默认计划 = 令面点名的两张。参数化而非写死：本仓够不着真工单库（工单住项目仓），
+// 迁移必须能对着任意一份仓库跑、能演练、能重跑——写死两个号就只有上线那天能用一次。
+const 默认迁移计划 = [{ 单号: 'TK-146' }, { 单号: 'TK-150' }];
+
+/**
+ * 伪单 → 专项容器迁移。**幂等可重跑**：认 别名 当钥匙，跑过的原样返回不再造新号。
+ * @param {string} root 监制台仓库根
+ * @param {Array<{单号:string,名称?:string,管线?:string,项目?:string}>} 计划 缺省用 默认迁移计划
+ * @param {{演练?:boolean,操作者?:string}} opts 演练=只算不写（本仓够不着真库时的排练口径）
+ * @returns {{ok:boolean,演练:boolean,专项:string[],动作:Array,跳过:Array}}
+ *
+ * 每张伪单四步走，缺一步都算没迁完：
+ *   ① 建容器：名称/目标/管线/项目 从伪单 frontmatter 与正文原样搬，别名记原 TK 号；
+ *   ② 子单挂链：`专项: S-n` 补进每张子单的 frontmatter，**父单章原样不动**（追溯链保真）；
+ *   ③ 容器停在 收口：立项→进行→收口 三跳全走一遍并留履历，因写「迁移」——
+ *      不许直接把 状态 字段写成「收口」，那是绕过状态机给自己开后门；
+ *   ④ 伪单归档不删：待验收 → 已归档 + 归档原因 + 迁移至专项 章。**归档不是删除**，
+ *      令面明写「其待验收文件归档不删」——纸面可考，工单板从此看不见它。
+ */
+function 迁移(root, 计划, opts = {}) {
+  const store = require('./core/store');
+  const 演练 = !!opts.演练;
+  const 项 = (计划 && 计划.length ? 计划 : 默认迁移计划);
+  const 动作 = []; const 跳过 = []; const 专项号们 = [];
+  const 已有 = list(root);
+
+  for (const p of 项) {
+    const 单号 = String((p && p.单号) || p || '').trim();
+    if (!单号) { 跳过.push({ 单号: '', 因: '计划项缺单号' }); continue; }
+
+    // 幂等钥匙 = 别名。跑过一次就认得出，第二次跑只补做没做完的步（子单挂链/归档），不再造号。
+    let s = 已有.find((x) => [].concat(x.fm.别名 || []).map(String).includes(单号)) || null;
+    const t = store.find(root, 单号);
+    if (!s && !t) { 跳过.push({ 单号, 因: '伪单不在本库（工单库不可达或已迁走）——不凭空造容器' }); continue; }
+
+    // ① 建容器
+    if (!s) {
+      const fm = (t.fm || {});
+      const 名称 = String(p.名称 || fm.title || 单号).trim();
+      const args = {
+        名称, 目标: 首段(t.body) || 名称,
+        管线: p.管线 || fm.管线 || null, 项目: p.项目 || fm.项目 || null,
+        单号前缀: (String(单号).match(/^(.+)-\d+$/) || [])[1] || 'TK',
+        别名: [单号], 因: `迁移自 ${单号}（施工令-058）`, 操作者: opts.操作者 || '施工令-058',
+        正文: 迁移正文(单号, t),
+      };
+      if (演练) {
+        s = { id: `S-?（新号，${名称}）`, fm: { ...args, 状态: '立项', 别名: [单号] }, body: '' };
+        动作.push({ 动作: '建容器', 单号, 专项: s.id, 名称, 管线: args.管线 });
+      } else {
+        const r = 立项(root, args);
+        if (!r.ok) { 跳过.push({ 单号, 因: '建容器失败：' + r.error }); continue; }
+        s = find(root, r.id);
+        动作.push({ 动作: '建容器', 单号, 专项: s.id, 名称, 管线: args.管线 });
+      }
+    } else {
+      动作.push({ 动作: '容器已在', 单号, 专项: s.id, 名称: s.fm.名称 });
+    }
+    专项号们.push(s.id);
+
+    // ② 子单挂链（父单章不动）
+    for (const st of store.STATES) {
+      for (const k of store.list(root, st)) {
+        const kfm = k.fm || {};
+        if (String(kfm.父单 || '') !== 单号) continue;
+        if (String(kfm.专项 || '') === s.id) { 动作.push({ 动作: '子单已挂', 单号: k.id, 专项: s.id }); continue; }
+        动作.push({ 动作: '子单挂链', 单号: k.id, 专项: s.id, 态: st });
+        if (!演练) store.update(root, k.id, (fm) => { fm.专项 = s.id; });
+      }
+    }
+
+    // ③ 容器推到 收口（三跳留履历），候制作人关账签字
+    const 现态 = (s.fm || {}).状态 || '立项';
+    if (现态 === '立项' || 现态 === '进行') {
+      动作.push({ 动作: '推收口', 专项: s.id, 从: 现态 });
+      if (!演练) {
+        if ((find(root, s.id).fm.状态) === '立项') 转移(root, s.id, '进行', { 因: '迁移：原伪单已开工', 操作者: opts.操作者 || '施工令-058' });
+        const 报告 = 收口报告路径(root, 单号);
+        转移(root, s.id, '收口', { 因: `迁移自 ${单号}，停在收口候制作人关账签字`, 操作者: opts.操作者 || '施工令-058', ...(报告 ? { 收口报告: 报告 } : {}) });
+      }
+    } else {
+      动作.push({ 动作: '状态已到位', 专项: s.id, 状态: 现态 });
+    }
+
+    // ④ 伪单归档不删
+    if (t && t.state !== '已归档') {
+      const 可 = store.isLegal(t.state, '已归档');
+      if (!可) 跳过.push({ 单号, 因: `伪单现处「${t.state}」，到已归档不是合法转移——原位留着，请人裁` });
+      else {
+        动作.push({ 动作: '伪单归档', 单号, 从: t.state, 专项: s.id });
+        if (!演练) {
+          store.move(root, 单号, t.state, '已归档', (fm) => {
+            fm.归档原因 = `专项实体化迁移 → ${s.id}（施工令-058）`;
+            fm.迁移至专项 = s.id;   // 工单板据此认出伪单并不再渲染（要件5）
+            fm.专项 = s.id;         // 追溯链：从纸面这一张也点得回容器
+          }, new Date().toISOString());
+        }
+      }
+    } else if (t) {
+      动作.push({ 动作: '伪单已归档', 单号, 专项: s.id });
+      if (!演练 && !t.fm.迁移至专项) store.update(root, 单号, (fm) => { fm.迁移至专项 = s.id; fm.专项 = s.id; });
+    }
+  }
+
+  if (!演练 && 动作.length) {
+    try {
+      require('./journal').append(root, `专项实体化迁移（施工令-058）：${专项号们.join('、') || '无'}`
+        + `——建容器 ${动作.filter((a) => a.动作 === '建容器').length} · 子单挂链 ${动作.filter((a) => a.动作 === '子单挂链').length}`
+        + ` · 伪单归档 ${动作.filter((a) => a.动作 === '伪单归档').length}${跳过.length ? ` · 跳过 ${跳过.length}` : ''}`);
+    } catch { /* 留痕失败不阻塞迁移 */ }
+  }
+  return { ok: true, 演练, 专项: 专项号们, 动作, 跳过 };
+}
+
+// 收口报告路径：伪单时代的报告落在 项管台账/收口报告-<单号>.md，迁移后原样指过去（不搬文件）。
+function 收口报告路径(root, 单号) {
+  const p = path.join(root, '项管台账', `收口报告-${单号}.md`);
+  return fs.existsSync(p) ? p : null;
+}
+
+const 首段 = (body) => String(body || '').split(/\n\s*\n/).map((s) => s.trim()).filter((s) => s && !s.startsWith('#'))[0] || '';
+
+function 迁移正文(单号, t) {
+  const 追溯 = `> 追溯链：本专项由伪工单 **${单号}** 迁移而来（施工令-058 · H103「专项是容器不是工单」）。\n`
+    + `> 原单以 已归档 身份留在纸面上（归档不删），子单的 父单 章一律未动。\n`;
+  return `${追溯}\n${(t && t.body) || '（原伪单无正文）'}\n`;
+}
+
+/* ================= 对外查询小工具 ================= */
+
+// 一张单归哪个专项：显式章优先，别名兜底。给 ledger-sync / UI / 切单共用一份判据。
+function 专项of(fm, 专项们) {
+  for (const s of 专项们 || []) if (属于(s, fm)) return s;
+  return null;
+}
+
+module.exports = {
+  DIR, STATES, 转移表, 终态, 是专项号, ensure,
+  list, find, 立项, update, 转移, 关账,
+  属于, 子单, 聚合, 基线变迁, 专项of,
+  首派, 收口自检,
+  迁移, 默认迁移计划, 收口报告路径,
+};

@@ -20,7 +20,7 @@ const { pulsePlan, PULSE } = 抽('pulsePlan', '{ pulsePlan, PULSE }');
 const pulseTarget = 抽('pulseTarget', 'pulseTarget');
 
 // route() 那张真表的键（app.js 传 Object.keys(ROUTES)）
-const 视图键 = ['', 'ideas', 'board', 'flow', 'queue', 'agents', 'decisions', 'wiki', 'relay', 'report'];
+const 视图键 = ['', 'ideas', 'specials', 'board', 'flow', 'queue', 'agents', 'decisions', 'wiki', 'relay', 'report'];
 const 态 = (o) => Object.assign({ 变了: false, 待办: false, 免打扰: false, 可局部: true, 交互中: false, 现在: 0, 上次整页: 0 }, o);
 
 /* ---- 一、局部刷新选择（要件1）---- */

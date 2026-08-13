@@ -16,7 +16,9 @@ const STPCT = { 草稿: 0, 待投: 0, 池: 0, 在途: 60, 质检: 85, 待定夺:
 // 施工令-015：wiki 升格唯一知识入口（施工令-020 起五分区），风格库导航退役——美术标杆并入 Wiki 页签
 // 施工令-042：「队列」页签落在流程与在途之间——流程页答「现在怎么走」，队列页答「后面排了什么」，
 // 两页同源（排程台账）且互为上下文，中间不该再隔着别的东西。
-const NAV = [['总览', ''], ['想法', 'ideas'], ['工单', 'board'], ['流程', 'flow'], ['队列', 'queue'], ['在途', 'agents'], ['决策台', 'decisions'], ['Wiki', 'wiki'], ['项管', 'relay'], ['报表', 'report']]; // 参数入口只走 ⚙；树形页签随施工令-028 退役
+const NAV = [['总览', ''], ['想法', 'ideas'], ['专项', 'specials'], ['工单', 'board'], ['流程', 'flow'], ['队列', 'queue'], ['在途', 'agents'], ['决策台', 'decisions'], ['Wiki', 'wiki'], ['项管', 'relay'], ['报表', 'report']]; // 参数入口只走 ⚙；树形页签随施工令-028 退役
+// 专项页排在 想法 与 工单 之间不是随手放的：它就是这条链上的那一环——想法拍板成专项容器（H103），
+// 容器切出子单进工单板。页签顺序照着事实的先后走，制作人不必记「专项归哪个页管」。
 function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1900); }
 // 数值跳字确认（步进器改完后调用）：重触发 animation
 function bump(el) { if (!el) return; el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
@@ -106,9 +108,15 @@ function bshell(crumb, pillHtml, inner, home) {
 }
 
 /* ===== 数据装配 ===== */
+// 专项伪单摘除（施工令-058 要件5）：迁移把容器伪单归档留在纸面上，但它不该再占盘面上任何一格——
+// 它不是活，工单板上每多一条这种单，制作人就要多问一次「这个我是不是该处理」。
+// 判据只认 迁移至专项 这一印：没迁的存量战役父单照旧显示（那些还是真在用的容器单）。
+const 是专项伪单 = (t) => !!(t && t.迁移至专项);
+
 async function loadBoard() {
   const [d] = await Promise.all([api('/api/board' + (window._showHidden ? '?含隐藏=1' : '')), loadCfg()]);
   window._hiddenCnt = d.隐藏数 || 0;
+  for (const s of d.states) d.board[s] = (d.board[s] || []).filter((t) => !是专项伪单(t));
   const raw = []; for (const s of d.states) for (const t of d.board[s]) raw.push({ ...t, state: s });
   const p = projActive();
   if (!p) return { states: d.states, board: d.board, all: raw, raw };
@@ -2072,6 +2080,10 @@ async function viewDetail(id) {
           ${fm.代核 ? `<span class="pill ${fm.代核.结论 === '通过' ? 'ok' : 'red'}">核查${esc(fm.代核.结论)}</span>` : ''}</div>
         <div class="chain"><div class="clbl">追溯链</div>
           ${chainRow('父单', c.父子.父 ? `<a href="#/t/${c.父子.父}" style="color:var(--accent-ink)">${esc(c.父子.父)}</a>` : null)}
+          ${/* 专项归属（施工令-058）：容器不是工单，点过去是专项页而不是某张单的详情 */ ''}
+          ${chainRow('专项', c.专项 ? `<a href="#/specials" style="color:var(--accent-ink)">${esc(c.专项.id)}</a>`
+    + (c.专项.名称 ? ` <span class="dim">${esc(c.专项.名称)}${c.专项.状态 ? ' · ' + esc(c.专项.状态) : ''}</span>`
+      : ' <span class="dim">（注册表里查无此号——挂链写错了？）</span>') : null)}
           ${chainRow('子单', kidsTxt)}
           ${chainRow('返工自', c.返工自 ? esc(c.返工自) : null)}
           ${chainRow('依据', c.依据 ? `<span style="color:var(--accent-ink)">${esc(c.依据)}</span>` : null)}
@@ -2682,8 +2694,114 @@ async function wkGraph(proj) {
 }
 
 // 施工令-015：stylelib 路由退役（内容并入 wiki 美术标杆页签），旧书签在 route() 里转向
-const ROUTES = { '': viewOverview, ideas: viewIdeas, board: viewBoard, flow: viewFlow, queue: viewQueue, agents: viewAgents, decisions: viewDecisions, wiki: viewWiki, relay: viewRelay, report: viewReport };
+const ROUTES = { '': viewOverview, ideas: viewIdeas, specials: viewSpecials, board: viewBoard, flow: viewFlow, queue: viewQueue, agents: viewAgents, decisions: viewDecisions, wiki: viewWiki, relay: viewRelay, report: viewReport };
 const WK_ALIAS = ['style', 'stylelib', '风格库']; // 旧书签不死：一律落 wiki 美术标杆
+
+/* ===== P15 专项（H103 · 施工令-058）：容器不是工单 =====
+   一张卡 = 一个专项容器。四态、进度聚合条、子单树、收口报告直达、关账按钮（唯一人闸）。
+   与工单板的分工是硬的：**这里没有一张工单能被操作**——点子单只跳详情页，容器自己既不派发
+   也不验收，它只有一个可按的钮，就是关账。容器页要是也长出一排工单动作，H103 就白裁了。 */
+
+// @testable-begin spAgg
+// 聚合条分段（纯函数，与服务端 specials.聚合 的 进度 段同口径，不另算一遍）：
+// 落袋 / 在办 / 未起 / 归档 四段按数量分宽度，零子单回一条空槽。
+// 抽成可测函数是因为「百分比怎么来的」在页面上是一句无声的断言——它错了没人看得出来。
+function spAgg(进度) {
+  const p = 进度 || {};
+  const 总 = Number(p.总数) || 0;
+  const seg = (n) => (总 ? Math.round((Number(n) || 0) / 总 * 1000) / 10 : 0);
+  return {
+    总数: 总, 百分比: 总 ? Number(p.百分比) || 0 : 0,
+    段: [
+      { 名: '落袋', 类: 'done', 数: Number(p.落袋) || 0, 宽: seg(p.落袋) },
+      { 名: '在办', 类: 'doing', 数: Number(p.在办) || 0, 宽: seg(p.在办) },
+      { 名: '未起', 类: 'todo', 数: Number(p.未起) || 0, 宽: seg(p.未起) },
+      { 名: '归档', 类: 'drop', 数: Number(p.归档) || 0, 宽: seg(p.归档) },
+    ].filter((s) => s.数 > 0),
+    空: 总 === 0,
+  };
+}
+// 四态一句话（状态本身不解释就是四个名词，制作人得猜哪个在等他）
+const SP_态释 = {
+  立项: '已立项，等项管切单',
+  进行: '子单在跑',
+  收口: '全部落袋 · 等你关账签字',
+  关账: '已关账收档',
+};
+// @testable-end spAgg
+
+async function viewSpecials() {
+  const d = await api('/api/specials').catch(() => ({ 专项: [] }));
+  const p = projActive();
+  const all = (d.专项 || []).filter((s) => !p || (s.项目 || projDefault()) === p);
+  if (!all.length) {
+    return `<div class="emptycard" style="margin-top:30px"><h5>还没有专项</h5>
+      <p>专项是<b>容器</b>不是工单（H103）：它装的是一批活，自己不执行、不进质检、不被派发。
+      开一个的路子只有一条——去 <a href="#/ideas" style="color:var(--accent-ink)">想法池</a> 拍板，
+      拍板那一刻落的就是这里的一条容器；立项后项管自动切单，子单才进
+      <a href="#/board" style="color:var(--accent-ink)">工单板</a>。</p></div>`;
+  }
+  // 等签字的排最前（收口态），其余按号。制作人开页第一眼该看见的是「哪个在等我」。
+  const 序 = { 收口: 0, 进行: 1, 立项: 2, 关账: 3 };
+  const 卡 = [...all].sort((a, b) => (序[a.状态] ?? 9) - (序[b.状态] ?? 9)
+    || Number(String(b.id).slice(2)) - Number(String(a.id).slice(2))).map(spCard).join('');
+  const 待签 = all.filter((s) => s.状态 === '收口').length;
+  return `<div class="sp-head"><b style="font-size:15px">专项 · 容器登记册</b>
+      <span class="subnote">想法拍板 → <b>立项</b>（项管自动切单）→ 进行 → 收口 → <b>关账</b>（唯一人闸=你签字）。
+      容器不进工单目录、不参与机判/QA/派发。${待签 ? `<b class="sp-wait">${待签} 个等你关账</b>` : ''}</span></div>
+    <div class="spgrid">${卡}</div>`;
+}
+
+function spCard(s) {
+  const a = spAgg(s.进度);
+  const 条 = a.空
+    ? '<div class="spbar empty" title="还没有子单——切单出结果前不显示任何完成度（不编进度）"></div>'
+    : `<div class="spbar">${a.段.map((g) => `<i class="sg-${g.类}" style="width:${g.宽}%" title="${esc(g.名)} ${g.数} 张"></i>`).join('')}</div>`;
+  const 子 = (s.子单 || []).map((k) => `<a class="sprow${k.落袋 ? ' done' : ''}" href="#/t/${esc(k.id)}" title="${esc(k.title)}">
+      <span class="mono spid">${esc(k.id)}</span><span class="spt">${esc(k.title)}</span>
+      ${fnPill(k.职能)}${stPill(k.state)}</a>`).join('')
+    || '<div class="dim" style="padding:8px 2px;font-size:12px">还没有子单——项管切单出结果后自动挂进来（子单清单由子单的 <code>专项:</code> 章反向聚合，容器里不手维护）</div>';
+  const 预 = s.预算 || {};
+  const 账 = [
+    `预计 ${预.预计h || 0}h`,
+    `实耗 ${预.实耗h || 0}h`,
+    预.偏差pct != null ? `偏差 ${预.偏差pct}%` : null,
+    预.实耗token ? `${Math.round(预.实耗token / 1000)}k token` : null,
+  ].filter(Boolean).join(' · ');
+  const 基线 = (s.基线 || []).slice(-4).map((b) => `<div class="spbl"><span class="pill sm mut">${esc(b.类型)}</span>${esc(b.说明)}</div>`).join('');
+  const 关账钮 = s.状态 === '收口'
+    ? `<button class="btn accent h32" onclick="spClose('${esc(s.id)}')" title="唯一人闸：签字即收档，签完不再回头">✍ 关账签字</button>`
+    : s.状态 === '关账'
+      ? `<span class="pill sm ok" title="${esc(String(s.关账时间 || '').slice(0, 16).replace('T', ' '))}">已关账 · ${esc(s.关账签字 || '制作人')}</span>`
+      : `<span class="dim" style="font-size:12px">关账要等收口（现在：${esc(SP_态释[s.状态] || s.状态)}）</span>`;
+  const 报告 = s.收口报告 ? `<button class="btn h32" onclick="spReport('${esc(s.id)}')">📄 收口报告</button>` : '';
+  return `<div class="spcard card r14 st-${esc(s.状态)}">
+    <div class="sph"><span class="mono spno">${esc(s.id)}</span><b class="spname">${esc(s.名称)}</b>
+      <span class="pill sm sp-st">${esc(s.状态)}</span>
+      ${s.管线 ? `<span class="pill sm mut" title="管线归属（H51）">${esc(s.管线)}</span>` : ''}
+      ${(s.别名 || []).length ? `<span class="pill sm mut" title="实体化前的伪工单号（施工令-058 迁移）">原 ${esc(s.别名.join('、'))}</span>` : ''}</div>
+    <div class="spgoal">${esc(s.目标 || '')}</div>
+    <div class="spmeta"><span class="sppct">${a.空 ? '—' : a.百分比 + '%'}</span>
+      <span class="subnote">${a.空 ? '无子单' : `${s.进度.落袋}/${s.进度.总数} 落袋`} · ${esc(SP_态释[s.状态] || '')}</span></div>
+    ${条}
+    <div class="spacct">${esc(账)}</div>
+    <div class="spkids">${子}</div>
+    ${基线 ? `<details class="spbase"><summary>基线变迁 · 最近 ${Math.min(4, (s.基线 || []).length)} 条</summary>${基线}</details>` : ''}
+    <div class="spops">${报告}${关账钮}</div></div>`;
+}
+
+window.spClose = async (id) => {
+  if (!await ask(`关账 ${id}？\n\n这是本专项唯一的人闸：签完即收档，容器从此不再收新子单。\n签字前请先读过收口报告。`)) return;
+  const r = await post('/api/specials/关账', { id, 签字人: '制作人' });
+  if (!r.ok) return toast(r.error || '关账失败');
+  toast(`${id} 已关账`); route();
+};
+window.spReport = async (id) => {
+  const s = await api('/api/specials/' + encodeURIComponent(id)).catch(() => null);
+  if (!s || !s.收口报告) return toast('收口报告还没出');
+  // 报告是明文文件，路径直接摊在弹层里（可复制）——不在页面里再造一个 markdown 阅读器。
+  await ask(`收口报告 · ${id}\n\n${s.收口报告}\n\n（明文文件，本机双击即开）`);
+};
 
 /* ===== P14 想法池（H49 双域·制作人层域）===== */
 async function viewIdeas() {
@@ -2693,11 +2811,11 @@ async function viewIdeas() {
       ${x.备注 ? `<div class="in2">${esc(x.备注)}</div>` : ''}
       <div class="ia"><span class="subnote">${esc(String(x.t).slice(5, 10))}</span><span class="sp"></span>
         <button class="btn h32" onclick="ideaAct('放弃','${esc(x.id)}')">放弃</button>
-        <button class="btn accent h32" onclick="ideaAct('拍板','${esc(x.id)}')">拍板 → 父单</button></div></div>`).join('')
+        <button class="btn accent h32" onclick="ideaAct('拍板','${esc(x.id)}')">拍板 → 专项</button></div></div>`).join('')
     || '<p class="dim" style="text-align:center;margin-top:40px">想法池空。灵感随手扔进来——没有验收标准、没有排期压力，拍板那一刻才进项目组域。</p>';
   return `<div class="rl-wrap" style="height:auto">
     <div class="rl-head"><b style="font-size:15px">想法池 · 制作人层域</b>
-      <span class="subnote">随聊随记（手机也行）→ 拍板成父单（补边界+验收标准）→ 项管切单派发。拍板是唯一人闸。</span></div>
+      <span class="subnote">随聊随记（手机也行）→ 拍板成<b>专项容器</b>（补边界+验收标准）→ 项管切单派发。拍板是唯一人闸。</span></div>
     <div class="rl-input" style="margin:0 0 18px"><textarea id="idea-t" placeholder="一句话想法…（Ctrl+Enter 入池）" onkeydown="if(event.ctrlKey&&event.key==='Enter')ideaAdd()"></textarea>
       <button class="btn accent h44" onclick="ideaAdd()">入池</button></div>
     <div class="ideagrid">${cards}</div></div>`;
@@ -2712,7 +2830,8 @@ window.ideaAct = async (动作, id) => {
   if (动作 === '放弃' && !await ask('放弃这个想法？')) return;
   const r = await post('/api/ideas', { 动作, id });
   if (!r.ok) return toast(r.error || '失败');
-  if (动作 === '拍板') { toast(`父单 ${r.父单} 已建——去补齐边界与验收标准`); location.hash = '#/draft?edit=' + encodeURIComponent(r.父单); return; }
+  // 施工令-058：拍板落的是专项容器，不再是伪工单——去处随之从起草页改成专项页。
+  if (动作 === '拍板') { toast(`专项 ${r.专项} 已立项——去补齐边界与验收标准`); location.hash = '#/specials'; return; }
   route();
 };
 

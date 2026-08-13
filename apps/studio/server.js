@@ -255,6 +255,9 @@ app.get('/api/board', (req, res) => {
     阶段: t.fm.阶段 || null, 预计时间: t.fm.预计时间 || null, // D43 流程视图用
     父单: t.fm.父单 || null, 依赖: t.fm.依赖 || null, 管线: t.fm.管线 || null, // H51 管线章
     父单类型: t.fm.父单类型 || null,
+    // H103 · 施工令-058：专项挂链 + 伪单印。迁移至专项 有值 = 这张单是被实体化掉的**容器伪单**，
+    // 工单板据此把它从盘面上摘掉（要件5「工单板不再显示专项伪单」）——纸面还在，只是不占条位。
+    专项: t.fm.专项 || null, 迁移至专项: t.fm.迁移至专项 || null,
     领单时间: t.fm.领单时间 || null, 交付时间: t.fm.交付时间 || null, 滞留告警: !!t.fm.滞留告警,
     挂起: t.fm.挂起 || null, // 施工令-021：工单池卡/树形行/流程节点/在途四处的 ❄ 置灰都读这一个字段
     // 施工令-022 流程视图（现在线管线甘特）两个必需字段：
@@ -422,6 +425,72 @@ app.post('/api/pipelines/status', (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 // （排期 API 已随甘特退役移除——拉取模型没有"计划日期"，时间轴只回放真实执行；里程碑=父单完成，已废）
+
+// ---- 专项注册表（H103 · 施工令-058）：容器不是工单，独立实体独立 API ----
+// 人闸两处、机器口两处，边界与管线注册表同规格：**立项与关账只准本机操作**（isLocalReq），
+// 切单与迁移是机器动作但都由人发起，故同样钉在本机——远端瞭望塔只有读权。
+const specials = require('./lib/specials');
+app.get('/api/specials', (req, res) => {
+  if (!ready(res)) return;
+  const 快照 = store.snapshot(ROOT); // 一次扫盘喂全部聚合：一个专项扫一遍会让十条专项扫十遍
+  res.json({ 专项: specials.list(ROOT).map((s) => specials.聚合(ROOT, s, { 快照 })) });
+});
+app.get('/api/specials/:id', (req, res) => {
+  if (!ready(res)) return;
+  const v = specials.聚合(ROOT, String(req.params.id));
+  if (!v) return res.status(404).json({ error: '专项不存在' });
+  const s = specials.find(ROOT, String(req.params.id));
+  res.json({ ...v, 正文: s.body });
+});
+app.post('/api/specials', (req, res) => {
+  if (!ready(res)) return;
+  if (!isLocalReq(req)) return res.status(403).json({ error: '立项是人闸，只能在本机操作' });
+  const b = req.body || {};
+  const r = specials.立项(ROOT, { ...b, 操作者: b.操作者 || '制作人' });
+  if (!r.ok) return res.status(400).json(r);
+  journal.append(ROOT, `专项立项 ${r.id}「${r.fm.名称}」（H103 人闸）`);
+  // 要件2：H49 的切单挂钩从「定稿」迁到「立项」——条目一成立就唤醒项管切单。
+  // 派发制没开时不自动切（同旧口径：手工模式下由人点「切单」），免得关着执行器还偷偷起会话。
+  if (cfg.执行器 && cfg.执行器.派发制 && b.自动切单 !== false) {
+    const proj = r.fm.项目 && cfg.项目 && cfg.项目.注册 && cfg.项目.注册[r.fm.项目];
+    require('./lib/pm/wake').on专项立项(ROOT, cfg, { id: r.id, fm: r.fm }, proj && proj.路径);
+    return res.json({ ...r, 项管: `切单已启动（${(cfg.模型 || {}).项管 || 'fable'}），简报完成后进台账待审` });
+  }
+  res.json(r);
+});
+// 三个动作走 :action 参数，不写字面量中文路径——**字面量中文路径在 express 4 下必 404**
+// （同 /api/schedule/:action 与 /api/pm/poolbalance/:action 的成例；参数名也只能是 ASCII，
+//   path-to-regexp 不认中文占位符，会把它当字面量）。这一行踩过就不该再踩第二次。
+const SP_ACTIONS = {
+  // 关账：唯一人闸。签字人缺省「制作人」，但缺省不等于免签——specials.关账 里空名照样拒。
+  关账: (b) => {
+    const r = specials.关账(ROOT, String(b.id || ''), b.签字人 || '制作人', b.说明);
+    if (r.ok) {
+      journal.append(ROOT, `专项关账 ${b.id}（签字 ${b.签字人 || '制作人'}${b.说明 ? '：' + b.说明 : ''}）——唯一人闸落笔`);
+      pmLedger.event(ROOT, '专项关账', { 父单: String(b.id), 专项: String(b.id), 签字人: b.签字人 || '制作人' });
+    }
+    return r;
+  },
+  // 复切（054 候期出口的下半步）：条件齐了人来点一下，走的是与立项同一条唤醒线。
+  切单: (b) => {
+    const s = specials.find(ROOT, String(b.id || ''));
+    if (!s) return { ok: false, error: '专项不存在' };
+    const proj = s.fm.项目 && cfg.项目 && cfg.项目.注册 && cfg.项目.注册[s.fm.项目];
+    require('./lib/pm/wake').on专项立项(ROOT, cfg, s, proj && proj.路径);
+    return { ok: true, 说明: `切单已启动（${(cfg.模型 || {}).项管 || 'fable'}）` };
+  },
+  // 迁移（要件4）：**默认演练**。真跑要显式 {执行:true}——迁移改的是工单 frontmatter 与目录，
+  // 一个手滑就得靠 git 捞回来，所以默认那一档永远是「只算给你看」。
+  迁移: (b) => specials.迁移(ROOT, b.计划, { 演练: !b.执行, 操作者: b.操作者 || '制作人' }),
+};
+app.post('/api/specials/:action', (req, res) => {
+  if (!ready(res)) return;
+  if (!isLocalReq(req)) return res.status(403).json({ error: '专项动作是人闸，只能在本机操作' });
+  const fn = SP_ACTIONS[String(req.params.action || '')];
+  if (!fn) return res.status(404).json({ error: '未知专项动作（只有 关账/切单/迁移）' });
+  try { const r = fn(req.body || {}); res.status(r.ok === false ? 400 : 200).json(r); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ---- 参数步进（P6）：白名单闸值写回 studio.config.json（全局在途上限已废——编制即上限）----
 app.post('/api/config/gate', (req, res) => {
@@ -923,8 +992,9 @@ app.post('/api/ideas', (req, res) => {
   let r;
   if (动作 === '放弃') r = ideas.drop(ROOT, id);
   else if (动作 === '拍板') {
+    // 施工令-058：拍板产出的是**专项注册表条目**，不再是伪工单（H103）。
     r = ideas.拍板(ROOT, id, 项目 || (cfg.项目 && cfg.项目.默认) || '', 前缀 || (cfg.项目 && cfg.项目.默认) || 'TK');
-    if (r.ok) journal.append(ROOT, `拍板：想法 ${id} → 父单 ${r.父单}（补齐边界与验收标准后生效）`);
+    if (r.ok) journal.append(ROOT, `拍板：想法 ${id} → 专项 ${r.专项}（补齐边界与验收标准后立项生效）`);
   } else { r = ideas.add(ROOT, 文本, 备注); if (r.ok) journal.append(ROOT, `想法入池：${String(文本).slice(0, 40)}`); }
   res.status(r.ok ? 200 : 400).json(r);
 });
@@ -1285,10 +1355,17 @@ ACTIONS.定稿 = (b) => {
   if (r.ok) 记事件('定稿放行', { 单: b.id });
   if (r.ok && cfg.执行器 && cfg.执行器.派发制) {
     const t = store.find(ROOT, b.id);
-    if (t && ['战役','专项'].includes(t.fm.父单类型)) {
+    // 施工令-058 要件2：这条挂钩从此**只服务存量战役号**。专项已实体化，它的切单挂在
+    // 「立项」那一刻（POST /api/specials）——容器不再有「定稿」这一态可挂。
+    // 未迁移的存量 专项父单工单还留在库里时：不自动切，但明说一句去哪儿切，不让人对着静默发呆。
+    if (t && t.fm.父单类型 === '战役') {
       const proj = t.fm.项目 && cfg.项目 && cfg.项目.注册 && cfg.项目.注册[t.fm.项目];
       require('./lib/pm/wake').onCampaignFinalized(ROOT, cfg, t, proj && proj.路径);
       return { ...r, 项管: `切单已启动（${(cfg.模型 || {}).项管 || 'opus'}），简报完成后进台账待审` };
+    }
+    if (t && t.fm.父单类型 === '专项') {
+      journal.append(ROOT, `定稿 ${b.id} 是存量专项伪单：切单挂钩已迁至「专项立项」（施工令-058），未自动切单`);
+      return { ...r, 项管: '本单是存量专项伪单——专项已实体化（H103）：请走 专项页 迁移，或在专项页立项后自动切单' };
     }
   }
   return r;

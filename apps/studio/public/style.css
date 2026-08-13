@@ -1343,3 +1343,50 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
   .ktitle { display:none; } /* 窄屏先舍标题：单号与徽章是最小可用信息 */
   .kstep .kt { width:44px; }
 }
+
+/* ===== P15 专项页（H103 · 施工令-058）：容器登记册 =====
+   卡片形制照抄 hubcard/idea 那一族（.card .r14 + 语义令牌），只多两样容器专有的东西：
+   四段聚合条（.spbar）与状态左边条（.spcard.st-* 的 border-left）。
+   颜色全走既有令牌不新造色——专项不是一种新状态，它只是另一种实体。 */
+.sp-head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin:18px 0 14px; }
+.sp-head .sp-wait { color:var(--danger); margin-left:6px; }
+.spgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(360px, 1fr)); gap:14px; align-items:start; }
+.spcard { padding:14px 16px 12px; border-left:3px solid var(--line); }
+.spcard.st-立项 { border-left-color:var(--ink3); }
+.spcard.st-进行 { border-left-color:var(--now); }
+.spcard.st-收口 { border-left-color:var(--accent); }   /* 等你签字：与全站「人闸靛」同族 */
+.spcard.st-关账 { border-left-color:var(--ok); }
+.sph { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.sph .spno { font-size:12px; color:var(--ink3); }
+.sph .spname { font-size:14.5px; color:var(--ink); }
+.spcard.st-收口 .sp-st { background:var(--accenttint); color:var(--accent-ink); }
+.spcard.st-关账 .sp-st { background:var(--okbg); color:var(--ok); }
+.spcard.st-进行 .sp-st { background:var(--nowtint); color:var(--now); }
+.spgoal { font-size:12.5px; color:var(--ink2); line-height:1.6; margin:8px 0 10px;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.spmeta { display:flex; align-items:baseline; gap:10px; margin-bottom:6px; }
+.spmeta .sppct { font-family:var(--mono); font-size:17px; font-weight:600; color:var(--ink);
+  font-variant-numeric:tabular-nums; }
+.spbar { display:flex; height:8px; border-radius:4px; overflow:hidden; background:var(--chip);
+  box-shadow:inset 0 1px 2px var(--groove-soft); }
+.spbar i { display:block; height:100%; }
+.spbar .sg-done { background:var(--ok); }
+.spbar .sg-doing { background:var(--now); }
+.spbar .sg-todo { background:var(--line); }
+.spbar .sg-drop { background:var(--ink3); opacity:.45; }
+/* 零子单不画任何填充：切单还没出结果的专项显示一条空槽，不编完成度（诚实纪律，同 progress.js） */
+.spbar.empty { background:repeating-linear-gradient(90deg, var(--chip) 0 6px, transparent 6px 12px); }
+.spacct { font-family:var(--mono); font-size:11.5px; color:var(--ink3); margin:8px 0 4px; }
+.spkids { display:flex; flex-direction:column; gap:2px; margin:6px 0 2px; max-height:212px; overflow-y:auto; }
+.sprow { display:flex; align-items:center; gap:7px; padding:4px 6px; border-radius:6px;
+  text-decoration:none; color:var(--ink2); font-size:12px; }
+.sprow:hover { background:var(--sect); }
+.sprow .spid { font-size:11px; color:var(--ink3); flex:none; }
+.sprow .spt { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sprow.done .spt { color:var(--ink3); }
+.spbase { margin-top:8px; }
+.spbase summary { font-size:11.5px; color:var(--ink3); cursor:pointer; }
+.spbl { font-size:11.5px; color:var(--ink2); padding:3px 0 3px 4px; display:flex; gap:6px; align-items:baseline; }
+.spops { display:flex; align-items:center; gap:8px; justify-content:flex-end; flex-wrap:wrap;
+  margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+@media (max-width:720px) { .spgrid { grid-template-columns:1fr; } }
