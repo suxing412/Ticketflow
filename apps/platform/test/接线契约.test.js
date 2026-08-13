@@ -149,6 +149,37 @@ t('页面里用到的类名，样式表里必须真的定义过（类名对不�
     + `index.html 里现在有 ${(页.match(/<button(?![^>]*class=)/g) || []).length} 个裸 button，它们会渲染成纯文字。`);
 });
 
+t('令牌生成必须原子：三个进程同时首启，只能有一个令牌', () => {
+  // 首次安装是三个进程**同时**启动的（开机.js 一起拉起 server/工作区/执行器）。
+  // 原先它们都发现文件不存在，各自生成、各自写盘，最后落盘的覆盖前面的，
+  // 而每个进程内存里还捧着自己那份。
+  //
+  // 实测（打包件首次安装，2026-08-13）：磁盘上的令牌对 4371、4372 有效，
+  // **唯独对 4370 无效**——界面能打开（首页令牌是发页时注入的），
+  // 但任何命令行调用一律 401，而 config 里那份看上去完全正常。
+  const 门禁 = require(path.join(平台根, 'lib', '门禁.js'));
+  const os = require('os');
+  const 根 = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-'));
+  try {
+    // 同一个根连取三次 = 模拟三个进程抢同一个文件。第一次建，后两次必须让位。
+    const a = 门禁.取令牌(根);
+    const b = 门禁.取令牌(根);
+    const c = 门禁.取令牌(根);
+    assert.equal(a.新建, true, '第一次该是新建');
+    assert.equal(b.令牌, a.令牌, '第二个进程拿到了不同的令牌——它会对不上另外两个');
+    assert.equal(c.令牌, a.令牌, '第三个进程同上');
+    // 明文副本也要是同一个值：命令行调用读的正是它
+    const 明文 = fs.readFileSync(path.join(根, 'config', 'api-token.txt'), 'utf8').trim();
+    assert.equal(明文, a.令牌, '明文副本与生效令牌不一致——命令行调用会 401');
+  } finally { fs.rmSync(根, { recursive: true, force: true }); }
+
+  // 写盘用的必须是 wx（独占创建）。用默认的 w 就是「后写的覆盖先写的」，
+  // 那正是这个 bug 的成因。
+  const 源 = fs.readFileSync(path.join(平台根, 'lib', '门禁.js'), 'utf8');
+  assert.ok(/flag: 'wx'/.test(源), "令牌写盘必须用 flag:'wx'——默认的 w 会互相覆盖");
+  assert.ok(/EEXIST/.test(源), '抢输的进程要读赢家写的那份，不能用自己的');
+});
+
 t('不许用原生 alert / confirm（阻塞整页，且长得像浏览器报错）', () => {
   // 原生弹窗有四个硬伤，每一个都在削弱「这是个软件」的感觉：
   //   ① 阻塞整个页面，后台刷新全停；
