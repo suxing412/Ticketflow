@@ -77,6 +77,17 @@ function rankProviders(root, cfg, { agent = null, task = null, role = '', kind =
   const ranked = providers.filter((provider) => {
     if (provider.enabled === false || deny.has(provider.name)) return false;
     if (allow.size && !allow.has(provider.name)) return false;
+    // 桩 Provider 不参与自动挑选（2026-08-13 实测踩到）。
+    //
+    // echo 靠打 0 分让它排最后。但**0 分是排序信号，不是资格判据**：
+    // 真判官全被预算闸冻结时，桩池就顶上来了——海投王 HW-1 的质检
+    // 就这么被派给了 echo，一个只会把输入回声出来的东西。
+    //
+    // 用显式字段 桩:true，不去认自述里的措辞——那种判据改个字就静默失效，
+    // 而失效的表现是「质检被派给桩池」，跟正常派活长得一模一样。
+    //
+    // 显式 pin（allow/prefer 点名）仍然放行：接线自测要靠它。
+    if (provider.桩 === true && !allow.has(provider.name) && !prefer.includes(provider.name)) return false;
     if (provider.roles && provider.roles.length && !provider.roles.includes(actualRole)) return false;
     const caps = arr(provider.capabilities);
     return !required.length || !caps.length || required.every((cap) => caps.includes(cap));

@@ -48,6 +48,8 @@ const 自检 = require('./lib/自检');
 const 工单模板 = require('./lib/工单模板');
 const 流程视图 = require('./lib/流程视图');
 const 知识库 = require('./lib/知识库');
+const 编制 = require('./lib/编制');
+const 派单 = require('./lib/派单');
 const 项目 = require('./lib/项目');
 // let 不是 const：界面上配好工单库之后要能当场生效。
 // 让人「配完请重启」是 studio 级产品不该有的台阶——尤其这还是第一次打开就撞上的那一步。
@@ -59,6 +61,18 @@ let 工单根 = 工单库.解析根目录(仓根);
 function 读JSON(p, 缺省) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return 缺省; }
 }
+// 编制落盘（协-015）：写 config/routing.local.json。
+// 走本地覆盖那套白名单，与其他可改配置同一个机制——不为一个新功能另开一条写盘路径。
+function 编制落盘(routing) {
+  try {
+    const 位置 = require('./lib/配置位置');
+    const 文件 = path.join(位置.可写配置目录(仓根), 'routing.local.json');
+    fs.mkdirSync(path.dirname(文件), { recursive: true });
+    fs.writeFileSync(文件, JSON.stringify(routing, null, 2) + '\n', 'utf8');
+    return { ok: true, 文件 };
+  } catch (e) { return { ok: false, 错误: `编制写不进去：${e.message}` }; }
+}
+
 // 危险开关只能从 config/*.local.json 打开——那些文件被 .gitignore 结构性挡住。
 // server 侧也要走同一套合并，否则它看到的配置与执行器不一致（比如工作区写开关），
 // 两个进程对同一份事实各执一词，是最难查的那类 bug。
@@ -557,6 +571,40 @@ const 服务 = http.createServer((req, res) => {
         codex提示: 'codex 非 stream-json 输出，取不到 usage，其消耗**不计入本账**（见 packages/budget/README.md）',
       });
     } catch (e) { return 发JSON(res, 500, { ok: false, error: `预算闸不可用：${e.message}` }); }
+  }
+
+  // ——— 编制（协-015）：哪个角色归哪个模型 ———
+  // 照抄 studio 的 /api/pm/roster：GET 只读快照，POST 批量改。
+  // **可用性用调度那把尺**——冻结判定直接复用 派单.冻结情况，不在这儿另写一套。
+  // 各算各的话，界面显示「可用」而实际派不出去，人会以为平台坏了。
+  if (url路径 === '/api/roster' && req.method === 'GET') {
+    const 冻 = 派单.冻结情况(公用件, 配置, 账本根);
+    const isFrozen = (池) => (冻.ok ? Object.prototype.hasOwnProperty.call(冻.挡, 池) : null);
+    return 发JSON(res, 200, {
+      ok: true,
+      编制: 编制.快照(配置, isFrozen),
+      池: 编制.池表(配置),
+      ...(冻.ok ? { 冻结: 冻.挡 } : { 预算闸: 冻.错误 }),
+      说明: '池序是**有序偏好**：从左到右取第一个没被冻结的池。留空 = 按全局排名（路由排名页那套分数）。',
+    });
+  }
+  if (url路径 === '/api/roster' && req.method === 'POST') {
+    return 收体(req, 16 * 1024, (体) => {
+      const r = 编制.应用(配置, 体 && (体.改动 || 体.changes));
+      if (!r.ok) return 发JSON(res, 400, { ok: false, error: r.错误 });
+      const 理由 = String((体 && 体.理由) || '').trim();
+      // 理由必填。改「谁干什么活」是会影响钱和产出的决定，三个月后回头看
+      // 「为什么 reviewer 挂在 codex 上」，没有理由就只能靠猜。
+      if (!理由) return 发JSON(res, 400, { ok: false, error: '理由必填——这条改动会影响派给谁、花谁的额度' });
+      if (!r.生效.length) return 发JSON(res, 200, { ok: true, 生效: [], 说明: '没有实际变化' });
+      const 落 = 编制落盘(r.routing);
+      if (!落.ok) return 发JSON(res, 500, { ok: false, error: 落.错误 });
+      配置.routing = r.routing;                 // 本进程当场生效，不用重启
+      return 发JSON(res, 200, {
+        ok: true, 生效: r.生效, 配置文件: 落.文件,
+        说明: '执行器与本进程都现读 routing——改完立刻生效，不用重启。',
+      });
+    });
   }
 
   // ——— 项目（协-007）：项目是一等公民，不是工单上的一个字符串 ———
