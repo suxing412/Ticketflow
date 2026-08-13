@@ -285,6 +285,40 @@ function publish(project, workspace) {
   return { ok: true, commit: head(basePath), path: basePath };
 }
 
+// 审阅区 —— 给判官一份**只读**的代码视图（协-011）。
+//
+// 此前质检跑在 取工作目录() 现建的空临时目录里，跟被评审的代码毫无关系：
+// 判官被告知「改了 util.js」，然后去读，得到 ENOENT。它做的判断没错——
+// 「工作区中不存在 util.js」是它眼前的事实——错的是我们没给它代码。
+// 实测：QA-VERIFY 的实现已经合进 master 且功能正确，仍被判不过。
+//
+// 为什么不直接把项目主仓当 cwd：施工令决定 3「不给『直接在主工作区跑』这个选项」。
+// 那条决定是对着**写**立的，但给一个无头 agent 递上主工作区的路径，
+// 指望它因为几个 CLI flag 就不写，是把架构保证降级成自觉。
+//
+// 所以另开一个 detached worktree 落在该单的检查点上。判官看到的正是它要判的那份代码，
+// 而且是历史上那个点的样子——就算主线之后又往前走了，判的也还是这张单交付的东西。
+function 审阅区(monitorRoot, cfg, project, 单号, commit) {
+  const wc = configOf(cfg);
+  const repository = repoTop(path.resolve(project.path));
+  const sha = String(commit || '').trim();
+  if (!/^[0-9a-f]{7,64}$/i.test(sha)) return { ok: false, 错误: `没有可审阅的检查点（实得 ${sha || '空'}）` };
+  git(repository, ['cat-file', '-e', `${sha}^{commit}`]);
+
+  const root = workspaceRoot(monitorRoot, wc.root, repository);
+  const target = path.join(root, safePart(project.name, 'project'), '审阅-' + safePart(单号, 'ticket'));
+  // 上一次判官留下的残留：直接摘掉重开，不复用。
+  // 复用的话，判官可能看到上一轮遗留的文件，而那正是「看到的不是要判的东西」。
+  if (fs.existsSync(target) || worktreeList(repository).some((w) => path.resolve(w.path) === path.resolve(target))) {
+    git(repository, ['worktree', 'remove', '--force', target], [0, 1, 128]);
+    git(repository, ['worktree', 'prune'], [0, 1]);
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  // --detach：不建分支。判官不该拥有一条分支——它没有要交付的东西。
+  git(repository, ['worktree', 'add', '--detach', target, sha]);
+  return { ok: true, 路径: path.resolve(target), commit: sha, 仓库: repository };
+}
+
 // 收工 —— 一张单干完之后把它的隔离工作区和分支收掉（协-009）。
 //
 // 原先 publish 只做 merge --ff-only 就返回，**全仓没有一行清理代码**。
@@ -361,7 +395,7 @@ function 遗留工作区(monitorRoot, cfg, project, 工单表) {
 }
 
 module.exports = {
-  收工, 遗留工作区,
+  收工, 遗留工作区, 审阅区,
   configOf, isGitRepo, repoTop, workspaceRoot, worktreeList,
   prepare, integrate, checkpoint, dependencyTickets, publish, changedFiles, enforceWriteScope,
   正文写入范围,
