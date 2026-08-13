@@ -46,9 +46,24 @@ function isGitRepo(dir) {
 
 function repoTop(dir) { return path.resolve(git(dir, ['rev-parse', '--show-toplevel']).stdout); }
 function head(dir) { return git(dir, ['rev-parse', 'HEAD']).stdout; }
+// 目录名/分支名里的一段。要既安全又**唯一**——原先只做到了安全。
+//
+// ⚠ 实测（2026-08-13，海投王首次真跑）：中文项目名会被整段剥空。
+// 「海投王」→ 非 ASCII 全被替换 → 空串 → 落回兜底值 'project'。
+// 于是**所有中文名项目共用同一个工作区目录**：靶仓和海投王都是 workspaces/project/，
+// 两边只要出现同名工单就直接撞车，而且撞得很难查——目录名上看不出是谁的。
+//
+// 中文名在这个仓里是常态（靶仓、海投王、平台自己），不是边角情况。
+//
+// 改法：ASCII 部分照旧保留（可读），剥空时用**内容哈希**兜底而不是固定字符串。
+// 哈希只在必要时出现，所以英文名项目的目录一个字都不变。
 function safePart(value, fallback) {
-  const clean = String(value || '').trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 64);
-  return clean || fallback;
+  const 原 = String(value || '').trim();
+  const clean = 原.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 64);
+  if (clean) return clean;
+  // 剥空了：拿原文算个短哈希。不同的名字必得不同的目录，而同一个名字每次都一样。
+  if (原) return fallback + '-' + crypto.createHash('sha1').update(原).digest('hex').slice(0, 8);
+  return fallback;
 }
 function isWithin(parent, child) {
   const rel = path.relative(path.resolve(parent), path.resolve(child));

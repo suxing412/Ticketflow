@@ -173,4 +173,34 @@ t('router.js 能加载（搬家前的四级相对路径已修，回归即 MODULE
   assert.ok(Object.keys(router).length > 0, 'router 应有导出');
 });
 
+t('桩 Provider 不参与自动挑选，但点名仍可用（接线自测要靠它）', () => {
+  // 2026-08-13 实测：海投王 HW-1 的质检被派给了 echo——一个只会把输入回声出来的东西。
+  // 原因是 echo 靠打 0 分排最后，而**0 分是排序信号不是资格判据**：
+  // claude 是执行方（跨厂避让排除）、codex 被预算闸冻结，桩池就顶上来了。
+  const router = require('../lib/routing/router');
+  const 配 = {
+    providers: {
+      真: { adapter: 'claude-cli', enabled: true, scores: { default: { quality: 80 } } },
+      桩: { adapter: 'command-cli', enabled: true, 桩: true, scores: { default: { quality: 0 } } },
+    },
+  };
+  const 自动 = router.rankProviders(null, 配, { role: 'backend' }).map((x) => x.name);
+  assert.ok(!自动.includes('桩'), '桩 Provider 出现在自动挑选结果里：' + JSON.stringify(自动));
+  assert.ok(自动.includes('真'));
+
+  // 点名放行——不然接线自测没法做。
+  // allow/prefer 挂在 routing.roles.<角色> 下，不是顶层（写测试时先猜错了一次）。
+  const 点名 = router.rankProviders(null,
+    { ...配, routing: { roles: { backend: { allow: ['桩'] } } } }, { role: 'backend' }).map((x) => x.name);
+  assert.deepEqual(点名, ['桩'], 'allow 点名时桩池必须能选出来');
+  const 偏好 = router.rankProviders(null,
+    { ...配, routing: { roles: { backend: { prefer: ['桩'] } } } }, { role: 'backend' }).map((x) => x.name);
+  assert.ok(偏好.includes('桩'), 'prefer 点名同样要放行');
+
+  // 出厂配置里 echo 得真的标着
+  const 出厂 = require(path.join(__dirname, '..', 'config', 'platform.config.json'));
+  assert.equal(出厂.providers.echo.桩, true,
+    'echo 是桩 Provider，必须显式标 桩:true——只靠 0 分挡不住「真判官全被冻结时它顶上来」');
+});
+
 console.log(`全部通过：${passed} 项`);

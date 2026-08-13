@@ -159,6 +159,30 @@ t('检查点的提交信息用同一个前缀，不写死 studio', () => {
   } finally { 清(仓, 根); }
 });
 
+t('中文项目名不许塌成同一个目录（本仓的项目名基本都是中文）', () => {
+  // 实测（海投王首次真跑）：safePart 把非 ASCII 整段剥掉，「海投王」剩空串，
+  // 落回兜底值 'project'。于是**所有中文名项目共用同一个工作区目录**——
+  // 靶仓和海投王都是 workspaces/project/，两边只要出现同名工单就直接撞车，
+  // 而且撞得很难查：目录名上看不出是谁的。
+  // 中文名在这个仓里是常态（靶仓、海投王、平台自己），不是边角情况。
+  const 仓 = 建仓();
+  const 根 = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-cn-'));
+  try {
+    const 配 = { workspace: { mode: 'worktree', root: 根, branchPrefix: 'platform' } };
+    const a = 工作区.prepare(根, 配, { id: 'T-1', fm: {} }, { name: '海投王', path: 仓 });
+    const b = 工作区.prepare(根, 配, { id: 'T-2', fm: {} }, { name: '靶仓', path: 仓 });
+    assert.notEqual(path.dirname(a.path), path.dirname(b.path),
+      '两个中文名项目落进了同一个目录——同名工单会互相覆盖');
+    assert.notEqual(a.branch.split('/')[1], b.branch.split('/')[1], '分支名同样要分得开');
+    // 英文名一个字都不该变——可读性不能为了修这个 bug 让路
+    const c = 工作区.prepare(根, 配, { id: 'T-3', fm: {} }, { name: 'my-repo', path: 仓 });
+    assert.equal(c.branch, 'platform/my-repo/T-3');
+    // 幂等：同一个名字每次都得到同一个目录，否则下次跑找不到上次的工作区
+    const d = 工作区.prepare(根, 配, { id: 'T-1', fm: {} }, { name: '海投王', path: 仓 });
+    assert.equal(d.path, a.path, '同一个项目两次算出不同目录——工作区复用会失效');
+  } finally { 清(仓, 根); }
+});
+
 t('默认分支前缀是 platform，不是 studio', () => {
   // 这个前缀出现在**用户自己的仓**里。建它的是 platform 不是 studio——
   // 两个产品都往同一个仓写的时候，光看分支名分不清是谁建的。
