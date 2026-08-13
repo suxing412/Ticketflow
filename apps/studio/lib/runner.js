@@ -693,14 +693,25 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   // 401 不是「跑失败」而是「压根没资格跑」：撞上去会被 failLocal 计进 判官重试上限，三次即钉死等人工。
   // 只拦真吃 OAuth 订阅登录态的会话（claude 池且没走托管 key）；codex/deepseek/*-key 池另有凭据，不受影响。
   // 拒派＝不开会话、不计失败次数、不动单——返回 false 让本轮跳过，寿命续上后下一拍照常拉起。
+  // 留痕节流（施工令-057 要件 1，案源 08-13 16:43-16:44 三连同文）：拒派是个**持续状态**，
+  // 而派发拍是逐分钟的——同单同因逐拍刷 journal 只会把真事件盖掉。改为只在状态变化时落痕。
   {
-    const 预 = require('./oauth').派发预检(root, cfg, { ...(opts.oauth || {}), 池: cliPool, 用托管: !!compat });
+    const oauth = require('./oauth');
+    const 预 = oauth.派发预检(root, cfg, { ...(opts.oauth || {}), 池: cliPool, 用托管: !!compat });
     if (!预.放行) {
       running.delete(agentId);
-      const 文 = `拒派 ${t.id}（${agentId} · ${kind} · ${cliPool}）：${预.因}`;
-      journal.append(root, 文);
-      try { require('./pm/ledger').event(root, 'OAuth拒派', { 单: t.id, 席: agentId, kind, 池: cliPool, 态: 预.态, 剩余分: 预.剩余分 }); } catch { /* 记账失败不阻塞拒派 */ }
+      const 痕 = oauth.拒派留痕(root, t.id, 预.态);
+      if (痕.记) {
+        journal.append(root, `拒派 ${t.id}（${agentId} · ${kind} · ${cliPool}）：${预.因}${痕.换因 ? '（拒因已变，重新计数）' : ''}——同因后续拒派静默计数，恢复时汇总`);
+        try { require('./pm/ledger').event(root, 'OAuth拒派', { 单: t.id, 席: agentId, kind, 池: cliPool, 态: 预.态, 剩余分: 预.剩余分 }); } catch { /* 记账失败不阻塞拒派 */ }
+      }
       return false;
+    }
+    // 恢复条：这张单之前被拦过，现在过了——把「拦了多少发」一次性交代清楚，静默期才有账可对。
+    const 复 = oauth.拒派恢复(root, t.id);
+    if (复.记) {
+      journal.append(root, `恢复派发 ${t.id}（${agentId} · ${kind} · ${cliPool}）：${预.因}——期间拒派 ${复.次数} 次`);
+      try { require('./pm/ledger').event(root, 'OAuth恢复派发', { 单: t.id, 席: agentId, kind, 池: cliPool, 态: 预.态, 剩余分: 预.剩余分, 期间拒派: 复.次数 }); } catch { /* 记账失败不阻塞派发 */ }
     }
   }
   const proj = projectPath(cfg, t);

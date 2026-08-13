@@ -14,16 +14,28 @@
 // 没有 accessToken / expiresAt 不是数 —— 一律按「未登录」办（要件 3）：探不出寿命的凭据
 // 与没有凭据在后果上是同一件事，都得响亮，绝不静默放行。
 //
-// **不碰刷新**：这里一个字节都不写凭据文件。自动续期归 quota.refreshClaudeToken（那是查用量
-// 的副产品）与 CLI 自己；哨兵只负责「看见并喊」。看的人和修的人分开，是这一模块能保持
-// 零副作用、可随便在巡检里调用的前提。
+// 二期（施工令-057，055 上线首日 2026-08-13 的两处实证）在此之上再加两件：
+//   ④ 临期自续 自续()   —— 16:49 实证：一发无头 `claude -p` 就把 token 续了 +8h。既然机器
+//                          自己能修，哨兵就不该一上来先叫人：临期/过期先探一发，续成只留流水，
+//                          **续败才发急件**。判据不认探针的退出码而认 expiresAt 有没有往前走
+//                          ——「跑通了但没续上」和「压根没跑通」在后果上是同一件事。
+//   ⑤ 拒派节流 拒派留痕()/拒派恢复() —— 16:43-16:44 三连同文：拒派挂在派发拍上，一分钟能刷三条
+//                          一模一样的 journal。同单同因只在**状态变化**时留痕（首拒一条、恢复一条，
+//                          恢复条附「期间拒派 N 次」），中间静默计数。
+//
+// 唯一会写凭据文件的路径是自续探针里的 CLI 自己（本模块仍不解析、不改写 .credentials.json，
+// 只在探针前后各读一次做对比）。查用量那条线上的 quota.refreshClaudeToken 各走各的，互不知道。
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
 
-const 临期分钟默认 = 30; // 要件 1：剩余低于此 → 急件催重登
+const 临期分钟默认 = 30; // 要件 1：剩余低于此 → 先自续，续不上才急件催重登
 const 拒派分钟默认 = 5;  // 要件 2：剩余低于此 → claude 订阅会话拒派
 const 节流分钟默认 = 30; // 要件 3：同状态每 30 分钟至多一封急件
+const 探针上限默认 = 2;  // 二期要件 3：同一到期窗口至多两发自续探针
+const 探针超时秒默认 = 60; // 二期要件 2：探针 60 秒不回就算续败
+const 探针模型默认 = 'haiku'; // 探针只要「跑通一次调用」，用最便宜的档；空串＝不带 --model
 
 const 凭据路径 = () => path.join(os.homedir(), '.claude', '.credentials.json');
 
@@ -36,6 +48,10 @@ function 参数(cfg) {
     临期分钟: 正数(c.临期分钟, 临期分钟默认),
     拒派分钟: 正数(c.拒派分钟, 拒派分钟默认),
     节流分钟: 正数(c.节流分钟, 节流分钟默认),
+    探针上限: 正数(c.探针上限, 探针上限默认),
+    探针超时秒: 正数(c.探针超时秒, 探针超时秒默认),
+    探针模型: c.探针模型 === undefined ? 探针模型默认 : String(c.探针模型 || ''),
+    自续开: c.自续 !== false, // 默认开；出事时一行配置能把整套自续按死回 055 行为
   };
 }
 
@@ -82,18 +98,112 @@ function 登录配方(cfg) {
   catch { return 'claude auth login'; }
 }
 
-// ---- 巡检哨兵（要件 1/3）：挂在 15 分钟巡检拍上 ----
+// ---- 自续探针（施工令-057 要件 2/3）----
+// 实证（2026-08-13 16:49）：token 只剩几分钟时跑一发无头 `claude -p`，CLI 自己拿 refreshToken
+// 换了新的，expiresAt 直接 +8h。所以「临期」这件事在多数时候根本不需要惊动人——它需要的是
+// 有人替它发一次调用。这里就是那一发。
+//
+// 三条纪律：
+//   · 用最便宜的档（默认 --model haiku）问一个字，我们不看它答什么，只看它跑不跑得通；
+//   · 60 秒不回就 kill（连 CLI 都拉不起来的机器，等下去只是把巡检拍拖住）；
+//   · 同一到期窗口至多两发（要件 3）。窗口用 expiresAt 当键：续成了 expiresAt 就变，
+//     计数自然复位；续不成则第三拍起不再白烧调用，改成叫人。
+const 探针记忆 = new Map(); // root → { 窗: String(expiresAt), 次数 }
+
+function 默认探针(cfg) {
+  const { 探针超时秒, 探针模型 } = 参数(cfg);
+  return new Promise((resolve) => {
+    let cmd;
+    try { cmd = require('./runner').resolveCli('claude').cmd; } catch (e) { return resolve({ ok: false, 因: 'CLI 定位失败：' + String((e && e.message) || e).slice(0, 60) }); }
+    // 代理必带：中台验证过的坑，claude 无头调用不走代理必死（与 runner.proxyEnv 同一口径）。
+    const env = { ...process.env };
+    const p = env.HTTPS_PROXY || env.https_proxy || ((cfg && cfg.网络 && cfg.网络.代理默认) || '');
+    if (p) { env.HTTPS_PROXY = p; env.HTTP_PROXY = p; env.https_proxy = p; env.http_proxy = p; }
+    const args = ['-p', '--output-format', 'text', ...(探针模型 ? ['--model', 探针模型] : [])];
+    let child;
+    try { child = spawn(cmd, args, { env, windowsHide: true, shell: cmd.endsWith('.cmd'), stdio: ['pipe', 'pipe', 'pipe'] }); }
+    catch (e) { return resolve({ ok: false, 因: '探针启动失败：' + String((e && e.message) || e).slice(0, 60) }); }
+    let 完 = false, err = '';
+    const 收 = (r) => { if (完) return; 完 = true; clearTimeout(闸); try { child.kill(); } catch { /* 已退出 */ } resolve(r); };
+    const 闸 = setTimeout(() => 收({ ok: false, 因: `探针超时 ${探针超时秒}s（CLI 没在时限内回话）` }), 探针超时秒 * 1000);
+    child.stderr.on('data', (d) => { err = (err + d).slice(-400); });
+    child.on('error', (e) => 收({ ok: false, 因: '探针进程错误：' + String((e && e.message) || e).slice(0, 60) }));
+    child.on('close', (code) => 收(code === 0
+      ? { ok: true, 因: '探针跑通（退出码 0）' }
+      : { ok: false, 因: `探针退出码 ${code}${err ? '：' + err.replace(/\s+/g, ' ').trim().slice(-120) : ''}` }));
+    // 提示词走 stdin（与 runner 同法，免 argv 编码坑）；纯 ASCII 一个词，答什么无所谓
+    try { child.stdin.write('ping'); child.stdin.end(); } catch { /* 进程已死，close 分支会收尾 */ }
+  });
+}
+
+// 试一发自续。返回 { 尝试, 成功, 增毫秒, 增文, 因, 次数 }；**判成功只认 expiresAt 往前走了**。
+// 探针可注入（opts.探针）——测试不拉真 CLI，也不碰真凭据。
+async function 自续(root, cfg, opts = {}) {
+  const { 探针上限 } = 参数(cfg);
+  const 前 = opts.前 || 寿命(cfg, opts);
+  if (!前.可续) return { 尝试: false, 成功: false, 次数: 0, 因: '凭据里没有 refreshToken——自续无从谈起，只能人工重登' };
+  const 窗 = String(前.expiresAt);
+  const m = 探针记忆.get(root);
+  const 已试 = m && m.窗 === 窗 ? m.次数 : 0;
+  if (已试 >= 探针上限) return { 尝试: false, 成功: false, 次数: 已试, 已尽: true, 因: `本到期窗口已试 ${已试} 次自续（上限 ${探针上限}）——不再重试，防循环烧调用` };
+  探针记忆.set(root, { 窗, 次数: 已试 + 1 });
+  let r;
+  try { r = await (opts.探针 ? opts.探针({ cfg, 前, 次: 已试 + 1 }) : 默认探针(cfg)); }
+  catch (e) { r = { ok: false, 因: '探针抛错：' + String((e && e.message) || e).slice(0, 60) }; }
+  const 后 = 寿命(cfg, opts); // 重读一次凭据文件：CLI 续没续，只有这一个字段说了算
+  const 增毫秒 = (Number(后.expiresAt) || 0) - (Number(前.expiresAt) || 0);
+  const 次数 = 已试 + 1;
+  if (增毫秒 > 0) {
+    return { 尝试: true, 成功: true, 增毫秒, 增文: 时长文(增毫秒), 次数, 剩余分: 后.剩余分, expiresAt: 后.expiresAt,
+      因: `自续成功 ${时长文(增毫秒)}（第 ${次数} 发探针；原剩 ${前.剩余分} 分钟 → 现剩 ${后.剩余分} 分钟，到期 ${new Date(后.expiresAt).toTimeString().slice(0, 5)}）` };
+  }
+  return { 尝试: true, 成功: false, 次数, 因: (r && r.ok)
+    ? `第 ${次数} 发探针跑通了但 expiresAt 没动——CLI 没触发续期`
+    : `第 ${次数} 发探针未续上：${(r && r.因) || '未知原因'}` };
+}
+
+// +8h / +45m：给流水与急件用的人话时长
+function 时长文(ms) {
+  const h = ms / 3600000;
+  if (h >= 1) return `+${Number(h.toFixed(1)).toString().replace(/\.0$/, '')}h`;
+  return `+${Math.max(1, Math.round(ms / 60000))}m`;
+}
+
+// ---- 巡检哨兵（要件 1/3 + 二期要件 2）：挂在 15 分钟巡检拍上 ----
 // 节流键 = 态：状态一变立刻放行一封（临期→过期是升级，不该被上一封的窗口压住），
 // 同状态则 节流分钟 内至多一封。恢复成「有效」即清记忆——下一次临期重新武装。
 const 记忆 = new Map(); // root → { 态, 上封 }
 
-function 哨兵(root, cfg, opts = {}) {
+// 二期起本函数是 async：临期/过期先走一发自续探针（要件 2），续成就没人需要被吵醒。
+// 调用方（server 巡检拍）不 await，只挂 .catch——自续那一发最多 60 秒，不该把同一拍的其余巡检拖住。
+async function 哨兵(root, cfg, opts = {}) {
   const now = opts.now != null ? opts.now : Date.now();
-  const { 节流分钟, 临期分钟 } = 参数(cfg);
-  const s = 寿命(cfg, opts);
-  const 需横幅 = s.态 === '过期' || s.态 === '未登录';
-  if (s.态 === '有效') { 记忆.delete(root); return { 态: s.态, 剩余分: s.剩余分, 告警: null, 节流: false, 横幅: null }; }
+  const { 节流分钟, 临期分钟, 自续开 } = 参数(cfg);
+  let s = 寿命(cfg, opts);
+  if (s.态 === '有效') { 记忆.delete(root); 探针记忆.delete(root); return { 态: s.态, 剩余分: s.剩余分, 告警: null, 节流: false, 横幅: null, 自续: null }; }
 
+  // ---- 先自续、续败才叫人（施工令-057 要件 2）----
+  // 过期也探——refresh token 的寿命远长于 access token，08-12 那次真正缺的就是这一发。
+  // 「有没有 refreshToken / 本窗口还剩几发」全由 自续() 一处裁定（它会不烧调用地回绝），
+  // 这里只管把两种态送进去：判据分散在两处，迟早有一处忘了改。
+  let 自续果 = null;
+  if (自续开 && (s.态 === '临期' || s.态 === '过期')) {
+    自续果 = await 自续(root, cfg, { ...opts, 前: s });
+    if (自续果.成功) {
+      const 后 = 寿命(cfg, opts);
+      记忆.delete(root); // 自续成功即复位：下次真临期时不被上一封的窗口压住
+      const 文 = `OAuth 自续成功 ${自续果.增文}：${自续果.因}——未惊动制作人`;
+      try { require('./journal').append(root, 文); } catch { /* 留痕失败不阻塞 */ }
+      try { require('./pm/ledger').event(root, 'OAuth自续', { 结果: '成功', 增文: 自续果.增文, 剩余分: 后.剩余分, 次数: 自续果.次数 }); } catch { /* 记账失败不阻塞 */ }
+      const 仍需横幅 = 后.态 === '过期' || 后.态 === '未登录';
+      return { 态: 后.态, 剩余分: 后.剩余分, 告警: null, 节流: false, 自续: 自续果,
+        横幅: 仍需横幅 ? { 态: 后.态, 文案: 后.因, 配方: 登录配方(cfg), 剩余分: 后.剩余分 } : null };
+    }
+    s = 寿命(cfg, opts); // 探针可能把凭据搅成别的样（如重登被冲掉）——叫人前以最新读数为准
+    if (s.态 === '有效') { 记忆.delete(root); return { 态: s.态, 剩余分: s.剩余分, 告警: null, 节流: false, 横幅: null, 自续: 自续果 }; }
+  }
+
+  const 需横幅 = s.态 === '过期' || s.态 === '未登录';
   const m = 记忆.get(root);
   const 节流 = !!(m && m.态 === s.态 && now - m.上封 < 节流分钟 * 60000);
   const 文 = s.态 === '临期'
@@ -101,15 +211,17 @@ function 哨兵(root, cfg, opts = {}) {
     : s.态 === '过期'
       ? `OAuth 已过期，请重登：${s.因}——claude 池会话随时 401，派发预检将拒派`
       : `OAuth 未登录，请重登：${s.因}——claude 池（含判官三席）无凭据可用`;
-  const 全文 = `${文}｜一键重登：${登录配方(cfg)}`;
+  // 自续结果挂在配方**后面**：急件正文截 300 字，一键重登那截绝不能被自续说明挤掉。
+  const 全文 = `${文}｜一键重登：${登录配方(cfg)}${自续果 ? `｜${自续果.尝试 ? '自续已试' : '自续未试'}：${自续果.因}` : ''}`;
   const 横幅 = 需横幅 ? { 态: s.态, 文案: 文, 配方: 登录配方(cfg), 剩余分: s.剩余分 } : null;
-  if (节流) return { 态: s.态, 剩余分: s.剩余分, 告警: null, 节流: true, 横幅 };
+  if (节流) return { 态: s.态, 剩余分: s.剩余分, 告警: null, 节流: true, 横幅, 自续: 自续果 };
 
   记忆.set(root, { 态: s.态, 上封: now });
   try { require('./inbox').post(root, '急', 'OAuth续命', 全文.slice(0, 300)); } catch { /* 信箱失败不阻塞留痕 */ }
   try { require('./journal').append(root, 全文); } catch { /* 留痕失败不阻塞告警 */ }
-  try { require('./pm/ledger').event(root, 'OAuth告警', { 态: s.态, 剩余分: s.剩余分 }); } catch { /* 记账失败不阻塞 */ }
-  return { 态: s.态, 剩余分: s.剩余分, 告警: 全文, 节流: false, 横幅 };
+  const 自续账 = !自续果 ? '未试' : 自续果.尝试 ? '试过未成' : 自续果.已尽 ? '本窗额度已尽' : '不可续';
+  try { require('./pm/ledger').event(root, 'OAuth告警', { 态: s.态, 剩余分: s.剩余分, 自续: 自续账 }); } catch { /* 记账失败不阻塞 */ }
+  return { 态: s.态, 剩余分: s.剩余分, 告警: 全文, 节流: false, 横幅, 自续: 自续果 };
 }
 
 // ---- 派发预检（要件 2）：runner 拉起会话前问一句 ----
@@ -133,6 +245,39 @@ function 派发预检(root, cfg, o = {}) {
   return { 放行: true, 态: s.态, 剩余分: s.剩余分, 因: s.因 };
 }
 
+// ---- 拒派留痕节流（施工令-057 要件 1）----
+// 案源 2026-08-13 16:43-16:44：拒派挂在派发拍上，一分钟刷了三条一模一样的 journal。
+// 拒派本身没错，错在它把「一个持续状态」当成「一串事件」记——三十条同文流水既盖住了真事件，
+// 也没多告诉人半个字。改成状态机留痕：**同单同因只在状态变化时落一条**。
+//   首拒 → 记一条（人从这一条知道「这张单开始被拦了」）；
+//   期间 → 静默计数（因没变就没有新信息）；
+//   因变 → 记新的一条（临期不足 → 过期是升级，得看得见）；
+//   恢复 → 记一条，附「期间拒派 N 次」（人从这一条知道「拦了多久、拦了多少发」）。
+// 记忆是进程内的：重启后计数从头算，最多多记一条首拒——比持久化一个纯显示用的计数划算。
+// 键的分隔符取 NUL：路径里能出现空格，单号里不会出现任何控制符，两段拼串撞车的可能性归零。
+// 源码里写转义序列、不留裸字节——同 runner.js 洗 ANSI 那处的规矩（裸控制字节会让 git/grep
+// 把整个文件当二进制，也容易被改文件的编辑器吃掉）。
+const 拒派记忆 = new Map(); // `${root}\u0000${单}` → { 因键, 次数 }
+const 拒键 = (root, 单) => `${root}\u0000${单}`;
+
+// 拒派时问一句「这条该不该记」。因键 = 拒派理由的类别（态），换了因就是新状态。
+function 拒派留痕(root, 单, 因键) {
+  const k = 拒键(root, 单);
+  const m = 拒派记忆.get(k);
+  if (m && m.因键 === String(因键)) { m.次数 += 1; return { 记: false, 次数: m.次数, 首: false }; }
+  拒派记忆.set(k, { 因键: String(因键), 次数: 1 });
+  return { 记: true, 次数: 1, 首: true, 换因: !!m };
+}
+
+// 放行时问一句「之前拦过吗」。拦过 → 该记恢复条并把期间次数交出去，同时清账。
+function 拒派恢复(root, 单) {
+  const k = 拒键(root, 单);
+  const m = 拒派记忆.get(k);
+  if (!m) return { 记: false, 次数: 0 };
+  拒派记忆.delete(k);
+  return { 记: true, 次数: m.次数, 因键: m.因键 };
+}
+
 // ---- 只读横幅（要件 1 后半）：/api/gates 的一位，纯读盘无副作用（不发信、不动节流记忆）----
 // 过期/未登录才出条：临期只走急件（要件 1 的分档），门禁位上常年挂黄条会把红条也一起看瞎。
 function 横幅(cfg, opts = {}) {
@@ -141,6 +286,15 @@ function 横幅(cfg, opts = {}) {
   return { 态: s.态, 文案: s.因, 配方: 登录配方(cfg), 剩余分: s.剩余分 };
 }
 
-function 重置(root) { if (root) 记忆.delete(root); else 记忆.clear(); }
+// 三本记忆一起复位（告警节流 / 探针窗口 / 拒派计数）——测试与重登后都要求「像刚开机一样」。
+function 重置(root) {
+  if (root) {
+    记忆.delete(root); 探针记忆.delete(root);
+    for (const k of 拒派记忆.keys()) if (k.startsWith(root + ' ')) 拒派记忆.delete(k);
+    return;
+  }
+  记忆.clear(); 探针记忆.clear(); 拒派记忆.clear();
+}
 
-module.exports = { 寿命, 哨兵, 派发预检, 横幅, 登录配方, 参数, 重置, 凭据路径, 临期分钟默认, 拒派分钟默认, 节流分钟默认 };
+module.exports = { 寿命, 哨兵, 自续, 派发预检, 拒派留痕, 拒派恢复, 横幅, 登录配方, 参数, 重置, 凭据路径,
+  临期分钟默认, 拒派分钟默认, 节流分钟默认, 探针上限默认, 探针超时秒默认 };

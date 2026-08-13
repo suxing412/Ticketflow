@@ -1650,9 +1650,11 @@ function start() {
             require('./lib/pm/patrol').打点停滞(ROOT, cfg);
             // 施工令-010 零输出看门狗：会话拉起 ≥config.并发.零输出分钟 仍一个字没吐 → 急件（TK-102 挂死 48 分钟案）
             require('./lib/pm/patrol').零输出(ROOT, cfg);
-            // 施工令-055 OAuth 续命哨兵：拍读凭据 expiresAt，临期/过期/未登录发急件（同状态 30 分钟至多一封）。
-            // 纯本地读盘零外呼——挂在这一拍上，制作人在 401 打脸前半小时就该收到信（08-12 集体 401 案）。
-            require('./lib/oauth').哨兵(ROOT, cfg);
+            // 施工令-055/057 OAuth 续命哨兵：拍读凭据 expiresAt；临期/过期先发一发无头探针自续
+            // （08-13 16:49 实证 +8h），续成只留流水，**续不上才**发急件（同状态 30 分钟至多一封）。
+            // 二期起是 async（探针最多 60 秒）——不 await，异常自吞进流水，别把同一拍的其余巡检拖住。
+            require('./lib/oauth').哨兵(ROOT, cfg)
+              .catch((e) => journal.append(ROOT, `OAuth 哨兵异常：${String(e && e.message).slice(0, 80)}`));
             // H99 池衡巡检（施工令-045）：读三池额度 → 决策 → 受限动作落配置。异步且自吞异常，
             // 不 await——池衡是优化面，它的外呼慢一点不该把同一拍的其余巡检项拖住。
             require('./lib/pm/wake').池衡巡检(ROOT, cfg, { 保存: saveCfg })
