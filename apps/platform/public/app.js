@@ -4,6 +4,132 @@ const 秒 = (n) => (n == null ? '—' : Math.round(n / 1000) + 's');
 const 转义 = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const 取JSON = (u, o) => fetch(u, o).then((r) => r.json().then((j) => ({ 码: r.status, 体: j })));
 
+// ══════════════════════════════════════════════════════════════
+// 交互反馈基建（协-012）
+// ══════════════════════════════════════════════════════════════
+// 把 studio 领先的那部分抄过来。它领先的**不是功能，是「机器在动」的质感**：
+// 同样一次操作，platform 用 alert 糊你一脸浏览器弹窗，studio 飘一条吐司；
+// platform 整页重绘导致滚动位置和输入焦点全丢，studio 只改动变了的那几个节点。
+//
+// 这些东西单独看都很小，加起来决定了「像个产品」还是「像个调试页面」。
+
+// ── 吐司：不打断的反馈 ──
+// 原先全站用 alert()。原生弹窗有三个硬伤，每一个都在削弱信任：
+//   ① 阻塞整个页面，后台刷新全停；
+//   ② 长得跟浏览器报错一模一样，成功提示也像出事了；
+//   ③ 标题栏写着「127.0.0.1 显示」——像个网页脚本，不像个软件。
+function 吐(消息, 类 = '') {
+  const t = document.createElement('div');
+  t.className = '吐司 ' + 类;
+  t.textContent = String(消息 || '');
+  document.body.appendChild(t);
+  // 出错的多留一会儿：报错要读，成功只需扫一眼
+  setTimeout(() => { t.classList.add('去'); setTimeout(() => t.remove(), 260); }, 类 === '坏' ? 4200 : 2200);
+  return t;
+}
+
+// ── 确认框：自己画，不用 confirm() ──
+// 除了上面三条，原生 confirm 还有一条致命的：**它不能排版**。
+// 本产品的确认文案里有「订阅额度 / 会计费」这种必须一眼分得清的信息，
+// 挤在一坨纯文本里等于没写。这个能给危险动作单独上色。
+function 问(标题, 正文, { 危险 = false, 确认字 = '确定', 取消字 = '取消' } = {}) {
+  return new Promise((定) => {
+    const 罩 = document.createElement('div');
+    罩.className = '罩';
+    罩.innerHTML =
+      '<div class="问框" role="dialog" aria-modal="true" aria-label="' + 转义(标题) + '">'
+      + '<div class="问题">' + 转义(标题) + '</div>'
+      + '<div class="问文">' + 正文 + '</div>'
+      + '<div class="问钮">'
+      + '<button class="btn" data-选="否">' + 转义(取消字) + '</button>'
+      + '<button class="btn ' + (危险 ? 'danger-o' : 'accent') + '" data-选="是">' + 转义(确认字) + '</button>'
+      + '</div></div>';
+    const 收 = (v) => { 罩.remove(); document.removeEventListener('keydown', 键); 定(v); };
+    const 键 = (e) => {
+      if (e.key === 'Escape') 收(false);
+      // 回车不绑「确认」：危险动作要有意去点那个按钮。
+      // 顺手一个回车就把钱花出去，是这里最不该发生的事。
+    };
+    罩.onclick = (e) => { if (e.target === 罩) 收(false); };
+    罩.querySelector('[data-选="否"]').onclick = () => 收(false);
+    罩.querySelector('[data-选="是"]').onclick = () => 收(true);
+    document.addEventListener('keydown', 键);
+    document.body.appendChild(罩);
+    // 焦点落在取消上：默认答案是「不」。危险操作的默认值必须是不做。
+    罩.querySelector('[data-选="否"]').focus();
+  });
+}
+
+// ── 相对时间 ──
+// 「2026-08-12T09:07:10.537Z」对人是无意义的。人要知道的是「多久以前」。
+function 多久(时刻) {
+  const t = Date.parse(时刻 || '');
+  if (!Number.isFinite(t)) return '—';
+  const 秒数 = Math.floor((Date.now() - t) / 1000);
+  if (秒数 < 0) return '刚刚';
+  if (秒数 < 60) return 秒数 + ' 秒前';
+  if (秒数 < 3600) return Math.floor(秒数 / 60) + ' 分钟前';
+  if (秒数 < 86400) return Math.floor(秒数 / 3600) + ' 小时前';
+  const 天 = Math.floor(秒数 / 86400);
+  return 天 < 30 ? 天 + ' 天前' : new Date(t).toLocaleDateString('zh-CN');
+}
+
+// ── 空态卡 ──
+// 空表格里塞一句「还没有工单」是**浪费掉的一次机会**：人第一次打开时看到的正是空态，
+// 而那一刻他最需要知道的是「那我该干什么」。给一句下一步，比一句陈述有用。
+function 空态(标题, 说明, 动作) {
+  return '<div class="空卡"><h5>' + 转义(标题) + '</h5>'
+    + (说明 ? '<p>' + 说明 + '</p>' : '')
+    + (动作 ? '<div class="空钮">' + 动作 + '</div>' : '')
+    + '</div>';
+}
+
+// ── 增量刷新 ──
+// 原先每次刷新都 innerHTML 整块重写，代价是：滚动位置跳回去、输入框里打了一半的字没了、
+// 展开的详情自己收起来。定时刷新每 10 秒发生一次，等于每 10 秒打断人一次。
+//
+// 只改真正变了的节点。这不是性能优化——是**不打断正在操作的人**。
+function 换(目标, html) {
+  if (!目标) return;
+  const 焦 = document.activeElement;
+  const 焦id = 焦 && 焦.id;
+  let 选区 = null;
+  if (焦 && /^(INPUT|TEXTAREA)$/.test(焦.tagName)) {
+    try { 选区 = [焦.selectionStart, 焦.selectionEnd]; } catch { /* 某些 type 没有选区 */ }
+  }
+  const 临 = document.createElement('div');
+  临.innerHTML = html;
+  换子(目标, 临);
+  // 兜底：整段被替换时焦点会掉，按 id 认回来
+  if (焦id && document.activeElement !== 焦) {
+    const el = $(焦id);
+    if (el && el.focus) {
+      el.focus();
+      if (选区) { try { el.setSelectionRange(选区[0], 选区[1]); } catch { /* 同上 */ } }
+    }
+  }
+}
+
+function 换子(旧父, 新父) {
+  const 旧 = [...旧父.childNodes];
+  const 新 = [...新父.childNodes];
+  for (let i = 0; i < 新.length; i++) {
+    const a = 旧[i]; const b = 新[i];
+    if (!a) { 旧父.appendChild(b.cloneNode(true)); continue; }
+    if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) { 旧父.replaceChild(b.cloneNode(true), a); continue; }
+    if (a.nodeType === 3) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; continue; }
+    if (a.nodeType !== 1) continue;
+    // 属性对齐
+    for (const at of [...a.attributes]) if (!b.hasAttribute(at.name)) a.removeAttribute(at.name);
+    for (const at of [...b.attributes]) if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
+    // 正在被编辑的输入框**不碰它的值**——那是人手里的东西，不是我们该覆盖的
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(a.nodeName) && document.activeElement === a) continue;
+    换子(a, b);
+  }
+  for (let i = 新.length; i < 旧.length; i++) 旧父.removeChild(旧[i]);
+}
+
+
 // ── 健康 ──
 async function 刷健康() {
   try {
@@ -60,8 +186,16 @@ async function 刷工单() {
     // 前端不再重复过滤一遍：同一件事两处各做一遍，迟早一处改了另一处没改，
     // 而且命令行调用方绕不过前端那份。
     if (!j.工单 || !j.工单.length) {
-      $('工单体').innerHTML = '<tr><td colspan="7" class="淡">'
-        + (滤 ? '这个状态下没有单' : '还没有工单（已归档的不在这里，用上面的筛选看）')
+      // 空态是**第一次打开时唯一看得见的东西**。一句「还没有工单」等于把这个
+      // 位置浪费掉——那一刻人最需要知道的是「那我该干什么」。
+      $('工单体').innerHTML = '<tr><td colspan="7">' + (滤
+        ? 空态('「' + 滤 + '」里没有单',
+          滤 === '已归档' ? '归档过的单会出现在这里，随时能取回。' : '换个状态看看，或者把筛选清成「全部」。')
+        : 空态('还没有工单',
+          '工单是这台机器的输入：一段 Markdown 说清要做什么、验收标准是什么，'
+          + '平台按角色挑一个 AI 去做，做完由<b>另一个厂商的模型</b>判一次。'
+          + '<br>已归档的单不在这里——用上面的筛选看。',
+          '<button class="btn accent" onclick="开建单()">＋ 建第一张单</button>'))
         + '</td></tr>';
       return;
     }
@@ -69,7 +203,9 @@ async function 刷工单() {
     // 先按状态，再让子单紧跟父单——DAG 平铺在列表里就看不出结构了。
     const 键 = (t) => ((t.fm && t.fm.父单) ? t.fm.父单 + '' + t.id : t.id);
     j.工单.sort((a, b) => (序[a.state] - 序[b.state]) || 键(a).localeCompare(键(b)));
-    $('工单体').innerHTML = j.工单.map((t) => {
+    // 增量刷新：整块 innerHTML 会把滚动位置、输入焦点、展开的详情全冲掉。
+    // 看板是人一直盯着的地方，每次刷新都跳一下等于每次都打断他。
+    换($('工单体'), j.工单.map((t) => {
       const f = t.fm || {};
       const 可派 = t.state === '待投';
       const 可判 = t.state === '质检';
@@ -104,7 +240,7 @@ async function 刷工单() {
           ? '<button class="btn" onclick="迁移(\'' + 转义(t.id) + '\',\'草稿\')">取回</button>'
           : '<button class="btn" onclick="归档(\'' + 转义(t.id) + '\')" title="从看板挪走，记录留着">归档</button>')
         + '</td></tr>';
-    }).join('');
+    }).join(''));
   } catch (e) { $('工单体').innerHTML = '<tr><td colspan="7" class="级急">工单接口不可达</td></tr>'; }
 }
 
@@ -146,13 +282,18 @@ async function 看单(id) {
 // 退回之后再派一次，同一张单会有两个 agent 同时在改同一片代码。
 // 巡检说「可能已挂」是推断不是事实——它只能看见「很久没动静」。
 async function 退回待投(id) {
-  if (!confirm('把 ' + id + ' 退回待投，之后可以重新派活。\n\n'
-    + '先确认那次执行**真的已经停了**：巡检只能看见「很久没动静」，推断不出进程死没死。\n'
-    + '若它还活着，重派会让两个 agent 同时改同一片代码。\n\n确定退回？')) return;
+  // 危险样式：这个动作有个隐蔽的坏情况——若那次执行其实还活着，
+  // 重派会让两个 agent 同时改同一片代码。红色是给这条用的。
+  if (!await 问('退回 ' + id + ' 到待投？',
+    '<p>之后可以重新派活。</p>'
+    + '<p class="级急">先确认那次执行真的已经停了。</p>'
+    + '<p>巡检只能看见「很久没动静」，推断不出进程死没死。若它还活着，'
+    + '重派会让<b>两个 agent 同时改同一片代码</b>。</p>',
+    { 危险: true, 确认字: '退回待投' })) return;
   const { 体: j } = await 取JSON('/api/tickets/' + encodeURIComponent(id) + '/move', {
     method: 'POST', body: JSON.stringify({ 到: '待投' }),
   });
-  if (!j.ok) { alert('退回失败：' + j.error); return; }
+  if (!j.ok) { 吐('退回失败：' + j.error, '坏'); return; }
   刷工单(); 刷调度();
 }
 
@@ -171,11 +312,14 @@ async function 归档(id) {
     ? '这张单**正在途**。归档不会去杀那个 CLI 进程——平台看不见它死没死。\n'
       + '若它还在跑，跑完的产出会落在一张已归档的单上，没人会去看。\n\n'
     : '';
-  if (!confirm('归档 ' + id + '：从看板挪走，记录与账本都留着。\n\n' + 话 + '随时可以「取回」。确定？')) return;
+  if (!await 问('归档 ' + id + '？',
+    '<p>从看板挪走，<b>记录与账本都留着</b>，随时可以「取回」。</p>'
+    + (话 ? '<p class="级急">' + 转义(话) + '</p>' : ''),
+    { 危险: !!话, 确认字: '归档' })) return;
   const { 体: j } = await 取JSON('/api/tickets/' + encodeURIComponent(id) + '/move', {
     method: 'POST', body: JSON.stringify({ 到: '已归档' }),
   });
-  if (!j.ok) { alert('归档失败：' + j.error); return; }
+  if (!j.ok) { 吐('归档失败：' + j.error, '坏'); return; }
   刷工单(); 刷调度();
 }
 
@@ -183,7 +327,7 @@ async function 迁移(id, 到) {
   const { 体: j } = await 取JSON('/api/tickets/' + encodeURIComponent(id) + '/move', {
     method: 'POST', body: JSON.stringify({ 到 }),
   });
-  if (!j.ok) alert('流转失败：' + j.error);
+  if (!j.ok) 吐('流转失败：' + j.error, '坏'); else 吐('已流转到「' + 到 + '」');
   刷工单();
 }
 
@@ -214,8 +358,13 @@ async function 跑(id, 干跑, 同意计费) {
         + (免.length ? '不额外花钱：' + 免.join('、') + '\n' : '')
         + (花.length ? '⚠ 会产生开销：' + 花.join('、') + '\n若选中了后者，服务端会先停下来再问你一次。' : '');
     }
-    if (!confirm('真跑会调用 AI CLI；工单带「项目」时还会在目标仓提交并合并。\n\n'
-      + '工单：' + id + '\n' + 费 + '\n\n确定继续？')) return;
+    // 危险色只给真会多花钱的那次——同 真跑钮类 那条：
+    // 对着不花钱的操作天天见红，等真该紧张时反而没反应。
+    const 会花 = /会产生开销|⚠/.test(费);
+    if (!await 问('真跑 ' + id + '？',
+      '<p>会调用 AI CLI；工单带「项目」时还会在目标仓<b>提交并合并</b>。</p>'
+      + '<div class="费框' + (会花 ? ' 花' : '') + '">' + 转义(费).split('\n').join('<br>') + '</div>',
+      { 危险: 会花, 确认字: '真跑' })) return;
   }
   $('运行区').style.display = '';
   $('运行').textContent = (干跑 ? '干跑' : '真跑') + '中…（真跑可能要几十秒）';
@@ -227,7 +376,10 @@ async function 跑(id, 干跑, 同意计费) {
     // 所以单独弹一次，而且默认是「不花」——直接返回，不重试。
     if (j.需同意计费) {
       $('运行').textContent = j.error;
-      if (confirm(j.error + '\n\n现在就用 API 计费跑这一张？')) return 跑(id, false, true);
+      // 全站唯一真正要问钱的地方：永远走危险样式，且取消键的字面就是「不花这笔钱」。
+      if (await 问('订阅额度已耗尽，要改用 API 计费吗？',
+        '<div class="费框 花">' + 转义(j.error).split('\n').join('<br>') + '</div>',
+        { 危险: true, 确认字: '按 token 计费跑这一张', 取消字: '不花这笔钱' })) return 跑(id, false, true);
       刷计费();
       return;
     }
@@ -256,7 +408,7 @@ async function 物化(父单) {
   let 原始 = '';
   try { 原始 = (JSON.parse(文).计划预览 || {}).正文预览 || ''; } catch { /* 下面兜底 */ }
   if (!原始) {
-    alert('拿不到原始计划文本。请改用接口物化：\nPOST /api/plan/materialize {"输出": <orchestrator 的原始回复>, "父单": "' + 父单 + '"}');
+    吐('拿不到原始计划文本，请改用接口物化 /api/plan/materialize', '坏');
     return;
   }
   const { 体: j } = await 取JSON('/api/plan/materialize', {
@@ -267,7 +419,11 @@ async function 物化(父单) {
 }
 
 async function 判(id, 干跑) {
-  if (!干跑 && !confirm('真判会调用另一个 AI CLI 做质检、产生费用。\n\n工单：' + id + '\n\n确定继续？')) return;
+  // 说明改过：真判走的也是订阅额度，说「产生费用」是不实的（协-008 的口径）。
+  if (!干跑 && !await 问('真判 ' + id + '？',
+    '<p>会调用<b>另一个 Provider</b> 做质检——跨厂评审降低同源盲区。</p>'
+    + '<p>判官只读不写，它拿到的是这张单交付时那个提交的 detached 快照。</p>',
+    { 确认字: '真判' })) return;
   $('运行区').style.display = '';
   $('运行').textContent = (干跑 ? '试判' : '真判') + '中…';
   try {
@@ -282,8 +438,11 @@ async function 判(id, 干跑) {
 async function 批量投出() {
   const { 体: j } = await 取JSON('/api/tickets?state=' + encodeURIComponent('草稿'));
   const 单 = (j.工单 || []).map((t) => t.id);
-  if (!单.length) { alert('没有草稿单'); return; }
-  if (!confirm('把这 ' + 单.length + ' 张草稿投出到「待投」？\n\n' + 单.join('、'))) return;
+  if (!单.length) { 吐('没有草稿单'); return; }
+  if (!await 问('把这 ' + 单.length + ' 张草稿投出？',
+    '<p>投出后进入「待投」等待派活。这一步<b>不调用任何 AI</b>，只是流转。</p>'
+    + '<div class="单列">' + 单.map((x) => '<code>' + 转义(x) + '</code>').join(' ') + '</div>',
+    { 确认字: '投出 ' + 单.length + ' 张' })) return;
   const 结果 = [];
   for (const id of 单) {
     const { 体: r } = await 取JSON('/api/tickets/' + encodeURIComponent(id) + '/move', {
@@ -300,7 +459,7 @@ async function 批量投出() {
 // 选人、权限、依赖一次看完——比一张张点省事，又不会花钱。
 async function 按调度干跑() {
   const { 码, 体: t } = await 取JSON('/api/exec/tick');
-  if (码 !== 200) { alert("执行器没在 4372 应答。npm start 会带起它——单独起过 server 才会缺；也可能是它刚崩了，看终端。"); return; }
+  if (码 !== 200) { 吐("执行器没在 4372 应答。npm start 会带起它；也可能是它刚崩了，看终端。", "坏"); return; }
   const 可派 = t.本轮可派 || [];
   if (!可派.length) {
     $('运行区').style.display = '';
@@ -480,7 +639,9 @@ async function 刷战绩() {
     // 成功率只算真跑：干跑必然成功，混进去这个数就没意义了
     $('成功率').textContent = 真.length ? Math.round(真.filter((x) => x.ok).length / 真.length * 100) + '%' : '—';
     $('战绩体').innerHTML = 记.slice(-12).reverse().map((x) =>
-      '<tr><td class="淡">' + 转义(String(x.at || '').slice(5, 19).replace('T', ' ')) + '</td>'
+      // 相对时间 + 绝对时间挂 title：「3 小时前」是人要的答案，
+      // 「08-11 15:56:23」是排查时才需要的东西，鼠标停上去再给。
+      '<tr><td class="淡" title="' + 转义(String(x.at || '')) + '">' + 转义(多久(x.at)) + '</td>'
       + '<td>' + 转义(x.provider) + '</td><td><code>' + 转义(x.ticket || '') + '</code></td>'
       + '<td>' + (x.dry ? '<span class="淡">干跑</span>' : (x.ok ? '<span style="color:var(--绿)">成</span>' : '<span class="级急">败</span>'))
       + '</td><td class="淡">' + 秒(x.durationMs) + '</td></tr>').join('')
@@ -818,7 +979,7 @@ async function 刷项目() {
     const 当前 = 取选中项目();
     if (当前 && 当前 !== '(无项目)' && !项目表.some((p) => p.名 === 当前)) {
       存选中项目('');
-      alert('原先选的项目「' + 当前 + '」已不在注册表里，已退回「全部项目」。');
+      吐('项目「' + 当前 + '」已不在注册表里，已退回「全部项目」', '坏');
     }
     项目胶囊();
   } catch { /* 服务没起时健康行已经会报 */ }
@@ -843,13 +1004,13 @@ async function 开登记项目() {
     const { 码, 体: j } = await 取JSON('/api/setup/project', {
       method: 'POST', body: JSON.stringify({ 名, 路径 }),
     });
-    if (码 !== 200 || !j.ok) { alert('登记失败：\n\n' + (j.error || ('HTTP ' + 码))); return; }
+    if (码 !== 200 || !j.ok) { 吐('登记失败：' + (j.error || ('HTTP ' + 码)), '坏'); return; }
     存选中项目(j.名);
     await 刷项目();
-  项目胶囊();
+    项目胶囊();
     刷工单();
-    alert('已登记 ' + j.名 + '\n→ ' + j.路径 + (j.覆盖 ? '\n\n（覆盖了同名的旧登记）' : ''));
-  } catch (e) { alert('登记失败：' + e.message); }
+    吐('已登记 ' + j.名 + (j.覆盖 ? '（覆盖了同名旧登记）' : ''));
+  } catch (e) { 吐('登记失败：' + e.message, '坏'); }
 }
 // ══════════════════════════════════════════════════════════════
 // 计费口径（协-008）

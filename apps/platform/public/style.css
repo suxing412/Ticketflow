@@ -329,3 +329,56 @@ td:nth-child(5), th:nth-child(5) { white-space:nowrap; }
 .返回 { width:28px; height:28px; border-radius:14px; padding:0; flex:0 0 auto;
   background:var(--card); border:1px solid var(--line); color:var(--ink2); font-size:15px; }
 .返回:hover { border-color:var(--ink3); color:var(--ink); }
+
+/* ═══ 交互反馈（协-012）═══
+   抄 studio 的那一层。它领先的不是功能，是「机器在动」的质感——
+   同一次操作，原生 alert 糊你一脸浏览器弹窗，吐司只是飘一下。 */
+
+/* 吐司：不打断。右下角是因为主要操作区在左上，视线不必跳走 */
+.吐司 { position:fixed; right:22px; bottom:22px; z-index:60; max-width:min(460px, calc(100vw - 44px));
+  background:var(--ink); color:var(--paper); font-size:13px; line-height:1.6;
+  padding:11px 16px; border-radius:10px; box-shadow:var(--shadow-lg);
+  animation:吐进 220ms var(--ease-out); }
+.吐司.坏 { background:var(--danger); color:#fff; }
+.吐司.去 { animation:吐出 240ms var(--ease-out) forwards; }
+@keyframes 吐进 { from { opacity:0; transform:translateY(10px) scale(.97); } }
+@keyframes 吐出 { to { opacity:0; transform:translateY(6px) scale(.98); } }
+/* 多条并存时自然叠在一起会重合——这里只留最近一条的位置，其余上移 */
+.吐司 ~ .吐司 { bottom:auto; top:22px; }
+
+/* 确认框：自己画。原生 confirm 不能排版，而这里的文案
+   （订阅额度 / 会计费）必须一眼分得清 */
+.罩 { position:fixed; inset:0; z-index:70; background:var(--mask, rgba(26,29,33,.34));
+  display:flex; align-items:center; justify-content:center; padding:24px;
+  animation:罩进 160ms var(--ease-out); }
+@keyframes 罩进 { from { opacity:0; } }
+.问框 { background:var(--card); border:1px solid var(--line); border-radius:14px;
+  box-shadow:var(--shadow-lg); width:min(520px, 100%); padding:22px 24px 18px;
+  animation:框进 200ms var(--ease-out); }
+@keyframes 框进 { from { opacity:0; transform:translateY(8px) scale(.985); } }
+.问题 { font-size:16.5px; font-weight:700; margin-bottom:10px; text-wrap:balance; }
+.问文 { font-size:13.5px; color:var(--ink2); line-height:1.72; }
+.问文 p { margin:8px 0; }
+.问文 b { color:var(--ink); }
+.问钮 { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
+
+/* 费用框：把「花不花钱」从一段文字里拎出来。
+   不花钱的用中性底，会花钱的才上红——红色留给真该紧张的那次 */
+.费框 { margin:10px 0 2px; padding:10px 13px; border-radius:9px; font-size:12.5px;
+  background:var(--sect); border:1px solid var(--line); line-height:1.7; }
+.费框.花 { background:var(--dangerbg); border-color:var(--danger); color:var(--danger); font-weight:500; }
+.单列 { margin-top:10px; display:flex; flex-wrap:wrap; gap:5px; }
+
+/* 空态卡：空表格里一句「还没有工单」是浪费掉的一次机会——
+   人第一次打开看到的正是空态，那一刻他最需要的是「那我该干什么」 */
+.空卡 { background:var(--sect); border:1px dashed var(--line); border-radius:12px;
+  padding:26px 24px; text-align:center; margin:14px 0; }
+.空卡 h5 { margin:0 0 6px; font-size:14.5px; font-weight:650; }
+.空卡 p { margin:0 auto; max-width:52ch; font-size:12.5px; color:var(--ink3); line-height:1.75; }
+.空卡 .空钮 { margin-top:14px; display:flex; justify-content:center; gap:8px; }
+td .空卡 { text-align:left; margin:6px 0; }
+td .空卡 p { margin:0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .吐司, .罩, .问框 { animation-duration:.01s; }
+}
