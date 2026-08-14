@@ -133,6 +133,21 @@ const 服务 = http.createServer((req, res) => {
     } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
   }
 
+  // 「这几个提交进主线了吗」——纯读，给上游销「待集成」戳用。
+  // 放在写闸外面：它一个 git 对象都不改，要求开写权限反而会让人为了销个戳去开写。
+  // 认的是**注册表里的项目名**，不是路径：收窄路径只放行仓根之内，
+  // 而登记的项目（靶仓、海投王）都在仓外，拿路径进来一律被判越界。
+  if (路径 === '/含有' && req.method === 'GET') {
+    const 项目名 = String(查询.get('项目') || 查询.get('project') || '').trim();
+    const 项 = 现读注册表()[项目名];
+    if (!项 || !项.路径) return 发JSON(res, 400, { ok: false, error: `项目「${项目名 || '(空)'}」不在注册表里` });
+    const 候选 = String(查询.get('提交') || 查询.get('commits') || '').split(',').map((s) => s.trim()).filter(Boolean);
+    try {
+      const 出 = 工作区.含有(path.resolve(项.路径), 候选);
+      return 发JSON(res, 200, { ok: true, 项目: 项目名, 含有: 出 });
+    } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+  }
+
   // ——— 写操作（协-003）———
   // 默认关闭。开关是独立的授权决定，不随「服务起来了」顺带获得。
   if (路径.startsWith('/write/')) {
@@ -182,7 +197,10 @@ const 服务 = http.createServer((req, res) => {
           let 变更文件 = [];
           try { 变更文件 = 工作区.changedFiles(体.工作区.path); } catch { /* 拿不到就空着 */ }
           const r = 工作区.checkpoint(配置, 体.工作区, 体.工单 || {});
-          return 发JSON(res, 200, { ok: true, ...r, 变更文件 });
+          // r 摆在后面：agent 自己提交过的情况下，工作树是干净的，上面那份
+          // changedFiles 必然是空的，而 checkpoint 会用「起点..HEAD」算出真名单。
+          // 顺序反了就会拿空清单盖掉真清单——质检又要看着「（无文件改动）」判不过。
+          return 发JSON(res, 200, { ok: true, 变更文件, ...r });
         }
         if (路径 === '/write/publish') {
           if (!体.工作区) return 发JSON(res, 400, { ok: false, error: '需要 工作区' });

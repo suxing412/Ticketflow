@@ -159,4 +159,21 @@ t('渲染 md：围栏没闭合也不吞掉后面的内容', () => {
   assert.ok(/<\/code><\/pre>/.test(出), '未闭合的围栏要在结尾补上，否则后面所有内容都被吃进代码块');
 });
 
+// ---- 徽章类名：界面用到的，样式表里得有 ----
+t('状态与角色徽章的类名，CSS 里每一个都要有定义', () => {
+  // 类名是**拼出来**的（`'态 ' + t.state`、`'角色 ' + f.role`），拼错或漏配
+  // 不会报任何错，只是渲染成一个没样式的白字——「显示正常」和「样式丢了」
+  // 在截图上都像那么回事。抄 studio 的 CSS 时踩过一次：标记用的是另一套类名，
+  // 整排按钮渲染成纯文本，跑起来一切正常。
+  const 样式 = fs.readFileSync(path.join(平台根, 'public', 'style.css'), 'utf8');
+  const 工单库 = require(path.join(平台根, 'lib', '工单库.js'));
+  const 配置 = JSON.parse(fs.readFileSync(path.join(平台根, 'config', 'platform.config.json'), 'utf8'));
+  const 缺 = [];
+  for (const s of 工单库.STATES) if (!样式.includes(`.态.${s}`)) 缺.push(`.态.${s}`);
+  for (const r of Object.keys(配置.roles || {})) if (!样式.includes(`.角色.${r}`)) 缺.push(`.角色.${r}`);
+  // 「未进主线」那颗不是状态机里的态，是额外挂的，同样得有样式
+  if (!样式.includes('.态.待集成')) 缺.push('.态.待集成');
+  assert.deepEqual(缺, [], '这些类名界面上会用到，样式表里却没有：' + 缺.join('、'));
+});
+
 console.log(`全部通过：${passed} 项`);

@@ -225,7 +225,11 @@ async function 刷工单() {
       const 可退 = t.state === '在途';
       const 层 = f.父单 ? '<span class="淡">└ </span>' : '';   // 子单缩进，DAG 一眼可辨
       return '<tr><td>' + 层 + '<a href="#" onclick="看单(\'' + 转义(t.id) + '\');return false"><code>' + 转义(t.id) + '</code></a></td>'
-        + '<td><span class="态 ' + 转义(t.state) + '">' + 转义(t.state) + '</span></td>'
+        + '<td><span class="态 ' + 转义(t.state) + '">' + 转义(t.state) + '</span>'
+        // 「完成」但没进主线，得当场说破。改动还躺在分支上等 integrator 来合，
+        // 而状态列只写着「完成」——不标出来，人就会以为它已经上线了。
+        + (f.待集成 ? ' <span class="态 待集成" title="' + 转义(f.待集成.说 || '') + '（分支 ' + 转义(f.待集成.分支 || '') + '）">未进主线</span>' : '')
+        + '</td>'
         + '<td><span class="角色 ' + 转义(f.role || f.职能 || '') + '">' + 转义(f.role || f.职能 || '') + '</span></td>'
         + '<td>' + 转义(f.title || '') + '</td>'
         + '<td>' + 转义(f.项目 || '') + '</td>'
@@ -269,6 +273,8 @@ async function 看单(id) {
     if (fm.父单) 行.push('父单：' + fm.父单);
     if (fm.检查点) 行.push('检查点：' + fm.检查点);
     if (fm.发布提交) 行.push('发布提交：' + fm.发布提交);
+    if (fm.待集成) 行.push('⚠ 未进主线：' + (fm.待集成.说 || '') + '　分支 ' + (fm.待集成.分支 || '') + '（建一张 integrator 单把它合进去）');
+    if (fm.集成于) 行.push('已由 ' + fm.集成于.由 + ' 带进主线：' + fm.集成于.发布提交);
     if (fm.降级留痕) 行.push('降级留痕：' + JSON.stringify(fm.降级留痕));
     if (fm.免检原因) 行.push('免检：' + fm.免检原因);
     if (fm.质检结论) {

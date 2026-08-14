@@ -113,6 +113,11 @@ function 真跑许可(池, { 同意计费 } = {}) {
     };
   }
 
+  // 闸③还有后半截：「配了上限」是读配置（上面那段），「吃满没有」要靠 budget 算。
+  // 后者会静默失效，判断收在 派单.真跑前提 里——那儿讲了为什么读不到数就得停。
+  const 前提 = 派单.真跑前提(派单.冻结情况(公用件, 配置, 账本根));
+  if (!前提.准) return 前提;
+
   // 第四闸（协-008）：**落到 API 计费必须显式同意**。
   //
   // 这是整套闸门里唯一真正对着钱包的一道。前三道守的是「别乱跑」，
@@ -171,6 +176,27 @@ function 取工作目录() {
 // 工作区服务的能力面是 git。两者分开，才能单独关掉其中一个——
 // 比如「允许跑 AI 但今天不许它提交」就是一个真实存在的状态。
 const 工作区端口 = Number(process.env.WORKSPACE_PORT || (配置.workspace && 配置.workspace.port) || 4371);
+
+// 只读的那几个走 GET。中文路径同样要编码——见下面那段血泪。
+function 工作区读(路径, 查询) {
+  const 串 = new URLSearchParams(查询 || {}).toString();
+  const 编码路径 = String(路径).split('/').map(encodeURIComponent).join('/');
+  return new Promise((resolve) => {
+    const req = http.request({
+      host: '127.0.0.1', port: 工作区端口, path: 编码路径 + (串 ? '?' + 串 : ''), method: 'GET',
+      headers: { Authorization: `Bearer ${令牌}` },
+    }, (上游) => {
+      let s = '';
+      上游.on('data', (d) => s += d);
+      上游.on('end', () => {
+        try { resolve({ 码: 上游.statusCode, 体: JSON.parse(s) }); }
+        catch { resolve({ 码: 502, 体: { ok: false, error: '工作区服务返回非 JSON' } }); }
+      });
+    });
+    req.on('error', () => resolve({ 码: 503, 体: { ok: false, error: '工作区服务连不上' } }));
+    req.end();
+  });
+}
 
 function 工作区请求(路径, 体) {
   return new Promise((resolve) => {
@@ -608,11 +634,41 @@ const 服务 = http.createServer((req, res) => {
         if (判.成 && 工作区) {
           const c = await 工作区请求('/write/checkpoint', { 项目: 项目名, 工作区, 工单: { id, fm: t.fm } });
           检查点 = c.体;
-          if (c.码 === 200 && c.体.ok && c.体.committed) {
+          // 「有检查点」= 这一步提交了，**或者** agent 自己提交过（自提交）。
+          // 只认前者的话，agent 自己 commit 的活会被当成空转退回待投，
+          // 而分支上那个提交谁也不认——重跑还会再干一遍。
+          if (c.码 === 200 && c.体.ok && (c.体.committed || c.体.自提交)) {
             工作区.commit = c.体.commit;                       // publish 要用检查点的 sha
             const pb = await 工作区请求('/write/publish', { 项目: 项目名, 工作区 });
             发布 = pb.体;
-            if (pb.码 === 200 && pb.体.ok) {
+            const 发布成 = pb.码 === 200 && pb.体 && pb.体.ok === true;
+
+            // **发布没成，不等于活没干成。**
+            //
+            // 快进发布只在基线没动过时才成立。两张兄弟单并发跑（并发上限默认 2，
+            // 这是常态不是意外），先发布的那张把 master 推进一格，后一张就被
+            // `--ff-only` 挡回来——这正是 publish 的设计意图：不在主目录制造冲突现场，
+            // 交给 integrator 去合。
+            //
+            // 但原先这条路**什么都不做**：不落检查点、不流转。后果有两层，都不响：
+            //   ① 工单永远留在「在途」，白占一个并发额度，巡检迟早报「在途超时，
+            //      执行器可能已挂」——又是一次归错因，跟当初「空转」那次一模一样。
+            //   ② 更要命的是检查点的 sha 没落进工单。活明明提交在分支上，
+            //      而 worktree.integrate 读的是 fm.workspace.commit，读不到就把这张单
+            //      当「没有可集成的检查点」**静默跳过**——下游 DAG 就断在这里。
+            //      于是 integrator 既等不到依赖「完成」（依赖就绪只认完成态），
+            //      也拿不到要合的提交。这条链从头到尾没跑通过，正是因为断在这一处。
+            //
+            // 所以：检查点照落、工单照流转，另外盖一个「待集成」戳。
+            // 「完成」在这里的含义是**这张单的活干完了**，进主线是 integrator 的事——
+            // 两者的区别不靠状态区分，靠 发布提交 有没有 + 待集成 戳，界面上都显示。
+            {
+              const 待集成 = 发布成 ? null : {
+                时刻: new Date().toISOString(),
+                说: (pb.体 && pb.体.error) || `发布未成功（HTTP ${pb.码}）`,
+                分支: 工作区.branch || '',
+                检查点: c.体.commit,
+              };
               // 干完了不等于做对了。默认送质检，由**另一个 Provider** 判一次；
               // 跳过质检必须是显式决定（配置关掉、工单 QA:关、或角色免检）。
               // 反过来会让「没配 = 没人验收」，那是最危险的默认。
@@ -621,7 +677,7 @@ const 服务 = http.createServer((req, res) => {
               const m = 工单库.move(工单根.根, id, '在途', 目标, (fm) => {
                 if (!检.要) { fm.完成时间 = new Date().toISOString(); fm.免检原因 = 检.因; }
                 fm.检查点 = c.体.commit;
-                fm.发布提交 = pb.体.commit;
+                if (发布成) fm.发布提交 = pb.体.commit; else delete fm.发布提交;
                 // 改动清单落进工单（协-009）。**质检唯一的客观材料就是这个**，
                 // 而它只在检查点那一刻取得到：提交之后 diff 就空了，收工之后目录都没了。
                 // 首次真跑当场撞到：判官被告知「实际改动的文件：（无文件改动）」，
@@ -632,9 +688,36 @@ const 服务 = http.createServer((req, res) => {
                 // 只写 fm.检查点 的话 worktree.integrate 看不见，会把本单当成
                 // 「没有可集成的检查点」而 **静默跳过**——DAG 就断在这里。
                 fm.workspace = Object.assign({}, fm.workspace, { commit: c.体.commit });
+                if (待集成) fm.待集成 = 待集成; else delete fm.待集成;
               });
               完成 = m.ok ? 目标 : `流转失败：${m.error}`;
               if (m.ok && 检.要) 完成 += '（待质检：POST /qa/' + id + '）';
+              // 这句话必须说出口。不说的话，回执里只有一个「完成」，
+              // 人会以为改动已经在主线上了——而它还躺在分支上等人来合。
+              if (m.ok && 待集成) 完成 += `；**未进主线**（${待集成.说}）——建一张 integrator 单把 ${待集成.分支} 合进去`;
+
+              // 本单发布成功，意味着**它带进主线的那些上游也进去了**——把它们身上
+              // 过期的「待集成」戳摘掉。不摘的话板上一直挂着「未进主线」而东西早就在了；
+              // 这种陈旧告警看几次就没人信，真出事那次也跟着被忽略。
+              //
+              // 判据是 git 的祖先关系，不是 prepare 的集成报告。报告会漏：冲突被
+              // integrator 手工解掉时，那张依赖单落在 failedDependency 上，既不在
+              // merged 也不在 already——而它正是最该销戳的那张（INT-B 实测就这么漏的）。
+              if (m.ok && 发布成 && 依.依赖单 && 依.依赖单.length) {
+                const 待 = 依.依赖单.filter((d) => d.fm && d.fm.待集成 && d.fm.workspace && d.fm.workspace.commit);
+                if (待.length) {
+                  const 查 = await 工作区读('/含有', { 项目: 项目名, 提交: 待.map((d) => d.fm.workspace.commit).join(',') });
+                  const 进了 = new Set((查.码 === 200 && 查.体.ok ? 查.体.含有 : []).map(String));
+                  for (const d of 待) {
+                    if (!进了.has(String(d.fm.workspace.commit))) continue;
+                    工单库.update(工单根.根, d.id, (fm) => {
+                      fm.集成于 = { 时刻: new Date().toISOString(), 由: id, 发布提交: pb.体.commit };
+                      delete fm.待集成;
+                    });
+                    完成 += `；${d.id} 的待集成戳已销（由本单带进主线）`;
+                  }
+                }
+              }
             }
           } else if (c.码 === 200 && c.体.ok && !c.体.committed && !c.体.changed) {
             // 跑成功了，但**一个文件都没改**。
