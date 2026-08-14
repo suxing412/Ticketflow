@@ -190,4 +190,197 @@ t('默认分支前缀是 platform，不是 studio', () => {
   assert.equal(工作区.configOf({ workspace: { branchPrefix: '自定义' } }).branchPrefix, '自定义');
 });
 
+// 造一个**真的**处在冲突中途的仓。冲突这件事假不出来：
+// 「git add 之后 U 态就没了」正是这一组要盯的行为，模拟对象不会有这个性质。
+function 建冲突仓() {
+  const d = 建仓();
+  git(d, ['checkout', '-q', '-b', '甲']);
+  fs.writeFileSync(path.join(d, 'a.txt'), '甲的改法\n');
+  fs.writeFileSync(path.join(d, '甲带来的.txt'), '新文件\n');
+  git(d, ['add', '-A']);
+  git(d, ['commit', '-q', '--no-gpg-sign', '-m', '甲']);
+  git(d, ['checkout', '-q', 'master']);
+  git(d, ['checkout', '-q', '-b', '乙']);
+  fs.writeFileSync(path.join(d, 'a.txt'), '乙的改法\n');
+  git(d, ['commit', '-q', '--no-gpg-sign', '-am', '乙']);
+  try { git(d, ['merge', '--no-edit', '--no-gpg-sign', '甲']); } catch { /* 冲突就是要的 */ }
+  return d;
+}
+
+t('中文文件名不许在写入范围上被误判成越界', () => {
+  // Git 默认把非 ASCII 路径转义成 "\350\207\252..." 再输出，那串东西流进 changedFiles，
+  // 拿去比 glob 就永远匹配不上——中文命名的文件一律被判越界，而报错里印的也是八进制，
+  // 人对着看不出是哪个文件。中文文件名在这个仓里是常态。
+  const 仓 = 建仓();
+  try {
+    fs.writeFileSync(path.join(仓, '说明文档.md'), 'x\n');
+    assert.deepEqual(工作区.changedFiles(仓), ['说明文档.md'], 'git 的路径转义没解开');
+    const 单 = { id: 'T-20', fm: { write_scope: ['*.md'] }, body: '' };
+    assert.deepEqual(工作区.enforceWriteScope(单, 仓), ['*.md'], '中文名文件被 *.md 挡住了');
+    // 报错里也要印出人认得的名字
+    fs.writeFileSync(path.join(仓, '范围外的.txt'), 'x\n');
+    assert.throws(() => 工作区.enforceWriteScope(单, 仓), /范围外的\.txt/);
+  } finally { 清(仓); }
+});
+
+t('冲突标记不许进检查点——`git add` 洗掉了「未解决」，标记还在', () => {
+  // Git 只在**索引**里记未解决，解冲突的习惯动作恰恰是编辑完顺手 add，
+  // 于是 unresolved() 那道闸形同虚设：标记跟着检查点进用户的仓，
+  // 再被 publish 的 --ff-only 送上 main。2026-08-14 真跑 integrator 之前验出来的。
+  const 仓 = 建冲突仓();
+  try {
+    const 配 = { workspace: { mode: 'worktree' } };
+    const w = { mode: 'worktree', isolated: true, path: 仓, branch: '乙' };
+    git(仓, ['add', '-A']);
+    assert.equal(git(仓, ['diff', '--name-only', '--diff-filter=U']), '',
+      'add 之后 Git 已经不认为有未解决冲突了——这正是这道闸存在的理由');
+    assert.throws(() => 工作区.checkpoint(配, w, { id: 'INT-1', fm: { role: 'integrator' }, body: '' }),
+      /冲突标记/);
+    assert.ok(!git(仓, ['log', '-1', '--format=%s']).includes('INT-1'), '拦下了就不许偷偷提交');
+  } finally { 清(仓); }
+});
+
+t('确实要留冲突标记的，在单子上声明', () => {
+  // 写冲突相关的测试样例是正当需求。没有逃生口的闸，人会去绕整道闸。
+  const 仓 = 建冲突仓();
+  try {
+    git(仓, ['add', '-A']);
+    const r = 工作区.checkpoint({ workspace: { mode: 'worktree' } },
+      { mode: 'worktree', isolated: true, path: 仓, branch: '乙' },
+      { id: 'INT-2', fm: { role: 'integrator', 允许冲突标记: true }, body: '' });
+    assert.equal(r.committed, true, JSON.stringify(r));
+  } finally { 清(仓); }
+});
+
+t('不误伤：单独一行 ======= 是 markdown 下划线，不是冲突', () => {
+  // 误报一次，人下次就学会绕过这道闸了，那还不如没有。
+  const 仓 = 建仓();
+  try {
+    fs.writeFileSync(path.join(仓, 'README.md'), '标题\n=======\n\n正文\n');
+    fs.writeFileSync(path.join(仓, 'art.txt'), '<<<<<<< 这是画的框\n');
+    assert.deepEqual(工作区.冲突残留(仓, 工作区.changedFiles(仓)), [], '两头都在才算冲突');
+  } finally { 清(仓); }
+});
+
+t('integrator 声明了写入范围就得算数', () => {
+  // 原先这里对 integrator 无条件 return []，人写在单子上的范围是装饰品。
+  // 「写了没人看」这类失败最难查，因为每一处都显示成功。
+  const 仓 = 建仓();
+  try {
+    fs.writeFileSync(path.join(仓, '范围外的.txt'), 'x\n');
+    assert.throws(() => 工作区.enforceWriteScope({ id: 'INT-3', fm: { role: 'integrator', write_scope: ['docs/**'] }, body: '' }, 仓),
+      /超出工单允许的写入范围/);
+    // 但**没声明**时仍然放开：它要动哪些文件由冲突决定，事先列不出来。
+    assert.deepEqual(工作区.enforceWriteScope({ id: 'INT-4', fm: { role: 'integrator' }, body: '' }, 仓), []);
+  } finally { 清(仓); }
+});
+
+t('合并带进来的文件不算 integrator 越界', () => {
+  // 冲突还没提交的时候，依赖改过的每个文件都摊在工作树上。
+  // 拿它们去比写入范围会把人冤枉了——而且冤枉得莫名其妙：它根本没碰过那个文件。
+  const 仓 = 建冲突仓();
+  try {
+    const 单 = { id: 'INT-5', fm: { role: 'integrator', write_scope: ['a.txt'] }, body: '' };
+    assert.ok(fs.existsSync(path.join(仓, '甲带来的.txt')), '合并把这个文件带进了工作树');
+    assert.deepEqual(工作区.enforceWriteScope(单, 仓), ['a.txt']);
+    fs.writeFileSync(path.join(仓, '自己加的.txt'), 'x\n');
+    assert.throws(() => 工作区.enforceWriteScope(单, 仓), /自己加的/, '它自己写的还是要管');
+  } finally { 清(仓); }
+});
+
+t('agent 自己 commit 过的，不许当成「没干活」', () => {
+  // 它看得见 git log 里的落款格式，自然会照着提交一把——这不是异常路径，是常态。
+  // 原先检查点只看工作树脏不脏：干净就报「没有改动」，执行器据此判空转、退回待投，
+  // 而分支上明明躺着一个提交，谁也不认它，重跑还会再干一遍。
+  // 实测：首个 integrator 真跑的重放就是这样被判空转的。
+  const 仓 = 建仓();
+  const 根 = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-self-'));
+  try {
+    const 配 = { workspace: { mode: 'worktree', root: 根, branchPrefix: 'platform' } };
+    const 单 = { id: 'T-30', fm: {}, body: '' };
+    const w = 工作区.prepare(根, 配, 单, { name: 'p', path: 仓 });
+    // agent 干活并自己提交，工作树因此是干净的
+    fs.writeFileSync(path.join(w.path, 'n.txt'), 'x\n');
+    git(w.path, ['add', '-A']);
+    git(w.path, ['-c', 'user.email=a@b', '-c', 'user.name=a', 'commit', '-q', '--no-gpg-sign', '-m', 'agent 自己提交的']);
+    const r = 工作区.checkpoint(配, w, 单);
+    assert.equal(r.自提交, true, '分支比起点前进了，就是确凿地干过活');
+    assert.equal(r.changed, true, 'changed=false 会让执行器判成空转');
+    assert.notEqual(r.commit, w.commit, '要认下 agent 那个提交当检查点');
+    // 变更清单必须从 起点..HEAD 算——工作树是干净的，changedFiles 只会给空清单，
+    // 而质检唯一的客观材料就是这份清单（喂空清单会让判官把成功的活判成不过）。
+    assert.deepEqual(r.变更文件, ['n.txt']);
+  } finally { 清(仓, 根); }
+});
+
+t('真没干活的，还是要如实报没干活', () => {
+  // 上一条不能把「压根没动手」也一起放行——那是两回事，处置也不同。
+  const 仓 = 建仓();
+  const 根 = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-noop-'));
+  try {
+    const 配 = { workspace: { mode: 'worktree', root: 根 } };
+    const 单 = { id: 'T-31', fm: {}, body: '' };
+    const w = 工作区.prepare(根, 配, 单, { name: 'p', path: 仓 });
+    const r = 工作区.checkpoint(配, w, 单);
+    assert.equal(r.changed, false);
+    assert.ok(!r.自提交);
+  } finally { 清(仓, 根); }
+});
+
+t('自提交的改动同样要过写入范围和冲突标记两道闸', () => {
+  // 「agent 自己提交」不该成为绕开检查的后门——那样只要 commit 一下就什么都能写。
+  const 仓 = 建仓();
+  const 根 = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-self2-'));
+  try {
+    const 配 = { workspace: { mode: 'worktree', root: 根 } };
+    const 单 = { id: 'T-32', fm: { write_scope: ['docs/**'] }, body: '' };
+    const w = 工作区.prepare(根, 配, 单, { name: 'p', path: 仓 });
+    fs.writeFileSync(path.join(w.path, '范围外的.txt'), 'x\n');
+    git(w.path, ['add', '-A']);
+    git(w.path, ['-c', 'user.email=a@b', '-c', 'user.name=a', 'commit', '-q', '--no-gpg-sign', '-m', 'x']);
+    assert.throws(() => 工作区.checkpoint(配, w, 单), /超出工单允许的写入范围/);
+  } finally { 清(仓, 根); }
+});
+
+t('含有：判「进没进主线」只认 git 的祖先关系', () => {
+  // 销「待集成」戳的判据。别拿 integrate 的集成报告代替——冲突被 integrator
+  // 手工解掉时，那张依赖单落在 failedDependency 上，既不在 merged 也不在 already，
+  // 而它正是最该销戳的那张（实测就这么漏过一次）。
+  const 仓 = 建仓();
+  try {
+    const 老 = git(仓, ['rev-parse', 'HEAD']);
+    fs.writeFileSync(path.join(仓, 'b.txt'), 'x\n');
+    git(仓, ['add', '-A']);
+    git(仓, ['commit', '-q', '--no-gpg-sign', '-m', '新']);
+    const 新 = git(仓, ['rev-parse', 'HEAD']);
+    assert.deepEqual(工作区.含有(仓, [老, 新]), [老, 新], '祖先和自身都算进了');
+    // 不在这个仓里的 sha 不许算数，也不许抛
+    assert.deepEqual(工作区.含有(仓, ['0'.repeat(40)]), []);
+    assert.deepEqual(工作区.含有(仓, ['不是sha', '', null]), []);
+    // 另起一条不相干的分支：没合进来就不算进主线
+    git(仓, ['checkout', '-q', '-b', '旁支', 老]);
+    fs.writeFileSync(path.join(仓, 'c.txt'), 'y\n');
+    git(仓, ['add', '-A']);
+    git(仓, ['commit', '-q', '--no-gpg-sign', '-m', '旁支']);
+    const 旁 = git(仓, ['rev-parse', 'HEAD']);
+    git(仓, ['checkout', '-q', 'master']);
+    assert.deepEqual(工作区.含有(仓, [旁]), [], '没合进 HEAD 就不该算已进主线');
+  } finally { 清(仓); }
+});
+
+t('带「待集成」的工单，工作区不许被当陈账收掉', () => {
+  // 那个分支是下游 integrator 唯一的原料。收掉等于把要合的东西先扔了，
+  // 而报出来的是一条「已完成，该收」——看上去一切正常。
+  const 仓 = 建仓();
+  // 目录名必须是工单号：遗留工作区按 basename 认单。
+  const wt = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wt-keep-')), 'K-1');
+  try {
+    git(仓, ['worktree', 'add', '-q', '-b', 'platform/p/K-1', wt, 'master']);
+    const 单 = { id: 'K-1', state: '完成', fm: { 待集成: { 说: '基线已前进' } } };
+    assert.deepEqual(工作区.遗留工作区(null, {}, { path: 仓 }, [单]), [], '待集成的不许收');
+    delete 单.fm.待集成;
+    assert.equal(工作区.遗留工作区(null, {}, { path: 仓 }, [单]).length, 1, '戳销了就该收了');
+  } finally { 清(仓, wt); }
+});
+
 console.log(`全部通过：${passed} 项`);

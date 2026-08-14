@@ -9,7 +9,11 @@ const { spawnSync } = require('child_process');
 const toArr = (value) => Array.isArray(value) ? value : value == null || value === '' ? [] : String(value).split(/[，,\s]+/).filter(Boolean);
 
 function git(cwd, args, allowed = [0]) {
-  const result = spawnSync('git', ['-C', cwd, ...args], {
+  // quotepath=false：Git 默认把非 ASCII 路径按八进制转义再输出（"\350\207\252..."）。
+  // 那串东西会一路流进 changedFiles，拿去比写入范围的 glob——于是**中文命名的文件
+  // 一律匹配不上，全被判成越界**；报错里给人看的也是那串八进制，根本认不出是哪个文件。
+  // 中文文件名在这个仓里是常态，不是边角情况。2026-08-14 写集成器测试时撞出来的。
+  const result = spawnSync('git', ['-C', cwd, '-c', 'core.quotepath=false', ...args], {
     encoding: 'utf8', windowsHide: true, maxBuffer: 4 * 1024 * 1024,
   });
   if (result.error) throw new Error(`Git 不可用：${result.error.message}`);
@@ -152,18 +156,40 @@ function 正文写入范围(body) {
   return 出;
 }
 
-function enforceWriteScope(ticket, dir) {
+// 合并带进来的文件不算干活的人自己写的：冲突还没提交的时候，
+// 依赖改过的每个文件都摊在工作树上，拿它们去比写入范围会把人冤枉了。
+function 合并带入(dir) {
+  const 头 = git(dir, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], [0, 1]);
+  if (头.code !== 0 || !头.stdout) return [];
+  const 出 = git(dir, ['diff', '--name-only', 'HEAD...MERGE_HEAD'], [0, 1]);
+  if (出.code !== 0 || !出.stdout) return [];
+  return 出.stdout.split(/\r?\n/).map((s) => s.replace(/\\/g, '/')).filter(Boolean);
+}
+
+// 两个提交之间动了哪些文件。agent 自己提交之后，工作树是干净的——
+// 拿 changedFiles 去问只会得到空清单，而质检和写入范围要的正是这份名单。
+function 区间变更(dir, 从, 到) {
+  const 出 = git(dir, ['diff', '--name-only', 从, 到], [0, 1]);
+  if (出.code !== 0 || !出.stdout) return [];
+  return 出.stdout.split(/\r?\n/).map((s) => s.replace(/\\/g, '/')).filter(Boolean);
+}
+
+function enforceWriteScope(ticket, dir, 文件表) {
   const role = ticket && ticket.fm && (ticket.fm.role || ticket.fm.角色 || ticket.fm.职能);
-  if (role === 'integrator') return [];
   const scopes = toArr(ticket && ticket.fm && (ticket.fm.write_scope || ticket.fm.writeScope || ticket.fm.写入范围));
   let 出处 = 'frontmatter 的 write_scope';
   if (!scopes.length) {
     scopes.push(...正文写入范围(ticket && ticket.body));
     出处 = '正文的「## 写入范围」一节';
   }
+  // integrator **没声明**范围时才放开：它要动哪些文件由冲突决定，事先列不出来。
+  // 但声明了就得算数——原先这里对 integrator 无条件 return []，
+  // 人在单子上写的范围是装饰品。这类「写了没人看」最难查，因为每一处都显示成功。
   if (!scopes.length) return [];
   const patterns = scopes.map(globRegex);
-  const violations = changedFiles(dir).filter((file) => !patterns.some((pattern) => pattern.test(file)));
+  const 免 = new Set(role === 'integrator' ? 合并带入(dir) : []);
+  const 待查 = Array.isArray(文件表) ? 文件表 : changedFiles(dir);
+  const violations = 待查.filter((file) => !免.has(file) && !patterns.some((pattern) => pattern.test(file)));
   // 出处要说清楚。人手建的单，范围是从**正文**读出来的——不讲的话，
   // 他对着 frontmatter 找半天也找不到这条约束是哪来的。
   if (violations.length) {
@@ -173,6 +199,49 @@ function enforceWriteScope(ticket, dir) {
       + '改动还在工作区里没丢，只是没打检查点。要么收窄改动，要么改这张单的写入范围。');
   }
   return scopes;
+}
+
+// git 的「未解决」只活在**索引**里，`git add` 一下就没了——而正文里的 <<<<<<< 还在。
+// 解冲突的习惯动作恰恰就是编辑完顺手 add，于是 unresolved() 那道闸形同虚设：
+// 标记跟着检查点进用户的仓，再被 publish 的 --ff-only 送上 main。
+// 所以这里查的是**文件正文**，不是索引状态。
+const 标记起 = /^<{7}(?: |$)/;
+const 标记源 = /^\|{7}(?: |$)/;
+const 标记止 = /^>{7}(?: |$)/;
+
+function 冲突残留(dir, files) {
+  const 出 = [];
+  for (const 相对 of files) {
+    let 内容;
+    try {
+      const 属 = fs.statSync(path.join(dir, 相对));
+      if (!属.isFile() || 属.size > 4 * 1024 * 1024) continue;
+      内容 = fs.readFileSync(path.join(dir, 相对));
+    } catch { continue; }
+    if (内容.includes(0)) continue;                    // 二进制不看
+    let 起 = false; let 止 = false; const 行号 = [];
+    内容.toString('utf8').split(/\r?\n/).forEach((行, i) => {
+      if (标记起.test(行)) { 起 = true; 行号.push(i + 1); }
+      else if (标记止.test(行)) { 止 = true; 行号.push(i + 1); }
+      else if (标记源.test(行)) 行号.push(i + 1);
+    });
+    // 两头都在才算。单独一行 ======= 是 markdown 的下划线，单独一串 <<<<<<< 可能是画的框——
+    // 误报一次，人下次就学会绕过这道闸了。
+    if (起 && 止) 出.push({ 文件: 相对, 行: 行号.slice(0, 5) });
+  }
+  return 出;
+}
+
+function 拦冲突标记(ticket, dir, 文件表) {
+  const fm = (ticket && ticket.fm) || {};
+  if (fm.允许冲突标记 === true || fm.allowConflictMarkers === true) return [];
+  const 残 = 冲突残留(dir, Array.isArray(文件表) ? 文件表 : changedFiles(dir));
+  if (!残.length) return [];
+  throw new Error(
+    `改动里还留着冲突标记：${残.map((r) => `${r.文件}（第 ${r.行.join('、')} 行）`).join('；')}。\n`
+    + 'Git 只在索引里记「未解决」，`git add` 之后就查不出来了，所以这道闸查的是文件正文。\n'
+    + '改动还在工作区里没丢，只是没打检查点。确实要留着这些标记（比如写的是冲突相关的测试样例），'
+    + '在工单 frontmatter 上加 "允许冲突标记": true。');
 }
 
 function integrate(workspace, dependencyTickets) {
@@ -199,6 +268,26 @@ function integrate(workspace, dependencyTickets) {
     return { merged, already, skipped, conflicts, failedDependency: ticket.id, pending: true };
   }
   return { merged, already, skipped, conflicts: [], pending: false };
+}
+
+// 这些提交进主线了吗。判据只能是 git 的祖先关系。
+//
+// 别拿 integrate 的集成报告代替：冲突由 integrator 手工解掉的时候，那张依赖单
+// 压根不出现在 merged 里——它落在 failedDependency 上，后面的依赖连试都没试。
+// 于是「按报告销待集成戳」会漏掉**恰恰最该销的那一张**（实测：INT-B 就是这样漏的）。
+function 含有(repoPath, 提交表) {
+  const 仓 = repoTop(repoPath);
+  const 出 = [];
+  for (const 值 of 提交表 || []) {
+    const sha = String(值 || '');
+    if (!/^[0-9a-f]{7,64}$/i.test(sha)) continue;
+    // 未知对象 cat-file 给的是 **128** 不是 1。只放行 1 的话，工单里记着一个
+    // 已经不存在的 sha（分支被强删、仓重新克隆过）会让这里直接抛，
+    // 而这只是「查一下在不在」——查不到就是不在，不该炸。
+    if (git(仓, ['cat-file', '-e', `${sha}^{commit}`], [0, 1, 128]).code !== 0) continue;
+    if (git(仓, ['merge-base', '--is-ancestor', sha, 'HEAD'], [0, 1]).code === 0) 出.push(sha);
+  }
+  return 出;
 }
 
 function prepare(monitorRoot, cfg, ticket, project, options = {}) {
@@ -265,8 +354,27 @@ function checkpoint(cfg, workspace, ticket) {
   if (conflicts.length) throw new Error(`仍有未解决的集成冲突：${conflicts.join('、')}`);
   const wc = configOf(cfg);
   const dirty = git(workspace.path, ['status', '--porcelain']).stdout;
-  if (!dirty) return { committed: false, commit: head(workspace.path), changed: false };
+  if (!dirty) {
+    // **干净不等于没干活**：agent 自己 `git commit` 了是常见情况——它看得见 git log
+    // 里的落款格式，自然会照着提交一把。原先这里一律报「没有改动」，执行器据此判成
+    // 空转、把工单退回待投，而分支上明明躺着一个提交，谁也不认它，重跑还会再干一遍。
+    // 实测：首个 integrator 真跑的重放就是这样被判空转的
+    // （5ae0adc「合并 max/min，保留双方实现」，活干得好好的）。
+    //
+    // 这一支跟「重跑幂等」「压根没动手」不一样：分支比起点前进了，就是确凿的干过活，
+    // 不含糊，不用让人来判。认下这个提交当检查点即可。
+    const 头 = head(workspace.path);
+    const 起点 = String(workspace.commit || '');
+    if (/^[0-9a-f]{7,64}$/i.test(起点) && 头 && 头 !== 起点) {
+      const 名单 = 区间变更(workspace.path, 起点, 头);
+      enforceWriteScope(ticket, workspace.path, 名单);
+      拦冲突标记(ticket, workspace.path, 名单);
+      return { committed: false, 自提交: true, commit: 头, changed: true, 变更文件: 名单 };
+    }
+    return { committed: false, commit: 头, changed: false };
+  }
   enforceWriteScope(ticket, workspace.path);
+  拦冲突标记(ticket, workspace.path);
   if (!wc.autoCommit) return { committed: false, commit: null, changed: true, warning: '自动检查点已关闭，改动尚未提交' };
   git(workspace.path, ['add', '-A']);
   const staged = git(workspace.path, ['diff', '--cached', '--quiet'], [0, 1]);
@@ -401,6 +509,11 @@ function 遗留工作区(monitorRoot, cfg, project, 工单表) {
     if (!名 || path.resolve(w.path) === path.resolve(repo)) continue;   // 主工作区不算
     const t = 表.get(名);
     if (!t) { 出.push({ 单: 名, 路径: w.path, 分支: w.branch, 因: '工单库里找不到这张单' }); continue; }
+    // 带「待集成」戳的不收：这张单的活干完了，但**还没进主线**，
+    // 那个分支是下游 integrator 唯一的原料。收掉它等于把要合的东西先扔了。
+    // （分支本身有 `git branch -d` 兜底删不掉，但工作区目录会没，
+    // 而报出来的是一条「已完成，该收」——看上去一切正常。）
+    if (t.fm && t.fm.待集成) continue;
     // 已归档的单同样该收：它已经退出产线，工作区留着没有任何用处。
     if (t.state === '完成' || t.state === '已归档') {
       出.push({ 单: 名, 路径: w.path, 分支: w.branch, 因: `工单已${t.state === '完成' ? '完成' : '归档'}` });
@@ -413,5 +526,5 @@ module.exports = {
   收工, 遗留工作区, 审阅区,
   configOf, isGitRepo, repoTop, workspaceRoot, worktreeList,
   prepare, integrate, checkpoint, dependencyTickets, publish, changedFiles, enforceWriteScope,
-  正文写入范围,
+  正文写入范围, 冲突残留, 拦冲突标记, 含有,
 };

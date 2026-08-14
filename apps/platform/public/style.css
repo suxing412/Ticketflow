@@ -168,6 +168,11 @@ code { background:var(--sect); border:1px solid var(--line); border-radius:5px; 
 .态.在途 { color:var(--warn); border-color:var(--warnln); background:var(--warnbg); }
 .态.质检 { color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
 .态.完成 { color:var(--ok); border-color:var(--okln); background:var(--okbg); }
+/* 已归档：退出产线的单，压到最弱——它还在列表里只是为了能查回来 */
+.态.已归档 { color:var(--ink3); border-style:dashed; }
+/* 「完成」旁边挂的那颗：活干完了，但**还没进主线**。
+   用告警色而不是灰——灰会被当成补充说明，而这是一件没做完的事。 */
+.态.待集成 { color:var(--warn); border-color:var(--warnln); background:var(--warnbg); }
 
 .角色 { font-size:11.5px; font-weight:500; }
 .角色.backend { color:var(--role-backend); } .角色.frontend { color:var(--role-frontend); }
