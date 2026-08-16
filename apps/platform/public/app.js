@@ -60,6 +60,37 @@ function 问(标题, 正文, { 危险 = false, 确认字 = '确定', 取消字 =
   });
 }
 
+// 带输入框的确认。用在「这一步要留个理由」的地方（开自动派发、改编制）。
+// 规矩跟 问 一样：默认答案是不做，回车不绑确认，理由空着就不让过——
+// 强制填理由不是形式主义，三个月后回头看「谁开的、为什么」，没有理由只能靠猜。
+function 问文(标题, 正文, { 占位 = '写一句理由', 确认字 = '确定' } = {}) {
+  return new Promise((定) => {
+    const 罩 = document.createElement('div');
+    罩.className = '罩';
+    罩.innerHTML =
+      '<div class="问框" role="dialog" aria-modal="true" aria-label="' + 转义(标题) + '">'
+      + '<div class="问题">' + 转义(标题) + '</div>'
+      + '<div class="问文">' + 转义(正文) + '</div>'
+      + '<input id="问文入" placeholder="' + 转义(占位) + '" spellcheck="false" style="width:100%;margin-top:10px">'
+      + '<div class="问钮">'
+      + '<button class="btn" data-选="否">取消</button>'
+      + '<button class="btn accent" data-选="是">' + 转义(确认字) + '</button>'
+      + '</div></div>';
+    const 收 = (v) => { 罩.remove(); document.removeEventListener('keydown', 键); 定(v); };
+    const 键 = (e) => { if (e.key === 'Escape') 收(null); };
+    罩.onclick = (e) => { if (e.target === 罩) 收(null); };
+    罩.querySelector('[data-选="否"]').onclick = () => 收(null);
+    罩.querySelector('[data-选="是"]').onclick = () => {
+      const v = (罩.querySelector('#问文入').value || '').trim();
+      if (!v) { 吐('请写一句理由', '坏'); return; }
+      收(v);
+    };
+    document.addEventListener('keydown', 键);
+    document.body.appendChild(罩);
+    罩.querySelector('#问文入').focus();
+  });
+}
+
 // ── 相对时间 ──
 // 「2026-08-12T09:07:10.537Z」对人是无意义的。人要知道的是「多久以前」。
 function 多久(时刻) {
@@ -224,11 +255,21 @@ async function 刷工单() {
       // 状态机本来就允许 在途 → 待投（退回重投），把它接出来即可。
       const 可退 = t.state === '在途';
       const 层 = f.父单 ? '<span class="淡">└ </span>' : '';   // 子单缩进，DAG 一眼可辨
-      return '<tr><td>' + 层 + '<a href="#" onclick="看单(\'' + 转义(t.id) + '\');return false"><code>' + 转义(t.id) + '</code></a></td>'
+      return '<tr data-单="' + 转义(t.id) + '" data-态="' + 转义(t.state) + '">'
+        + '<td>' + 层 + '<a href="#" onclick="看单(\'' + 转义(t.id) + '\');return false"><code>' + 转义(t.id) + '</code></a></td>'
         + '<td><span class="态 ' + 转义(t.state) + '">' + 转义(t.state) + '</span>'
         // 「完成」但没进主线，得当场说破。改动还躺在分支上等 integrator 来合，
         // 而状态列只写着「完成」——不标出来，人就会以为它已经上线了。
         + (f.待集成 ? ' <span class="态 待集成" title="' + 转义(f.待集成.说 || '') + '（分支 ' + 转义(f.待集成.分支 || '') + '）">未进主线</span>' : '')
+        // 判过没有、谁判的、过没过——原先要点进详情才知道。而「这张单验收了吗」
+        // 恰恰是看板上最常问的一句：跨厂评审的全部价值就在这个结论上，
+        // 藏一层等于把它降格成可选信息。
+        + (f.质检结论
+          ? ' <span class="判 ' + (f.质检结论 === '通过' ? '过' : '不过') + '" title="判官 '
+            + 转义(f.质检判官 || '?') + '　' + 转义(f.质检时间 || '') + '">'
+            + (f.质检结论 === '通过' ? '✓' : '✗') + 转义(f.质检判官 || '判') + '</span>'
+          : '')
+        + '<span class="卡因"></span>'
         + '</td>'
         + '<td><span class="角色 ' + 转义(f.role || f.职能 || '') + '">' + 转义(f.role || f.职能 || '') + '</span></td>'
         + '<td>' + 转义(f.title || '') + '</td>'
@@ -253,6 +294,7 @@ async function 刷工单() {
           : '<button class="btn" onclick="归档(\'' + 转义(t.id) + '\')" title="从看板挪走，记录留着">归档</button>')
         + '</td></tr>';
     }).join(''));
+    贴跳过();                        // 看板刚重渲，把上一轮算好的跳过原因贴回去
   } catch (e) { $('工单体').innerHTML = '<tr><td colspan="7" class="级急">工单接口不可达</td></tr>'; }
 }
 
@@ -284,6 +326,43 @@ async function 看单(id) {
       if ((意.问题 || []).length) 行.push('阻断问题：\n' + 意.问题.map((x) => '  - ' + x).join('\n'));
       if ((意.证据 || []).length) 行.push('验收证据：\n' + 意.证据.map((x) => '  - ' + x).join('\n'));
     }
+    // 跑过几轮、花了多少。这两样一直取得到（/api/tickets/<id>/runs），
+    // 只是**从没有界面调用方**——于是「它为什么还没完成」只能靠翻全局战绩，
+    // 而判不过会回待投重跑，一张单跑三四轮是常态。
+    try {
+      const { 码: 码2, 体: h } = await 取JSON('/api/tickets/' + encodeURIComponent(id) + '/runs');
+      if (码2 === 200 && h.ok && h.总次数) {
+        行.push('');
+        行.push('## 跑过 ' + h.总次数 + ' 次（真跑 ' + h.真实次数 + ' · 干跑 ' + h.干跑次数 + '）');
+        for (const r of h.执行 || []) {
+          行.push('  执行　' + 多久(r.时刻) + '　' + (r.provider || '?') + '　' + (r.成 ? '成' : '败')
+            + '　' + Math.round((r.耗时毫秒 || 0) / 1000) + 's');
+        }
+        for (const r of h.质检 || []) {
+          行.push('  质检　' + 多久(r.时刻) + '　判官 ' + (r.判官 || '?') + '　' + (r.判过 ? '过' : '不过')
+            + '　' + Math.round((r.耗时毫秒 || 0) / 1000) + 's');
+        }
+        const f = h.花费;
+        if (f) {
+          const 池表 = Object.entries(f.按池 || {});
+          行.push('');
+          行.push('## 花费');
+          if (池表.length) {
+            for (const [池, c] of 池表) {
+              行.push('  ' + 池 + '　' + c.token.toLocaleString() + ' token'
+                + '（入 ' + c.输入.toLocaleString() + ' / 出 ' + c.输出.toLocaleString()
+                + ' / 缓存 ' + c.缓存.toLocaleString() + '）　' + c.条数 + ' 次');
+            }
+            行.push('  合计　' + (f.合计token || 0).toLocaleString() + ' token（不含缓存，与预算闸同口径）');
+          } else {
+            行.push('  账本里没有这张单的读数');
+          }
+          // 这一句不能省：不说的话，人会把「没记到」读成「没花」。
+          if (f.说明) 行.push('  ⚠ ' + f.说明);
+        }
+      }
+    } catch { /* 战绩取不到不该挡住详情本身 */ }
+
     行.push('');
     行.push('## 正文');
     行.push(j.正文 || '（空）');
@@ -537,6 +616,24 @@ async function 建单() {
   if (j.ok) { $('新编号').value = ''; $('新标题').value = ''; $('新正文').value = ''; 刷工单(); }
 }
 
+// 跳过原因：调度那边算出来，看板这边贴上去。
+//
+// 两边各自拉自己的接口（工单库 / 执行器），谁先回来不一定。所以不做「拉完再一起渲」，
+// 而是各存各的、各自贴一次：看板重渲之后贴一次，调度回来之后再贴一次。
+// 少了任一次，都会出现「刷新之后原因没了」——而人会以为是问题自己好了。
+let 跳过表 = {};
+
+function 贴跳过() {
+  for (const tr of document.querySelectorAll('#工单体 tr[data-单]')) {
+    const 位 = tr.querySelector('.卡因');
+    if (!位) continue;
+    const 因 = 跳过表[tr.dataset.单];
+    // 只给还没开跑的单看。完成的单「本轮没派它」是废话，挂上去只是噪音。
+    位.innerHTML = (因 && (tr.dataset.态 === '待投'))
+      ? '<span class="因" title="' + 转义(因) + '">' + 转义(String(因).split('——')[0]) + '</span>' : '';
+  }
+}
+
 // ── 产线状态 ──
 // 这一块回答的是「为什么产线没在动」。没有它的话，一个空的工单看板有两种可能——
 // 没活干，或者有活但全被闸住了——而这两种的处置完全相反。
@@ -589,6 +686,16 @@ async function 刷调度() {
         ? '<div class="提示">本轮跳过：' + 跳.map((s) =>
           转义(s.id) + '（' + 转义(String(s.原因).split('——')[0]) + '）').join('、') + '</div>'
         : '');
+
+    // 把跳过原因挂回**那张单自己那一行**上。
+    //
+    // 上面那句灰字是对的，但它离看板隔着一整页：人盯着「UI-1 待投，为什么不动」，
+    // 答案在页面另一头的一串顿号里。「这张单为什么派不出去」是逐张的问题，
+    // 答案就该在那张单身上。
+    跳过表 = {};
+    for (const s of 跳) 跳过表[String(s.id)] = String(s.原因 || '');
+    for (const x of 卡) 跳过表[String(x.id)] = '卡在途' + (x.分钟 == null ? '' : ' ' + x.分钟 + ' 分钟') + '，占着并发额度';
+    贴跳过();
   } catch {
     $('调度概览').innerHTML = '<span class="淡">' + "执行器没在 4372 应答。npm start 会带起它——单独起过 server 才会缺；也可能是它刚崩了，看终端。" + '</span>';
   }
@@ -761,7 +868,16 @@ setInterval(刷自检, 60000);
 // 原先整个产品是一页往下滚。加了流程与知识库两块之后滚不完了，
 // 而且「我刚才看的是哪儿」在刷新后就丢了。照 studio 的做法走 hash 路由：
 // 地址栏能回到同一页，刷新不丢位置，浏览器的前进后退也照常用。
-const 页表 = { '': '驾驶舱', '/': '驾驶舱', '/flow': '流程', '/wiki': '知识库', '/hub': '项目', '/设置': '设置' };
+// 路由键**一律 ASCII**。原先五条里四条英文、唯独 `/设置` 是中文——而中文那条
+// 正是会被浏览器百分号编码、必须解码才查得到表的那条。能跑（下面就是解码），
+// 但下一个加页面的人会照着旁边一条抄，抄到哪条全看运气，而抄错的表现是
+// 「点导航没反应」，不报错。所以把口径统一掉，不留这个二选一。
+// `/设置` 留成别名：地址栏里可能已经存着这个书签，改口径不该让它 404。
+const 页表 = {
+  '': '驾驶舱', '/': '驾驶舱',
+  '/flow': '流程', '/wiki': '知识库', '/hub': '项目', '/settings': '设置',
+  '/设置': '设置',                    // 旧书签别名，勿删
+};
 
 function 当前页() {
   let h = (location.hash || '').replace(/^#/, '');
@@ -794,7 +910,7 @@ function 切页() {
   // 设置页装的是观测数据（排名/消耗/战绩/Providers/瞭望塔/账本），进去才拉。
   // 常驻驾驶舱时后台每隔几秒把这些接口全打一遍，纯属白费——
   // 而且真跑时这些请求会跟执行抢日志。
-  if (页 === '设置') { 刷编制(); 刷排名(); 刷消耗(); 刷战绩(); 刷providers(); 刷瞭望塔(); 刷账本(); 刷计费(); }
+  if (页 === '设置') { 刷自动(); 刷编制(); 填回收项目().then(刷回收); 刷排名(); 刷消耗(); 刷战绩(); 刷providers(); 刷瞭望塔(); 刷账本(); 刷计费(); }
 }
 window.addEventListener('hashchange', 切页);
 
@@ -1042,11 +1158,13 @@ async function 刷计费() {
     // 落计费风险要顶出来：订阅池但环境里带着 API key，CLI 可能在耗尽后
     // 自己切到计费而平台看不见。这是唯一一个「不问就会花钱」的口子。
     const 险 = Object.values(计费表).filter((x) => x.落计费风险);
-    const 位 = $('计费提示');
-    if (位) {
-      位.innerHTML = 险.length
-        ? '<span class="级急">可能被静默计费</span>' + 转义(险[0].落计费风险)
-        : '';
+    // 两处都要填：驾驶舱一处、设置页一处。原先两处共用同一个 id，
+    // 而 $() 只找得到第一个——设置页那条**从来没填上过**，
+    // 表现是那儿永远空着，看上去像「没有风险」。重复 id 不报错，所以没人发现。
+    const 文 = 险.length ? '<span class="级急">可能被静默计费</span>' + 转义(险[0].落计费风险) : '';
+    for (const id of ['计费提示', '计费提示2']) {
+      const 位 = $(id);
+      if (位) 位.innerHTML = 文;
     }
   } catch { /* 执行器没起时调度概览已经会报 */ }
 }
@@ -1148,10 +1266,18 @@ async function 刷项目页() {
       + '</div>'
       + (无项目
         ? '<div class="卡注">不带项目的单：只跑不提交，不走 worktree 也不合并。</div>'
-        : '<div class="卡路 mono" title="' + 转义((项 && 项.路径) || '') + '">' + 转义((项 && 项.路径) || '') + '</div>')
+        : '<div class="卡路 mono" title="' + 转义((项 && 项.路径) || '') + '">' + 转义(中截((项 && 项.路径) || '')) + '</div>')
       + (项 && !项.就绪 ? '<div class="卡注 级急">' + 转义(项.说) + '</div>' : '')
       + '<div class="卡数">' + 数.map(([l, v]) =>
         '<span class="卡计"><i' + (v ? '' : ' class="零"') + '>' + v + '</i>' + l + '</span>').join('') + '</div>'
+      // 改/删只给真项目。stopPropagation 是必需的：整张卡是「进项目」的按钮，
+      // 不拦住的话点「改路径」会连带切换当前项目——改完发现语境也变了，莫名其妙。
+      + (项 && !无项目 && 名 !== '全部项目'
+        ? '<div class="卡脚">'
+          + '<button class="btn 细" onclick="event.stopPropagation();改项目路径(\'' + 转义(名) + '\',\'' + 转义(项.路径 || '') + '\')">改路径</button>'
+          + '<button class="btn 细" onclick="event.stopPropagation();注销项目(\'' + 转义(名) + '\',' + (c.总 || 0) + ')">注销</button>'
+          + '</div>'
+        : '')
       + '</div>';
   };
 
@@ -1163,6 +1289,50 @@ async function 刷项目页() {
     + ' onkeydown="if(event.key===\'Enter\'){开登记项目()}">'
     + '<div class="加号">＋</div><div>登记项目</div>'
     + '<div class="卡注">登记 = 允许 AI 往这个仓提交</div></div>';
+}
+
+// 路径从**中间**截，不从右边。
+//
+// 右截会把「这是哪个仓」那一半正好切掉：
+//   C:/Users/Sanxing/AppData/Local/Temp/clau…      ← 看不出是靶仓还是别的
+//   C:/Users/…/scratchpad/靶仓                     ← 一眼认得出
+// 盘符要留（区分 C:/ 和 D:/ 是常事），仓名更要留——那是人真正在找的东西。
+function 中截(值, 上限 = 46) {
+  const s = String(值 || '');
+  if (s.length <= 上限) return s;
+  const 尾 = Math.max(12, Math.floor(上限 * 0.6));
+  const 头 = 上限 - 尾 - 1;
+  return s.slice(0, 头) + '…' + s.slice(-尾);
+}
+
+// 改路径 / 注销。原先登记完就动不了了——路径打错只能去手改 JSON，
+// 而登记表单恰恰是新手第一步就会碰的地方，打错的概率最高。
+async function 改项目路径(名, 旧路径) {
+  const 新 = await 问文('改「' + 名 + '」的路径', '当前：' + 旧路径,
+    { 占位: '新的 git 仓绝对路径', 确认字: '改' });
+  if (!新) return;
+  const { 码, 体: j } = await 取JSON('/api/setup/project', {
+    method: 'POST', body: JSON.stringify({ 名, 路径: 新 }),
+  });
+  if (码 !== 200 || !j.ok) { 吐(j.error || ('HTTP ' + 码), '坏'); return; }
+  吐('已改：' + 名);
+  刷项目页();
+}
+
+async function 注销项目(名, 单数) {
+  // 注销只删注册表里的一行，**不动那个仓**。但要说清后果：
+  // 注册表同时是写操作白名单，注销之后这个项目上的单一跑就会被拒。
+  const 警 = 单数
+    ? '<b class="级急">这个项目下还有 ' + 单数 + ' 张单</b>——注销之后它们一跑就会报「项目不在注册表里」。<br>'
+    : '';
+  if (!await 问('注销项目「' + 名 + '」？',
+    警 + '只删注册表里的这一行，<b>不动那个 git 仓</b>，磁盘上的东西一个字都不少。<br>'
+    + '注册表同时是写操作白名单，注销 = 收回「允许 AI 往这个仓提交」。', { 危险: true, 确认字: '注销' })) return;
+  const { 码, 体: j } = await 取JSON('/api/setup/project?' + new URLSearchParams({ 名 }), { method: 'DELETE' });
+  if (码 !== 200 || !j.ok) { 吐(j.error || ('HTTP ' + 码), '坏'); return; }
+  if (取选中项目() === 名) { 存选中项目(''); 项目胶囊(); }
+  吐('已注销：' + 名);
+  刷项目页();
 }
 
 // 进一个项目：设好语境就回驾驶舱。停在项目页上让人自己点「驾驶舱」是多一步。
@@ -1191,8 +1361,13 @@ async function 刷编制() {
     if (码 !== 200) { 位.innerHTML = '<tr><td colspan="4" class="级急">' + 转义(j.error || ('HTTP ' + 码)) + '</td></tr>'; return; }
     编制表 = j.编制 || [];
     编制池 = j.池 || [];
+    // 标题右边只放一句短的。原先把接口的整段说明塞这儿，既和下面的提示重复，
+    // 又把标题行撑成三行——右上角那个位置是给「一眼看的状态」的，不是给正文的。
     const 说 = $('编制说明');
-    if (说) 说.textContent = j.说明 || '';
+    if (说) {
+      const 指了 = 编制表.filter((r) => (r.池序 || []).length).length;
+      说.textContent = `${指了}/${编制表.length} 个角色指定了池序`;
+    }
     换(位, 编制表.map((r) => {
       // 冻结的池要在这一行上就看得见——「已指定 codex」而 codex 正冻着，
       // 是一个必须当场知道的事实，不该等派活失败才发现。
@@ -1269,6 +1444,134 @@ async function 改编制(角色) {
     刷编制();
     刷排名();
   };
+}
+
+// ══════════════════════════════════════════════════════════════
+// 自动派发（协-017）
+// ══════════════════════════════════════════════════════════════
+// 这个开关跟别的开关不是一个量级：开了之后平台会自己花额度。所以界面上要
+// 一眼看到三件事——**现在开着没有、本次已经派了几张、为什么停的**。
+// 少了最后一条，人只会看到「它不动了」，然后去重启，而停因往往正是它该停的理由。
+async function 刷自动() {
+  const 卡 = $('自动卡');
+  if (!卡) return;
+  try {
+    const { 码, 体: j } = await 取JSON('/api/exec/auto');
+    if (码 !== 200 || !j.ok) { 卡.innerHTML = '<span class="级急">' + 转义(j.error || ('HTTP ' + 码)) + '</span>'; return; }
+    const a = j.自动派发 || {};
+    const 说 = $('自动说明');
+    if (说) 说.textContent = a.开 ? '运行中' : (a.停因 ? '已停' : '关闭');
+    卡.innerHTML =
+      '<span class="态 ' + (a.开 ? '在途' : '草稿') + '">' + (a.开 ? '运行中' : '关闭') + '</span>　'
+      + '<span class="淡">本次已派 </span><b>' + Number(a.本次已派 || 0) + '</b>'
+      + '<span class="淡"> / ' + Number(a.本次运行上限 || 0) + '　每 ' + Math.round(Number(a.间隔毫秒 || 0) / 1000)
+      + 's 一轮，每轮至多 ' + Number(a.每轮上限 || 0) + ' 张　连败 ' + Number(a.连败 || 0)
+      + '/' + Number(a.连败上限 || 0) + '</span>　'
+      + (a.开
+        ? '<button class="btn" onclick="切自动(false)">停</button>'
+        : '<button class="' + (a.可开 ? 'btn' : 'btn') + '" onclick="切自动(true)"'
+          + (a.可开 ? '' : ' disabled title="真跑总开关没开，开了也只会一路被拒"') + '>开</button>')
+      // 停因要占满一整行。这张卡是 flex，不给 basis 的话它会被挤成一个几十像素宽的
+      // 窄条——「人工停止」四个字还看得过去，而真正的停因是两句话
+      // （「连续 3 次没跑成…」「要落 API 计费才能继续…」），那时就烂在那儿了。
+      // 而停因恰恰是这张卡上最需要被读到的一句：不读它，人只会看到「它不动了」。
+      + (a.停因 ? '<div class="提示 级急" style="flex:0 0 100%">停因：' + 转义(a.停因) + '</div>' : '');
+    const 流 = $('自动流水');
+    if (流) {
+      const 表 = a.最近 || [];
+      if (!表.length) 流.innerHTML = '<tr><td colspan="4" class="淡">还没动过</td></tr>';
+      else 换(流, 表.map((r) => '<tr>'
+        + '<td class="淡">' + 转义(String(r.时刻 || '').slice(11, 19)) + '</td>'
+        + '<td>' + 转义(r.事 || '') + '</td>'
+        + '<td><code>' + 转义(r.单 || '—') + '</code></td>'
+        + '<td>' + 转义(String(r.说 || '').slice(0, 160)) + '</td></tr>').join(''));
+    }
+  } catch (e) { 卡.innerHTML = '<span class="级急">执行器不可达</span>'; }
+}
+
+async function 切自动(开) {
+  if (开) {
+    const 理由 = await 问文('开自动派发', '开了之后它会自己一张张跑，自己花额度。写一句理由——'
+      + '三天后回头看「谁开的、为什么」，没有理由只能靠猜。');
+    if (!理由) return;
+    const { 码, 体: j } = await 取JSON('/api/exec/auto', { method: 'POST', body: JSON.stringify({ 开: true, 理由 }) });
+    if (码 !== 200 || !j.ok) { 吐(j.error || ('HTTP ' + 码), '坏'); return; }
+    吐('自动派发已开');
+  } else {
+    const { 码, 体: j } = await 取JSON('/api/exec/auto', { method: 'POST', body: JSON.stringify({ 开: false }) });
+    if (码 !== 200 || !j.ok) { 吐(j.error || ('HTTP ' + 码), '坏'); return; }
+    吐('已停');
+  }
+  刷自动();
+}
+
+// ══════════════════════════════════════════════════════════════
+// 工作区回收（协-017）
+// ══════════════════════════════════════════════════════════════
+// 遗留工作区那套（协-009）写完之后一个界面调用方都没有，垃圾只能在磁盘上攒着。
+// 这里把它接出来。**列表是纯读的**，收不收一条一条点——批量「全收」有意没做：
+// 这是删除操作，而每一条的判断都不一样（有的分支上有唯一一份提交）。
+async function 刷回收() {
+  const 位 = $('回收体');
+  if (!位) return;
+  const 选 = $('回收项目');
+  const 项目 = 选 ? 选.value : '';
+  if (!项目) { 位.innerHTML = '<tr><td colspan="5" class="淡">先在「项目」页登记一个项目</td></tr>'; return; }
+  位.innerHTML = '<tr><td colspan="5" class="淡">查着…</td></tr>';
+  try {
+    const { 码, 体: j } = await 取JSON('/api/reclaim?项目=' + encodeURIComponent(项目));
+    if (码 !== 200 || !j.ok) { 位.innerHTML = '<tr><td colspan="5" class="级急">' + 转义(j.error || ('HTTP ' + 码)) + '</td></tr>'; return; }
+    // 「另有 N 个不是本平台建的」必须说出口。这个仓里可能同时住着 studio 的工作区，
+    // 只报「干净」会让人以为仓里真的没东西——而 `git worktree list` 明明列着一堆。
+    const 别 = Number(j.别人的条数 || 0);
+    const 别说 = 别 ? '　另有 ' + 别 + ' 个不是本平台建的（不收）' : '';
+    const 说 = $('回收说明');
+    if (说) 说.textContent = (j.条数 ? j.条数 + ' 条待收' : '干净') + 别说;
+    if (!j.条数) {
+      位.innerHTML = '<tr><td colspan="5" class="淡">没有待收的'
+        + (别 ? '。' + 转义(别说.trim()) + '——它们的分支不带本平台前缀，'
+          + '按 basename 去我们的工单库里当然查无此单，但那不是我们的东西' : '——跑完都收干净了')
+        + '</td></tr>';
+      return;
+    }
+    换(位, (j.遗留 || []).map((r) => '<tr>'
+      + '<td><code>' + 转义(r.单 || '') + '</code></td>'
+      + '<td class="淡">' + 转义(r.路径 || '') + '</td>'
+      + '<td><code>' + 转义(r.分支 || '—') + '</code></td>'
+      + '<td>' + 转义(r.因 || '') + '</td>'
+      + '<td><button class="btn" onclick="收一条(\'' + 转义(项目) + '\',\'' + 转义(r.路径 || '') + '\',\'' + 转义(r.分支 || '') + '\')">收</button></td>'
+      + '</tr>').join(''));
+  } catch (e) { 位.innerHTML = '<tr><td colspan="5" class="级急">回收接口不可达</td></tr>'; }
+}
+
+async function 收一条(项目, 路径, 分支) {
+  if (!await 问('收掉这个工作区？', '目录 ' + 路径 + (分支 ? '\n分支 ' + 分支 : '')
+    + '\n\n有未提交改动就摘不掉，没合并的分支也删不掉——那两道是 git 自己的闸。')) return;
+  const { 码, 体: j } = await 取JSON('/api/reclaim', {
+    method: 'POST', body: JSON.stringify({ 项目, 路径, 分支 }),
+  });
+  // 收工是「能收多少收多少」：目录摘了但分支没删是正常结果，不是失败。
+  // 一律按成败二分会把这种半成功报成红的，人下次就不敢点了。
+  const 说 = [j.工作区 && j.工作区.说, j.分支 && j.分支.说].filter(Boolean).join('；');
+  if (码 !== 200 || !j.ok) 吐(说 || j.error || ('HTTP ' + 码), '坏');
+  else 吐(说 || '已收');
+  刷回收();
+}
+
+// 项目下拉跟着注册表走。放在这儿而不是复用项目页那份：那份是选「当前干活的项目」，
+// 这份是选「查哪个项目的垃圾」——两个下拉各管各的，联动只会让人以为切了项目。
+async function 填回收项目() {
+  const 选 = $('回收项目');
+  if (!选) return;
+  try {
+    const { 码, 体: j } = await 取JSON('/api/projects');
+    if (码 !== 200) return;
+    const 表 = (j.项目 || []).map((p) => p.名);
+    const 旧 = 选.value;
+    选.innerHTML = 表.map((n) => '<option>' + 转义(n) + '</option>').join('');
+    if (旧 && 表.includes(旧)) 选.value = 旧;
+    else if (j.默认 && 表.includes(j.默认)) 选.value = j.默认;
+  } catch { /* 项目接口不可达时下拉留空，刷回收 会说清 */ }
 }
 
 

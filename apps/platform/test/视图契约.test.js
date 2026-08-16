@@ -159,6 +159,31 @@ t('渲染 md：围栏没闭合也不吞掉后面的内容', () => {
   assert.ok(/<\/code><\/pre>/.test(出), '未闭合的围栏要在结尾补上，否则后面所有内容都被吃进代码块');
 });
 
+t('页面里的元素 id 不许重复', () => {
+  // 重复 id 不报任何错，而 $()/getElementById 只返回**第一个**。
+  // 实测：驾驶舱与设置页各有一个 id="计费提示"，于是设置页那条从来没填上过——
+  // 表现是它永远空着，看上去像「没有风险」，而那恰恰是唯一一个「不问就会花钱」的提示。
+  const 页 = fs.readFileSync(path.join(平台根, 'public', 'index.html'), 'utf8');
+  const 计 = {};
+  for (const m of 页.matchAll(/\bid="([^"]+)"/g)) 计[m[1]] = (计[m[1]] || 0) + 1;
+  const 重 = Object.entries(计).filter(([, n]) => n > 1).map(([k, n]) => `${k}×${n}`);
+  assert.deepEqual(重, [], '这些 id 出现了不止一次，第二个及以后永远取不到：' + 重.join('、'));
+});
+
+t('路由键一律 ASCII（中文 hash 会被百分号编码，靠解码兜着才不出事）', () => {
+  // 原先五条里四条英文、唯独 /设置 是中文。能跑（有解码），但下一个加页面的人
+  // 会照着旁边一条抄，抄到哪条全看运气——而抄错的表现是「点导航没反应」，不报错。
+  const 前 = fs.readFileSync(path.join(平台根, 'public', 'app.js'), 'utf8');
+  const 表 = (前.match(/const 页表 = \{[\s\S]*?\};/) || [''])[0];
+  assert.ok(表, '找不到路由表');
+  const 页 = fs.readFileSync(path.join(平台根, 'public', 'index.html'), 'utf8');
+  const 导航键 = [...页.matchAll(/href="#(\/[^"]*)"/g)].map((m) => m[1]);
+  const 坏 = 导航键.filter((k) => /[^\x20-\x7E]/.test(k));
+  assert.deepEqual(坏, [], '导航链接里有中文 hash：' + 坏.join('、'));
+  // 旧的中文键要留成别名——地址栏里可能已经存着这个书签
+  assert.ok(表.includes("'/设置'"), '别名 /设置 被删了：老书签会落回默认页，而且不报错');
+});
+
 // ---- 徽章类名：界面用到的，样式表里得有 ----
 t('状态与角色徽章的类名，CSS 里每一个都要有定义', () => {
   // 类名是**拼出来**的（`'态 ' + t.state`、`'角色 ' + f.role`），拼错或漏配
@@ -171,8 +196,11 @@ t('状态与角色徽章的类名，CSS 里每一个都要有定义', () => {
   const 缺 = [];
   for (const s of 工单库.STATES) if (!样式.includes(`.态.${s}`)) 缺.push(`.态.${s}`);
   for (const r of Object.keys(配置.roles || {})) if (!样式.includes(`.角色.${r}`)) 缺.push(`.角色.${r}`);
-  // 「未进主线」那颗不是状态机里的态，是额外挂的，同样得有样式
-  if (!样式.includes('.态.待集成')) 缺.push('.态.待集成');
+  // 这几颗不是状态机里的态，是额外挂的，同样得有样式：
+  // 未进主线 / 质检结论 / 派不出去的原因 / 项目卡上的细按钮
+  for (const c of ['.态.待集成', '.判.过', '.判.不过', '.卡因', '.btn.细']) {
+    if (!样式.includes(c)) 缺.push(c);
+  }
   assert.deepEqual(缺, [], '这些类名界面上会用到，样式表里却没有：' + 缺.join('、'));
 });
 

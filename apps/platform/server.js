@@ -143,6 +143,70 @@ function 收体(req, 上限, 完成) {
   req.on('end', () => { try { 完成(体 ? JSON.parse(体) : {}); } catch { 完成(null); } });
 }
 
+// 主动向工作区服务发一次请求（不同于 /api/workspace/* 的透传：那条是把浏览器的请求
+// 原样递过去，这条是本进程自己组装一份——比如遗留回收要先读工单库，
+// 而工单库不是工作区服务的能力面）。
+// 路径带中文要编码：node 的 http.request 对未转义字符**同步抛** ERR_UNESCAPED_CHARACTERS，
+// 不是返回错误，是把整个进程带走（/write/收工 就带中文，执行器那边踩过一次）。
+function 转发工作区(res, 路径, 方法, 体) {
+  const 数据 = JSON.stringify(体 || {});
+  const 编码路径 = String(路径).split('/').map(encodeURIComponent).join('/');
+  const 代理 = http.request({
+    host: '127.0.0.1', port: 工作区端口, method: 方法 || 'POST', path: 编码路径,
+    headers: {
+      Authorization: `Bearer ${令牌}`,
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(数据),
+    },
+  }, (上游) => {
+    let s = '';
+    上游.on('data', (d) => s += d);
+    上游.on('end', () => {
+      try { return 发JSON(res, 上游.statusCode, JSON.parse(s)); }
+      catch { return 发JSON(res, 502, { ok: false, error: '工作区服务返回了非 JSON 内容' }); }
+    });
+  });
+  代理.on('error', () => 发JSON(res, 503, {
+    ok: false,
+    error: `工作区服务未在 127.0.0.1:${工作区端口} 应答（npm run workspace 单起，或 npm start 一并起）。`,
+  }));
+  代理.write(数据);
+  代理.end();
+}
+
+// 「这一张花了多少」。
+//
+// 数据本来就在预算账里——budget.记 是按 单 落的——只是从没被按单归集过。
+// 战绩表有耗时，消耗表有池的日/月总量，而人真正想问的是
+// 「FE-1 这一趟花了多少额度」，那两张表都答不了。
+//
+// **取不到读数的池必须点名**。codex 是非 stream-json 输出，usageOf 取不到 usage，
+// 所以它跑过的那几次在账本里根本没有行。只报一个数字的话，
+// 人会把「没记到」读成「没花」——而那正是花得最多的那次。
+function 按单花费(id, 真跑记录) {
+  try {
+    const budget = 公用件.载入('budget', 'budget.js');
+    const 按池 = {};
+    for (const r of budget.读账(账本根)) {
+      if (String(r.单 || '') !== String(id)) continue;
+      const c = 按池[r.池] || (按池[r.池] = { 输入: 0, 缓存: 0, 输出: 0, token: 0, 条数: 0 });
+      c.输入 += r.输入 || 0; c.缓存 += r.缓存 || 0; c.输出 += r.输出 || 0;
+      c.token += (r.输入 || 0) + (r.输出 || 0);            // 合计不含缓存，与 budget 同口径
+      c.条数 += 1;
+    }
+    const 跑过的池 = [...new Set((真跑记录 || []).map((r) => r.provider).filter(Boolean))];
+    const 未计量 = 跑过的池.filter((p) => !按池[p]);
+    return {
+      按池,
+      合计token: Object.values(按池).reduce((a, c) => a + c.token, 0),
+      未计量池: 未计量,
+      ...(未计量.length
+        ? { 说明: `${未计量.join('/')} 跑过但账本里没有读数（非 stream-json 输出取不到 usage）——这部分消耗没被计入，不是没花。` }
+        : {}),
+    };
+  } catch { return null; }                                  // budget 缺位就不报花费，不编数
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -472,6 +536,7 @@ const 服务 = http.createServer((req, res) => {
           质检: 真.filter((r) => (r.kind ? r.kind === '质检' : r.qualityPassed !== undefined))
             .map((r) => ({ 时刻: r.at, 判官: r.provider, 判过: r.qualityPassed, 耗时毫秒: r.durationMs })),
           ...(全.length ? {} : { 说明: '这张单还没跑过' }),
+          花费: 按单花费(id, 真),
         });
       } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
     }
@@ -610,6 +675,38 @@ const 服务 = http.createServer((req, res) => {
   // ——— 项目（协-007）：项目是一等公民，不是工单上的一个字符串 ———
   // 注册表一直都在（config/项目.local.json），但界面上项目不存在：看板混着列、
   // 消耗不分项目、登记只能手改 JSON、项目名写错要等到真跑那一刻才炸。
+  // ——— 工作区回收（协-017）———
+  //
+  // 遗留工作区这套（协-009）写完之后**一个界面调用方都没有**，而且它的路径闸只放行
+  // 仓根之内，登记的项目全在仓外——接上按钮也够不着。于是垃圾只能在磁盘上攒着：
+  // 实测 workspaces/ 下堆着三个目录，靶仓里五条 platform/* 分支收不掉，谁也看不见。
+  //
+  // 这条端点做两件工作区服务做不了的事：**读工单库**（那不是它的能力面），
+  // 以及把「哪些单还在办」这份判断喂给它。回收本身仍由它执行。
+  if (url路径 === '/api/reclaim' && req.method === 'GET') {
+    if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
+    const 项目名 = String(请求URL.searchParams.get('项目') || '').trim();
+    if (!项目名) return 发JSON(res, 400, { ok: false, error: '需要 项目 参数' });
+    // 只递工单表里判得上的那几个字段。整份 fm 递过去既没必要，也会把
+    // 工单正文里的东西送进另一个进程的日志里。
+    const 工单表 = 工单库.list(工单根.根).map((t) => ({
+      id: t.id, state: t.state, fm: { 待集成: (t.fm && t.fm.待集成) || undefined },
+    }));
+    return 转发工作区(res, '/遗留', 'POST', { 项目: 项目名, 工单: 工单表 });
+  }
+  if (url路径 === '/api/reclaim' && req.method === 'POST') {
+    return 收体(req, 16 * 1024, (体) => {
+      if (!体 || !体.项目) return 发JSON(res, 400, { ok: false, error: '需要 项目' });
+      if (!体.路径 && !体.分支) return 发JSON(res, 400, { ok: false, error: '需要 路径 或 分支' });
+      // 收工用的是 `git worktree remove`（不带 --force）+ `git branch -d`（小写）：
+      // 有未提交改动的目录摘不掉，没合并的分支删不掉。这两道是 git 自己的闸，
+      // 比我们在这儿判可靠——**那些提交可能是这台机器上唯一的一份**。
+      return 转发工作区(res, '/write/收工', 'POST', {
+        项目: 体.项目, 工作区: { path: 体.路径 || '', branch: 体.分支 || '' }, 分支: 体.分支 || '',
+      });
+    });
+  }
+
   if (url路径 === '/api/projects' && req.method === 'GET') {
     return 发JSON(res, 200, {
       ok: true,
@@ -618,6 +715,17 @@ const 服务 = http.createServer((req, res) => {
       说明: '「就绪」只表示路径在、是 git 仓——本进程不引 child_process，'
         + '查不了分支与未提交改动，那是工作区服务(:4371)的能力面',
     });
+  }
+  // 注销：只删注册表里的一行，不动那个仓。与 POST 同一个路径、不同方法——
+  // 「登记 / 改 / 注销」是同一样东西的三种写法，不该散成三条路径。
+  if (url路径 === '/api/setup/project' && req.method === 'DELETE') {
+    const r = 项目.注销(仓根, 请求URL.searchParams.get('名') || 请求URL.searchParams.get('name'));
+    if (!r.ok) return 发JSON(res, 400, { ok: false, error: r.错误 });
+    // 和登记那条一样要重读：本进程捧着旧表的话，注销完还能往那个仓提交，
+    // 而界面上已经显示注销成功了。
+    const 新配置 = 本地覆盖.应用(仓根, 读JSON(path.join(仓根, 'config', 'platform.config.json'), {})).配置;
+    配置.项目 = 新配置.项目;
+    return 发JSON(res, 200, { ok: true, ...r });
   }
   if (url路径 === '/api/setup/project' && req.method === 'POST') {
     return 收体(req, 8 * 1024, (体) => {

@@ -170,6 +170,24 @@ code { background:var(--sect); border:1px solid var(--line); border-radius:5px; 
 .态.完成 { color:var(--ok); border-color:var(--okln); background:var(--okbg); }
 /* 已归档：退出产线的单，压到最弱——它还在列表里只是为了能查回来 */
 .态.已归档 { color:var(--ink3); border-style:dashed; }
+
+/* 质检结论。看板上最常问的一句是「这张单验收了吗」，原先要点进详情才知道。
+   判官名字带出来是有意的：跨厂评审的价值全在「是另一家判的」上，
+   只写「通过」等于把这条信息丢了。 */
+.判 { display:inline-flex; align-items:center; gap:2px; margin-left:5px; padding:0 6px; height:19px;
+  border-radius:999px; font-size:10.5px; font-weight:600; white-space:nowrap; border:1px solid transparent; }
+.判.过 { color:var(--ok); background:var(--okbg); border-color:var(--okln); }
+.判.不过 { color:var(--warn); background:var(--warnbg); border-color:var(--warnln); }
+
+/* 「这张单为什么没派出去」。挂在状态格里，跟着行走。
+   弱化处理：它是补充说明，抢不过状态本身。 */
+.卡因 { display:block; }
+.卡因 .因 { display:inline-block; margin-top:3px; font-size:10.5px; color:var(--ink3); cursor:help;
+  border-bottom:1px dotted var(--line); }
+
+/* 项目卡底部的改/删。细按钮：这两个动作不该跟「进项目」抢注意力 */
+.卡脚 { display:flex; gap:6px; margin-top:8px; }
+.btn.细 { height:22px; padding:0 8px; font-size:11px; }
 /* 「完成」旁边挂的那颗：活干完了，但**还没进主线**。
    用告警色而不是灰——灰会被当成补充说明，而这是一件没做完的事。 */
 .态.待集成 { color:var(--warn); border-color:var(--warnln); background:var(--warnbg); }
@@ -182,7 +200,16 @@ code { background:var(--sect); border:1px solid var(--line); border-radius:5px; 
 .池 { font-size:11.5px; font-weight:500; }
 .池.claude { color:var(--pool-claude); } .池.codex { color:var(--pool-codex); } .池.echo { color:var(--pool-echo); }
 
-.列 { display:grid; grid-template-columns:1fr 1fr; gap:26px; align-items:start; }
+/* minmax(0,1fr) 而不是 1fr：`1fr` 等价于 minmax(auto,1fr)，轨道**不许低于内容的
+   min-content**。而 .表盒 > table 有 min-width:720px，于是两条轨道各被顶到 720px、
+   合计 1440px 塞进一个 910px 的容器——右栏（消耗/战绩/账本）一直被切掉一截，
+   .表盒 的横向滚动永远轮不上。这个宽度下它从来没对过，而且切得很安静：
+   看上去就像那几张表本来就只有这么宽。
+   minmax(0,…) 允许轨道收窄，宽表回到自己的盒子里横向滚动——那才是本来的设计。 */
+.列 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:26px; align-items:start; }
+/* 半栏里的表不该沿用整宽的 720 下限，否则每个面板都挂一条横向滚动条。
+   380 是「四列还认得出是四列」的下限。 */
+.列 .表盒 > table { min-width:380px; }
 @media (max-width:900px) { .列 { grid-template-columns:1fr; } body { padding:0 20px 40px; } }
 .栏 { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:10px 0; }
 
