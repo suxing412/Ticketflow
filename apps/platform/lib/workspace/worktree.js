@@ -501,12 +501,27 @@ function 收工(project, workspace, { 分支 } = {}) {
 // 找出「已经没人认领」的工作区：目录还在，但对应的工单已完成或压根不存在。
 // 纯读，不动任何东西——要不要收由调用方决定。
 function 遗留工作区(monitorRoot, cfg, project, 工单表) {
+  const wc = configOf(cfg);
   const repo = repoTop(project.path);
   const 表 = new Map((工单表 || []).map((t) => [String(t.id), t]));
+  const 我的根 = path.resolve(workspaceRoot(monitorRoot || '.', wc.root, repo));
+  const 前缀 = wc.branchPrefix + '/';
   const 出 = [];
+  const 别人的 = [];
   for (const w of worktreeList(repo)) {
     const 名 = path.basename(w.path || '');
     if (!名 || path.resolve(w.path) === path.resolve(repo)) continue;   // 主工作区不算
+
+    // **只认自己建的**。两个产品往同一个仓写是常态（分支前缀这套机制就是为此造的），
+    // 而这里是按 basename 去工单库里找单——对面建的工作区在我们的工单库里当然找不到，
+    // 于是整整齐齐列成「查无此单，该收」。实测：海投王里 23 条 studio/project/0-*
+    // 全被列进待收，人点一下「收」就把对面正在用的工作区和分支删了。
+    // 判据两条取其一：分支带我们的前缀，或目录落在我们自己的工作区根下
+    // （审阅区是 detached，没有分支，只能靠后者认）。
+    const 支 = String(w.branch || '');
+    const 是我的 = (支 && 支.startsWith(前缀)) || isWithin(我的根, path.resolve(w.path));
+    if (!是我的) { 别人的.push({ 单: 名, 路径: w.path, 分支: w.branch || null }); continue; }
+
     const t = 表.get(名);
     if (!t) { 出.push({ 单: 名, 路径: w.path, 分支: w.branch, 因: '工单库里找不到这张单' }); continue; }
     // 带「待集成」戳的不收：这张单的活干完了，但**还没进主线**，
@@ -519,7 +534,11 @@ function 遗留工作区(monitorRoot, cfg, project, 工单表) {
       出.push({ 单: 名, 路径: w.path, 分支: w.branch, 因: `工单已${t.state === '完成' ? '完成' : '归档'}` });
     }
   }
-  return 出;
+  // 别人的那些也报出来，只是不进待收清单——「这个仓里还有 23 个不是我建的工作区」
+  // 是人该知道的事实。闷掉的话，人看到「干净」会以为仓里真的没东西。
+  // 返回对象而不是在数组上挂属性：数组的额外属性过 JSON.stringify 会**静默丢掉**，
+  // 而这一路正好要过一次 HTTP。
+  return { 待收: 出, 别人的 };
 }
 
 module.exports = {

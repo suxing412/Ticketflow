@@ -123,12 +123,35 @@
   <div class="面包屑"><button class="返回" onclick="location.hash='#/'" title="回驾驶舱">←</button>
     <span class="淡">驾驶舱</span><span class="分">/</span><b>设置与观测</b></div>
   <div class="提示" id="计费提示"></div>
+
+  <h2>自动派发<span class="右 淡" id="自动说明"></span></h2>
+  <div class="提示">开着它，平台会自己把待投单一张张跑掉——<b>自己花额度</b>。
+    它走的是和你点按钮完全同一条路，四闸一条不少；<b>永不代你同意 API 计费</b>，真撞上那一步会停下等人。</div>
+  <div id="自动卡" class="栏"><span class="淡">读取中…</span></div>
+  <div class="表盒"><table>
+    <thead><tr><th>时刻</th><th>事</th><th>单</th><th>说</th></tr></thead>
+    <tbody id="自动流水"><tr><td colspan="4" class="淡">还没动过</td></tr></tbody>
+  </table></div>
+
   <h2>编制<span class="右 淡" id="编制说明"></span></h2>
   <div class="提示">谁干哪种活。<b>池序是有序偏好</b>：从左到右取第一个没被冻结的池；留空则按全局排名。</div>
   <div class="表盒"><table>
     <thead><tr><th>角色</th><th>池序</th><th>状态</th><th></th></tr></thead>
     <tbody id="编制体"><tr><td colspan="4" class="淡">读取中…</td></tr></tbody>
   </table></div>
+
+  <h2>工作区回收<span class="右 淡" id="回收说明"></span></h2>
+  <div class="提示">跑完没收干净的 worktree 与分支。<b>只列已完成或工单库里查无此单的</b>——在办的不碰。
+    有未提交改动的目录摘不掉，没合并的分支删不掉（那是 git 自己的闸，那些提交可能是这台机器上唯一的一份）。</div>
+  <div class="栏">
+    <span class="淡">项目：</span><select id="回收项目" onchange="刷回收()"></select>
+    <button class="btn" onclick="刷回收()">重查</button>
+  </div>
+  <div class="表盒"><table>
+    <thead><tr><th>工单</th><th>路径</th><th>分支</th><th>因</th><th></th></tr></thead>
+    <tbody id="回收体"><tr><td colspan="5" class="淡">选个项目</td></tr></tbody>
+  </table></div>
+
   <div id="设置体">
 
 <div class="列">

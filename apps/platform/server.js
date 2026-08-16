@@ -143,6 +143,37 @@ function 收体(req, 上限, 完成) {
   req.on('end', () => { try { 完成(体 ? JSON.parse(体) : {}); } catch { 完成(null); } });
 }
 
+// 主动向工作区服务发一次请求（不同于 /api/workspace/* 的透传：那条是把浏览器的请求
+// 原样递过去，这条是本进程自己组装一份——比如遗留回收要先读工单库，
+// 而工单库不是工作区服务的能力面）。
+// 路径带中文要编码：node 的 http.request 对未转义字符**同步抛** ERR_UNESCAPED_CHARACTERS，
+// 不是返回错误，是把整个进程带走（/write/收工 就带中文，执行器那边踩过一次）。
+function 转发工作区(res, 路径, 方法, 体) {
+  const 数据 = JSON.stringify(体 || {});
+  const 编码路径 = String(路径).split('/').map(encodeURIComponent).join('/');
+  const 代理 = http.request({
+    host: '127.0.0.1', port: 工作区端口, method: 方法 || 'POST', path: 编码路径,
+    headers: {
+      Authorization: `Bearer ${令牌}`,
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(数据),
+    },
+  }, (上游) => {
+    let s = '';
+    上游.on('data', (d) => s += d);
+    上游.on('end', () => {
+      try { return 发JSON(res, 上游.statusCode, JSON.parse(s)); }
+      catch { return 发JSON(res, 502, { ok: false, error: '工作区服务返回了非 JSON 内容' }); }
+    });
+  });
+  代理.on('error', () => 发JSON(res, 503, {
+    ok: false,
+    error: `工作区服务未在 127.0.0.1:${工作区端口} 应答（npm run workspace 单起，或 npm start 一并起）。`,
+  }));
+  代理.write(数据);
+  代理.end();
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -610,6 +641,38 @@ const 服务 = http.createServer((req, res) => {
   // ——— 项目（协-007）：项目是一等公民，不是工单上的一个字符串 ———
   // 注册表一直都在（config/项目.local.json），但界面上项目不存在：看板混着列、
   // 消耗不分项目、登记只能手改 JSON、项目名写错要等到真跑那一刻才炸。
+  // ——— 工作区回收（协-017）———
+  //
+  // 遗留工作区这套（协-009）写完之后**一个界面调用方都没有**，而且它的路径闸只放行
+  // 仓根之内，登记的项目全在仓外——接上按钮也够不着。于是垃圾只能在磁盘上攒着：
+  // 实测 workspaces/ 下堆着三个目录，靶仓里五条 platform/* 分支收不掉，谁也看不见。
+  //
+  // 这条端点做两件工作区服务做不了的事：**读工单库**（那不是它的能力面），
+  // 以及把「哪些单还在办」这份判断喂给它。回收本身仍由它执行。
+  if (url路径 === '/api/reclaim' && req.method === 'GET') {
+    if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
+    const 项目名 = String(请求URL.searchParams.get('项目') || '').trim();
+    if (!项目名) return 发JSON(res, 400, { ok: false, error: '需要 项目 参数' });
+    // 只递工单表里判得上的那几个字段。整份 fm 递过去既没必要，也会把
+    // 工单正文里的东西送进另一个进程的日志里。
+    const 工单表 = 工单库.list(工单根.根).map((t) => ({
+      id: t.id, state: t.state, fm: { 待集成: (t.fm && t.fm.待集成) || undefined },
+    }));
+    return 转发工作区(res, '/遗留', 'POST', { 项目: 项目名, 工单: 工单表 });
+  }
+  if (url路径 === '/api/reclaim' && req.method === 'POST') {
+    return 收体(req, 16 * 1024, (体) => {
+      if (!体 || !体.项目) return 发JSON(res, 400, { ok: false, error: '需要 项目' });
+      if (!体.路径 && !体.分支) return 发JSON(res, 400, { ok: false, error: '需要 路径 或 分支' });
+      // 收工用的是 `git worktree remove`（不带 --force）+ `git branch -d`（小写）：
+      // 有未提交改动的目录摘不掉，没合并的分支删不掉。这两道是 git 自己的闸，
+      // 比我们在这儿判可靠——**那些提交可能是这台机器上唯一的一份**。
+      return 转发工作区(res, '/write/收工', 'POST', {
+        项目: 体.项目, 工作区: { path: 体.路径 || '', branch: 体.分支 || '' }, 分支: 体.分支 || '',
+      });
+    });
+  }
+
   if (url路径 === '/api/projects' && req.method === 'GET') {
     return 发JSON(res, 200, {
       ok: true,

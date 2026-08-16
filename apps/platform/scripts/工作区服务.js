@@ -90,9 +90,30 @@ const 服务 = http.createServer((req, res) => {
     return 发JSON(res, 200, { ok: true, 服务: '工作区', 端口, 仓根, 允许写, 说明: '本进程是唯一被允许起 git 进程的地方' });
   }
 
-  // ——— 只读三条 ———
+  // ——— 只读几条 ———
+  //
+  // 定位仓库**优先按注册表的项目名**，路径只是退路。
+  //
+  // 收窄路径 只放行仓根之内，而登记的项目（靶仓、海投王）全住在仓外——
+  // 只认路径的话，这几个只读端点对真实项目从一开始就够不着：
+  // 想看「这个项目攒了多少遗留工作区」，传路径被判越界，传不了就看不见。
+  // 于是这几个端点写了大半年，一个界面调用方都没有——接上按钮也没用。
+  // 注册表本身就是显式白名单，和写操作用的是同一条准绳，不额外放宽任何东西。
+  function 解析仓(路径参数名) {
+    const 项目名 = String(查询.get('项目') || 查询.get('project') || '').trim();
+    if (!项目名) return 收窄路径(查询.get(路径参数名));
+    const 注册 = 现读注册表();
+    const 项 = 注册[项目名];
+    if (!项 || !项.路径) {
+      return { ok: false, 错误: `项目「${项目名}」不在注册表里。已登记：${Object.keys(注册).join('/') || '（无）'}` };
+    }
+    const p = path.resolve(项.路径);
+    if (!fs.existsSync(p)) return { ok: false, 错误: `项目路径不存在：${p}` };
+    return { ok: true, 路径: p, 项目: 项目名 };
+  }
+
   if (路径 === '/repo' && req.method === 'GET') {
-    const 闸 = 收窄路径(查询.get('dir'));
+    const 闸 = 解析仓('dir');
     if (!闸.ok) return 发JSON(res, 400, { ok: false, error: 闸.错误 });
     try {
       const 是仓 = 工作区.isGitRepo(闸.路径);
@@ -101,7 +122,7 @@ const 服务 = http.createServer((req, res) => {
   }
 
   if (路径 === '/worktrees' && req.method === 'GET') {
-    const 闸 = 收窄路径(查询.get('repository'));
+    const 闸 = 解析仓('repository');
     if (!闸.ok) return 发JSON(res, 400, { ok: false, error: 闸.错误 });
     try {
       const 表 = 工作区.worktreeList(闸.路径);
@@ -111,21 +132,35 @@ const 服务 = http.createServer((req, res) => {
 
   // 遗留工作区（协-009）：目录还在，但对应的工单已完成或压根不存在。
   // 纯读不动手——「有多少垃圾」得先看得见，收不收是另一回事。
-  if (路径 === '/遗留' && req.method === 'GET') {
-    const 闸 = 收窄路径(查询.get('repository'));
-    if (!闸.ok) return 发JSON(res, 400, { ok: false, error: 闸.错误 });
-    try {
-      // 工单表由调用方带进来（本进程的能力面是 git，不读工单库）。
-      // 不带就只按「工单库里找不到」判——那仍然能抓出大部分陈账。
-      let 工单表 = [];
-      try { 工单表 = JSON.parse(查询.get('工单') || '[]'); } catch { /* 传坏了就当没传 */ }
-      const 出 = 工作区.遗留工作区(平台根, 配置, { path: 闸.路径 }, 工单表);
-      return 发JSON(res, 200, { ok: true, 仓库: 闸.路径, 条数: 出.length, 遗留: 出 });
-    } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+  //
+  // 用 POST 而不是 GET：工单表要整份递进来（本进程的能力面是 git，不读工单库），
+  // 塞进查询串的话，板子一大就顶爆请求行——node 默认 maxHeaderSize 16KB，
+  // 而请求行也算在里头。POST 不代表写，这条一个 git 对象都不改，所以仍在写闸外面。
+  if (路径 === '/遗留' && req.method === 'POST') {
+    return 收体(req, 1024 * 1024, (体) => {
+      if (!体) return 发JSON(res, 400, { ok: false, error: '需要 JSON 体' });
+      const 项目名 = String(体.项目 || '').trim();
+      const 注册 = 现读注册表();
+      const 项 = 注册[项目名];
+      if (!项 || !项.路径) {
+        return 发JSON(res, 400, { ok: false, error: `项目「${项目名 || '(空)'}」不在注册表里。已登记：${Object.keys(注册).join('/') || '（无）'}` });
+      }
+      const 仓 = path.resolve(项.路径);
+      if (!fs.existsSync(仓)) return 发JSON(res, 400, { ok: false, error: `项目路径不存在：${仓}` });
+      try {
+        const 出 = 工作区.遗留工作区(平台根, 配置, { path: 仓 }, Array.isArray(体.工单) ? 体.工单 : []);
+        return 发JSON(res, 200, {
+          ok: true, 项目: 项目名, 仓库: 仓,
+          条数: 出.待收.length, 遗留: 出.待收,
+          // 不是我们建的那些也报出来，只是不给「收」——人得知道这个仓里还有别人的东西
+          别人的: 出.别人的, 别人的条数: 出.别人的.length,
+        });
+      } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+    });
   }
 
   if (路径 === '/changes' && req.method === 'GET') {
-    const 闸 = 收窄路径(查询.get('dir'));
+    const 闸 = 解析仓('dir');
     if (!闸.ok) return 发JSON(res, 400, { ok: false, error: 闸.错误 });
     try {
       const 文件 = 工作区.changedFiles(闸.路径);
@@ -135,16 +170,12 @@ const 服务 = http.createServer((req, res) => {
 
   // 「这几个提交进主线了吗」——纯读，给上游销「待集成」戳用。
   // 放在写闸外面：它一个 git 对象都不改，要求开写权限反而会让人为了销个戳去开写。
-  // 认的是**注册表里的项目名**，不是路径：收窄路径只放行仓根之内，
-  // 而登记的项目（靶仓、海投王）都在仓外，拿路径进来一律被判越界。
   if (路径 === '/含有' && req.method === 'GET') {
-    const 项目名 = String(查询.get('项目') || 查询.get('project') || '').trim();
-    const 项 = 现读注册表()[项目名];
-    if (!项 || !项.路径) return 发JSON(res, 400, { ok: false, error: `项目「${项目名 || '(空)'}」不在注册表里` });
+    const 闸 = 解析仓('repository');
+    if (!闸.ok) return 发JSON(res, 400, { ok: false, error: 闸.错误 });
     const 候选 = String(查询.get('提交') || 查询.get('commits') || '').split(',').map((s) => s.trim()).filter(Boolean);
     try {
-      const 出 = 工作区.含有(path.resolve(项.路径), 候选);
-      return 发JSON(res, 200, { ok: true, 项目: 项目名, 含有: 出 });
+      return 发JSON(res, 200, { ok: true, 项目: 闸.项目 || null, 含有: 工作区.含有(闸.路径, 候选) });
     } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
   }
 

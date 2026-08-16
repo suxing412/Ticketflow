@@ -105,21 +105,43 @@ t('遗留工作区：只挑已完成或已不存在的单，在办的不碰', ()
   const b = path.join(os.tmpdir(), 'wt-e2-' + process.pid);
   const c = path.join(os.tmpdir(), 'wt-e3-' + process.pid);
   try {
-    git(仓, ['worktree', 'add', '-q', '-b', 'p/完成单', a, 'master']);
-    git(仓, ['worktree', 'add', '-q', '-b', 'p/在办单', b, 'master']);
-    git(仓, ['worktree', 'add', '-q', '-b', 'p/没这单', c, 'master']);
+    git(仓, ['worktree', 'add', '-q', '-b', 'platform/p/完成单', a, 'master']);
+    git(仓, ['worktree', 'add', '-q', '-b', 'platform/p/在办单', b, 'master']);
+    git(仓, ['worktree', 'add', '-q', '-b', 'platform/p/没这单', c, 'master']);
     // 遗留判定按目录名认单号（worktree 的目录名就是单号），这里直接用临时目录名当单号
     const 全 = [
       { id: path.basename(a), state: '完成' },
       { id: path.basename(b), state: '待投' },
     ];
-    const 出 = 工作区.遗留工作区(null, {}, { path: 仓 }, 全);
+    const 出 = 工作区.遗留工作区(null, {}, { path: 仓 }, 全).待收;
     const 单 = 出.map((x) => x.单).sort();
     assert.ok(单.includes(path.basename(a)), '已完成的该报');
     assert.ok(单.includes(path.basename(c)), '工单库里没有的该报');
     assert.ok(!单.includes(path.basename(b)), '在办的单不该被当成遗留——收掉它等于把正在跑的活铲了');
     assert.ok(!出.some((x) => path.resolve(x.路径) === path.resolve(仓)), '主工作区不该出现在遗留里');
   } finally { 清(仓, a, b, c); }
+});
+
+t('**别人建的工作区不许列进待收**——那是另一个产品正在用的', () => {
+  // 两个产品往同一个仓写是常态，分支前缀这套机制就是为此造的，而这里没用上：
+  // 判定按 basename 去**我们的**工单库里找单，对面建的当然找不到，
+  // 于是整整齐齐列成「查无此单，该收」。
+  // 实测（海投王）：23 条 studio/project/0-* 全被列进待收，
+  // 人点一下「收」就把对面正在用的工作区和分支删了。
+  const 仓 = 建仓();
+  const 我 = path.join(os.tmpdir(), 'wt-mine-' + process.pid);
+  const 他 = path.join(os.tmpdir(), 'wt-theirs-' + process.pid);
+  try {
+    git(仓, ['worktree', 'add', '-q', '-b', 'platform/p/M-1', 我, 'master']);
+    git(仓, ['worktree', 'add', '-q', '-b', 'studio/project/0-7', 他, 'master']);
+    const r = 工作区.遗留工作区(null, {}, { path: 仓 }, []);      // 工单库全空 = 两个都「查无此单」
+    assert.deepEqual(r.待收.map((x) => x.单), [path.basename(我)], '只该收自己建的');
+    assert.deepEqual(r.别人的.map((x) => x.分支), ['studio/project/0-7'],
+      '别人的也要报出来——闷掉的话人看到「干净」会以为仓里真没东西');
+    // 换个前缀，归属跟着换：这条前缀是可配的，判定不能写死 'platform'
+    const 换 = 工作区.遗留工作区(null, { workspace: { branchPrefix: 'studio' } }, { path: 仓 }, []);
+    assert.deepEqual(换.待收.map((x) => x.分支), ['studio/project/0-7']);
+  } finally { 清(仓, 我, 他); }
 });
 
 // ---- 分支归属 ----
@@ -377,9 +399,9 @@ t('带「待集成」的工单，工作区不许被当陈账收掉', () => {
   try {
     git(仓, ['worktree', 'add', '-q', '-b', 'platform/p/K-1', wt, 'master']);
     const 单 = { id: 'K-1', state: '完成', fm: { 待集成: { 说: '基线已前进' } } };
-    assert.deepEqual(工作区.遗留工作区(null, {}, { path: 仓 }, [单]), [], '待集成的不许收');
+    assert.deepEqual(工作区.遗留工作区(null, {}, { path: 仓 }, [单]).待收, [], '待集成的不许收');
     delete 单.fm.待集成;
-    assert.equal(工作区.遗留工作区(null, {}, { path: 仓 }, [单]).length, 1, '戳销了就该收了');
+    assert.equal(工作区.遗留工作区(null, {}, { path: 仓 }, [单]).待收.length, 1, '戳销了就该收了');
   } finally { 清(仓, wt); }
 });
 

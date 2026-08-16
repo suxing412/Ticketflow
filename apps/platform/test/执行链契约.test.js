@@ -139,6 +139,120 @@ t('预算闸读不到数时不许真跑（「什么都不冻」跟「都没超�
   assert.equal(派单.真跑前提({ ok: true, 挡: {} }).准, true);
 });
 
+t('账本有坏行 = 用量少算了，同样不许真跑（只坏末行除外）', () => {
+  // 读账 对坏行是**丢弃不抛**，于是「账本坏了」和「今天没用过」在冻结结果上
+  // 长得一模一样：零用量、不冻结、ok 仍为 true。少算用量的方向就是费钱的方向。
+  const 坏 = { ok: true, 挡: {}, 账本: { 完好: false, 坏行数: 3, 首个坏行: 1, 只坏末行: false, 文件: 'x/预算账.jsonl' } };
+  const r = 派单.真跑前提(坏);
+  assert.equal(r.准, false);
+  assert.equal(r.码, 503);
+  assert.ok(/3 行读不出来/.test(r.错), r.错);
+  assert.ok(/干跑不受影响/.test(r.错), '停的只该是真跑');
+
+  // 只坏末行放行：那是写到半路进程没了留下的半截，最多丢一条。
+  // 为它罢工会让人转头把整道闸关掉——会误报的闸最后一定被绕过去。
+  const 半 = 派单.真跑前提({ ok: true, 挡: {}, 账本: { 完好: false, 坏行数: 1, 首个坏行: 9, 只坏末行: true, 文件: 'x' } });
+  assert.equal(半.准, true);
+  assert.ok(半.提醒, '放行归放行，这件事仍要说出来');
+
+  // 老版公用件没有账本体检 → 没有账本读数 → 按原来的行为放行，不许因此瘫掉
+  assert.equal(派单.真跑前提({ ok: true, 挡: {} }).准, true);
+});
+
+t('账本体检真能认出坏账（跑真的 budget 公用件，不是假对象）', () => {
+  const budget = require(path.join(平台根, 'lib', '公用件.js')).载入('budget', 'budget.js');
+  assert.equal(typeof budget.账本体检, 'function', 'budget 公用件里没有账本体检——platform 侧那道闸就永远不会响');
+  const 沙 = fs.mkdtempSync(path.join(os.tmpdir(), 'led-'));
+  try {
+    assert.equal(budget.账本体检(沙).完好, true, '没账本 = 没用过，不算坏');
+    budget.记(沙, { 池: 'claude', 单: 'T-1', 输入: 10, 输出: 20 });
+    assert.equal(budget.账本体检(沙).完好, true);
+    fs.appendFileSync(budget.账本(沙), '{半截\n');
+    const 半 = budget.账本体检(沙);
+    assert.equal(半.完好, false);
+    assert.equal(半.只坏末行, true, '末行半截要单独认出来——它和整份乱码不是一回事');
+    fs.writeFileSync(budget.账本(沙), '乱码\n更多乱码\n');
+    const 全坏 = budget.账本体检(沙);
+    assert.equal(全坏.坏行数, 2);
+    assert.equal(全坏.只坏末行, false);
+    // 而 汇总 对这份坏账仍报零——这正是要挡的那个假象
+    assert.equal(budget.汇总(沙, 'claude').月.token, 0, '坏账读出来是零用量，跟「没用过」一模一样');
+  } finally { fs.rmSync(沙, { recursive: true, force: true }); }
+});
+
+// ---- 自动派发：无人值守那条路自己的闸 ----
+// 按大括号配对切出一个函数体。用正则切在 CRLF 上会静默切空
+// （`\n}` 在 \r\n 文件里永远匹配不到），而切空之后断言全部空过——
+// 一条「跑绿了但什么都没测」的测试比没有测试更糟。
+function 取函数(源, 头) {
+  const i = 源.indexOf(头);
+  if (i < 0) return '';
+  let 深 = 0; let started = false;
+  for (let j = 源.indexOf('{', i); j < 源.length; j++) {
+    if (源[j] === '{') { 深++; started = true; }
+    else if (源[j] === '}') { 深--; if (started && 深 === 0) return 源.slice(i, j + 1); }
+  }
+  return '';
+}
+
+t('自动派发默认关，且入库配置里不许带着 true', () => {
+  // 它开着就会自己花额度。和「允许真跑」同一条准绳：入库的永远是最严默认，
+  // 本机放宽是本机的事（config/执行.local.json，不入库）。
+  const c = JSON.parse(fs.readFileSync(path.join(平台根, 'config', 'platform.config.json'), 'utf8'));
+  assert.equal(c.执行.自动派发.开, false, '这条红了说明有人把「让它自己跑」提交进了版本库');
+  const 覆盖 = require(path.join(平台根, 'lib', '本地覆盖.js'));
+  const 合 = 覆盖.深合并(c.执行, { 自动派发: { 开: true } });
+  assert.equal(合.自动派发.开, true, '本机要能打开');
+  assert.equal(合.自动派发.本次运行上限, c.执行.自动派发.本次运行上限, '深合并不许把其余刹车冲掉');
+});
+
+t('自动派发不是第二条派活路径——它走同一个 /run，且永不代人同意计费', () => {
+  // 两条路径各自实现的话，闸门迟早在其中一条上长歪，而长歪那天没人会发现：
+  // 谁会去测「自动跑的那条路上闸还在不在」。所以它只能是个自动的调用方。
+  const 源 = fs.readFileSync(path.join(平台根, 'scripts', '执行器.js'), 'utf8');
+  const 循环 = 取函数(源, 'async function 自动一轮');
+  assert.ok(循环, '找不到自动派发的循环');
+  assert.ok(/自请求\('POST', '\/run\//.test(循环), '自动派发必须去调同一个 POST /run，不许另走一条');
+  // 判据要精确到「**作为请求体的键**出现」：停机文案里提到「不代人同意计费」是对的，
+  // 真正不许的是 { 同意计费: true } 被发出去。
+  assert.ok(!/(同意计费|agreeBilling)\s*:/.test(循环),
+    '自动派发不许往请求体里放 同意计费——闸④的全部意义就是每次都问一遍，而这里没有人在场');
+  // 撞上 402（要落 API 计费）必须停下等人，不是跳过继续跑下一张
+  assert.ok(/402/.test(循环) && /自动停\(/.test(循环), '撞上 402 要停下等人');
+});
+
+t('同一次运行里，同一张单只自动派一次', () => {
+  // 跑完回到「待投」的路子不止一条：空转、质检不过打回、发布被拒。
+  // 每一条都会让这张单下一轮又排到队首，于是循环一遍遍拿它开跑——
+  // 每轮烧一次真跑什么都不产出。实测：QA-VERIFY 连派两轮，两次都是空转。
+  const 源 = fs.readFileSync(path.join(平台根, 'scripts', '执行器.js'), 'utf8');
+  const 循环 = 取函数(源, 'async function 自动一轮');
+  assert.ok(/派过\.has\(/.test(循环), '派之前要先看这张单本次派过没有');
+  assert.ok(/派过\.add\([\s\S]{0,80}\n[^\n]*自请求\('POST', '\/run\//.test(循环)
+    || 循环.indexOf('派过.add(') < 循环.indexOf("自请求('POST', '/run/"),
+    '要**先记再跑**：跑挂了也算派过，否则崩一次就会一直重试');
+});
+
+// ---- 路由路径一律 ASCII ----
+t('HTTP 路由路径不许带非 ASCII（不解码的进程会永远匹配不上）', () => {
+  // server.js 与执行器都**不** decodeURIComponent 路径，而调用方必须编码才发得出去
+  // （node 的 http.request 对未转义字符直接抛）。于是一条中文路由收到的是
+  // %E5%9B%9E%E6%94%B6，与字面量永远不等 —— 表现是「未知 API」404，
+  // 两边看起来都没错。今天在 /api/回收 和 /自动派发 上各撞了一次。
+  // 工作区服务是唯一解码的进程（它的 /write/审阅区 等本来就是中文），故不在此列。
+  const 查 = (文件) => {
+    const 源 = fs.readFileSync(文件, 'utf8');
+    const 出 = [];
+    for (const m of 源.matchAll(/路径 === '([^']+)'|url路径 === '([^']+)'|url路径\.startsWith\('([^']+)'/g)) {
+      const p = m[1] || m[2] || m[3];
+      if (p && /[^\x20-\x7E]/.test(p)) 出.push(p);
+    }
+    return 出;
+  };
+  assert.deepEqual(查(path.join(平台根, 'scripts', '执行器.js')), [], '执行器的路由里有中文路径');
+  assert.deepEqual(查(path.join(平台根, 'server.js')), [], 'server 的路由里有中文路径');
+});
+
 // ---- 本地覆盖：危险开关只能从不入库的文件打开 ----
 t('入库配置的 允许真跑 必须是 false（危险开关不许带着 true 入库）', () => {
   const c = JSON.parse(fs.readFileSync(path.join(平台根, 'config', 'platform.config.json'), 'utf8'));
