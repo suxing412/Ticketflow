@@ -159,25 +159,35 @@ t('账本有坏行 = 用量少算了，同样不许真跑（只坏末行除外�
   assert.equal(派单.真跑前提({ ok: true, 挡: {} }).准, true);
 });
 
-t('账本体检真能认出坏账（跑真的 budget 公用件，不是假对象）', () => {
+t('账本体检真能认出坏账，且对着 budget 真写出来的账本', () => {
+  // 体检住在 platform 这边（packages/ 是双签的共建包，「要不要因此停跑」是我方的判断，
+  // 不该替对方决定他们的产品怎么处置）。但账本是 budget 写的，
+  // 所以这条必须拿**真的 budget 写出来的文件**去验，不能自己造一份格式来测自己。
   const budget = require(path.join(平台根, 'lib', '公用件.js')).载入('budget', 'budget.js');
-  assert.equal(typeof budget.账本体检, 'function', 'budget 公用件里没有账本体检——platform 侧那道闸就永远不会响');
   const 沙 = fs.mkdtempSync(path.join(os.tmpdir(), 'led-'));
+  const 账 = budget.账本(沙);
   try {
-    assert.equal(budget.账本体检(沙).完好, true, '没账本 = 没用过，不算坏');
+    assert.equal(派单.账本体检(账).完好, true, '没账本 = 没用过，不算坏');
     budget.记(沙, { 池: 'claude', 单: 'T-1', 输入: 10, 输出: 20 });
-    assert.equal(budget.账本体检(沙).完好, true);
-    fs.appendFileSync(budget.账本(沙), '{半截\n');
-    const 半 = budget.账本体检(沙);
+    assert.equal(派单.账本体检(账).完好, true, 'budget 刚写的这行必须认得——不认就是两边格式对不上');
+    fs.appendFileSync(账, '{半截\n');
+    const 半 = 派单.账本体检(账);
     assert.equal(半.完好, false);
     assert.equal(半.只坏末行, true, '末行半截要单独认出来——它和整份乱码不是一回事');
-    fs.writeFileSync(budget.账本(沙), '乱码\n更多乱码\n');
-    const 全坏 = budget.账本体检(沙);
+    fs.writeFileSync(账, '乱码\n更多乱码\n');
+    const 全坏 = 派单.账本体检(账);
     assert.equal(全坏.坏行数, 2);
     assert.equal(全坏.只坏末行, false);
-    // 而 汇总 对这份坏账仍报零——这正是要挡的那个假象
+    // 而 budget.汇总 对这份坏账仍报零——这正是要挡的那个假象
     assert.equal(budget.汇总(沙, 'claude').月.token, 0, '坏账读出来是零用量，跟「没用过」一模一样');
   } finally { fs.rmSync(沙, { recursive: true, force: true }); }
+});
+
+t('公用件里不许再留一份账本体检（同一件事两个真相）', () => {
+  // 这条判断挪回 platform 之后，packages/budget 必须干净——两边各有一份的话，
+  // 改了一处漏了另一处，而两处都显示正常。
+  const 源 = fs.readFileSync(require(path.join(平台根, 'lib', '公用件.js')).解析('budget', 'budget.js'), 'utf8');
+  assert.ok(!/账本体检/.test(源), 'packages/budget 里还留着账本体检——那是双签的共建包，本轮已挪回 platform');
 });
 
 // ---- 自动派发：无人值守那条路自己的闸 ----

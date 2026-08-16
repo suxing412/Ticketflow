@@ -64,36 +64,6 @@ function 读账(root) {
   return out;
 }
 
-// 账本体检 —— 「这份账读全了没有」。
-//
-// 读账 对坏行的处置是**丢弃不抛**，这在读的层面是对的：一次崩在半路的写会留下
-// 半截行，为一行坏账让整个闸罢工不划算。但丢弃是**静默**的，于是
-// 「账本坏了」和「这个池今天没用过」在返回值上长得一模一样——都是零用量、
-// 都不冻结、ok 照旧为 true。用量少算的方向恰恰是费钱的方向。
-//
-// 所以另给一条：只诊断，不改任何既有行为。要不要因此停跑由消费方自己定
-// （platform 侧的判断是：读不全就不许真跑，干跑不受影响）。
-// 纯新增，既有调用方一个字都不用改。
-function 账本体检(root) {
-  const 文件 = 账本(root);
-  let raw = null;
-  try { raw = fs.readFileSync(文件, 'utf8'); } catch { return { 文件, 存在: false, 行数: 0, 坏行数: 0, 完好: true }; }
-  let 行数 = 0; let 坏行数 = 0; let 首个坏行 = 0;
-  const 行表 = raw.split('\n');
-  for (let i = 0; i < 行表.length; i++) {
-    const s = 行表[i].trim();
-    if (!s) continue;
-    行数++;
-    let ok = false;
-    try { const j = JSON.parse(s); ok = !!(j && j.池); } catch { ok = false; }
-    if (!ok) { 坏行数++; if (!首个坏行) 首个坏行 = i + 1; }
-  }
-  // 末行半截是最常见也最无害的一种（写到一半进程没了），单独标出来：
-  // 它和「整份文件成了乱码」不该同等对待。
-  const 只坏末行 = 坏行数 === 1 && 首个坏行 === 行表.filter((l) => l.trim()).length;
-  return { 文件, 存在: true, 行数, 坏行数, 首个坏行: 首个坏行 || null, 只坏末行, 完好: 坏行数 === 0 };
-}
-
 const 日键 = (iso) => String(iso || '').slice(0, 10);   // YYYY-MM-DD
 const 月键 = (iso) => String(iso || '').slice(0, 7);    // YYYY-MM
 
@@ -180,4 +150,4 @@ function view(cfg, root, now) {
   });
 }
 
-module.exports = { 账本, usageOf, 记, 读账, 账本体检, 汇总, 估费, 超预算, 冻结池, 并入, view, 日键, 月键 };
+module.exports = { 账本, usageOf, 记, 读账, 汇总, 估费, 超预算, 冻结池, 并入, view, 日键, 月键 };

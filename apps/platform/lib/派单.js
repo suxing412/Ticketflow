@@ -5,6 +5,7 @@
 // 所以本模块可以住 server 进程，桩模式断言不受影响。
 'use strict';
 
+const fs = require('fs');
 const 路由器 = require('./routing/router');
 const 加固 = require('./执行加固');
 
@@ -76,17 +77,44 @@ function 冻结情况(公用件, 配置, 账本根) {
     for (const [池, 信息] of Object.entries(冻)) {
       if (信息 && 信息.locked) 挡[池] = 信息.reason || '预算闸冻结';
     }
-    // 账本读全了没有。读账 对坏行是**丢弃不抛**，于是「账本坏了」和「今天没用过」
-    // 在冻结结果上长得一模一样：都是零用量、都不冻。少算用量的方向恰恰是费钱的方向。
-    // typeof 判一下：公用件版本可能没有这个函数，缺了不算错（那时就退回原来的行为）。
     let 账本 = null;
-    if (typeof budget.账本体检 === 'function') {
-      try { 账本 = budget.账本体检(账本根); } catch { /* 体检本身失败就当没体检 */ }
-    }
+    try { 账本 = 账本体检(budget.账本(账本根)); } catch { /* 体检本身失败就当没体检 */ }
     return { ok: true, 挡, 原始: 冻, 账本 };
   } catch (e) {
     return { ok: false, 挡: {}, 错误: `预算闸不可用：${e.message}` };
   }
+}
+
+// 账本体检 —— 「这份账读全了没有」。
+//
+// budget.读账 对坏行的处置是**丢弃不抛**。这在读的层面是对的：一次崩在半路的写
+// 会留下半截行，为一行坏账让整个闸罢工不划算。但丢弃是**静默**的，于是
+// 「账本坏了」和「这个池今天没用过」在返回值上长得一模一样——都是零用量、
+// 都不冻结、ok 照旧为 true。而少算用量的方向，恰恰是费钱的方向。
+//
+// 放在 platform 自己这边而不是 packages/budget：那是双签的共建包，
+// 而这条判断是**我方要不要因此停跑**的判断，不该替对方决定他们的产品怎么处置。
+// 代价是这里另有一份读账逻辑——只读文件、只数坏行，不参与任何计算，
+// 与 budget 的口径无关（它算用量，这里只回答「读全了没有」）。
+// 账本文件的路径仍向 budget 要（budget.账本），不在两处各写一遍文件名。
+function 账本体检(文件) {
+  let raw = null;
+  try { raw = fs.readFileSync(文件, 'utf8'); } catch { return { 文件, 存在: false, 行数: 0, 坏行数: 0, 完好: true }; }
+  const 行表 = raw.split('\n');
+  const 非空 = 行表.filter((l) => l.trim()).length;
+  let 行数 = 0; let 坏行数 = 0; let 首个坏行 = 0;
+  for (let i = 0; i < 行表.length; i++) {
+    const s = 行表[i].trim();
+    if (!s) continue;
+    行数++;
+    let ok = false;
+    try { const j = JSON.parse(s); ok = !!(j && j.池); } catch { ok = false; }
+    if (!ok) { 坏行数++; if (!首个坏行) 首个坏行 = i + 1; }
+  }
+  // 末行半截单独标出来：那是写到一半进程没了留下的，最常见也最无害，
+  // 和「整份文件成了乱码」不该同等对待。
+  const 只坏末行 = 坏行数 === 1 && 首个坏行 === 非空;
+  return { 文件, 存在: true, 行数, 坏行数, 首个坏行: 首个坏行 || null, 只坏末行, 完好: 坏行数 === 0 };
 }
 
 // 闸③的后半截：**上限吃满没有**。
@@ -244,4 +272,4 @@ function 落单(工单库, 根, id, 派单结果) {
   return r.ok ? { ok: true, id, 状态: '在途', 执行池: 派单结果.选中 } : r;
 }
 
-module.exports = { 权限参数, 冻结情况, 真跑前提, 选派, 落单, 依赖就绪 };
+module.exports = { 权限参数, 冻结情况, 账本体检, 真跑前提, 选派, 落单, 依赖就绪 };
