@@ -174,6 +174,39 @@ function 转发工作区(res, 路径, 方法, 体) {
   代理.end();
 }
 
+// 「这一张花了多少」。
+//
+// 数据本来就在预算账里——budget.记 是按 单 落的——只是从没被按单归集过。
+// 战绩表有耗时，消耗表有池的日/月总量，而人真正想问的是
+// 「FE-1 这一趟花了多少额度」，那两张表都答不了。
+//
+// **取不到读数的池必须点名**。codex 是非 stream-json 输出，usageOf 取不到 usage，
+// 所以它跑过的那几次在账本里根本没有行。只报一个数字的话，
+// 人会把「没记到」读成「没花」——而那正是花得最多的那次。
+function 按单花费(id, 真跑记录) {
+  try {
+    const budget = 公用件.载入('budget', 'budget.js');
+    const 按池 = {};
+    for (const r of budget.读账(账本根)) {
+      if (String(r.单 || '') !== String(id)) continue;
+      const c = 按池[r.池] || (按池[r.池] = { 输入: 0, 缓存: 0, 输出: 0, token: 0, 条数: 0 });
+      c.输入 += r.输入 || 0; c.缓存 += r.缓存 || 0; c.输出 += r.输出 || 0;
+      c.token += (r.输入 || 0) + (r.输出 || 0);            // 合计不含缓存，与 budget 同口径
+      c.条数 += 1;
+    }
+    const 跑过的池 = [...new Set((真跑记录 || []).map((r) => r.provider).filter(Boolean))];
+    const 未计量 = 跑过的池.filter((p) => !按池[p]);
+    return {
+      按池,
+      合计token: Object.values(按池).reduce((a, c) => a + c.token, 0),
+      未计量池: 未计量,
+      ...(未计量.length
+        ? { 说明: `${未计量.join('/')} 跑过但账本里没有读数（非 stream-json 输出取不到 usage）——这部分消耗没被计入，不是没花。` }
+        : {}),
+    };
+  } catch { return null; }                                  // budget 缺位就不报花费，不编数
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -503,6 +536,7 @@ const 服务 = http.createServer((req, res) => {
           质检: 真.filter((r) => (r.kind ? r.kind === '质检' : r.qualityPassed !== undefined))
             .map((r) => ({ 时刻: r.at, 判官: r.provider, 判过: r.qualityPassed, 耗时毫秒: r.durationMs })),
           ...(全.length ? {} : { 说明: '这张单还没跑过' }),
+          花费: 按单花费(id, 真),
         });
       } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
     }
@@ -681,6 +715,17 @@ const 服务 = http.createServer((req, res) => {
       说明: '「就绪」只表示路径在、是 git 仓——本进程不引 child_process，'
         + '查不了分支与未提交改动，那是工作区服务(:4371)的能力面',
     });
+  }
+  // 注销：只删注册表里的一行，不动那个仓。与 POST 同一个路径、不同方法——
+  // 「登记 / 改 / 注销」是同一样东西的三种写法，不该散成三条路径。
+  if (url路径 === '/api/setup/project' && req.method === 'DELETE') {
+    const r = 项目.注销(仓根, 请求URL.searchParams.get('名') || 请求URL.searchParams.get('name'));
+    if (!r.ok) return 发JSON(res, 400, { ok: false, error: r.错误 });
+    // 和登记那条一样要重读：本进程捧着旧表的话，注销完还能往那个仓提交，
+    // 而界面上已经显示注销成功了。
+    const 新配置 = 本地覆盖.应用(仓根, 读JSON(path.join(仓根, 'config', 'platform.config.json'), {})).配置;
+    配置.项目 = 新配置.项目;
+    return 发JSON(res, 200, { ok: true, ...r });
   }
   if (url路径 === '/api/setup/project' && req.method === 'POST') {
     return 收体(req, 8 * 1024, (体) => {
