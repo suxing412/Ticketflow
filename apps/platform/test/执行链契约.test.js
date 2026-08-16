@@ -263,6 +263,22 @@ t('HTTP 路由路径不许带非 ASCII（不解码的进程会永远匹配不上
   assert.deepEqual(查(path.join(平台根, 'server.js')), [], 'server 的路由里有中文路径');
 });
 
+t('分发件里不许带本机配置（这个口子漏过一次）', () => {
+  // 实测过一次：打出来的 exe 里带着开发机的 接口令牌.local.json（API 令牌）、
+  // 工单库.local.json（指向私仓的绝对路径）、项目.local.json、预算.local.json。
+  // 这些是本机的东西，不该跟着二进制走。排除项被谁顺手删掉的话，
+  // 下次打包又会把它们塞进去——而打包日志里一个字都不会提。
+  const 包 = JSON.parse(fs.readFileSync(path.join(平台根, 'package.json'), 'utf8'));
+  const 表 = (包.build && 包.build.files) || [];
+  for (const 必须 of ['!config/*.local.json', '!config/api-token.txt']) {
+    assert.ok(表.includes(必须), `package.json build.files 少了排除项 ${必须}——本机配置会被打进分发件`);
+  }
+  // 排除项要排在**包含项之后**：electron-builder 的 files 是按序求值的，
+  // 先排除再 config/** 会把它们又捞回来。
+  const 含 = 表.indexOf('config/**');
+  assert.ok(含 >= 0 && 表.indexOf('!config/*.local.json') > 含, '排除项必须排在 config/** 后面，否则会被重新捞回来');
+});
+
 // ---- 本地覆盖：危险开关只能从不入库的文件打开 ----
 t('入库配置的 允许真跑 必须是 false（危险开关不许带着 true 入库）', () => {
   const c = JSON.parse(fs.readFileSync(path.join(平台根, 'config', 'platform.config.json'), 'utf8'));
