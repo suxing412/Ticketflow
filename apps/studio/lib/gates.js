@@ -16,6 +16,7 @@ function setPaused(root, val) {
 // 窗口正名（施工令-010，制作人 2026-08-06 23:59 批准）：codex 现实只有周窗——app-server 实读
 // primary.windowDurationMins=10080、secondary=null，锁文案却写死「5小时已用」，读起来像 5 小时窗烧穿。
 // 现按窗口自报的 label（quota.windowLabel）如实呈现；claude 双窗照旧「5小时」＋「周」。
+// 窗口解析本体自施工令-059 起在 packages/quota（lib/quota.js 转发），本文件 require 路径不变。
 // **判定逻辑一字不改**：主窗（codex 就是那唯一一个窗口）比 阈值，次窗比 周阈值。
 function poolLock(cfg, pool, rl, cu) {
   const pc = (cfg.执行池 && cfg.执行池[pool]) || {};

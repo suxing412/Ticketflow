@@ -1,0 +1,12 @@
+{
+  "name": "@papercrew/quota",
+  "version": "0.1.0",
+  "private": true,
+  "description": "额度快照解读：窗口解析、百分比、label、重置时刻、守门判定。纯函数——不发请求不读文件，取数归调用方。",
+  "main": "quota.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "author": "robinwang2",
+  "license": "UNLICENSED"
+}

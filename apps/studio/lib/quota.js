@@ -1,6 +1,11 @@
-// quota.js — codex / claude 账号限额：查询（零 token 消耗）、缓存、守门判定。
+// quota.js — codex / claude 账号限额：查询（零 token 消耗）、缓存、守门。
 // codex 走 app-server 协议；claude 走 OAuth usage 接口（读 ~/.claude/.credentials.json）。
 // 也可作 CLI：node quota.js [--oneline]
+//
+// 施工令-059（应 robinwang2 请求）：**解读**那一半已归位 packages/quota（形制照 packages/budget）——
+// 窗口解析 windowsOf/claudeWindows、百分比、label、重置时刻、守门判定 gateOf 全在包里，纯函数。
+// 留在本文件的是**取数**那一半：拉 app-server、发 OAuth 请求、刷 token、节流、缓存、CLI。
+// 消费方（gates / server / runner）require 的还是这里，导出名一个没变：本文件把包里那几个纯函数原样转发。
 const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -8,6 +13,103 @@ const path = require('path');
 
 const QUERY_TIMEOUT_MS = 20000;
 let cache = { at: 0, data: null }; // codex app-server 快照缓存（本地零 token，无限流之虞）
+
+/* ===================== 公用件三候选解析（照 budget-resolve · 施工令-046）=====================
+   打包态坑（0.26.5 冒烟案）：asar 内 ../../../packages 逃不出应用包，故有三候选：
+     ①仓内相对（开发态）→②TICKETFLOW_PACKAGES 环境变量→③studio.config.json · packages路径
+   （壳里不许出现盘符绝对路径——候选③此前在 budget 那边是硬编码某台机器的仓根，换机即死。）
+   缺省/空串=跳过该候选，相对值按监制台仓根解析。
+   全失守不静默：console + journal 双留痕 + 对象上打 失效/失败因（失效位() 供接口展开）。
+   与 budget-resolve 是同一套算法的第二份实现——写区只到 lib/quota.js，不动 046 那两个文件；
+   两份合一（提 lib/公用件解析.js，budget-resolve 转调）值得单开一令，见回执-059「留给下一令」。 */
+
+// 候选③的配置读取。不走 core/config.load()——那条路会顺带跑编制迁移并**写盘**，
+// 而这里只是取一个字符串，在 require 期做写盘副作用不划算。BOM 容忍与 load() 同款。
+function 读配置包路径(根) {
+  const raw = fs.readFileSync(path.join(根, 'studio.config.json'), 'utf8');
+  const cfg = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+  return typeof cfg.packages路径 === 'string' ? cfg.packages路径.trim() : '';
+}
+
+// 空实现：额度**解读**缺席但绝不炸 gates/派发——与既有纪律同向（查询失败一律 fail-open，
+// 守门查不着不能反过来卡死管线）。代价是这段时间不会有任何池被额度锁住，所以更要吭声：
+// 控制台一行 + journal 一条 + 对象上的失效位。保险丝烧了要响。
+function 空实现(失败因, 根) {
+  const 说 = 失败因.map((f) => `${f.候选}：${f.因}`).join('；');
+  console.error('[quota] 额度解读件失效——三候选全失守，落空实现：窗口读不出、额度锁恒不锁（' + 说 + '）');
+  // 控制台那行开机就滚没了，流水是唯一留得住的证据面；找不到仓根就只剩控制台，如实记下这一点。
+  let journal = '未落（找不到监制台仓库，无处可落）';
+  if (根) {
+    try {
+      require('./journal').append(根, `额度解读件失效：三候选全失守，落空实现——窗口读不出、额度锁恒不锁｜${说}`);
+      journal = '已落';
+    } catch (e) { journal = '未落（' + e.message + '）'; }
+  }
+  return {
+    windowsOf: () => [], claudeWindows: () => [], describe: () => [], describeClaude: () => [],
+    fmtReset: () => '未知', windowLabel: () => '窗口',
+    gateOf: () => ({ allowed: true, threshold: 0, reason: '额度解读件失效，放行（fail-open）' }),
+    失效: true, 失败因, journal,
+  };
+}
+
+// 解析。参数全部可注入（测试用）：
+//   相对=候选①的路径（不给则走字面量 require，保持打包器的静态可分析性）
+//   环境=候选②的 TICKETFLOW_PACKAGES 值　根=候选③找 studio.config.json 的仓根
+function 解析(o = {}) {
+  const 环境 = o.环境 !== undefined ? o.环境 : process.env.TICKETFLOW_PACKAGES;
+  const 根 = o.根 !== undefined ? o.根 : require('./core/config').resolveRoot();
+  const 候选 = [
+    {
+      名: '仓内相对',
+      取: () => (o.相对 ? require(o.相对) : require('../../../packages/quota/quota.js')),
+    },
+    {
+      名: 'TICKETFLOW_PACKAGES 环境变量',
+      取: () => {
+        if (!环境) throw new Error('未设');
+        return require(path.join(环境, 'quota/quota.js'));
+      },
+    },
+    {
+      名: 'studio.config.json · packages路径',
+      取: () => {
+        if (!根) throw new Error('找不到监制台仓库（缺 studio.config.json）');
+        const p = 读配置包路径(根);
+        if (!p) throw new Error('配置里 packages路径 为空——跳过该候选');
+        return require(path.join(path.resolve(根, p), 'quota/quota.js'));
+      },
+    },
+  ];
+  const 失败因 = [];
+  for (const c of 候选) {
+    try {
+      const m = c.取();
+      // 形状校验：解析到了但不是额度解读件（半截包/同名文件）比找不到更坑——当场判失败进下一候选。
+      // 七个面一个都不能缺：少了 windowsOf 额度卡画不出窗口，少了 gateOf 守门整块失灵，
+      // 而两者都会**静默**地表现为「一切正常，就是从来不锁」——正是 046 要根治的那种病。
+      const 缺 = ['windowsOf', 'claudeWindows', 'describe', 'describeClaude', 'fmtReset', 'windowLabel', 'gateOf']
+        .filter((k) => typeof (m || {})[k] !== 'function');
+      if (缺.length) throw new Error('模块形状不对（缺 ' + 缺.join('/') + '）');
+      return m;
+    } catch (e) {
+      // 只留首行：MODULE_NOT_FOUND 的 message 后面挂着整段 Require stack，
+      // 原样带进 journal 与 UI 悬停就是三屏噪音，首行「Cannot find module 'X'」才是那条线索。
+      失败因.push({ 候选: c.名, 因: String(e && e.message || e).split('\n')[0] });
+    }
+  }
+  return 空实现(失败因, 根);
+}
+
+// 接口失效位（形制照 budget-resolve.失效位）：正常命中时是空对象——返回体逐字节不变。
+function 失效位(q) {
+  const m = q || 包;
+  return m && m.失效 ? { quota失效: true, quota失败因: m.失败因 || [] } : {};
+}
+
+const 包 = 解析(); // 本壳自己也用它：checkGate 的判定、CLI 的文案都从包里取
+
+/* ===================== 以下是取数那一半（有 I/O，故不入包）===================== */
 
 // 代理自适应：exe 双击启动没有代理 env，回落读系统注册表（同 watch-mailbox.ps1 策略）
 function getProxyUrl() {
@@ -140,38 +242,6 @@ async function getClaudeUsage(cfg) {
   return stale(t.lastGood);
 }
 
-// 结构化窗口数据（label/pct/reset），供界面画进度条；text 版继续服务 CLI 与日志
-function windowsOf(rl) {
-  const out = [];
-  if (!rl) return out;
-  for (const key of ['primary', 'secondary']) {
-    const w = rl[key];
-    if (!w || w.usedPercent == null) continue;
-    out.push({ label: windowLabel(w), pct: Math.round(w.usedPercent), reset: fmtReset(w.resetsAt) });
-  }
-  return out;
-}
-function claudeWindows(cu) {
-  const out = [];
-  if (!cu) return out;
-  const push = (w, label) => { if (w && w.utilization != null) out.push({ label, pct: Math.round(w.utilization), reset: fmtReset(w.resets_at) }); };
-  push(cu.fiveHour, '5小时');
-  push(cu.sevenDay, '周');
-  return out;
-}
-
-function describeClaude(cu) {
-  const parts = [];
-  if (!cu) return parts;
-  const fmt = (w, label) => {
-    if (!w || w.utilization == null) return;
-    parts.push(`${label} 已用 ${Math.round(w.utilization)}%（${fmtReset(w.resets_at)} 重置）`);
-  };
-  fmt(cu.fiveHour, '5小时');
-  fmt(cu.sevenDay, '周');
-  return parts;
-}
-
 // 查询限额快照；任何失败都返回 null（守门 fail-open，绝不能因查询挂了卡死管线）
 function queryRateLimits() {
   return new Promise((resolve) => {
@@ -239,87 +309,29 @@ async function getRateLimits(cfg) {
   return data;
 }
 
-function fmtReset(resetsAt) {
-  if (resetsAt == null) return '未知';
-  let d;
-  if (typeof resetsAt === 'number') d = new Date(resetsAt * (resetsAt > 1e12 ? 1 : 1000));
-  else d = new Date(resetsAt);
-  if (isNaN(d.getTime())) return String(resetsAt);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function windowLabel(w) {
-  if (!w || w.windowDurationMins == null) return '窗口';
-  const mins = w.windowDurationMins;
-  if (mins <= 360) return `${Math.round(mins / 60)}小时`;
-  if (mins >= 9000) return '周';
-  return `${mins}分钟`;
-}
-
-function describe(rl) {
-  const parts = [];
-  if (!rl) return parts;
-  for (const key of ['primary', 'secondary']) {
-    const w = rl[key];
-    if (!w) continue;
-    const pct = w.usedPercent == null ? '?' : Math.round(w.usedPercent);
-    parts.push(`${windowLabel(w)} 已用 ${pct}%（${fmtReset(w.resetsAt)} 重置）`);
-  }
-  if (rl.planType) parts.push(`套餐 ${rl.planType}`);
-  return parts;
-}
-
-// 守门判定（双闸 + 余量感知）。查询失败 fail-open 放行。
-// - 5h 闸：有效阈值 = min(gatePercent, 100 - costBufferPercent)。costBuffer 是"单张工单
-//   的预估消耗"——守门只在派发瞬间检查，不留余量就会 79% 放行、一单烧 30% 冲破 100%
-//   （2026-07-06 实测每张 Unity 单吃 25~30%，TK-11-10 事故即此）
-// - 周闸：周窗烧穿是灾难级（停摆数日），weeklyGatePercent 兜底
-// gatePercent 显式设 0 = 关闭守门（不发起查询，测试/离线环境用）
+// 守门 = 取数 + 判定。判定整块在 packages/quota.gateOf（纯函数），这里只负责把快照喂进去。
+// gatePercent 显式设 0 时不发起查询（测试/离线环境用）——递 null 进去，包里那条早退分支照旧应答。
 async function checkGate(cfg) {
   const q = (cfg && cfg.quota) || {};
-  if (Number(q.gatePercent) === 0) return { allowed: true, threshold: 0, reason: '额度守门已关闭' };
-  const gatePercent = Number(q.gatePercent) > 0 ? Number(q.gatePercent) : 80;
-  const costBuffer = q.costBufferPercent != null ? Number(q.costBufferPercent) : 30;
-  const threshold = Math.min(gatePercent, 100 - costBuffer);
-  const weeklyThreshold = q.weeklyGatePercent != null ? Number(q.weeklyGatePercent) : 90;
-  const rl = await getRateLimits(cfg);
-  if (!rl || !rl.primary || rl.primary.usedPercent == null) {
-    return { allowed: true, threshold, snapshot: rl, reason: '额度查询不可用，放行（fail-open）' };
-  }
-  const toISO = (raw) => {
-    if (raw == null) return null;
-    const d = typeof raw === 'number' ? new Date(raw * (raw > 1e12 ? 1 : 1000)) : new Date(raw);
-    return isNaN(d.getTime()) ? null : d.toISOString();
-  };
-  const used = rl.primary.usedPercent;
-  if (used >= threshold) {
-    return {
-      allowed: false, threshold, snapshot: rl, usedPercent: used, resetAt: toISO(rl.primary.resetsAt),
-      reason: `${windowLabel(rl.primary)}窗口已用 ${Math.round(used)}%（拦截线 ${threshold}%＝阈值与单张余量取严），${fmtReset(rl.primary.resetsAt)} 重置`,
-    };
-  }
-  const weekly = rl.secondary && rl.secondary.usedPercent;
-  if (weekly != null && weekly >= weeklyThreshold) {
-    return {
-      allowed: false, threshold: weeklyThreshold, snapshot: rl, usedPercent: weekly, resetAt: toISO(rl.secondary.resetsAt),
-      reason: `周窗口已用 ${Math.round(weekly)}%（周阀门 ${weeklyThreshold}%），${fmtReset(rl.secondary.resetsAt)} 重置——周额度烧穿会停摆数日，从严把守`,
-    };
-  }
-  return { allowed: true, threshold, snapshot: rl, usedPercent: used };
+  if (Number(q.gatePercent) === 0) return 包.gateOf(null, cfg);
+  return 包.gateOf(await getRateLimits(cfg), cfg);
 }
 
-module.exports = { queryRateLimits, getRateLimits, checkGate, describe, fmtReset, windowLabel,
-  queryClaudeUsage, getClaudeUsage, describeClaude, windowsOf, claudeWindows, eagerRefresh, getProxyUrl };
+module.exports = { queryRateLimits, getRateLimits, checkGate,
+  queryClaudeUsage, getClaudeUsage, eagerRefresh, getProxyUrl,
+  // 以下七个是 packages/quota 的纯函数，本壳原样转发（消费方 require 路径与调用名不变）
+  describe: 包.describe, describeClaude: 包.describeClaude, fmtReset: 包.fmtReset, windowLabel: 包.windowLabel,
+  windowsOf: 包.windowsOf, claudeWindows: 包.claudeWindows, gateOf: 包.gateOf,
+  解析, 失效位, 读配置包路径, 包 };
 
 // ---- CLI 模式（供监听器写 USAGE 日志 / 人工双击查看）：codex + claude 一起报 ----
 if (require.main === module) {
   const oneline = process.argv.includes('--oneline');
   Promise.all([queryRateLimits(), queryClaudeUsage()]).then(([rl, cu]) => {
     const lines = [];
-    const codexParts = describe(rl);
+    const codexParts = 包.describe(rl);
     if (codexParts.length) lines.push('codex：' + codexParts.join(' · '));
-    const claudeParts = describeClaude(cu);
+    const claudeParts = 包.describeClaude(cu);
     if (claudeParts.length) lines.push('claude：' + claudeParts.join(' · '));
     if (!lines.length) { console.error('限额查询失败'); process.exit(2); }
     console.log(oneline ? lines.join(' | ') : lines.join('\n'));
