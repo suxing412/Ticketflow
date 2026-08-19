@@ -126,6 +126,7 @@ function buildCutPrompt(root, cfg, parent, projPath, 校准块) {
     '⑤依赖建模：同写区串行（依赖链）、异写区并行；标注红链',
     '⑥单元合规自检：每张 ≤2 单元、单一写区、验收标准全部可判定（GWT/勾选）',
     '⑧验收锚点归位（TK-78/75 两案）：受控重建、SavedScene 在位断言、场景体积闸这类收尾锚点，只准写进最后一张装配单的验收标准——写进前置单必与其「不要做」互斥，烧判官轮次',
+    '⑧附·引擎门禁停闸（H97，2026-08-09 制作人批准，施工令-032 实装）：**验收标准章**里出现 enginectl / unity-test / 受控重建 这类引擎实测特征的单，核查判通过后机器不转完成——原位盖「候引擎实证」印停在待验收，待总监确认引擎实测证据确已誊入回执后走「实证放行」才收（特征表可在 studio.config 执行器.引擎门禁.特征 覆盖，缺省即上述三特征；门禁只扫验收标准章）。这是设计内的第二把钥匙，不是故障：切这类单时把验收标准写成「谁跑哪条命令、回执里必须贴哪几个数字」的可复核条目，别只写「测试通过」。',
     '⑦结构归位（H50/H51）：工单树是项管资产，管线是顶层单位——若本父单无管线章（frontmatter 管线: P-#），在简报里提出应挂入的既有管线，或建议开新线（开线是制作人人闸，你只有建议权）；判不出写「呈制作人定归属」',
     '⑩短题制（H83，2026-08-06 制作人裁决，适用全部单型——子单/专项/父单/机制单一视同仁）：标题 ≤16 字、「对象+动作」结构（如「海岸线钉零与衰减」），不堆机制词不带括号补语；范围枚举（①②③…）一律写进正文「范围」章，禁入标题——标题是卡片的脸，长到要点进详情才认得出就是不合格（制作人反馈拆名太乱）',
     '⑪用工语境（H85 + 同日「去岗位化」补章，2026-08-06 制作人裁决）：编制数据与调整权在你（项管）手上——监制台参数页已无编制管理区，改编制走 /api/pm/roster（GET 取快照，POST 体 {改动:[{职能,池序:[{池,档}]}],理由}）。**编制表每职能一行，没有 程序-A/程序-B 这类岗位号**：派发制下执行者因单而生，同一编制想开几个无头 CLI 就开几个，所以编制记的是「这个职能能在哪些池上干、按什么优先级」——池序第一位是首选池，档为空即用池默认模型。池路由按池序与额度实况定：池序里还有未冻结的池就顺位取用（不算改挂）；整条池序全冻时派发引擎才临时借调到可用池（自动动作只此一种，会留 fm.临时改池 + 台账）；其余用工调整由你显式发起，别指望自动。',
@@ -136,7 +137,7 @@ function buildCutPrompt(root, cfg, parent, projPath, 校准块) {
     '=== 单型库（只从六型选：调研单/方案单/实现单/装配单/修复单/工程单）===',
     '工程单（H71）：纯机械体力活——批量替换/清洗/格式化/迁移，零设计判断零技术抉择；frontmatter 必须盖 执行池: deepseek（最便宜池），QA: 关（简检口径）。验收标准必须全机判（grep 计数/文件清单比对）。',
     '调研单（H90）：未知数排查的先行单——调研结论文档本身就是交付物。**产物路径口径（施工令-020）：调研结论一律落 `Docs/SLG/调研方案/<题目>.md`**（竞品横评落 `Docs/SLG/竞品分析/`），两者同挂监制台 wiki「调研方案」分区；产出物路径写别处即返修。执行会话必须调异厂评审台（packages/review-panel/review.js，喂调研结论 md 全绝对路径）过一遍全员评审，命令口径同方案单：评审团自动发现、异厂全到，少一席要写缺席原因；额度耗尽则弃对应厂并在回执如实记录。回执必带附录三件：①各厂意见原文 ②逐条采纳/驳回（驳回写理由）③由此产生的修订点。评审台已行**红队立场卷制**（H91/施工令-019）：三卷（可行性红队/不变量红队/成本红队）按席序轮换派发、单厂在席时独领全部三卷，每卷必须尝试构造具体失败场景，构造不出要明写「未能构造击杀」——该声明本身即通过证据。验收标准必须含评审台证据项（意见合集 md 绝对路径 + 附录三件齐备 + 击杀结论：各厂领卷与击杀/未杀条数，缺席致落空的立场卷如实标注）。质检阶段按 H93 只做击杀点定向复核，零击杀免次轮。',
-    '方案单（H88）：承重技术方案的设计单——先出方案再动手，方案本身就是交付物。frontmatter 定死：职能: 技术策划、产出物类型: 文档、QA: 开、验收方式: 委托（承重设计不吃⑨「文档类=关」的简检口径，这是明定例外）。正文按五章契约写（章名以协议库 H88 正本为准，至少覆盖 问题与目标／不变量／路径划分与取舍／验证法／实现风险与回滚），缺章即返修。执行会话必须调异厂评审台（packages/review-panel/review.js，喂方案 md 全绝对路径）过一遍全员评审——评审团自动发现、异厂全到，少一席要写缺席原因。回执必带附录三件：①各厂意见原文 ②逐条采纳/驳回（驳回写理由）③由此产生的修订点。质检阶段定向复核（H90，经 H93 收窄 2026-08-09）——执行阶段全量异厂对抗性评审为唯一全量轮；QA 质检只对首轮击杀点+对应修订处定向对抗复核（回执击杀点清单即次轮卷面），零击杀免次轮；额度耗尽则弃对应厂并如实记录。评审台已行**红队立场卷制**（H91/施工令-019）：三卷（可行性红队/不变量红队/成本红队）按席序轮换派发、单厂在席时独领全部三卷，每卷必须尝试构造具体失败场景，构造不出要明写「未能构造击杀」——该声明本身即通过证据。验收标准必须含评审台证据项（意见合集 md 绝对路径 + 附录三件齐备 + 击杀结论：各厂领卷与击杀/未杀条数，缺席致落空的立场卷如实标注）。',
+    '方案单（H88）：承重技术方案的设计单——先出方案再动手，方案本身就是交付物。frontmatter 定死：职能: 技术策划、产出物类型: 文档、QA: 开、验收方式: 委托（承重设计不吃⑨「文档类=关」的简检口径，这是明定例外）。正文按**六章契约**写（H91 六章制，2026-08-08 制作人决议；章名以 监制台/岗位协议/技术策划.md 为准：第一性拆解／目标／不变量清单／现状与病灶／改动面与路径／验证法。首章「第一性拆解」写本问题不可约的物理约束与目的三问——是什么／为何非有不可／谁是唯一所有者，不变量清单必须从该章推导，红队优先对该章开火），缺章即返修。执行会话必须调异厂评审台（packages/review-panel/review.js，喂方案 md 全绝对路径）过一遍全员评审——评审团自动发现、异厂全到，少一席要写缺席原因。回执必带附录三件：①各厂意见原文 ②逐条采纳/驳回（驳回写理由）③由此产生的修订点。质检阶段定向复核（H90，经 H93 收窄 2026-08-09）——执行阶段全量异厂对抗性评审为唯一全量轮；QA 质检只对首轮击杀点+对应修订处定向对抗复核（回执击杀点清单即次轮卷面），零击杀免次轮；额度耗尽则弃对应厂并如实记录。评审台已行**红队立场卷制**（H91/施工令-019）：三卷（可行性红队/不变量红队/成本红队）按席序轮换派发、单厂在席时独领全部三卷，每卷必须尝试构造具体失败场景，构造不出要明写「未能构造击杀」——该声明本身即通过证据。验收标准必须含评审台证据项（意见合集 md 绝对路径 + 附录三件齐备 + 击杀结论：各厂领卷与击杀/未杀条数，缺席致落空的立场卷如实标注）。',
     '承重实现单挂依据（H88）：凡实现单落在已出方案的承重面上，frontmatter 必须写 依据: <已落袋的方案单号>——方案没落袋就不许切实现单，先切方案单、再把实现单的 依赖 挂到它身上。',
     '实现单/装配单/修复单——无方案不开工（H92 项管侧，施工令-020）：程序与装配类单型的**依据栏应指向已落袋技术方案**（方案单号或 `Docs/SLG/技术方案/` 下已定案的那一篇）；**无对应方案先切方案单**，再把本单 依赖 挂上去。判不出该挂哪篇就是方案缺位，按缺位处置——不许拿「边做边定」搪塞。',
     '职能定夺（H98）：职能按改动面实质定——改动面全落 Scripts/Tests 代码的单一律 职能: 程序（不论单型叫什么）；装配单型只用于场景/预制体/资产拼装写区动作。',
@@ -233,14 +234,37 @@ function parse拒切(text) {
  * 统一成同一个形回给下游：{ id, fm, body, 专项 }。切单主流程只认这个形，不必到处判「这是哪一种」。
  * 关键差别只有两处，全在这里定死：**子单挂链字段**（专项: S-n / 父单: TK-n）与**派号前缀**
  * （专项号是 S-n，子单绝不能跟着叫 S-2——那会跟下一个专项号撞车）。 */
-function 容器(root, id) {
+// 项目前缀（施工令-061 · 制作人 2026-08-20 00:45 拍板监制台自立 Ticketflow 项目）：
+// 派号前缀原先六处写死 'TK'，第二个项目一进来就会跟 TK 抢号。前缀是**项目的属性**，
+// 事实源在 config.项目.注册[名].单号前缀；缺注册项时回落项目名本身（注册名即前缀是最省心的默认），
+// 再兜底 'TK' 只为老库无注册表时不炸。三级回落各有其用，别合并。
+function 前缀Of(cfg, 项目) {
+  const reg = (cfg && cfg.项目 && cfg.项目.注册) || {};
+  const name = String(项目 || (cfg && cfg.项目 && cfg.项目.默认) || '').trim();
+  const px = name && reg[name] && reg[name].单号前缀;
+  return String(px || name || 'TK').trim();
+}
+
+// 派下一个号：只数**本前缀**的号段。两项目号段互不相扰的保证就在这个正则的前缀上——
+// 数 TK 时不看 TF，数 TF 时不看 TK，故各自连号、互不串号。
+function 下一号(root, px) {
+  const re = new RegExp('^' + px.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-([0-9]+)$');
+  let mx = 0;
+  for (const s of store.STATES) for (const x of store.list(root, s)) {
+    const mm = String(x.id).match(re);
+    if (mm) mx = Math.max(mx, Number(mm[1]));
+  }
+  return px + '-' + (mx + 1);
+}
+
+function 容器(root, id, cfg) {
   const specials = require('../specials');
   if (specials.是专项号(id)) {
     const s = specials.find(root, id);
     if (!s) return null;
     return {
       id: s.id, body: s.body, 专项: true,
-      前缀: String(s.fm.单号前缀 || 'TK'),
+      前缀: String(s.fm.单号前缀 || 前缀Of(cfg, s.fm.项目)),
       挂链: { 专项: s.id },
       fm: { 项目: s.fm.项目 || '', 管线: s.fm.管线 || null, title: s.fm.名称 || s.id },
     };
@@ -249,7 +273,7 @@ function 容器(root, id) {
   if (!t) return null;
   return {
     id: t.id, body: t.body, 专项: false,
-    前缀: (String(t.id).match(/^(.+)-(\d+)$/) || [])[1] || 'TK',
+    前缀: (String(t.id).match(/^(.+)-(\d+)$/) || [])[1] || 前缀Of(cfg, t.fm.项目),
     挂链: { 父单: t.id },
     fm: t.fm,
   };
@@ -298,7 +322,7 @@ function draftFm(tk, { id, 项目, 粒ID }) {
 // 切单主流程：调 fable → 解析 → 建草稿挂容器 → 简报落台账待审
 // parentId 吃两形（见 容器()）：专项号 S-n（施工令-058 新路）或存量战役父单号。
 function cut(root, cfg, parentId, projPath, cb) {
-  const parent = 容器(root, parentId);
+  const parent = 容器(root, parentId, cfg);
   if (!parent) return cb({ ok: false, error: parentId && String(parentId).startsWith('S-') ? '专项不存在' : '父单不存在' });
   const 校 = 备校准(root); // H101：切单链的校准步，取数一次，提示词与机器复核共用这张表
   const prompt = buildCutPrompt(root, cfg, parent, projPath, 校.块);
@@ -327,7 +351,7 @@ function cut(root, cfg, parentId, projPath, cb) {
     // 派号 + 建草稿（依赖引用同批序号→实际编号）
     // 前缀由容器给（施工令-058）：专项号 S-1 的子单要叫 TK-n，不能顺着容器号叫 S-n——
     // 那会跟下一个专项号 S-2 撞车，一个编号两种实体是账目最难拆的一种烂摊子。
-    const px = parent.前缀 || 'TK';
+    const px = parent.前缀 || 前缀Of(cfg, parent.fm && parent.fm.项目);
     let mx = 0;
     for (const s of store.STATES) for (const x of store.list(root, s)) {
       const mm = String(x.id).match(/^(.+)-(\d+)$/);
@@ -359,7 +383,7 @@ function cut(root, cfg, parentId, projPath, cb) {
 
 // 收口报告：专项全落袋后汇总子单回执 → 验收包（含逐项验收步骤与成本账）
 function closeout(root, cfg, parentId, cb) {
-  const parent = 容器(root, parentId); // 施工令-058：收口对象同样吃 S-n 与存量战役父单两形
+  const parent = 容器(root, parentId, cfg); // 施工令-058：收口对象同样吃 S-n 与存量战役父单两形
   if (!parent) return cb({ ok: false, error: parentId && String(parentId).startsWith('S-') ? '专项不存在' : '父单不存在' });
   const wake = require('./wake');
   const kids = wake.childrenOf(root, parentId);
@@ -525,6 +549,7 @@ function buildDraftPrompt(cfg, 需求, projPath, 校准块) {
     '项目仓库（可读，用于盘点核实）：' + (projPath || '（未注册）'),
     '纪律：①先盘仓核实需求描述的现状 ②单元标准 ' + (单元.小时 || 0.25) + 'h/≤' + (单元.token || 50000) + ' token，顶格 2 单元 ③验收标准全部可判定 ④收尾锚点（受控重建/SavedScene/体积闸）只属装配单 ⑤如需求实际需要多张单，直说并建议走专项拍板，不要硬塞。',
     '短题制（H83，2026-08-06 制作人裁决，适用全部单型——子单/专项/父单/机制单一视同仁）：标题 ≤16 字、「对象+动作」结构（如「海岸线钉零与衰减」），不堆机制词不带括号补语；范围枚举（①②③…）一律写进正文「范围」章，禁入标题——标题是卡片的脸，长到要点进详情才认得出就是不合格。',
+    '引擎门禁停闸（H97，2026-08-09 制作人批准，施工令-032 实装）：验收标准章里写了 enginectl / unity-test / 受控重建 这类引擎实测特征的单，核查判通过后不转完成——原位盖「候引擎实证」印停在待验收，待总监确认实测证据誊入回执后走「实证放行」才收。这是设计内的第二把钥匙，不是故障：这类验收标准要写成「谁跑哪条命令、回执里必须贴哪几个数字」的可复核条目，别只写「测试通过」。',
     FIELD_RULES,
     '输出契约与拆单相同：一个 ```ticket 代码块（title/单型/职能/产出物类型/优先级/QA/验收方式/预计时间/预计token/依赖（需求点名了就写，否则留空）/管线 + --- + 正文三章）。之后一段「起草说明」：盘点发现+边界取舍。',
     '管线归属必填（案源 TK-106~116，起草单尤重）：单张起草单没有父单可继承归属，漏写就必落看板「散单」行——凡属某条管线域的单，frontmatter 必须写 管线: P-N（注册表见 /api/pipelines 或按工单正文域语义判），确无归属的独立杂务才允许留空。',
@@ -553,16 +578,12 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
     const text = require('../runner').extractClaudeText(out);
     const { tickets, brief } = parseTickets(text);
     if (!tickets.length) return cb({ ok: false, error: '起草输出无工单块', raw: text.slice(0, 400) });
-    const px = 'TK';
-    let mx = 0;
-    for (const s of store.STATES) for (const x of store.list(root, s)) {
-      const mm = String(x.id).match(/^TK-([0-9]+)$/);
-      if (mm) mx = Math.max(mx, Number(mm[1]));
-    }
-    const nid = px + '-' + (mx + 1);
+    // 施工令-061：项目 → 前缀 → 号段。起草单的项目取 opts.项目（派单委托可指定），缺省走项目默认。
+    const 项目 = ((opts || {}).项目) || (cfg.项目 && cfg.项目.默认) || '';
+    const nid = 下一号(root, 前缀Of(cfg, 项目));
     const tk = tickets[0];
     const 粒ID = ((opts || {}).粒ID) || null;
-    const fm = draftFm(tk, { id: nid, 项目: (cfg.项目 && cfg.项目.默认) || '', 粒ID });
+    const fm = draftFm(tk, { id: nid, 项目, 粒ID });
     const 记 = 校准落fm(root, nid, fm, 校.表); // H101 机器兜底：落盘前复核估值
     const r = store.create(root, nid, fm, tk.body);
     if (!r.ok) return cb(r);
@@ -586,4 +607,4 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
 }
 
 module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, buildCutPrompt, buildDraftPrompt,
-  parseTickets, parse拒切, childFm, draftFm, getWorking, 历史样本, 备校准, 校准落fm, 容器 };
+  parseTickets, parse拒切, childFm, draftFm, getWorking, 历史样本, 备校准, 校准落fm, 容器, 前缀Of, 下一号 };

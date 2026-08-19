@@ -3,7 +3,7 @@
 // 本套件专盯这条缝：解析拿得到 ≠ 落得到盘，两段都要锁。
 const assert = require('node:assert');
 const store = require('../lib/core/store');
-const { parseTickets, childFm, draftFm } = require('../lib/pm/brain');
+const { parseTickets, childFm, draftFm, 前缀Of, 下一号 } = require('../lib/pm/brain');
 const { makeRoot } = require('./helper');
 
 let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
@@ -204,6 +204,33 @@ t('机器兜底：落 fm 前复核改写估值 + 台账落「估时校准」事�
   // 备校准 在空仓上也出得了表与块（无样本版），不抛
   const b = 备校准(root);
   assert.ok(b.表 && /不得自由拍值/.test(b.块));
+});
+
+// ── 施工令-061：多项目派号（Ticketflow 立项，制作人 2026-08-20 00:45 拍板）──
+// 病灶：派号前缀曾六处写死 'TK'，第二个项目一进来就跟 TK 抢号段。
+t('前缀Of：注册表有前缀取前缀，无注册项回落项目名，全空兜底 TK', () => {
+  const cfg = { 项目: { 默认: 'TK', 注册: { TK: { 单号前缀: 'TK' }, Ticketflow: { 单号前缀: 'TF' } } } };
+  assert.equal(前缀Of(cfg, 'Ticketflow'), 'TF');
+  assert.equal(前缀Of(cfg, 'TK'), 'TK');
+  assert.equal(前缀Of(cfg, ''), 'TK', '空项目走项目默认');
+  assert.equal(前缀Of({ 项目: { 默认: 'Foo', 注册: {} } }, 'Foo'), 'Foo', '无注册项时注册名即前缀');
+  assert.equal(前缀Of({}, ''), 'TK', '老库无注册表也不炸');
+});
+
+t('下一号：两项目号段互不相扰——数 TK 不看 TF，数 TF 不看 TK', () => {
+  const root = makeRoot();
+  const fm = (id, 项目) => ({ id, title: id, 职能: '程序', 项目, 单型: '实现单', QA: '关', 验收方式: '委托' });
+  store.create(root, 'TK-7', fm('TK-7', 'TK'), '本文');
+  store.create(root, 'TK-12', fm('TK-12', 'TK'), '本文');
+  store.create(root, 'TF-3', fm('TF-3', 'Ticketflow'), '本文');
+  assert.equal(下一号(root, 'TK'), 'TK-13', 'TK 号段不受 TF 干扰');
+  assert.equal(下一号(root, 'TF'), 'TF-4', 'TF 号段不受 TK 干扰');
+  assert.equal(下一号(root, 'ZZ'), 'ZZ-1', '全新前缀从 1 起派');
+});
+
+t('下一号：前缀含正则元字符也不炸（转义）', () => {
+  const root = makeRoot();
+  assert.equal(下一号(root, 'A.B'), 'A.B-1');
 });
 
 console.log('全部通过：' + passed + ' 项');
