@@ -1230,6 +1230,20 @@ app.get('/api/decisions', (req, res) => {
   res.json({ 待验收: accept, 待定夺: escal, 积压闸: (cfg.闸值 || {}).待验收积压闸, 积压: accept.length });
 });
 
+// ---- 等我（施工令-061 二·2）：全系统唯一的「欠人几笔」谓词 ----
+// 与上面 /api/decisions 的关键差别：那条按**工单状态**取（待验收∪待定夺），故专项关账这类
+// 非工单实体的闸结构上取不到——08-20 实测欠 3 笔而决策台报 1 笔，页顶还写「积压 1/8」。
+// 本条按**闸**取，逐闸查各自的权威源。/api/decisions 在次序闸走完（详情页补齐通过入库钮 +
+// 三个孤儿闸安家）之前不动，两条并行一个周期供对拍——先建后删是硬前置，不是保守。
+app.get('/api/attn', (req, res) => {
+  if (!ready(res)) return;
+  const gr = require('./lib/gatereg');
+  const 活跃 = new Set((runner.status().执行中 || []).map((s) => s.id));
+  const T = Number((cfg.闸值 || {}).人闸超时小时 || 24);
+  const r = gr.等我(ROOT, { 归属: req.query.归属 || undefined, deps: { 活跃单: 活跃 } });
+  res.json({ ...r, 逾期阈值小时: T, 逾期: r.债.filter((x) => x.停摆小时 != null && x.停摆小时 >= T) });
+});
+
 // ---- 两道闸状态（P1/P2 横幅）----
 app.get('/api/gates', async (req, res) => {
   if (!ready(res)) return;
