@@ -477,5 +477,23 @@ const 找 = (list, 位) => list.find((d) => d.位 === 位);
     assert.equal(m.位.find((b) => b.位 === 'QA').档, 'sonnet');
   });
 
+  // ── 恒定拒因去重（2026-08-20 制作人指认：品味锁把同一请求拒了 265 次，跨 9 天）──
+  t('已记过：同指纹在静默窗内判真，窗外判假，窗=0 即关闭去重', () => {
+    const now = Date.parse('2026-08-20T00:00:00Z');
+    const ev = (h) => ({ 类型: '池衡拒绝', 指纹: 'A', t: new Date(now - h * 3600000).toISOString() });
+    assert.equal(PB.已记过([ev(1)], 'A', now, 24), true, '1 小时前记过 → 不再记');
+    assert.equal(PB.已记过([ev(30)], 'A', now, 24), false, '30 小时前 → 窗外，该再记一次');
+    assert.equal(PB.已记过([ev(1)], 'B', now, 24), false, '指纹不同 → 各自有各自的第一次');
+    assert.equal(PB.已记过([ev(1)], 'A', now, 0), false, '窗=0 即关闭去重（留给要全量流水的场景）');
+    assert.equal(PB.已记过(null, 'A', now, 24), false, '事件缺失不炸');
+  });
+
+  t('已记过：不同拒因不互相压制（品味锁与人工覆盖是两件事）', () => {
+    const now = Date.parse('2026-08-20T00:00:00Z');
+    const 锁 = { 类型: '池衡拒绝', 指纹: '池衡拒绝|执行·美术|品味锁|codex', t: new Date(now - 3600000).toISOString() };
+    assert.equal(PB.已记过([锁], '池衡拒绝|执行·美术|品味锁|codex', now, 24), true);
+    assert.equal(PB.已记过([锁], '池衡拒绝|执行·美术|人工覆盖|codex', now, 24), false, '同一位、不同因 → 该各记一条');
+  });
+
   console.log(`poolbalance：${passed} 项通过`);
 })().catch((e) => { console.error('✗ ' + e.message); console.error(e.stack); process.exit(1); });
