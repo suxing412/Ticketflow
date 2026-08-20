@@ -75,8 +75,8 @@ const 登记一 = (root, o = {}, 人 = '总监') => {
     const 行数 = () => fs.readFileSync(S.LOG(root), 'utf8').split(/\r?\n/).filter(Boolean).length;
     assert.equal(行数(), 1, '登记 1 事件');
     S.调整(root, { 粒ID: g.粒ID, 预期版本: 1, 序: 7, 操作者: '项管' });
-    S.转移(root, { 粒ID: g.粒ID, 目标: '起草中', 预期版本: 2, 操作者: '项管', 单号: 'TK-200' });
-    S.转移(root, { 粒ID: g.粒ID, 目标: '已成单', 预期版本: 3, 操作者: '项管' });
+    S.转移(root, { 粒ID: g.粒ID, 目标: '起草中', 预期版本: 2, 操作者: '总监', 单号: 'TK-200' }); // 派单闸=人闸，项管无此边（2026-08-20）
+    S.转移(root, { 粒ID: g.粒ID, 目标: '已成单', 预期版本: 3, 操作者: '总监' });
     assert.equal(行数(), 4, '四次写盘=四条事件（只追加）');
     const now = S.取(root, g.粒ID);
     assert.equal(now.序, 7, '调整字段被折叠进现态');
@@ -152,7 +152,7 @@ const 登记一 = (root, o = {}, 人 = '总监') => {
     const g = 登记一(root);
     const 甲 = S.取(root, g.粒ID); const 乙 = S.取(root, g.粒ID); // 两个调用方读到同一现态
     assert.ok(S.转移(root, { 粒ID: g.粒ID, 目标: '起草中', 预期版本: 甲.版本号, 操作者: '总监', 单号: 'TK-2' }).ok, '甲先手成功');
-    const r = S.转移(root, { 粒ID: g.粒ID, 目标: '撤销', 预期版本: 乙.版本号, 操作者: '项管' });
+    const r = S.转移(root, { 粒ID: g.粒ID, 目标: '撤销', 预期版本: 乙.版本号, 操作者: '总监' });
     assert.ok(!r.ok && r.冲突, '乙拿旧版本写应被拒');
     assert.ok(r.现态 && r.现态.版本号 === 2 && r.现态.状态 === '起草中', '拒了要把现态交回去供重试：' + JSON.stringify(r.现态));
     assert.equal(S.事件流(root).filter((e) => e.事件类型 === '拒绝').length, 0, 'CAS 冲突不刷审计（重试是正常流量）');
@@ -160,7 +160,7 @@ const 登记一 = (root, o = {}, 人 = '总监') => {
       const bad = S.转移(root, { 粒ID: g.粒ID, 目标: '撤销', 预期版本: v, 操作者: '总监' });
       assert.ok(!bad.ok && /预期版本/.test(bad.error), '预期版本缺失/非整数应拒：' + JSON.stringify(v));
     }
-    assert.ok(S.转移(root, { 粒ID: g.粒ID, 目标: '撤销', 预期版本: r.现态.版本号, 操作者: '项管' }).ok, '按现态重试成功');
+    assert.ok(S.转移(root, { 粒ID: g.粒ID, 目标: '撤销', 预期版本: r.现态.版本号, 操作者: '总监' }).ok, '按现态重试成功');
   });
 
   await t('CAS 同样管住调整；调整只开序/依赖/池衡，终态与越权拒', async () => {
@@ -389,6 +389,41 @@ const 登记一 = (root, o = {}, 人 = '总监') => {
     assert.equal(v.非法[0], 400, '非法转移应 400');
     assert.match(v.非法[1], /不合法的转移/);
     assert.deepEqual(v.未知, [404], '未知动作应 404');
+  });
+
+
+  // ── 逐边操作域（2026-08-20 制作人重定职责：闸前项管能动，闸本身是人闸，闸后项管全权）──
+  await t('派单闸：项管推不动 计划→起草中（待办进工单队列是人闸），总监/制作人可以', async () => {
+    const root = makeRoot();
+    const g = 登记一(root);
+    const 拒 = S.转移(root, { 粒ID: g.粒ID, 目标: '起草中', 预期版本: 1, 操作者: '项管', 单号: 'TK-300' });
+    assert.equal(拒.ok, false, '项管不得自行派单');
+    assert.match(拒.error, /转移权在 总监\/制作人/);
+    assert.match(拒.error, /派单是人闸/, '拒因要讲清为什么，不是干巴巴一句无权');
+    assert.equal(S.取(root, g.粒ID).状态, '计划', '被拒后状态一动不动');
+    assert.ok(S.转移(root, { 粒ID: g.粒ID, 目标: '起草中', 预期版本: 1, 操作者: '制作人', 单号: 'TK-300' }).ok, '制作人可派单');
+  });
+
+  await t('闸后归项管：已成单→完成 项管有权（推进落地是它的全权）', async () => {
+    const root = makeRoot();
+    const g = 登记一(root);
+    S.转移(root, { 粒ID: g.粒ID, 目标: '起草中', 预期版本: 1, 操作者: '总监', 单号: 'TK-301' });
+    S.转移(root, { 粒ID: g.粒ID, 目标: '已成单', 预期版本: 2, 操作者: '总监' });
+    assert.ok(S.转移(root, { 粒ID: g.粒ID, 目标: '完成', 预期版本: 3, 操作者: '项管' }).ok, '闸后项管全权推进');
+  });
+
+  await t('销毁性判断归人：项管撤不掉粒', async () => {
+    const root = makeRoot();
+    const g = 登记一(root);
+    assert.equal(S.转移(root, { 粒ID: g.粒ID, 目标: '撤销', 预期版本: 1, 操作者: '项管' }).ok, false);
+  });
+
+  await t('系统方豁免：台账对齐/派发补链不受人闸拦（机器记录既成事实，不是行使权力）', async () => {
+    const root = makeRoot();
+    const g = 登记一(root);
+    assert.ok(S.转移(root, { 粒ID: g.粒ID, 目标: '起草中', 预期版本: 1, 操作者: '系统·派发', 单号: 'TK-302' }).ok);
+    assert.ok(S.转移(root, { 粒ID: g.粒ID, 目标: '已成单', 预期版本: 2, 操作者: '系统·台账对齐' }).ok);
+    assert.ok(S.转移(root, { 粒ID: g.粒ID, 目标: '完成', 预期版本: 3, 操作者: '系统·台账对齐' }).ok, '拿人闸拦机器回填只会让台账停在错的状态上');
   });
 
   console.log(`全部通过：${passed} 项`);
