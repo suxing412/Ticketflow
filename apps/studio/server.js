@@ -430,6 +430,44 @@ app.post('/api/pipelines/status', (req, res) => {
 // 人闸两处、机器口两处，边界与管线注册表同规格：**立项与关账只准本机操作**（isLocalReq），
 // 切单与迁移是机器动作但都由人发起，故同样钉在本机——远端瞭望塔只有读权。
 const specials = require('./lib/specials');
+// ---- 特性注册表（四层第二层；制作人 2026-08-20 拍板，施工令-061 配套）----
+// 与专项/管线两条并列。读面公开；写面两条：提请（项管）与审核（总监），
+// 审核是人闸故只认本机（同 /api/specials 口径）。
+app.get('/api/features', (req, res) => {
+  if (!ready(res)) return;
+  const F = require('./lib/features');
+  const 快照 = store.snapshot(ROOT);
+  const 专项表 = require('./lib/specials').list(ROOT);
+  res.json({ 特性: F.list(ROOT).map((f) => F.聚合(ROOT, f, { 快照, 专项表 })) });
+});
+app.get('/api/features/:id', (req, res) => {
+  if (!ready(res)) return;
+  const F = require('./lib/features');
+  const v = F.聚合(ROOT, String(req.params.id));
+  if (!v) return res.status(404).json({ error: '特性不存在' });
+  const f = F.find(ROOT, String(req.params.id));
+  res.json({ ...v, 正文: f.body });
+});
+const FT_ACTIONS = {
+  // 提请：项管的动作。禁预规划闸在 features.提请 里（附不出活即拒），此处不复判。
+  提请: (b) => require('./lib/features').提请(ROOT, { ...b, 提请人: b.提请人 || '项管' }),
+  // 审核：总监的人闸。过→活跃，不过→就地封存留痕。
+  审核: (b) => require('./lib/features').审核(ROOT, String(b.id || ''), { 通过: !!b.通过, 审核人: b.审核人 || '总监', 说明: b.说明 }),
+  封存: (b) => require('./lib/features').转移(ROOT, String(b.id || ''), '封存', { 操作者: b.操作者 || '总监', 因: b.因 }),
+  复活: (b) => require('./lib/features').转移(ROOT, String(b.id || ''), '活跃', { 操作者: b.操作者 || '总监', 因: b.因 }),
+};
+app.post('/api/features/:action', (req, res) => {
+  if (!ready(res)) return;
+  if (!isLocalReq(req)) return res.status(403).json({ error: '特性写面只能在本机操作' });
+  const fn = FT_ACTIONS[String(req.params.action || '')];
+  if (!fn) return res.status(404).json({ error: '未知特性动作（只有 提请/审核/封存/复活）' });
+  try {
+    const r = fn(req.body || {});
+    if (r.ok) journal.append(ROOT, `特性${req.params.action} ${r.id || (req.body || {}).id}${r.fm ? `「${r.fm.名称}」` : ''}`);
+    res.status(r.ok === false ? 400 : 200).json(r);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/specials', (req, res) => {
   if (!ready(res)) return;
   const 快照 = store.snapshot(ROOT); // 一次扫盘喂全部聚合：一个专项扫一遍会让十条专项扫十遍
