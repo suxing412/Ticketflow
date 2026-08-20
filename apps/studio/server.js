@@ -524,6 +524,8 @@ const SP_ACTIONS = {
     }
     return r;
   },
+  // 完成定义（2026-08-20）：关账的对照物。存量专项没这一格，签字前在页面上补。
+  定完成定义: (b) => specials.定完成定义(ROOT, String(b.id || ''), b.文, b.操作者 || '制作人'),
   // 复切（054 候期出口的下半步）：条件齐了人来点一下，走的是与立项同一条唤醒线。
   切单: (b) => {
     const s = specials.find(ROOT, String(b.id || ''));
@@ -540,7 +542,7 @@ app.post('/api/specials/:action', (req, res) => {
   if (!ready(res)) return;
   if (!isLocalReq(req)) return res.status(403).json({ error: '专项动作是人闸，只能在本机操作' });
   const fn = SP_ACTIONS[String(req.params.action || '')];
-  if (!fn) return res.status(404).json({ error: '未知专项动作（只有 关账/切单/迁移）' });
+  if (!fn) return res.status(404).json({ error: '未知专项动作（只有 关账/定完成定义/切单/迁移）' });
   try { const r = fn(req.body || {}); res.status(r.ok === false ? 400 : 200).json(r); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });

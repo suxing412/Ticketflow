@@ -67,6 +67,7 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     立(root);
     assert.equal(SP.关账(root, 'S-1', '制作人').ok, false, '立项态不许关账');
     SP.转移(root, 'S-1', '进行'); SP.转移(root, 'S-1', '收口');
+    SP.定完成定义(root, 'S-1', '本用例测的是署名与状态机，完成定义闸另有专测'); // 2026-08-20 新闸
     assert.equal(SP.关账(root, 'S-1', '   ').ok, false, '不署名不给关');
     assert.equal(SP.转移(root, 'S-1', '关账', { 操作者: '' }).ok, false, '绕过 关账() 直接转移也拦——人闸判据在状态机里');
     const r = SP.关账(root, 'S-1', '制作人', '验收通过');
@@ -483,6 +484,49 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     // 前端不自己算百分比：服务端给多少显示多少，两处各算一套正是 041 §四那道病
     assert.equal(spAgg({ 总数: 3, 落袋: 1, 百分比: 33 }).百分比, 33);
   });
+
+
+// ── 完成定义闸（2026-08-20）：两次误催签字之后加的那道闸 ──
+  await t('关账要对照完成定义：缺了就拒，并说清为什么', () => {
+  const root = makeRoot();
+  const s = SP.立项(root, { 名称: '重构专项', 操作者: '制作人' });
+  SP.转移(root, s.id, '进行', { 操作者: '系统' });
+  SP.转移(root, s.id, '收口', { 操作者: '系统' });
+  const r = SP.关账(root, s.id, '制作人');
+  assert.equal(r.ok, false, '没有完成定义不许关账');
+  assert.equal(r.缺完成定义, true);
+  assert.match(r.error, /不是「没活在跑了」/, '拒因要讲清道理——机器判得出没活在跑，判不出做完了');
+  assert.equal(SP.find(root, s.id).fm.状态, '收口', '被拒后状态一动不动');
+});
+
+  await t('补完成定义后可关账；关账留痕带上对照的那句话', () => {
+  const root = makeRoot();
+  const s = SP.立项(root, { 名称: '重构专项', 操作者: '制作人' });
+  SP.转移(root, s.id, '进行', { 操作者: '系统' });
+  SP.转移(root, s.id, '收口', { 操作者: '系统' });
+  assert.equal(SP.定完成定义(root, s.id, '   ').ok, false, '空的不算');
+  assert.ok(SP.定完成定义(root, s.id, '制作人能顺手改图', '制作人').ok);
+  const r = SP.关账(root, s.id, '制作人');
+  assert.equal(r.ok, true);
+  const h = SP.find(root, s.id).fm.履历;
+  assert.match(h[h.length - 1].因, /制作人能顺手改图/, '签的是哪句话要留在账上');
+});
+
+  await t('完成定义改写记履历（旧的是什么半年后要查得到）', () => {
+  const root = makeRoot();
+  const s = SP.立项(root, { 名称: 'x', 完成定义: '旧的一句', 操作者: '制作人' });
+  assert.equal(SP.find(root, s.id).fm.完成定义, '旧的一句', '立项即可带');
+  SP.定完成定义(root, s.id, '新的一句', '制作人');
+  const h = SP.find(root, s.id).fm.履历;
+  assert.match(h[h.length - 1].因, /旧的一句.*→.*新的一句/);
+});
+
+  await t('类型只收枚举内的值，别的落 null（判不出类型说明边界没想清）', () => {
+  const root = makeRoot();
+  assert.equal(SP.立项(root, { 名称: 'a', 类型: '重构' }).fm.类型, '重构');
+  assert.equal(SP.立项(root, { 名称: 'b', 类型: '瞎写' }).fm.类型, null);
+  assert.deepEqual(SP.TYPES, ['调研', '建设', '重构', '修缮', '迁移']);
+});
 
   console.log(`\n✓ specials 全部 ${passed} 项通过`);
 })().catch((e) => { console.error('✗ ' + e.message); console.error(e.stack); process.exit(1); });

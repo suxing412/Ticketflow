@@ -1415,3 +1415,120 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 .tkdirect > summary { cursor:pointer; font-size:13px; padding:2px 0; }
 .bdone { margin:14px 2px 4px; font-size:12px; }
 .bdone a { color:var(--accent-ink); }
+/* 收件箱逾期红标（施工令-061 二·4 超时升格）：停摆超阈值的债左边一道红——
+   页面不会主动找人，这道红是它唯一的"喊"。 */
+.inbox-row.od { border-left:3px solid var(--danger); }
+.inbox-row.od .rnote { color:var(--danger); }
+
+/* ===== 项管页（#/relay）· 2026-08-20 页签定案改造：待办队列 + 甘特 + 排期 =====
+   页宽从原来的 860px 单列放开——甘特图是横轴时间图，塞进读文用的窄栏会把 40 天挤成 40 像素。
+   四块共用一张卡壳（.rlcard）：块头一行说清「这块答什么」，右端一个 mono 读数。
+   颜色全部复用既有语义令牌（计划=虚框弱调 / 已成单=靛 / 完成=绿 / 今日=橙 --now），
+   不新造色：甘特条与队列徽章 QCLS 同一族，同一条待办在两块里长得一样。 */
+.rlpage { margin-top:20px; display:flex; flex-direction:column; gap:14px; }
+.rlstate { padding:16px 22px; display:flex; align-items:center; gap:14px; }
+.rlstate .rldot { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
+.rlroster { overflow:hidden; }
+.rlroster.fold { display:none; }
+.rlcard { padding:16px 20px 14px; }
+.rlch { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+.rlch > b { font-size:14px; }
+.rlch .sp { flex:1; min-width:0; }
+.rlnum { font-size:12px; color:var(--ink3); white-space:nowrap; }
+.rlsub { margin:-4px 0 10px; }
+.rlsec { margin-bottom:14px; }
+/* 人闸读数条：本页做得到的到此为止，再往前一步是总监与制作人的手——写在版面上而不是只写在注释里 */
+.rlgate { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; padding:8px 12px; margin-bottom:10px;
+  border-radius:10px; background:var(--gatebg); border:1px solid var(--gateln); color:var(--gatetx); font-size:12px; }
+.rlgate b { font-size:13px; }
+.rlgate .subnote { color:var(--gatetx); opacity:.85; flex:1 1 300px; }
+
+/* ---- ① 甘特 ---- */
+.gtwrap { border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--card); }
+.gtaxis, .gtrow { display:grid; grid-template-columns:minmax(150px,26%) 1fr 54px; align-items:center; gap:10px; }
+.gtaxis { padding:4px 12px 6px; background:var(--sect); border-bottom:1px solid var(--line); }
+.gtaxis .gttrack { position:relative; height:16px; }
+.gttick { position:absolute; top:0; bottom:0; width:1px; background:var(--line); }
+.gttick em { position:absolute; top:1px; left:3px; font-family:var(--mono); font-size:9.5px; color:var(--ink3); font-style:normal; white-space:nowrap; }
+/* 今日线：全站唯一的「此刻」橙（与流程页现在区同源），压在刻度之上 */
+.gttoday { position:absolute; top:0; bottom:-9999px; width:1.5px; background:var(--now); z-index:2; }
+.gttoday em { position:absolute; top:0; left:2px; font-size:9.5px; color:var(--now); font-weight:700; font-style:normal; }
+.gtbody { max-height:46vh; overflow-y:auto; padding:4px 0; }
+.gtrow { padding:3px 12px; cursor:pointer; border-left:2px solid transparent; }
+.gtrow:hover, .gtrow:focus-visible { background:var(--we); outline:none; }
+/* 计划与基线不重合 = 这条挪过。左侧一道琥珀竖标，不写天数——天数是判定，归服务端 工期判定 */
+.gtrow.moved { border-left-color:var(--warn); }
+.gtlab { display:flex; align-items:baseline; gap:6px; min-width:0; overflow:hidden; }
+.gtlab b { font-size:12px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gts { font-size:10.5px; color:var(--accent-ink); font-style:normal; white-space:nowrap; flex-shrink:0; }
+.gttrack { position:relative; height:20px; }
+/* 基线影子：淡、矮、垫底——它是历史，不该比现计划显眼 */
+.gtbase { position:absolute; top:12px; height:5px; border-radius:3px; background:var(--chip); }
+.gtbar { position:absolute; top:2px; height:10px; border-radius:5px; background:var(--ink3); opacity:.85; }
+.gtbar.plan { background:transparent; border:1px dashed var(--ink3); }
+.gtbar.draft { background:var(--warnbg); border:1px solid var(--warnln); }
+.gtbar.made { background:var(--accent); }
+.gtbar.done { background:var(--ok); }
+.gtbar.drop { background:var(--chip); }
+.gtbar.half { border-style:dotted; }   /* 只有一端有日期：虚到底，别让人以为那是排好的区间 */
+.gtwhen { font-family:var(--mono); font-size:10.5px; color:var(--ink3); text-align:right; white-space:nowrap; }
+.gtempty { padding:14px 16px; border:1px dashed var(--line); border-radius:12px; background:var(--sect);
+  font-size:12.5px; line-height:1.7; color:var(--ink2); }
+.gtempty b { color:var(--ink); }
+/* 未排期区：它们不在图上，但活还在——不显示等于把「项管没排期」这件事藏起来 */
+.gtun { margin-top:12px; border:1px dashed var(--gateln); border-radius:12px; background:var(--gatebg); padding:10px 12px; }
+.gtunh { font-size:12px; color:var(--gatetx); display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+.gtunh b { font-size:14px; }
+.gtunh .subnote { color:var(--gatetx); opacity:.8; }
+.gtunl { display:flex; flex-direction:column; gap:2px; margin-top:8px; max-height:30vh; overflow-y:auto; }
+.gtunrow { display:flex; align-items:center; gap:8px; width:100%; text-align:left; padding:4px 8px;
+  border:1px solid transparent; border-radius:7px; background:transparent; cursor:pointer; font:inherit; color:var(--ink); }
+.gtunrow:hover, .gtunrow:focus-visible { background:var(--card); border-color:var(--gateln); outline:none; }
+.gtunrow b { flex:1 1 0; min-width:0; font-size:12px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gtunrow em { font-size:11px; color:var(--accent-ink); font-style:normal; white-space:nowrap; }
+.fglegend i.lg-gbar { background:var(--ink3); opacity:.85; }
+.fglegend i.lg-gbase { background:var(--chip); }
+.fglegend i.lg-gtoday { background:var(--now); width:3px; border-radius:2px; }
+/* 判定留白的说明不是脚注，是本页的一条已知缺口——给它一整格，别缩成灰色小字被略过 */
+.gtlg .gtwait { flex:1 1 100%; padding:6px 9px; border-radius:8px; background:var(--sect);
+  border-left:2px solid var(--warn); line-height:1.6; }
+
+/* ---- ② 待办队列：复用 P12b 的 .qbatch/.qrow 一族，只补三件（排期区间 / 停摆 / 两个动作键）---- */
+.qrow .qplan { font-size:10.5px; color:var(--ink2); white-space:nowrap; }
+.qrow .qplan.none { color:var(--ink3); opacity:.7; }
+.qrow .qidle { font-size:10px; color:var(--warn); border:1px solid var(--warnln); background:var(--warnbg);
+  border-radius:999px; padding:0 6px; white-space:nowrap; }
+.qrow .qrdy, .qrow .qplanbtn { font:inherit; font-size:10.5px; padding:1px 8px; border-radius:999px; cursor:pointer;
+  white-space:nowrap; border:1px solid var(--line); background:var(--card); color:var(--ink2); }
+.qrow .qrdy:hover, .qrow .qplanbtn:hover { border-color:var(--accent); color:var(--accent-ink); }
+.qrow .qrdy.on { background:var(--okbg); border-color:var(--okln); color:var(--ok); font-weight:600; }
+.qrow .qrdy:disabled { opacity:.5; cursor:progress; }
+.f-row2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+
+/* ---- ④ 项管行为：分桶 ---- */
+.abgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:12px; }
+.abox { border:1px solid var(--line); border-radius:12px; padding:10px 13px; background:var(--card); }
+/* 心跳桶垫底且退让：它的全部信息量就是「跑没跑、跑了几拍」 */
+.abox.beat { grid-column:1/-1; background:var(--sect); border-style:dashed; }
+.abh { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+.abh > b { font-size:13px; }
+.abh .sp { flex:1; min-width:0; }
+.abn { font-size:15px; font-weight:700; color:var(--accent-ink); }
+.abox.beat .abn { color:var(--ink3); }
+.abts { display:flex; gap:6px; flex-wrap:wrap; margin:7px 0 2px; }
+.abt { font-size:10px; color:var(--ink3); border:1px solid var(--line); border-radius:999px; padding:0 7px; white-space:nowrap; }
+.abt b { color:var(--ink2); }
+.ablist { margin-top:8px; max-height:210px; overflow-y:auto; }
+.ablist .logrow { margin-bottom:8px; font-size:12px; }
+.ablist .logrow time { width:46px; font-size:11px; }
+
+@media (max-width:860px) {
+  /* 甘特在窄屏上把标签列压到 40%，横轴仍不许出横向滚动条（本页最长的那条是时间，不是文字） */
+  .gtaxis, .gtrow { grid-template-columns:minmax(96px,40%) 1fr 44px; gap:6px; }
+  .f-row2 { grid-template-columns:1fr; }
+  .abgrid { grid-template-columns:1fr; }
+}
+/* 完成定义（2026-08-20）：摆在关账钮旁边当签字的对照物。
+   没有它，签字就成了对状态机的盖章——S-1/S-3 两次误催签字即此。 */
+.spdone { margin:10px 0 2px; font-size:12px; color:var(--ok); line-height:1.5; }
+.spdone.none { color:var(--warn); }
