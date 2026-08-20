@@ -3438,7 +3438,7 @@ function 项管行为Html(act, kc) {
 async function viewRelay() {
   // 数据七源。一律 catch 兜底：任何一个接口不在（老部署/桩台）都不许把整页拖白——
   // 本页是四块拼起来的，一块取不到就该只塌那一块。
-  const [d, pl, rs, kc, sch, q, id] = await Promise.all([
+  const [d, pl, rs, kc, sch, q, id, act] = await Promise.all([
     api('/api/relay').catch(() => ({ 消息: [] })),
     api('/api/pm/ledger').catch(() => ({ 台账: {} })),
     api('/api/pm/roster').catch(() => ({ 编制: [] })),
@@ -3447,8 +3447,9 @@ async function viewRelay() {
     // 跨项目：不传 项目 参数（口径二）。传了会把 Q 队列整批判成「未归属」，页面只剩两条。
     api('/api/schedule/' + encodeURIComponent('队列')).catch(() => null),
     api('/api/ideas').catch(() => ({ 想法: [] })),
+    // 八口全并发（本页每次重绘都要取一遍，实测最慢那口 34ms；串成一列就是白等一个来回）
+    api('/api/pm/actions').catch(() => ({ 桶: [], 合计: 0 })),
   ]);
-  const act = await api('/api/pm/actions').catch(() => ({ 桶: [], 合计: 0 }));
   const now = Date.now();
   const 今日 = new Date(now - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10); // 本地日，不拿 UTC 串切
   const 粒们 = (sch && sch.粒) || [];

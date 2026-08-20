@@ -19,18 +19,70 @@ const 抽 = (名, 出) => {
 const { pulsePlan, PULSE } = 抽('pulsePlan', '{ pulsePlan, PULSE }');
 const pulseTarget = 抽('pulseTarget', 'pulseTarget');
 
-// route() 那张真表的键（app.js 传 Object.keys(ROUTES)）
-const 视图键 = ['', 'ideas', 'specials', 'board', 'flow', 'queue', 'agents', 'decisions', 'wiki', 'relay', 'report'];
+/* route() 那张真表的键（app.js 传 Object.keys(ROUTES)）。
+   **从源码现取，不再手抄**：2026-08-20 的 11→8 页签定案把 ideas/flow/queue 三个键撤了，
+   而手抄的那份仍列着它们——pulseTarget 只是按给定名单查表，名单错了它照样全绿，
+   于是这份「与 route() 同口径」的断言会静默变成对着一张不存在的表自说自话。 */
+const ROUTES键 = (() => {
+  const m = /const ROUTES = \{([^}]*)\}/.exec(src);
+  assert.ok(m, 'app.js 里的 ROUTES 表找不到了');
+  return m[1].split(',').map((s) => s.split(':')[0].trim().replace(/^'|'$/g, '')).filter((s) => s.length || s === '');
+})();
+const 视图键 = ROUTES键;
 const 态 = (o) => Object.assign({ 变了: false, 待办: false, 免打扰: false, 可局部: true, 交互中: false, 现在: 0, 上次整页: 0 }, o);
 
 /* ---- 一、局部刷新选择（要件1）---- */
 
 t('登记过的视图一律走原地重绘，不整页', () => {
-  for (const h of ['#/board', '#/flow', '#/queue', '#/agents', '#/report', '#/wiki']) {
+  for (const h of ['#/board', '#/tickets', '#/relay', '#/agents', '#/report', '#/wiki']) {
     const r = pulseTarget(h, 视图键);
     assert.equal(r.类, 'patch', h + ' 应当能原地刷新');
     assert.equal(r.视图, h.replace('#/', ''));
   }
+});
+
+/* ---- 一b、页签定案 11→8（2026-08-20 制作人裁定）：撤 想法/流程/队列 三页 ----
+   这三条断言守的是「撤了就是真撤了」：路由表里没有、导航条上没有、旧书签不落死链。
+   任缺一条，退役都会退成半截——最常见的半截是「页签没了但 hash 还能进」，
+   于是一张没有入口、没人维护、数据早已由别处接管的页会继续被书签唤出来。 */
+t('ROUTES 已无 ideas/flow/queue 三键，relay 仍在', () => {
+  for (const k of ['ideas', 'flow', 'queue']) assert.ok(!视图键.includes(k), `ROUTES 里还留着退役键 ${k}`);
+  for (const k of ['', 'tickets', 'board', 'agents', 'decisions', 'wiki', 'relay', 'report']) {
+    assert.ok(视图键.includes(k), `ROUTES 缺了在役键 ${k || '(总览)'}`);
+  }
+});
+
+t('NAV 恰好 8 项，顺序与页签定案一致', () => {
+  const m = /const NAV = (\[.*?\]\];)/.exec(src);
+  assert.ok(m, 'NAV 表找不到了');
+  // eslint-disable-next-line no-new-func
+  const NAV = new Function('return ' + m[1].replace(/;$/, ''))();
+  assert.equal(NAV.length, 8, 'NAV 应是 8 项，实为 ' + NAV.length + '：' + NAV.map((x) => x[0]).join('/'));
+  assert.deepEqual(NAV.map((x) => x[0]), ['总览', '工单', '看板', '在途', '决策台', 'Wiki', '项管', '报表']);
+  assert.deepEqual(NAV.map((x) => x[1]), ['', 'tickets', 'board', 'agents', 'decisions', 'wiki', 'relay', 'report']);
+  // 导航条上的每一项都必须在 ROUTES 里查得到，否则点了就落总览（静默错页）
+  for (const [名, h] of NAV) assert.ok(视图键.includes(h), `NAV「${名}」的 hash ${h} 不在 ROUTES 里`);
+});
+
+t('退役页转向表：ideas/flow/queue/tree 一律落 relay，且用 replace 不用 assign', () => {
+  const m = /const 退役页 = (\{[^}]*\})/.exec(src);
+  assert.ok(m, '退役页转向表找不到了');
+  // eslint-disable-next-line no-new-func
+  const 退役页 = new Function('return ' + m[1])();
+  assert.deepEqual(退役页, { ideas: 'relay', flow: 'relay', queue: 'relay', tree: 'relay' });
+  const 转向行 = src.slice(src.indexOf('if (退役页['), src.indexOf('if (退役页[') + 220);
+  assert.ok(/location\.replace/.test(转向行), '退役页转向必须 location.replace——assign 会让退役页占一格历史，用户按返回又被弹回来');
+  assert.ok(!/location\.hash *=/.test(转向行), '转向行里出现了 location.hash= 赋值（等价 assign）');
+  // 带参旧链接（#/queue?项目=TK）也要落地：转向认的是首段，不是整串
+  assert.ok(/h\.split\('\?'\)\[0\]\.split\('\/'\)\[0\]/.test(转向行), '转向应按 hash 首段查表，整串比对会漏掉带参旧书签');
+});
+
+t('三张退役页的视图函数不再挂路由：viewQueue 已删，viewFlow 摘牌留档', () => {
+  assert.ok(!/\bviewQueue\b\s*\(\)/.test(src.replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '')), 'viewQueue 还在被调用');
+  assert.ok(!/function viewQueue/.test(src), 'viewQueue 函数体应随本次退役删除（项管页 tqRow 是它的超集）');
+  assert.ok(!/function viewIdeas/.test(src), 'viewIdeas 应化成片段函数 ideaPoolHtml，不再是路由视图');
+  assert.ok(/function ideaPoolHtml/.test(src), '想法在池的片段函数 ideaPoolHtml 不见了');
+  assert.ok(/async function viewFlow/.test(src), 'viewFlow 是摘牌留档，函数体应原样保留（管线现在线暂无接班人）');
 });
 
 t('总览是空键：裸 #/ 与认不出的 hash 都落总览（与 route() 同口径）', () => {
