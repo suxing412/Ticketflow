@@ -243,8 +243,123 @@ function 可挂单(root, id) {
   return { ok: true };
 }
 
+/**
+ * 四层归位迁移（丙-2）。**默认演练**——真跑要显式 {执行:true}。
+ * 照 specials.迁移 的先例：改的是一百多张单的 frontmatter，一个手滑得靠 git 捞，
+ * 所以默认那一档永远是「只算给你看」。
+ *
+ * @param 计划 { 特性册:[{名称,管线,边界,单:[],专项:[]}], 散单位管线:[[管线,名]], 散单归属:{管线:[单号]},
+ *              转TF:[单号], 容器单:[{id,因}] }
+ *
+ * 四步，每步都幂等（跑过一次再跑只补没做完的）：
+ *   ① 建特性册（按名称+管线判重，已有即复用）
+ *   ② 单挂特性——**只写直挂单**：已有 专项 章的单不写 特性，它的特性由专项推导（只记直接上级）
+ *   ③ 专项挂特性
+ *   ④ 转项目 / 容器单归档
+ */
+function 迁移(root, 计划, opts = {}) {
+  const store = require('./core/store');
+  const specials = require('./specials');
+  const 演练 = !opts.执行;
+  const 人 = String(opts.操作者 || '总监').trim();
+  const 动作 = []; const 跳过 = []; const 错 = [];
+  const 号Of = new Map();   // 名称@管线 → F-n
+
+  const 建 = (名称, 管线, 边界, 挂载, 系统) => {
+    const 键 = `${名称}@${管线}`;
+    if (号Of.has(键)) return 号Of.get(键);
+    const 有 = list(root).find((f) => f.fm.名称 === 名称 && f.fm.管线 === 管线 && f.fm.状态 !== '封存');
+    if (有) { 号Of.set(键, 有.id); 动作.push({ 步: '建特性', 名称, 管线, 号: 有.id, 已有: true }); return 有.id; }
+    if (演练) { const 假号 = `F-?（${名称}）`; 号Of.set(键, 假号); 动作.push({ 步: '建特性', 名称, 管线, 号: 假号, 系统: !!系统 }); return 假号; }
+    const r = 提请(root, { 名称, 管线, 边界, 挂载, 系统, 提请人: 人, 因: '四层归位迁移' });
+    if (!r.ok) { 错.push(`建特性「${名称}」失败：${r.error}`); return null; }
+    // 迁移建的具名特性直接审过——归位方案本身已经过制作人过目，不必再走一遍待审
+    if (!系统) 转移(root, r.id, '活跃', { 操作者: 人, 因: '四层归位迁移（方案已过制作人目）' });
+    号Of.set(键, r.id); 动作.push({ 步: '建特性', 名称, 管线, 号: r.id, 系统: !!系统 });
+    return r.id;
+  };
+
+  // ① 具名特性
+  for (const f of (计划.特性册 || [])) {
+    建(f.名称, f.管线, f.边界, { 工单: (f.单 || []).slice(0, 3), 专项: f.专项 || [] }, false);
+  }
+  // ①b 散单兜底位
+  for (const [线, 名] of (计划.散单位管线 || [])) {
+    const 号 = 演练 ? `F-?（${散单名(名)}）` : (确保散单位(root, 线, 名).id);
+    号Of.set(`${散单名(名)}@${线}`, 号);
+    动作.push({ 步: '建散单位', 管线: 线, 号 });
+  }
+
+  // ② 单挂特性（只写直挂单）
+  const 挂 = (id, 号, 来自) => {
+    const t = store.find(root, id);
+    if (!t) { 跳过.push({ 单: id, 因: '不在库' }); return; }
+    if (t.fm.专项) { 跳过.push({ 单: id, 因: `已挂专项 ${t.fm.专项}，特性由专项推导（只记直接上级）` }); return; }
+    if (String(t.fm.特性 || '') === String(号)) { 跳过.push({ 单: id, 因: '已挂同一特性' }); return; }
+    动作.push({ 步: '单挂特性', 单: id, 特性: 号, 来自 });
+    if (!演练) store.update(root, id, (fm) => { fm.特性 = 号; });
+  };
+  for (const f of (计划.特性册 || [])) {
+    const 号 = 号Of.get(`${f.名称}@${f.管线}`);
+    if (!号) continue;
+    for (const id of (f.单 || [])) 挂(id, 号, f.名称);
+  }
+  for (const [线, ids] of Object.entries(计划.散单归属 || {})) {
+    const 名 = (计划.散单位管线 || []).find((x) => x[0] === 线);
+    const 号 = 名 && 号Of.get(`${散单名(名[1])}@${线}`);
+    if (号) for (const id of ids) 挂(id, 号, '散单位');
+  }
+
+  // ③ 专项挂特性
+  for (const f of (计划.特性册 || [])) {
+    const 号 = 号Of.get(`${f.名称}@${f.管线}`);
+    for (const s of (f.专项 || [])) {
+      const cur = specials.find(root, s);
+      if (!cur) { 跳过.push({ 专项: s, 因: '不存在' }); continue; }
+      if (String(cur.fm.特性 || '') === String(号)) { 跳过.push({ 专项: s, 因: '已挂同一特性' }); continue; }
+      动作.push({ 步: '专项挂特性', 专项: s, 特性: 号, 来自: f.名称 });
+      if (!演练) specials.update(root, s, (fm) => { fm.特性 = 号; });
+    }
+  }
+
+  // ④ 转项目（乙类：四条管线都装不下 → TF；TF 无管线故无特性，只有专项+工单两层）
+  for (const id of (计划.转TF || [])) {
+    const t = store.find(root, id);
+    if (!t) { 跳过.push({ 单: id, 因: '不在库' }); continue; }
+    if (t.fm.项目 === 'Ticketflow') { 跳过.push({ 单: id, 因: '已在 TF' }); continue; }
+    动作.push({ 步: '转项目', 单: id, 从: t.fm.项目 || '(空)', 到: 'Ticketflow' });
+    if (!演练) store.update(root, id, (fm) => { fm.项目 = 'Ticketflow'; fm.管线 = null; });
+  }
+
+  // ⑤ 容器单归档废弃（按四层它们不是工单，其组织职能已由管线/特性/专项接管）
+  for (const c of (计划.容器单 || [])) {
+    const t = store.find(root, c.id);
+    if (!t) { 跳过.push({ 单: c.id, 因: '不在库' }); continue; }
+    if (t.state === '已归档') {
+      if (t.fm.容器退役) { 跳过.push({ 单: c.id, 因: '已标退役' }); continue; }
+      动作.push({ 步: '容器标退役', 单: c.id, 态: t.state, 因: c.因 });
+      if (!演练) store.update(root, c.id, (fm) => { fm.容器退役 = true; fm.容器退役因 = c.因; });
+      continue;
+    }
+    动作.push({ 步: '容器归档', 单: c.id, 从: t.state, 因: c.因 });
+    if (!演练) {
+      const r = store.move(root, c.id, t.state, '已归档', (fm) => {
+        fm.归档原因 = `四层归位：容器单退役——${c.因}`; fm.容器退役 = true; fm.容器退役因 = c.因;
+      }, new Date().toISOString());
+      if (!r.ok) 错.push(`容器 ${c.id} 归档失败：${r.error}`);
+    }
+  }
+
+  return { ok: !错.length, 演练, 动作, 跳过, 错, 计数: 统计(动作) };
+}
+function 统计(动作) {
+  const c = {};
+  for (const a of 动作) c[a.步] = (c[a.步] || 0) + 1;
+  return c;
+}
+
 module.exports = {
   DIR, STATES, 转移表, 是特性号, ensure, 散单名,
   list, find, 提请, 审核, 编辑, 转移, update, 下一号,
-  子专项, 直挂单, 聚合, 可挂单, 确保散单位,
+  子专项, 直挂单, 聚合, 可挂单, 确保散单位, 迁移,
 };

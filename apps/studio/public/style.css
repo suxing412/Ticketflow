@@ -178,8 +178,8 @@ input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outlin
 .pill.st-escal { background:var(--dangerbg); color:var(--danger); }
 .pill.mut { background:var(--chip); color:var(--ink3); }
 .pill.ok { background:var(--okbg); color:var(--ok); }
-/* 签字队列徽章（施工令-006）：实心 ok 底 + --paper 字（两主题都过 4.5:1），醒目但不占用危险红 */
-.pill.signq { background:var(--ok); color:var(--paper); font-weight:700; cursor:help; }
+/* 签字队列徽章（施工令-006）已退役：签字位语义并入流程视图（施工令-022/028），
+   消费端随之拆除，此处样式一并清理 */
 .pill.red { background:var(--dangerbg); color:var(--danger); }
 .btn { display:inline-flex; align-items:center; justify-content:center; height:40px; padding:0 22px;
   border-radius:20px; font-size:13px; font-weight:500; background:var(--card);
@@ -764,8 +764,8 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .emptycard { background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px 26px; margin-top:20px; }
 .emptycard h5 { margin:0 0 8px; font-size:13px; color:var(--ink2); }
 .emptycard p { margin:0; font-size:12px; color:var(--ink3); }
-/* 空态里的出路按钮：文案让点什么，钮就得在卡里（施工令-006 死胡同案） */
-.emptycard .emptyact { margin-top:14px; }
+/* 空态出路（施工令-006 死胡同案）现由卡内直链承接（app.js 空态卡内 <a>），
+   独立按钮消费端已拆，此处样式一并清理 */
 
 /* ===== P13 消耗报表 ===== */
 .rp-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-top:20px; align-items:start; }
