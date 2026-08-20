@@ -51,6 +51,20 @@ Copy-Item $exe (Join-Path $DeployDir "监制台 $Version.exe") -Force
 Start-Process (Join-Path $DeployDir "监制台 $Version.exe") -WorkingDirectory $DeployDir
 Start-Sleep -Seconds 10
 
+# 2b) 同步开机自启脚本的版本号（2026-08-20 断电复盘）
+# 自启 vbs 里写死着 exe 文件名。不同步改，下次断电重启会**静默拉起上一个版本**——
+# 界面能开、接口能通，只是跑的是旧代码，这种错最难发现（比起不来更坏）。
+# 故接进换装脚本：换装即改，不靠人记。
+$vbs = Join-Path $DeployDir "启动监制台.vbs"
+if (Test-Path $vbs) {
+  $c = [System.IO.File]::ReadAllText($vbs, [System.Text.Encoding]::Unicode)
+  $n = [regex]::Replace($c, '监制台 [\d.]+\.exe', "监制台 $Version.exe")
+  if ($n -ne $c) {
+    [System.IO.File]::WriteAllText($vbs, $n, [System.Text.Encoding]::Unicode)
+    Write-Host "自启脚本已跟版：$Version"
+  }
+} else { Write-Host "（未见 启动监制台.vbs，跳过自启跟版）" }
+
 # 3) 验活
 try {
   $cfg = Invoke-RestMethod "http://127.0.0.1:$Port/api/config" -TimeoutSec 8
