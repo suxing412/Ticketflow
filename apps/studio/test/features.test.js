@@ -136,4 +136,19 @@ t('只记直接上级：特性记管线，特性文件里不存子专项清单',
   assert.equal(fm.专项, undefined, '不记子级——那是反向聚合现算的事');
 });
 
+t('编辑：改名不动挂链，记履历不静默改；重名拒、改空拒', () => {
+  const root = makeRoot();
+  提(root); F.审核(root, 'F-1', { 通过: true, 审核人: '总监' });
+  seed(root, '完成', { id: 'TK-9', 特性: 'F-1' });
+  const r = F.编辑(root, 'F-1', { 名称: '手绘编辑器', 操作者: '制作人' });
+  assert.equal(r.fm.名称, '手绘编辑器');
+  assert.equal(F.聚合(root, 'F-1').直挂单数, 1, '改名后底下的单一张不掉——挂的是 F-n 号不是名字');
+  const 末 = r.fm.履历[r.fm.履历.length - 1];
+  assert.match(末.因, /名称 手修编辑器 → 手绘编辑器/, '改名是真事件，半年后翻账要查得到旧名');
+  assert.equal(F.编辑(root, 'F-1', { 名称: '   ' }).ok, false, '改空拒');
+  提(root, { 名称: '另一个' }); F.审核(root, 'F-2', { 通过: true, 审核人: '总监' });
+  assert.equal(F.编辑(root, 'F-2', { 名称: '手绘编辑器' }).ok, false, '同管线重名拒');
+  assert.equal(F.编辑(root, 'F-1', { 名称: '手绘编辑器' }).幂等, true, '没变即幂等，不刷履历');
+});
+
 console.log('全部通过：' + passed + ' 项');

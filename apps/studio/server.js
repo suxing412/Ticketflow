@@ -453,6 +453,8 @@ const FT_ACTIONS = {
   提请: (b) => require('./lib/features').提请(ROOT, { ...b, 提请人: b.提请人 || '项管' }),
   // 审核：总监的人闸。过→活跃，不过→就地封存留痕。
   审核: (b) => require('./lib/features').审核(ROOT, String(b.id || ''), { 通过: !!b.通过, 审核人: b.审核人 || '总监', 说明: b.说明 }),
+  // 编辑：制作人在工单页双击名字就地改。改名不动挂链（工单记的是 F-n 号不是名字）
+  编辑: (b) => require('./lib/features').编辑(ROOT, String(b.id || ''), { 名称: b.名称, 边界: b.边界, 操作者: b.操作者 || '制作人' }),
   封存: (b) => require('./lib/features').转移(ROOT, String(b.id || ''), '封存', { 操作者: b.操作者 || '总监', 因: b.因 }),
   复活: (b) => require('./lib/features').转移(ROOT, String(b.id || ''), '活跃', { 操作者: b.操作者 || '总监', 因: b.因 }),
 };
@@ -460,7 +462,7 @@ app.post('/api/features/:action', (req, res) => {
   if (!ready(res)) return;
   if (!isLocalReq(req)) return res.status(403).json({ error: '特性写面只能在本机操作' });
   const fn = FT_ACTIONS[String(req.params.action || '')];
-  if (!fn) return res.status(404).json({ error: '未知特性动作（只有 提请/审核/封存/复活）' });
+  if (!fn) return res.status(404).json({ error: '未知特性动作（只有 提请/审核/编辑/封存/复活）' });
   try {
     const r = fn(req.body || {});
     if (r.ok) journal.append(ROOT, `特性${req.params.action} ${r.id || (req.body || {}).id}${r.fm ? `「${r.fm.名称}」` : ''}`);

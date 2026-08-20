@@ -132,6 +132,36 @@ function 转移(root, id, 到, opts = {}) {
   });
 }
 
+/**
+ * 改名 / 改边界（制作人 11:23 要的双击就地编辑的后端口）。
+ * 安全性来自 ID 挂链：工单与专项记的是 `特性: F-n` 这个号、不是名字，
+ * 所以改名纯粹是改显示——底下挂着几十张单也一张都不用动。
+ * 但改名是**真事件**（半年后翻账要知道「地理底图」以前叫什么），故记履历不静默改。
+ */
+function 编辑(root, id, { 名称, 边界, 操作者 } = {}) {
+  const f = find(root, id);
+  if (!f) return { ok: false, error: '特性不存在：' + id };
+  const 新名 = 名称 == null ? null : String(名称).trim();
+  const 新界 = 边界 == null ? null : String(边界).trim();
+  if (新名 === '') return { ok: false, error: '名称不能改成空' };
+  if (新界 === '') return { ok: false, error: '边界不能改成空' };
+  if (新名 && 新名 !== f.fm.名称) {
+    const 重 = list(root).find((x) => x.id !== id && x.fm.名称 === 新名 && x.fm.管线 === f.fm.管线 && x.fm.状态 !== '封存');
+    if (重) return { ok: false, error: `${f.fm.管线} 下已有同名特性 ${重.id}` };
+  }
+  const 变 = [];
+  if (新名 && 新名 !== f.fm.名称) 变.push(`名称 ${f.fm.名称} → ${新名}`);
+  if (新界 && 新界 !== f.fm.边界) 变.push('边界改写');
+  if (!变.length) return { ok: true, id, fm: f.fm, 幂等: true };
+  const now = new Date().toISOString();
+  return update(root, id, (fm) => {
+    if (新名) fm.名称 = 新名;
+    if (新界) fm.边界 = 新界;
+    fm.履历 = [...(fm.履历 || []), { t: now, 从: fm.状态, 到: fm.状态, 因: 变.join('；'), 操作者: String(操作者 || '制作人') }];
+    return { body: 新界 ? f.body.replace(/^## 边界\n[\s\S]*?(?=\n## |$)/, `## 边界\n${新界}\n`) : f.body };
+  });
+}
+
 /** 审核（总监的动作，制作人 11:12 定）：过 → 活跃；不过 → 就地封存留痕，不删。 */
 function 审核(root, id, { 通过, 审核人, 说明 } = {}) {
   const 人 = String(审核人 || '').trim();
@@ -215,6 +245,6 @@ function 可挂单(root, id) {
 
 module.exports = {
   DIR, STATES, 转移表, 是特性号, ensure, 散单名,
-  list, find, 提请, 审核, 转移, update, 下一号,
+  list, find, 提请, 审核, 编辑, 转移, update, 下一号,
   子专项, 直挂单, 聚合, 可挂单, 确保散单位,
 };
