@@ -143,4 +143,37 @@ t('归属分流：总监的闸不报进制作人清单（混数就说不清欠�
   assert.equal(gr.等我(root, { deps: 空 }).计数, 2, '不传归属即全收');
 });
 
+t('端点实跑 · /api/attn 与 /api/features：真起服务打一遍（漏传参这类只有起服务才炸得出来）', () => {
+  // 案源：0.26.15 换装冒烟。/api/attn 里 runner.status() 漏传 cfg，函数内读 cfg.执行器 抛 TypeError，
+  // 端点 500。lib 层 13 项测试全绿——因为炸的是**端点接线**不是判据逻辑。
+  // 教训：谓词有单测 ≠ 端点跑得起来。凡新端点，必须有一格真起服务打一遍。
+  const { execFileSync } = require('child_process');
+  const path = require('path');
+  const root = makeRoot();
+  const port = 4933;
+  const code = `
+    require(${JSON.stringify(path.join(__dirname, '..', 'server.js'))}).start().then(async ({ server: srv }) => {
+      const B = 'http://127.0.0.1:${port}';
+      const G = async (u) => { const r = await fetch(B + u); let j = null; try { j = await r.json(); } catch { j = { __非JSON: true }; } return [r.status, j]; };
+      const out = {};
+      let [s, j] = await G('/api/attn');
+      out.attn = [s, typeof j.计数, Array.isArray(j.债), typeof j.逾期阈值小时];
+      [s, j] = await G('/api/attn?' + encodeURIComponent('归属') + '=' + encodeURIComponent('制作人'));
+      out.attn归属 = [s, Array.isArray(j.债)];
+      [s, j] = await G('/api/features');
+      out.features = [s, Array.isArray(j.特性)];
+      process.stdout.write('@@' + JSON.stringify(out) + '@@');
+      srv.close();
+    }).catch((e) => { process.stdout.write('@@' + JSON.stringify({ 起服务失败: String(e.message) }) + '@@'); process.exit(1); });
+  `;
+  const raw = execFileSync(process.execPath, ['-e', code], {
+    encoding: 'utf8', timeout: 30000,
+    env: { ...process.env, STUDIO_ROOT: root, STUDIO_PORT: String(port), STUDIO_STUB: '1' },
+  });
+  const out = JSON.parse((raw.match(/@@([\s\S]*)@@/) || [])[1] || '{}');
+  assert.deepEqual(out.attn, [200, 'number', true, 'number'], '/api/attn 必须 200 且形状完整——500 说明接线断了');
+  assert.deepEqual(out.attn归属, [200, true], '带归属参数照样 200');
+  assert.deepEqual(out.features, [200, true], '/api/features 200 且回特性数组');
+});
+
 console.log('全部通过：' + passed + ' 项');

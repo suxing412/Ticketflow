@@ -1313,7 +1313,9 @@ app.get('/api/decisions', (req, res) => {
 app.get('/api/attn', (req, res) => {
   if (!ready(res)) return;
   const gr = require('./lib/gatereg');
-  const 活跃 = new Set((runner.status().执行中 || []).map((s) => s.id));
+  // status 要 (root, cfg) 两参——漏传 cfg 会在函数内读 cfg.执行器 时抛 TypeError，
+  // 而这条端点没被单测覆盖，只有真机冒烟才炸得出来（0.26.15 换装冒烟实录）。
+  const 活跃 = new Set((runner.status(ROOT, cfg).执行中 || []).map((s) => s.id));
   const T = Number((cfg.闸值 || {}).人闸超时小时 || 24);
   const r = gr.等我(ROOT, { 归属: req.query.归属 || undefined, deps: { 活跃单: 活跃 } });
   res.json({ ...r, 逾期阈值小时: T, 逾期: r.债.filter((x) => x.停摆小时 != null && x.停摆小时 >= T) });
