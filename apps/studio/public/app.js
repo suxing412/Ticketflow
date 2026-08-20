@@ -24,7 +24,7 @@ const STPCT = { 草稿: 0, 待投: 0, 池: 0, 在途: 60, 质检: 85, 待定夺:
 // 制作人每次都得先想「这件事该去哪一页找」。合成一页之后，项管页＝**未来面**：
 // 想法在池 → 待办队列 → 甘特排期，一条从灵感到落地的线，配上项管自己的行为流水。
 // 旧书签 #/ideas · #/flow · #/queue 在 route() 里 location.replace 转向 #/relay，不留死链。
-const NAV = [['总览', ''], ['工单', 'tickets'], ['看板', 'board'], ['在途', 'agents'], ['决策台', 'decisions'], ['Wiki', 'wiki'], ['项管', 'relay'], ['报表', 'report']]; // 参数入口只走 ⚙；树形页签随施工令-028 退役
+const NAV = [['总览', ''], ['工单', 'tickets'], ['看板', 'board'], ['在途', 'agents'], ['Wiki', 'wiki'], ['项管', 'relay'], ['报表', 'report']]; // 参数入口只走 ⚙；树形页签随施工令-028 退役
 function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1900); }
 // 数值跳字确认（步进器改完后调用）：重触发 animation
 function bump(el) { if (!el) return; el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
@@ -235,7 +235,7 @@ async function viewHub() {
       <div class="grp pool"><span class="lbl">codex 池</span><span class="num dim" id="hub-cx">—</span></div><div class="vdiv"></div>
       <div class="grp pool"><span class="lbl">claude 池</span><span class="num dim" id="hub-cl">—</span></div><div class="vdiv"></div>
       <div class="grp pool"><span class="lbl">环境</span><span class="num dim" id="hub-env" title="全链路自检">—</span></div>
-      <div class="spacer"></div><span class="subnote">需你处理的项目卡会亮红胶囊 · 编辑器锁在决策台</span></div>
+      <div class="spacer"></div><span class="subnote">需你处理的项目卡会亮红胶囊 · 编辑器锁在在途页</span></div>
     <div id="hub-crew"></div>
     <div class="hubgrid">${cards}
       <a class="hubcard add card r16" href="#/proj-new"><span>＋ 注册新项目</span><span class="subnote">一份监制台管所有项目——注册即接管</span></a></div>`;
@@ -1066,10 +1066,10 @@ function viewAgentsDispatch(d, all) {
       const ce = $('agc-' + r.id); if (ce) ce.classList.toggle('noagent', r.有会话 === false); // 会话起来了就退出「卡住」形态
     }
   });
-  const busyBanner = (d.编辑器占用||[]).length ? `<div class="r14" style="padding:10px 16px;margin-top:16px;background:var(--gatebg);border:1px solid var(--gateln);color:var(--gatetx)"><b>编辑器锁已关（验收中）</b> · 项目 ${d.编辑器占用.map(esc).join('、')} 派发挂起——制作人用完关闭编辑器即自动开锁（H64），或在决策台手动开锁</div>` : '';
+  const busyBanner = (d.编辑器占用||[]).length ? `<div class="r14" style="padding:10px 16px;margin-top:16px;background:var(--gatebg);border:1px solid var(--gateln);color:var(--gatetx)"><b>编辑器锁已关（验收中）</b> · 项目 ${d.编辑器占用.map(esc).join('、')} 派发挂起——制作人用完关闭编辑器即自动开锁（H64），或在本页顶部开锁</div>` : '';
   // H64 编辑器锁迁来在途页（2026-08-20，施工令-061 四·3 孤儿闸安家）。
   // 原落决策台（2026-08-05 制作人指正「锁属验收流程」），但决策台按定案要撤；
-  // 且占用本就发生在这一页——原先在途页只有只读横幅写着「或在决策台手动开锁」，
+  // 且占用本就发生在这一页——原先在途页只有只读横幅写着「或在本页顶部开锁」，
   // 看见了却得跳一页才按得动，是白白多一跳。锁的语义没变，只是回到发生地。
   const 锁定 = (d.编辑器占用 || []).length > 0;
   const lockCard = `<div class="card r14" style="padding:12px 16px;margin-top:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -1118,6 +1118,16 @@ let dTab = 'accept';
 const dJudgeBtns = (cur, 有子) => `
   <button class="btn h36" onclick="suspAsk('${esc(cur.id)}',${cur.挂起 ? 'false' : 'true'},${有子 ? 'true' : 'false'})" title="${cur.挂起 ? '原位复活，重新进入调度' : '原位冻结：单不挪窝，全链路跳过'}">${cur.挂起 ? '❄ 解挂' : '❄ 挂起'}</button>
   <button class="btn danger-o h36" onclick="askAct2('废弃','${esc(cur.id)}','废弃并归档 ${esc(cur.id)}？此单进已归档不可逆，返工需另开新单。')" title="终态判决：进已归档不可逆">废弃</button>`;
+// 【已退役 2026-08-21】决策台撤除（异厂对抗审查裁决 + 制作人 08-20 02:34 拍板「看着这张单子的
+// 详情签这张单子」）。撤它不是因为这活不该干，是因为「页面」这个容器装错了：
+// 它按**工单状态**取队列（待验收∪待定夺），于是专项关账这类非工单闸结构上看不见——
+// 08-20 实测欠 3 笔而它报 1 笔、页顶还写着「积压 1/8」。
+// 三件职能各归各位（先建后删的次序闸，均已落地）：
+//   聚合 → 服务端 等我()（lib/gatereg.js，按闸取不按状态取）
+//   显示 → 总览收件箱（开机第一屏，按停摆时长降序，逾期标红）
+//   签字 → 工单详情页（补齐通过入库/返修/打回三钮）+ 工单页专项卡（关账签字）
+//   编辑器锁 → 在途页（占用发生地）
+// 函数体原样留档：#/decisions 已转向总览，此函数不再挂路由。
 async function viewDecisions() {
   const d = await api('/api/decisions');
   // D42：决策台按当前项目过滤（积压计数是全局闸，保持全局读数）
@@ -2705,14 +2715,14 @@ async function wkGraph(proj) {
 }
 
 // 施工令-015：stylelib 路由退役（内容并入 wiki 美术标杆页签），旧书签在 route() 里转向
-const ROUTES = { '': viewOverview, tickets: viewTickets, specials: viewTickets, board: viewBoard, agents: viewAgents, decisions: viewDecisions, wiki: viewWiki, relay: viewRelay, report: viewReport };
+const ROUTES = { '': viewOverview, tickets: viewTickets, specials: viewTickets, board: viewBoard, agents: viewAgents, wiki: viewWiki, relay: viewRelay, report: viewReport };
 const WK_ALIAS = ['style', 'stylelib', '风格库']; // 旧书签不死：一律落 wiki 美术标杆
 /* 退役页转向表（2026-08-20 页签定案 11→8）：键=旧 hash 段，值=新落点。
    一律 location.replace 不用 assign——assign 会让退役页占一格历史，用户按返回又被弹回来一次
    （WK_ALIAS 与 #/tree 早有此先例，此处收归一张表，免得每退一页就在 route() 里多长一个 if）。
    #/tree 的落点随之改判：028 当初把它转去 #/flow，而流程页本身今天退役，
    于是**传递解析**到 #/relay——留在 flow 上只会转两跳，中间那跳还是一张不存在的页。 */
-const 退役页 = { ideas: 'relay', flow: 'relay', queue: 'relay', tree: 'relay' };
+const 退役页 = { ideas: 'relay', flow: 'relay', queue: 'relay', tree: 'relay', decisions: '' };
 
 /* ===== P15 专项（H103 · 施工令-058）：容器不是工单 =====
    一张卡 = 一个专项容器。四态、进度聚合条、子单树、收口报告直达、关账按钮（唯一人闸）。

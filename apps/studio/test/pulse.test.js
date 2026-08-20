@@ -47,7 +47,7 @@ t('登记过的视图一律走原地重绘，不整页', () => {
    于是一张没有入口、没人维护、数据早已由别处接管的页会继续被书签唤出来。 */
 t('ROUTES 已无 ideas/flow/queue 三键，relay 仍在', () => {
   for (const k of ['ideas', 'flow', 'queue']) assert.ok(!视图键.includes(k), `ROUTES 里还留着退役键 ${k}`);
-  for (const k of ['', 'tickets', 'board', 'agents', 'decisions', 'wiki', 'relay', 'report']) {
+  for (const k of ['', 'tickets', 'board', 'agents', 'wiki', 'relay', 'report']) {
     assert.ok(视图键.includes(k), `ROUTES 缺了在役键 ${k || '(总览)'}`);
   }
 });
@@ -57,9 +57,9 @@ t('NAV 恰好 8 项，顺序与页签定案一致', () => {
   assert.ok(m, 'NAV 表找不到了');
   // eslint-disable-next-line no-new-func
   const NAV = new Function('return ' + m[1].replace(/;$/, ''))();
-  assert.equal(NAV.length, 8, 'NAV 应是 8 项，实为 ' + NAV.length + '：' + NAV.map((x) => x[0]).join('/'));
-  assert.deepEqual(NAV.map((x) => x[0]), ['总览', '工单', '看板', '在途', '决策台', 'Wiki', '项管', '报表']);
-  assert.deepEqual(NAV.map((x) => x[1]), ['', 'tickets', 'board', 'agents', 'decisions', 'wiki', 'relay', 'report']);
+  assert.equal(NAV.length, 7, 'NAV 应是 7 项，实为 ' + NAV.length + '：' + NAV.map((x) => x[0]).join('/'));
+  assert.deepEqual(NAV.map((x) => x[0]), ['总览', '工单', '看板', '在途', 'Wiki', '项管', '报表']);
+  assert.deepEqual(NAV.map((x) => x[1]), ['', 'tickets', 'board', 'agents', 'wiki', 'relay', 'report']);
   // 导航条上的每一项都必须在 ROUTES 里查得到，否则点了就落总览（静默错页）
   for (const [名, h] of NAV) assert.ok(视图键.includes(h), `NAV「${名}」的 hash ${h} 不在 ROUTES 里`);
 });
@@ -69,7 +69,8 @@ t('退役页转向表：ideas/flow/queue/tree 一律落 relay，且用 replace �
   assert.ok(m, '退役页转向表找不到了');
   // eslint-disable-next-line no-new-func
   const 退役页 = new Function('return ' + m[1])();
-  assert.deepEqual(退役页, { ideas: 'relay', flow: 'relay', queue: 'relay', tree: 'relay' });
+  // decisions: '' → 落总览（2026-08-21 撤决策台：签字随对象走，聚合上收服务端 等我()）
+  assert.deepEqual(退役页, { ideas: 'relay', flow: 'relay', queue: 'relay', tree: 'relay', decisions: '' });
   const 转向行 = src.slice(src.indexOf('if (退役页['), src.indexOf('if (退役页[') + 220);
   assert.ok(/location\.replace/.test(转向行), '退役页转向必须 location.replace——assign 会让退役页占一格历史，用户按返回又被弹回来');
   assert.ok(!/location\.hash *=/.test(转向行), '转向行里出现了 location.hash= 赋值（等价 assign）');
@@ -77,7 +78,7 @@ t('退役页转向表：ideas/flow/queue/tree 一律落 relay，且用 replace �
   assert.ok(/h\.split\('\?'\)\[0\]\.split\('\/'\)\[0\]/.test(转向行), '转向应按 hash 首段查表，整串比对会漏掉带参旧书签');
 });
 
-t('三张退役页的视图函数不再挂路由：viewQueue 已删，viewFlow 摘牌留档', () => {
+t('四张退役页的视图函数不再挂路由：viewQueue 已删，viewFlow/viewDecisions 摘牌留档', () => {
   assert.ok(!/\bviewQueue\b\s*\(\)/.test(src.replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '')), 'viewQueue 还在被调用');
   assert.ok(!/function viewQueue/.test(src), 'viewQueue 函数体应随本次退役删除（项管页 tqRow 是它的超集）');
   assert.ok(!/function viewIdeas/.test(src), 'viewIdeas 应化成片段函数 ideaPoolHtml，不再是路由视图');
