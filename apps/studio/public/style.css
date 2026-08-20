@@ -1390,3 +1390,28 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 .spops { display:flex; align-items:center; gap:8px; justify-content:flex-end; flex-wrap:wrap;
   margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
 @media (max-width:720px) { .spgrid { grid-template-columns:1fr; } }
+
+/* ===== 工单页四层结构（2026-08-20 制作人拍板：管线→特性→专项→工单）=====
+   卡片而非行（制作人否决过折叠树：「不要这样一行一行，给我放卡片」）。
+   三条治丑：等高（内容量一致）、按号排、描述单行截断不撑卡。 */
+.tkcrumb { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ink3); margin:14px 0 2px; }
+.tkcrumb a { color:var(--ink2); text-decoration:none; }
+.tkcrumb a:hover { color:var(--accent-ink); }
+.tkcrumb .tksep { color:var(--line); }
+.tkgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(272px, 1fr)); gap:12px; align-items:start; }
+.tkcard { padding:13px 15px 11px; border-left:3px solid var(--now); cursor:pointer; transition:border-color .12s; }
+.tkcard:hover, .tkcard:focus-visible { border-left-color:var(--accent); outline:none; }
+.tkcard.tk-sealed { opacity:.55; border-left-color:var(--line); }   /* 封存≠删除：灰掉但照样在树里可查 */
+.tkcard .tkh { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin-bottom:6px; }
+.tkcard .tkno { font-size:12px; color:var(--ink3); }
+.tkcard .tkname { font-size:14px; }
+.tkcard .tkmeta { display:flex; align-items:baseline; gap:8px; margin:6px 0 5px; }
+.tkcard .tkfoot { font-size:11px; color:var(--ink3); margin-top:8px; }
+/* 双击改名的就地输入框：尺寸与它替换掉的标题一致，免得一进编辑态整张卡跳一下 */
+.tkrename { font:inherit; font-size:14px; padding:1px 5px; border:1px solid var(--accent); border-radius:4px;
+  background:var(--bg); color:var(--ink); min-width:120px; max-width:100%; }
+/* 直挂单：默认折起只留一行摘要——旧专项页把子单全铺开正是撑出滚动条的根因 */
+.tkdirect { margin-top:12px; }
+.tkdirect > summary { cursor:pointer; font-size:13px; padding:2px 0; }
+.bdone { margin:14px 2px 4px; font-size:12px; }
+.bdone a { color:var(--accent-ink); }

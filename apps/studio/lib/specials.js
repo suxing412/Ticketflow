@@ -194,7 +194,7 @@ function 聚合(root, id, opts = {}) {
 
   return {
     id: s.id, 名称: s.fm.名称 || s.id, 目标: s.fm.目标 || '', 状态: s.fm.状态 || '立项',
-    管线: s.fm.管线 || null, 项目: s.fm.项目 || null, 单号前缀: s.fm.单号前缀 || 'TK',
+    管线: s.fm.管线 || null, 特性: s.fm.特性 || null, 项目: s.fm.项目 || null, 单号前缀: s.fm.单号前缀 || 'TK',
     别名: [].concat(s.fm.别名 || []), 立项时间: s.fm.立项时间 || null,
     收口时间: s.fm.收口时间 || null, 收口报告: s.fm.收口报告 || null,
     关账时间: s.fm.关账时间 || null, 关账签字: s.fm.关账签字 || null,

@@ -16,7 +16,10 @@ const STPCT = { 草稿: 0, 待投: 0, 池: 0, 在途: 60, 质检: 85, 待定夺:
 // 施工令-015：wiki 升格唯一知识入口（施工令-020 起五分区），风格库导航退役——美术标杆并入 Wiki 页签
 // 施工令-042：「队列」页签落在流程与在途之间——流程页答「现在怎么走」，队列页答「后面排了什么」，
 // 两页同源（排程台账）且互为上下文，中间不该再隔着别的东西。
-const NAV = [['总览', ''], ['想法', 'ideas'], ['专项', 'specials'], ['工单', 'board'], ['流程', 'flow'], ['队列', 'queue'], ['在途', 'agents'], ['决策台', 'decisions'], ['Wiki', 'wiki'], ['项管', 'relay'], ['报表', 'report']]; // 参数入口只走 ⚙；树形页签随施工令-028 退役
+// NAV（2026-08-20 四层架构改版）：工单页＝归属结构面（管线→特性→专项→工单三级钻取），
+// 看板＝流转面（谁在哪一态）。制作人定的分工原话：「工单页管归属，看板页管流转」。
+// 专项页并入工单页第三层，旧书签在 route() 里转向。
+const NAV = [['总览', ''], ['想法', 'ideas'], ['工单', 'tickets'], ['看板', 'board'], ['流程', 'flow'], ['队列', 'queue'], ['在途', 'agents'], ['决策台', 'decisions'], ['Wiki', 'wiki'], ['项管', 'relay'], ['报表', 'report']]; // 参数入口只走 ⚙；树形页签随施工令-028 退役
 // 专项页排在 想法 与 工单 之间不是随手放的：它就是这条链上的那一环——想法拍板成专项容器（H103），
 // 容器切出子单进工单板。页签顺序照着事实的先后走，制作人不必记「专项归哪个页管」。
 function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 1900); }
@@ -457,8 +460,14 @@ window.boardFold = (s) => {
   try { localStorage.setItem(foldKey(s), boardOpen(s) ? '0' : '1'); } catch { /* 隐私模式：本次会话内不记忆 */ }
   route();
 };
+// 看板 = **流转面**（谁在哪一态）。2026-08-20 制作人裁定：完成/已归档两列整体移出——
+// 「看板页非常麻烦，有很多竖列……并且已完成堆了一百多单，真的找起来也很麻烦」。
+// 落袋即离开看板，故这一页永不堆积；要找做完的去报表页（可搜可筛可按耗时排序）。
+// 归属结构去工单页看（管线→特性→专项→工单），两页分工不重叠。
+const BOARD_OUT = new Set(['完成', '已归档']);
 async function viewBoard() {
-  const { states, board } = await loadBoard();
+  const { states: 全态, board } = await loadBoard();
+  const states = 全态.filter((s) => !BOARD_OUT.has(s));
   const conf = await api('/api/config').catch(() => ({ 闸值: {} }));
   const widths = { 池: 'w168', 在途: 'w168', 待验收: 'w168', 执行失败: 'w128', 完成: 'w128', 已归档: 'w128' };
   const cols = states.map((s) => {
@@ -518,8 +527,13 @@ async function viewBoard() {
       if (hs.scrollLeft !== b.scrollLeft) b.scrollLeft = hs.scrollLeft;
     }, 300);
   }, 0);
+  // 落袋去向条：完成/已归档移出后，单一收工就从这一页消失——不写清去哪找，就是把人晾在原地。
+  const 落 = (board['完成'] || []).length; const 档 = (board['已归档'] || []).length;
   return `<div id="gatebar-slot">${gatebarHtml(gateCache)}</div><div class="board2" id="board2">${cols}</div>
-    <div class="hsync" id="hsync"><div id="hsync-w" style="height:1px"></div></div>`;
+    <div class="hsync" id="hsync"><div id="hsync-w" style="height:1px"></div></div>
+    <div class="bdone subnote">看板只留活态——落袋即离开，这一页永不堆积。
+      已完成 ${落} · 已归档 ${档} 去 <a href="#/report">报表</a> 查（可搜可筛可按耗时排序）；
+      要看归属结构（管线→特性→专项）去 <a href="#/tickets">工单</a>。</div>`;
 }
 
 /* ===== P12 流程（施工令-022 重构）：现在线 · 管线甘特 =====
@@ -2694,7 +2708,7 @@ async function wkGraph(proj) {
 }
 
 // 施工令-015：stylelib 路由退役（内容并入 wiki 美术标杆页签），旧书签在 route() 里转向
-const ROUTES = { '': viewOverview, ideas: viewIdeas, specials: viewSpecials, board: viewBoard, flow: viewFlow, queue: viewQueue, agents: viewAgents, decisions: viewDecisions, wiki: viewWiki, relay: viewRelay, report: viewReport };
+const ROUTES = { '': viewOverview, ideas: viewIdeas, tickets: viewTickets, specials: viewTickets, board: viewBoard, flow: viewFlow, queue: viewQueue, agents: viewAgents, decisions: viewDecisions, wiki: viewWiki, relay: viewRelay, report: viewReport };
 const WK_ALIAS = ['style', 'stylelib', '风格库']; // 旧书签不死：一律落 wiki 美术标杆
 
 /* ===== P15 专项（H103 · 施工令-058）：容器不是工单 =====
@@ -2729,6 +2743,163 @@ const SP_态释 = {
   关账: '已关账收档',
 };
 // @testable-end spAgg
+
+/* ===== P15 工单页 · 四层归属结构（制作人 2026-08-20 拍板）=====
+ * 管线 P-n（系统）→ 特性 F-n（系统下的功能/规则）→ 专项 S-n（一段活）→ 工单（最小单元）。
+ * 三级卡片钻取：点管线卡进特性层，点特性卡进专项层，点工单直达详情页。
+ * 制作人对第一版「一行一实体的折叠树」的原话否决：「不要这样一行一行，给我放卡片，
+ * 点击管线卡片之后给我进入到专项层级」；对旧专项页的评价是「看得这么丑」——丑因三条
+ * （卡片高度参差、顺序非按编号、目标描述吃掉半张卡），本页逐条治：按号排、子单默认折叠、单行截断。
+ * 层级位置记在 hash 里（#/tickets/P-1/F-3），刷新与前进后退都不丢。 */
+function tkLevel() {
+  const seg = (location.hash.replace(/^#\/?/, '').split('?')[0] || '').split('/').filter(Boolean);
+  return { 管线: seg[1] || null, 特性: seg[2] || null };
+}
+window.tkGo = (h) => { location.hash = h; };
+
+async function viewTickets() {
+  const { 管线: pl, 特性: ft } = tkLevel();
+  const [fd, sd, pls] = await Promise.all([
+    api('/api/features').catch(() => ({ 特性: [] })),
+    api('/api/specials').catch(() => ({ 专项: [] })),
+    api('/api/pipelines').catch(() => ({ 管线: [] })),
+  ]);
+  const 特性们 = fd.特性 || []; const 专项们 = sd.专项 || []; const 管线们 = pls.管线 || pls || [];
+  if (!pl) return tkL1(管线们, 特性们);
+  if (!ft) return tkL2(pl, 管线们, 特性们);
+  return tkL3(pl, ft, 特性们, 专项们);
+}
+
+// 面包屑：层级越深越要能一眼退回去。当前层不做成链接（点自己没有意义）。
+function tkCrumb(parts) {
+  return '<div class="tkcrumb">' + parts.map((p, i) => (i === parts.length - 1
+    ? `<b>${esc(p.名)}</b>`
+    : `<a href="${esc(p.到)}">${esc(p.名)}</a><span class="tksep">/</span>`)).join('') + '</div>';
+}
+
+// 进度条：落袋比例。空的不画条——「不编进度」是既有纪律（spCard 同款）。
+function tkBar(v) {
+  const 总 = v.单数 || 0;
+  if (!总) return '<div class="spbar empty" title="还没有单——不编进度"></div>';
+  const 落 = Math.round(100 * (v.落袋 || 0) / 总);
+  return `<div class="spbar"><i class="sg-done" style="width:${落}%"></i></div>`;
+}
+
+/* ---- 第一层：管线卡片 ---- */
+function tkL1(管线们, 特性们) {
+  const p = projActive();
+  const 卡 = 管线们.filter((x) => x.状态 !== '封存' || window._showSealed).map((x) => {
+    const fs = 特性们.filter((f) => f.管线 === x.id);
+    const 单数 = fs.reduce((n, f) => n + (f.单数 || 0), 0);
+    const 落袋 = fs.reduce((n, f) => n + (f.落袋 || 0), 0);
+    const 待审 = fs.filter((f) => f.状态 === '待审').length;
+    const pct = 单数 ? Math.round(100 * 落袋 / 单数) : 0;
+    const 到 = `#/tickets/${x.id}`;
+    return `<div class="tkcard card r14" onclick="tkGo('${esc(到)}')" tabindex="0" role="button"
+        onkeydown="if(event.key==='Enter')tkGo('${esc(到)}')" aria-label="进入 ${esc(x.名称 || x.id)} 的特性层">
+      <div class="tkh"><span class="mono tkno">${esc(x.id)}</span><b class="tkname">${esc(x.名称 || '')}</b>
+        ${x.阶段 ? `<span class="pill sm mut">${esc(x.阶段)}</span>` : ''}
+        ${x.状态 === '封存' ? '<span class="pill sm mut">封存</span>' : ''}</div>
+      <div class="tkmeta"><span class="sppct">${单数 ? pct + '%' : '—'}</span>
+        <span class="subnote">${单数 ? `${落袋}/${单数} 落袋` : '还没有单'}</span></div>
+      ${tkBar({ 单数, 落袋 })}
+      <div class="tkfoot">特性 ${fs.length}${待审 ? ` · <b class="sp-wait">${待审} 待审</b>` : ''}</div></div>`;
+  }).join('');
+  // TF（监制台自维护）不挂管线：不同项目不同形状（H52）——它只有「专项+工单」两层，
+  // 故在管线层给它一张独立入口卡，不硬塞进 P 序列里冒充一条管线。
+  const tf = `<div class="tkcard card r14" onclick="tkGo('#/tickets/Ticketflow')" tabindex="0" role="button"
+      onkeydown="if(event.key==='Enter')tkGo('#/tickets/Ticketflow')" aria-label="进入 Ticketflow 项目">
+    <div class="tkh"><span class="mono tkno">TF</span><b class="tkname">Ticketflow</b>
+      <span class="pill sm mut" title="工作室自维护自优化：常驻服务，无终点故无管线（制作人 2026-08-20 定）">自维护</span></div>
+    <div class="tkfoot">不挂管线——只有「专项 + 工单」两层</div></div>`;
+  return `<div class="sp-head"><b style="font-size:15px">工单 · 归属结构</b>
+      <span class="subnote">管线（系统）→ 特性（功能/规则）→ 专项（一段活）→ 工单。
+      点卡进下一层；<b>看板</b>页管的是流转（谁在哪一态），这里管的是归属（谁属于谁）。</span></div>
+    <div class="tkgrid">${卡}${(!p || p === 'TK') ? tf : ''}</div>`;
+}
+
+/* ---- 第二层：特性卡片（按编号升序——旧专项页乱序是制作人点名的丑因）---- */
+function tkL2(pl, 管线们, 特性们) {
+  const 线 = 管线们.find((x) => x.id === pl) || { id: pl, 名称: pl === 'Ticketflow' ? 'Ticketflow' : pl };
+  const fs = 特性们.filter((f) => f.管线 === pl)
+    .sort((a, b) => Number(String(a.id).slice(2)) - Number(String(b.id).slice(2)));
+  const 卡 = fs.map(tkFeatCard).join('')
+    || `<div class="emptycard"><h5>这条管线下还没有特性</h5><p>特性是被活撑出来的，不是设计出来的——
+      项管拆单时遇到挂不上的活才提请开一个，总监审过才生效。</p></div>`;
+  return tkCrumb([{ 名: '管线', 到: '#/tickets' }, { 名: `${线.id} ${线.名称 || ''}` }])
+    + `<div class="sp-head"><b style="font-size:15px">${esc(线.名称 || 线.id)} · 特性</b>
+      <span class="subnote">系统下的功能/规则，常驻。<b>双击名字可改</b>——工单挂的是 F-n 号不是名字，改名不动挂链。</span></div>
+    <div class="tkgrid">${卡}</div>`;
+}
+
+function tkFeatCard(f) {
+  const 待审 = f.状态 === '待审'; const 封 = f.状态 === '封存';
+  const 态 = 待审 ? '<span class="pill sm warn" title="项管提请、总监未审——审过才能挂单">待审</span>'
+    : 封 ? `<span class="pill sm mut" title="${esc(f.封存因 || '不再接新活')}">封存</span>` : '';
+  const 到 = `#/tickets/${f.管线}/${f.id}`;
+  return `<div class="tkcard card r14${封 ? ' tk-sealed' : ''}" onclick="tkGo('${esc(到)}')"
+      tabindex="0" role="button" onkeydown="if(event.key==='Enter')tkGo('${esc(到)}')">
+    <div class="tkh"><span class="mono tkno">${esc(f.id)}</span>
+      <b class="tkname" ondblclick="event.stopPropagation();ftRename('${esc(f.id)}',this)"
+         title="双击改名">${esc(f.名称)}</b>${态}
+      ${f.系统 ? '<span class="pill sm mut" title="每条管线自带的兜底位：不属任何专项的单挂这里，树因此永远整齐四层">兜底</span>' : ''}</div>
+    <div class="spgoal" title="${esc(f.边界 || '')}">${esc(f.边界 || '')}</div>
+    <div class="tkmeta"><span class="sppct">${f.单数 ? f.百分比 + '%' : '—'}</span>
+      <span class="subnote">${f.单数 ? `${f.落袋}/${f.单数} 落袋` : '还没有单'}</span></div>
+    ${tkBar(f)}
+    <div class="tkfoot">专项 ${f.专项数 || 0} · 直挂单 ${f.直挂单数 || 0}</div></div>`;
+}
+
+/* ---- 第三层：专项卡片 + 直挂单 ---- */
+function tkL3(pl, ft, 特性们, 专项们) {
+  const f = 特性们.find((x) => x.id === ft);
+  if (!f) return `<div class="emptycard"><h5>特性 ${esc(ft)} 不在册</h5></div>`;
+  const sps = 专项们.filter((s) => s.特性 === ft)
+    .sort((a, b) => Number(String(a.id).slice(2)) - Number(String(b.id).slice(2)));
+  const 待签 = sps.filter((s) => s.状态 === '收口').length;
+  const 卡 = sps.map(spCard).join('');
+  setTimeout(() => tkFillDirect(ft), 0);
+  return tkCrumb([{ 名: '管线', 到: '#/tickets' }, { 名: pl, 到: `#/tickets/${pl}` }, { 名: `${f.id} ${f.名称}` }])
+    + `<div class="sp-head"><b style="font-size:15px">${esc(f.名称)} · 专项与直挂单</b>
+      <span class="subnote">${esc(f.边界 || '')}${待签 ? ` <b class="sp-wait">${待签} 个等你关账</b>` : ''}</span></div>
+    ${卡}<div id="tk-direct"></div>`;
+}
+
+// 直挂单（不经专项、直接挂本特性的单）：单独取一次，默认折叠成一行摘要——
+// 旧专项页把子单全铺开正是「卡片高度参差、撑出滚动条」的根因。
+async function tkFillDirect(ft) {
+  const el = $('tk-direct'); if (!el) return;
+  const d = await api('/api/features/' + encodeURIComponent(ft)).catch(() => null);
+  if (!d || !$('tk-direct')) return;
+  const 单 = d.直挂 || [];
+  if (!单.length) { el.innerHTML = ''; return; }
+  const 终 = new Set(['完成', '已归档']);
+  const 落 = 单.filter((t) => 终.has(t.state)).length;
+  const 行 = 单.map((t) => `<a class="sprow${终.has(t.state) ? ' done' : ''}" href="#/t/${esc(t.id)}" title="${esc(t.fm && t.fm.title || '')}">
+      <span class="mono spid">${esc(t.id)}</span><span class="spt">${esc((t.fm && t.fm.title) || '')}</span>
+      ${fnPill(t.fm && t.fm.职能)}${stPill(t.state)}</a>`).join('');
+  el.innerHTML = `<details class="spcard card r14 tkdirect"><summary>直挂单 ${单.length} 张 · 落袋 ${落}
+      <span class="subnote">（不属任何专项，直接挂本特性）</span></summary><div class="spkids">${行}</div></details>`;
+}
+
+// 双击改名：就地变输入框，回车/失焦提交，Esc 取消。改名不动挂链（工单记的是 F-n 号不是名字）。
+window.ftRename = (id, el) => {
+  const 旧 = el.textContent;
+  const inp = document.createElement('input');
+  inp.className = 'tkrename'; inp.value = 旧; inp.setAttribute('aria-label', '特性名称');
+  el.replaceWith(inp); inp.focus(); inp.select();
+  let done = false;
+  const 收 = async (存) => {
+    if (done) return; done = true;
+    const 新 = inp.value.trim();
+    if (!存 || !新 || 新 === 旧) { inp.replaceWith(el); return; }
+    const r = await post('/api/features/编辑', { id, 名称: 新 });
+    if (!r.ok) { toast(r.error || '改名失败'); inp.replaceWith(el); return; }
+    toast(`${id} 已改名「${新}」`); route();
+  };
+  inp.onkeydown = (e) => { if (e.key === 'Enter') 收(true); if (e.key === 'Escape') 收(false); };
+  inp.onblur = () => 收(true);
+};
 
 async function viewSpecials() {
   const d = await api('/api/specials').catch(() => ({ 专项: [] }));
@@ -3254,7 +3425,11 @@ async function route() {
     }
     // 多项目且尚未选定项目：驾驶舱视图一律先落启动页（详情/起草按编号直达不拦）
     if (projMulti() && !curProj()) { location.hash = '#/hub'; return; }
-    const key = ROUTES[h] ? h : '';
+    // 首段匹配（2026-08-20）：工单页把层级位置写进 hash（#/tickets/P-1/F-3），刷新与前进后退都不丢。
+    // 原先是整串精确匹配，多段 hash 查不到就静默落回总览——点管线卡会「跳回首页」。
+    // 取首段查表，多出来的段由视图函数自己解析（tkLevel）。
+    const 首段 = h.split('?')[0].split('/')[0];
+    const key = ROUTES[h] ? h : (ROUTES[首段] ? 首段 : '');
     // 不显示"加载中"：数据在后台取，旧版面保持到新版面整体就绪才一次换入（版面不因加载变动）
     const inner = await ROUTES[key]();
     // FLIP 捕捉：同在工单池时记住每张卡的旧位置，重渲染后滑到新位置（看得见"单子挪列"）

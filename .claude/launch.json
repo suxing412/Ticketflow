@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "studio",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.js"],
+      "cwd": "apps/studio",
+      "port": 4270
+    }
+  ]
+}
