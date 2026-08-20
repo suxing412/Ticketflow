@@ -293,7 +293,12 @@ app.post('/api/pm/draft', (req, res) => {
   // 粒ID（施工令-040 第 6 条）：这次起草是在**兑现哪一条排程计划**。可选——手工委托照旧不带。
   // 带了就当场校验存在性：等到十分钟后起草回调里才发现粒不存在，那条 token 已经烧掉了。
   const 粒ID = String((req.body || {}).粒ID || '').trim();
-  if (粒ID && !schedule.取(ROOT, 粒ID)) return res.status(400).json({ error: '计划粒不存在：' + 粒ID });
+  if (粒ID && !schedule.取(ROOT, 粒ID)) {
+    // 丙-4 补留痕：受理即拒也是一次「项管想起草但没起成」，此前只回 400、台账零痕，
+    // 事后查「这条计划粒为什么一直没兑现」查不到任何东西。
+    记事件('起草失败', { 阶段: '受理', 粒ID, error: '计划粒不存在' });
+    return res.status(400).json({ error: '计划粒不存在：' + 粒ID });
+  }
   const reg = (cfg.项目 && cfg.项目.注册) || {};
   const name = (cfg.项目 && cfg.项目.默认) || '';
   const projPath = name && reg[name] && reg[name].路径;
@@ -303,6 +308,11 @@ app.post('/api/pm/draft', (req, res) => {
   记事件('派单委托', { 需求: 需求.slice(0, 200), ...(粒ID ? { 粒ID } : {}) });
   require('./lib/pm/brain').draftTicket(ROOT, cfg, 需求, projPath, (r) => {
     journal.append(ROOT, r.ok ? '项管起草完成：' + r.单 + '（草稿待审）' : '项管起草失败：' + (r.error || ''));
+    // 丙-4 补留痕：成功那半有 brain 的「待审」事件兜着，**失败这半此前只进 journal**——
+    // 台账里根本没有 起草失败 这个类型，于是「项管起草失败 N 次」在流水与分桶里一条都查不到，
+    // 而 journal 是给人读的长文流水，机器对不了账。不新增写盘链路，就借既有 记事件 出口补齐；
+    // 成功不补记（会与 待审 双计，把起草次数报高）。
+    if (!r.ok) 记事件('起草失败', { 阶段: '起草', 需求: 需求.slice(0, 120), error: String(r.error || '').slice(0, 200), ...(粒ID ? { 粒ID } : {}) });
   }, { 粒ID: 粒ID || null });
   res.json({ ok: true, 状态: '项管起草中，完成后草稿区+信道可见', ...(粒ID ? { 粒ID } : {}) });
 });
@@ -446,7 +456,10 @@ app.get('/api/features/:id', (req, res) => {
   const v = F.聚合(ROOT, String(req.params.id));
   if (!v) return res.status(404).json({ error: '特性不存在' });
   const f = F.find(ROOT, String(req.params.id));
-  res.json({ ...v, 正文: f.body });
+  // 直挂单明细只在详情页下发：列表页要的是计数，若在那儿一并捞，18 个特性会把全库单扫 18 遍
+  const 直挂 = F.直挂单(ROOT, String(req.params.id))
+    .map((t) => ({ id: t.id, state: t.state, fm: { title: t.fm.title, 职能: t.fm.职能 } }));
+  res.json({ ...v, 正文: f.body, 直挂 });
 });
 const FT_ACTIONS = {
   // 提请：项管的动作。禁预规划闸在 features.提请 里（附不出活即拒），此处不复判。
@@ -1038,9 +1051,25 @@ app.post('/api/ideas', (req, res) => {
   } else { r = ideas.add(ROOT, 文本, 备注); if (r.ok) journal.append(ROOT, `想法入池：${String(文本).slice(0, 40)}`); }
   res.status(r.ok ? 200 : 400).json(r);
 });
+// 台账下发（丙-4 改：杀假读数）。此前直接 res.json(pmLedger.read(ROOT))，把 read() 的兜底空壳
+// 原样交给界面——报表页的「专项成本归集」表就靠 父单成本 画，而那个字段全仓零写入方，于是那张表
+// 从上线起永远写着「暂无归集」。改走 视图()：父单成本 读时真算，在跑（死镜像）不再下发，
+// 并随包下发 字段来源——消费方据此分得清「真的是 0」和「这儿根本没实现」。
 app.get('/api/pm/ledger', (req, res) => {
   if (!ready(res)) return;
-  res.json({ 台账: pmLedger.read(ROOT), 事件: pmLedger.events(ROOT, Number(req.query.limit) || 80) });
+  res.json({ 台账: pmLedger.视图(ROOT), 事件: pmLedger.events(ROOT, Number(req.query.limit) || 80) });
+});
+/* 项管行为流水（丙-4 · 制作人「让它的行为可视化」）。
+   案源：/api/pm/ledger 只下发尾 80 条，而台账里 巡检 + 台账对齐 + 池衡拒绝 三类机器心跳占了
+   全量的四分之三——项管真正的判断动作（估时校准、裁决、拒切、并发调配）全滚出窗口，
+   干了也等于没干。这里按桶下发：心跳归一桶只报计数，判断类各成一桶各留最近 N 条明细。
+   **纯读聚合**：业务全在 lib/pm/ledger.分桶（纯函数，可整片单测），此处只做路由与参数夹逼。 */
+app.get('/api/pm/actions', (req, res) => {
+  if (!ready(res)) return;
+  const 夹 = (v, d, lo, hi) => { const n = Number(v); return Number.isFinite(n) ? Math.min(Math.max(Math.trunc(n), lo), hi) : d; };
+  const 窗 = 夹(req.query.窗, 3000, 1, 50000);   // 读进来参与计数的事件条数（默认盖过全量）
+  const 每桶 = 夹(req.query.每桶, 8, 0, 50);      // 每个判断桶保留的明细条数
+  res.json(pmLedger.分桶(pmLedger.events(ROOT, 窗), { 每桶 }));
 });
 // 关键汇报事件链（施工令-037）：台账事件流水 + 工单 frontmatter 结构位按单号归组，一单一链。
 // **纯读聚合**——零新事件源、零调度语义改动、零写盘；业务全在 lib/pm/chain（可单测），此处只做路由。
@@ -1161,7 +1190,13 @@ const 排程动作 = {
     if (!schedule.操作域.转移.includes(人)) return { ok: false, 越权: true, error: `转移权在 ${schedule.操作域.转移.join('/')}（收到「${人 || '空'}」）` };
     return schedule.转移(ROOT, { 粒ID: b.粒ID, 目标: b.目标, 预期版本: b.预期版本, 操作者: 人, 单号: b.单号, 说明: b.说明 });
   },
-  调整: (b) => schedule.调整(ROOT, { 粒ID: b.粒ID, 预期版本: b.预期版本, 序: b.序, 依赖: b.依赖, 池衡建议: b.池衡建议, 操作者: b.操作者, 说明: b.说明 }),
+  // 就绪 透传（2026-08-20）：项管排完一批说「这批可以放了」，G8「待办放行成单」人闸的判据读的就是它。
+  // **必须原样透传，不许 `b.就绪 || false` 兜底**——省略键在 lib 侧是「这一格不动」，兜底会把它变成「改成 false」。
+  调整: (b) => schedule.调整(ROOT, { 粒ID: b.粒ID, 预期版本: b.预期版本, 序: b.序, 依赖: b.依赖, 池衡建议: b.池衡建议, 就绪: b.就绪, 操作者: b.操作者, 说明: b.说明 }),
+  // 重排（制作人：「发生延期或是超期完成需要重新排期」）：另开一口不并进 调整——
+  // 排期改动必须留下「从哪天挪到哪天、较基线延几天、为什么」，混进调整就只剩一行「改了几个字段」。
+  // 三格同样原样透传：不传＝不动，显式 null＝清空。
+  重排: (b) => schedule.重排(ROOT, { 粒ID: b.粒ID, 计划开始: b.计划开始, 计划完成: b.计划完成, 工期天: b.工期天, 因: b.因, 操作者: b.操作者, 预期版本: b.预期版本 }),
 };
 app.post('/api/schedule/:action', (req, res) => { // 参数名只能是 ASCII：path-to-regexp 不认中文占位符（会当字面量）
   if (!ready(res)) return;
