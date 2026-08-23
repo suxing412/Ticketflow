@@ -118,4 +118,66 @@ t('切单出口·切成：两样都不记（待审事件由 brain.cut 落，不�
   assert.ok(!evs.some((x) => ['切单失败', '切单候期'].includes(x.类型)), '切成不落异常事件');
 });
 
+/* ===================== ⑥ 今时线拍（H112 · 2026-08-24）=====================
+ * 判据本体在 gatereg（G23/G24 专测在 gatereg.test.js），这里验**唤醒半边**的运行期行为：
+ * 桩时钟推进真触发、gateKey 集合差幂等、停表整拍零写入、债清消解后再越线还能再响。
+ * 排程账直接写事件流（折叠口径公开且稳定）：刻钟级排点是被测输入，不吊在登记写口那组的节奏上。 */
+const fs = require('fs');
+const path = require('path');
+const gates = require('../lib/gates');
+const state2 = require('../lib/core/state');
+const NL = String.fromCharCode(10);
+const 写粒事件 = (root, e) => {
+  fs.mkdirSync(path.join(root, '排程台账'), { recursive: true });
+  fs.appendFileSync(path.join(root, '排程台账', '排程账.jsonl'), JSON.stringify(e) + NL, 'utf8');
+};
+const 唤醒事件 = (root) => ledger.events(root).filter((e) => e.类型 === '项管债唤醒');
+const 流水 = (root) => {
+  const d = path.join(root, 'journal');
+  try { return fs.readdirSync(d).map((f) => fs.readFileSync(path.join(d, f), 'utf8')).join(NL); } catch { return ''; }
+};
+
+t('今时线拍 · 桩时钟推进真触发：线没到不响，越线即唤醒（事件+journal+state 三处留痕），幂等不重发', () => {
+  const root = makeRoot();
+  写粒事件(root, { 粒ID: '粒A', 事件类型: '登记', 字段变更: { 题: '河道分段实装', 状态: '计划', 来源: '测试', 计划开始: '2026-08-21T09:15' }, 版本号: 1, 时刻: '2026-08-20T00:00:00Z', 操作者: '项管' });
+  // 现在 传本地串（无时区尾巴）：排点按本地时间读（存量纯日期=当日 00:00），两侧同一把尺
+  const r1 = wake.今时线拍(root, {}, { test: true, 现在: '2026-08-21T09:00' });
+  assert.deepEqual([r1.停表, r1.新增.length], [false, 0], '09:00 线还没推到 09:15 → 不响（触发粒度分钟，刻钟排点真被读进来）');
+  assert.equal(唤醒事件(root).length, 0, '没债不许留唤醒事件');
+  const r2 = wake.今时线拍(root, {}, { test: true, 现在: '2026-08-21T09:15' });
+  assert.deepEqual(r2.新增.map((d) => d.gateKey), ['G23:粒A'], '钟推到 09:15（含等号）→ 真触发');
+  assert.deepEqual([唤醒事件(root).length, 唤醒事件(root)[0].越线], [1, 1], '台账事件带越线笔数');
+  assert.ok((state2.read(root).今时线已报 || {})['G23:粒A'], 'gateKey 记进 state——「同一笔只唤醒一次」的底账');
+  const r3 = wake.今时线拍(root, {}, { test: true, 现在: '2026-08-21T10:00' });
+  assert.equal(r3.新增.length, 0, '下一拍同一笔不再响（gateKey 集合差幂等）');
+  assert.equal(唤醒事件(root).length, 1, '事件也只落一笔——60s 一拍的环，忘了去重就是一夜刷屏（升格环纪律①同款）');
+  const j = 流水(root);
+  assert.ok(j.includes('项管唤醒：今时线新债') && j.includes('河道分段实装'), '流水要点名新债：' + j.split(NL).filter((l) => l.includes('今时线')).join(' | '));
+  assert.ok(j.includes('派发 或 重排'), '唤醒词要把强制二选一说清（H112 没有第三种）');
+});
+
+t('今时线拍 · 停表与消解：产线关整拍空转零写入；重开整批立债；重排出线即消解抹账、再越线再响', () => {
+  const root = makeRoot();
+  写粒事件(root, { 粒ID: '粒B', 事件类型: '登记', 字段变更: { 题: '编辑器贴真', 状态: '计划', 来源: '测试', 计划开始: '2026-08-20T14:30' }, 版本号: 1, 时刻: '2026-08-19T00:00:00Z', 操作者: '项管' });
+  gates.setPaused(root, true);   // 真闸真盘：产线关（H81 唯一布尔总闸）
+  const r停 = wake.今时线拍(root, {}, { test: true, 现在: '2026-08-21T09:00' });
+  assert.equal(r停.停表, true, '产线关=停表');
+  assert.ok(!state2.read(root).今时线已报, '停表期零写入：state 连「看过了」都不记');
+  assert.equal(唤醒事件(root).length, 0, '停表期零事件');
+  assert.ok(!流水(root).includes('今时线'), '停表期零流水——把拍口的早退删掉，这三句一起红（变异自证）');
+  gates.setPaused(root, false);  // 重开
+  const r开 = wake.今时线拍(root, {}, { test: true, 现在: '2026-08-21T09:00' });
+  assert.deepEqual(r开.新增.map((d) => d.gateKey), ['G23:粒B'], '重开第一拍把停表期攒的越线债整批端出来');
+  // 项管重排到未来（事件流追加，同折叠口径）→ 债消解、底账抹掉
+  写粒事件(root, { 粒ID: '粒B', 事件类型: '重排', 字段变更: { 计划开始: '2026-09-30T10:00' }, 版本号: 2, 时刻: '2026-08-21T09:10:00Z', 操作者: '项管' });
+  const r消 = wake.今时线拍(root, {}, { test: true, 现在: '2026-08-21T09:30' });
+  assert.deepEqual([r消.新增.length, r消.消解], [0, ['G23:粒B']], '表态（重排）落账后债消解');
+  assert.ok(!(state2.read(root).今时线已报 || {})['G23:粒B'], '债清抹账');
+  assert.ok(流水(root).includes('今时线债消解'), '消解也要留痕');
+  // 又推回过去 → 同一粒要能再响（抹账不是一次性熔断）
+  写粒事件(root, { 粒ID: '粒B', 事件类型: '重排', 字段变更: { 计划开始: '2026-08-21T00:00' }, 版本号: 3, 时刻: '2026-08-21T09:20:00Z', 操作者: '项管' });
+  const r再 = wake.今时线拍(root, {}, { test: true, 现在: '2026-08-21T09:30' });
+  assert.deepEqual(r再.新增.map((d) => d.gateKey), ['G23:粒B'], '再越线再响——债的身份是 gateKey，不是历史');
+});
+
 console.log(`全部通过：${passed} 项`);

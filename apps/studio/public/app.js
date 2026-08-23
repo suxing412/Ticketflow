@@ -3473,61 +3473,205 @@ const 停摆天 = (g, now) => {
   return Number.isNaN(t) ? null : Math.max(0, Math.floor(((now || Date.now()) - t) / 天毫));
 };
 
-/* ---- ① 甘特图 ---- */
+/* ---- ① 甘特图（H112/H113 丙案重画 · 2026-08-24）----
+   行结构（制作人拍板丙案）：特性组头（TF 无此层自然不出）→ 专项主行（真实时间条：计划起止；
+   无自身计划时聚合子粒区间灰线）→ 甬道（专项内工单/粒按 序 **等距**节点串——非时间轴，
+   底色细网格暗示这半张不是时间刻度；折叠权在制作人，localStorage 本机记忆）。
+   今时线=分钟粒度竖线，三大态天然左中右；越线未表态的条灰标「待重判」**不标红**——
+   越线强制二选一（派发/重排）由数据层独立调度器立债（gateKey 幂等），本层只画不判。
+   关闸期（gates.paused）画灰带「产线关闭中 · 停表」，触发提示整条短路（零渲染）。
+   节点=闸的菱形标记：数据源 /api/attn 的债（G23/G3/G6…），点击走债自带的 路由，不新增实体。
+   缩放两档 日/周（周视图自动降天粒度）；刻钟计划（YYYY-MM-DDTHH:mm，15 分对齐）按分钟几何落位。 */
 // 上级名：F-10 这种裸号在界面上没意义，得显示「手修编辑器」。
 // 名册由 /api/schedule 随现态下发（服务端合并特性册与专项册，前端不自己拼——两处各拼一遍就是两把尺）。
 // 取不到就退化成裸号：**退化要看得见**，不许显示成空白让人以为这条没有归属。
 let 名册 = {};
 const 上级名 = (up) => (up ? (名册[up] ? `${up} ${名册[up]}` : up) : '散单');
 
-function 甘特Html(粒们, 今日, 未归属 = []) {
-  const 排了 = []; const 没排 = [];
-  for (const g of (粒们 || [])) (甘特端点(g).已排期 || 甘特端点(g).有基线 ? 排了 : 没排).push(g);
-  const 窗 = 甘特窗(排了, 今日);
-  const 刻度 = 甘特刻度(窗, 9);
-  const 今left = 窗.空 || 窗.今 == null ? null : ((窗.今 - 窗.t0) / (窗.天数 * 天毫)) * 100;
-  const 行 = 排了.map((g) => {
-    const e = 甘特端点(g);
-    const 计划 = 甘特段(e.计划起, e.计划讫, 窗);
-    const 基线 = 甘特段(e.基线起, e.基线讫, 窗);
-    // 判定由服务端下发（lib/pm/schedule.工期判定），前端只读不算——两把尺是这本账最贵的病。
+// ═══ 分钟粒度几何（H112）═══
+// 上方 @testable 的「甘特几何」块是日粒度契约（schedule-view ⑤ 钉着），原样保留供旧口径对账；
+// 这里另立分钟几何：计划已支持 YYYY-MM-DDTHH:mm（15 分对齐），存量纯日期兼容读＝当日 00:00 起算。
+// 纪律不变：这一层只回答「画在哪」——判定唯一实现在服务端 lib/pm/schedule.工期判定，随现态逐粒下发。
+const 刻毫 = 900000; // 15 分钟
+const 分毫 = (v) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(String(v == null ? '' : v));
+  return m ? { ms: Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)), 含时: m[4] != null } : null;
+};
+// 端点对 → [起, 讫) 半开毫秒段。纯日期讫含尾一整天（沿 040 老口径：8/20→8/20 是一整天宽）；
+// 带时刻讫是精确时刻（最窄一刻钟）；周档把两端降回天粒度（周视图自动降天粒度，H112 定）。
+function 时段(开始, 完成, 档) {
+  const 降 = (p) => (p == null ? null : (档 === '周' ? { ms: Math.floor(p.ms / 天毫) * 天毫, 含时: false } : p));
+  let a = 降(分毫(开始)), b = 降(分毫(完成));
+  if (!a && !b) return null;
+  const 单端 = !a || !b;
+  if (!a) a = b; if (!b) b = a;
+  const 起 = a.ms;
+  return { 起, 讫: Math.max(b.含时 ? b.ms : b.ms + 天毫, 起 + (档 === '周' ? 天毫 : 刻毫)), 单端 };
+}
+const 计划时段 = (g, 档) => 时段(g && g.计划开始, g && g.计划完成, 档);
+const 基线时段 = (g, 档) => 时段(g && g.基线开始, g && g.基线完成, 档);
+// 时间窗：所有段端点 ∪ 今时，两侧留余白（周档 2 天；日档取跨度 4%、至少 2 小时）。
+function 时窗(段们, 今时, 档) {
+  const 点 = [];
+  for (const s of (段们 || [])) if (s) 点.push(s.起, s.讫);
+  if (!点.length) return { 空: true };
+  if (今时 != null) 点.push(今时);
+  const 边 = 档 === '周' ? 2 * 天毫 : Math.max(2 * 3600000, (Math.max(...点) - Math.min(...点)) * 0.04);
+  const t0 = Math.min(...点) - 边, t1 = Math.max(...点) + 边;
+  return { 空: false, t0, t1, 长: t1 - t0 };
+}
+const 时左 = (ms, 窗) => (!窗 || 窗.空 || ms == null ? null : ((ms - 窗.t0) / 窗.长) * 100);
+function 时条(s, 窗) {
+  if (!s || !窗 || 窗.空) return null;
+  const left = Math.max(0, 时左(s.起, 窗));
+  return { left, width: Math.max(0.5, Math.min(100 - left, ((s.讫 - s.起) / 窗.长) * 100)), 单端: s.单端 };
+}
+function 时刻度(窗, 档) {
+  if (!窗 || 窗.空) return [];
+  const out = []; let 步, 起, 标;
+  if (档 === '周') { 步 = 7 * 天毫; 起 = Math.ceil(窗.t0 / 天毫) * 天毫; 标 = (t) => 毫日(t).slice(5); }
+  else if (窗.长 <= 2 * 天毫) { 步 = 3 * 3600000; 起 = Math.ceil(窗.t0 / 步) * 步; 标 = (t) => new Date(t).toISOString().slice(11, 16); }
+  else { 步 = Math.max(1, Math.ceil(窗.长 / 天毫 / 10)) * 天毫; 起 = Math.ceil(窗.t0 / 天毫) * 天毫; 标 = (t) => 毫日(t).slice(5); }
+  for (let t = 起; t < 窗.t1; t += 步) out.push({ 文: 标(t), left: 时左(t, 窗) });
+  return out;
+}
+// 时刻显示：带时刻的显示到分（MM-DD HH:mm），纯日期只显示 MM-DD——不给纯日期捏造一个 00:00 摆上台面。
+const 时文 = (v) => { const p = 分毫(v); return p ? (p.含时 ? String(v).slice(5, 16).replace('T', ' ') : String(v).slice(5, 10)) : ''; };
+
+// 缩放（日/周）与甬道折叠：都是本机显示偏好，进 localStorage 不进账（折叠权在制作人）。
+const 甘特档 = () => (localStorage.getItem('gt-zoom') === '周' ? '周' : '日');
+window.gtZoom = (z) => { localStorage.setItem('gt-zoom', z === '周' ? '周' : '日'); repaint('甘特缩放'); };
+const 甬道折表 = () => { try { return JSON.parse(localStorage.getItem('gt-fold') || '{}') || {}; } catch { return {}; } };
+window.gtFoldSp = (k) => { const m = 甬道折表(); m[k] = !m[k]; localStorage.setItem('gt-fold', JSON.stringify(m)); repaint('甬道折叠'); };
+window.gtGo = (r) => { if (r) location.hash = r; };
+
+function 甘特Html(粒们, 今日, 未归属 = [], 附 = {}) {
+  const 档 = 甘特档();
+  const 停表 = !!附.停表;
+  const 债 = Array.isArray(附.债) ? 附.债 : [];
+  const 今点 = 分毫(附.现在 || 今日);   // 附.现在 = 'YYYY-MM-DDTHH:mm'（本地钟面）；旧调用只给日期串也认
+  const 今时 = 今点 ? 今点.ms : null;
+
+  // 分组（四层架构在图上的投影）：上级 S-n → 甬道子粒；型=专项 → 专项主行；上级 F-n → 特性组；其余散单。
+  const 组特性 = new Map(); const 组专项 = new Map(); const 散 = [];
+  const 拿S = (k) => { if (!组专项.has(k)) 组专项.set(k, { 键: k, 主: null, 子: [], 归特性: null }); return 组专项.get(k); };
+  const 拿F = (k) => { if (!组特性.has(k)) 组特性.set(k, { 键: k, 专项: [], 直属: [] }); return 组特性.get(k); };
+  for (const g of (粒们 || [])) {
+    if (g.上级 && /^S-\d+$/.test(String(g.上级))) 拿S(g.上级).子.push(g);
+    else if (g.型 === '专项') {
+      const k = (g.单号 && /^S-\d+$/.test(String(g.单号))) ? g.单号 : g.粒ID;
+      const s = 拿S(k); s.主 = g;
+      if (g.上级 && /^F-\d+$/.test(String(g.上级))) { s.归特性 = g.上级; const f = 拿F(g.上级); if (!f.专项.includes(k)) f.专项.push(k); }
+    } else if (g.上级 && /^F-\d+$/.test(String(g.上级))) 拿F(g.上级).直属.push(g);
+    else 散.push(g);
+  }
+  // 时间窗吃**全部**计划/基线段（含甬道子粒——聚合灰线由它们撑出来）∪ 今时
+  const 全段 = [];
+  for (const g of (粒们 || [])) 全段.push(计划时段(g, 档), 基线时段(g, 档));
+  const 窗 = 时窗(全段, 今时, 档);
+  const 今左 = 时左(今时, 窗);
+  const 折表 = 甬道折表();
+
+  // 闸债 → 菱形（H112：节点=闸的菱形标记，数据源闸注册表的债，不新增实体）。
+  // 债的实体 id 对到行/节点（粒ID 或 单号/专项号）；路由随债下发（gatereg.填路由），本层不猜跳哪儿。
+  const 债于 = (...ids) => 债.filter((d) => ids.some((x) => x != null && String(d.id) === String(x)));
+  const 钻串 = (列) => 列.map((d) => `<i class="gtgem" role="button" tabindex="0" title="${esc(`${d.闸号 || ''} ${d.闸名 || ''} · 闸债${d.停摆小时 != null ? ` · 停摆 ${d.停摆小时}h` : ''}\n点击去处置：${d.路由 || ''}`)}"
+      onclick="event.stopPropagation();gtGo('${qesc(d.路由 || '')}')"
+      onkeydown="if(event.key==='Enter'){event.stopPropagation();gtGo('${qesc(d.路由 || '')}')}">◆</i>`).join('');
+
+  // 时间条行（散单/特性直属工单/带自身计划的专项主行共用）
+  const 条行 = (g, 加类, 加标) => {
+    const 计 = 计划时段(g, 档), 基 = 基线时段(g, 档);
+    const 计条 = 时条(计, 窗), 基条 = 时条(基, 窗);
     const j = g.判定 || null;
+    // 越线（前端提示面）：产线开 AND 计划态 AND 计划开始≤今时。表态与立债在数据层（gateKey 幂等）；
+    // 这里只把「已越线候重判」的条灰显——**灰不红**（H112：重判前不算超期事故）。停表=判据整条短路。
+    const 越线 = !停表 && 今时 != null && g.状态 === '计划' && 计 && 计.起 <= 今时;
+    const 红类 = 越线 ? '' : `${j && j.超期 ? ' gt-od' : ''}${j && j.延期 ? ' gt-late' : ''}`;
+    const 徽 = 越线 ? '<em class="gtflag rejudge" title="计划开始已过今时线且未表态——数据层已立债给项管（派发/重排二选一），重判前灰显不标红">待重判</em>'
+      : (j && j.需重排 ? '<em class="gtflag" title="超期未了结：该重排了">该重排</em>'
+        : (j && j.延期 ? `<em class="gtflag late" title="现计划较基线累计挪了 ${j.延期天} 天">延 ${j.延期天}d</em>` : ''));
     const 提 = [`${上级名(g.上级)}${g.序 ? '·' + g.序 : ''}　${g.题 || ''}`,
       `状态：${g.状态 || ''}`,
-      `计划：${e.计划起 ? 毫日(e.计划起) : '未定'} → ${e.计划讫 ? 毫日(e.计划讫) : '未定'}`,
-      `基线：${e.基线起 ? 毫日(e.基线起) : '未立'} → ${e.基线讫 ? 毫日(e.基线讫) : '未立'}`,
+      `计划：${g.计划开始 || '未定'} → ${g.计划完成 || '未定'}`,
+      `基线：${g.基线开始 || '未立'} → ${g.基线完成 || '未立'}`,
       g.工期天 == null ? '' : `工期 ${g.工期天} 天`,
-      // 2026-08-21 体检纠正：原先这里写「延期天数待服务端下发」，而服务端从 08-20 起
-      // 就随每粒下发 判定 了——**这句话把 3 条真延期藏了一整天**。
+      越线 ? '已越今时线未表态：候项管重判（派发/重排二选一）' : '',
       j && j.延期 ? `延期 ${j.延期天} 天（现计划较基线累计往后挪了这么多）` : '',
       j && j.超期 ? `已超期 ${j.超期天} 天（说好的日子到了，活还在）` : '',
       j && !j.超期 && !排期终态.includes(g.状态) && j.余量天 != null ? `余量 ${j.余量天} 天` : '',
       j && j.超期完成 ? `超期完成 ${j.超期完成天} 天` : '',
       j && j.需重排 ? '★ 该重排了' : '',
-      e.挪过 && !(j && j.延期) ? '计划较基线挪过（方向未判：缺基线或缺计划日）' : '',
       '点这一行改排期',
     ].filter(Boolean).join('\n');
-    return `<div class="gtrow${e.挪过 ? ' moved' : ''}${j && j.超期 ? ' gt-od' : ''}${j && j.延期 ? ' gt-late' : ''}" data-gid="${esc(g.粒ID)}" title="${esc(提)}"
+    return `<div class="gtrow${加类 || ''}${红类}${越线 ? ' xline' : ''}" data-gid="${esc(g.粒ID)}" title="${esc(提)}"
         tabindex="0" role="button" onclick="tqReplan('${qesc(g.粒ID)}')"
         onkeydown="if(event.key==='Enter'){tqReplan('${qesc(g.粒ID)}')}">
-        <span class="gtlab"><i class="gts mono">${esc(上级名(g.上级))}${g.序 ? '·' + g.序 : ''}</i><b>${esc(g.题 || '')}</b>${
-          j && j.需重排 ? '<em class="gtflag" title="超期未了结：该重排了">该重排</em>'
-            : (j && j.延期 ? `<em class="gtflag late" title="现计划较基线累计挪了 ${j.延期天} 天">延 ${j.延期天}d</em>` : '')
-        }</span>
+        <span class="gtlab">${加标 || ''}<i class="gts mono">${esc(上级名(g.上级))}${g.序 ? '·' + g.序 : ''}</i><b>${esc(g.题 || '')}</b>${徽}${钻串(债于(g.粒ID, g.单号))}</span>
         <span class="gttrack">
-          ${基线 ? `<i class="gtbase" style="left:${基线.left.toFixed(3)}%;width:${基线.width.toFixed(3)}%"></i>` : ''}
-          ${计划 ? `<i class="gtbar ${QCLS[g.状态] || ''}${计划.单端 ? ' half' : ''}" style="left:${计划.left.toFixed(3)}%;width:${计划.width.toFixed(3)}%"></i>` : ''}
+          ${基条 ? `<i class="gtbase" style="left:${基条.left.toFixed(3)}%;width:${基条.width.toFixed(3)}%"></i>` : ''}
+          ${计条 ? `<i class="gtbar ${QCLS[g.状态] || ''}${计条.单端 ? ' half' : ''}" style="left:${计条.left.toFixed(3)}%;width:${计条.width.toFixed(3)}%"></i>` : ''}
         </span>
-        <span class="gtwhen mono">${esc(e.计划讫 ? 毫月日(e.计划讫) : (e.计划起 ? 毫月日(e.计划起) + '→?' : '—'))}</span></div>`;
-  }).join('');
+        <span class="gtwhen mono">${esc(g.计划完成 ? 时文(g.计划完成) : (g.计划开始 ? 时文(g.计划开始) + '→?' : '—'))}</span></div>`;
+  };
+
+  // 专项主行：真实时间条＝自身计划起止；无自身计划 → 聚合子粒区间**灰细线**（不冒充排过期）。
+  const 专项行 = (s) => {
+    if (s.主 && 计划时段(s.主, 档)) return 条行(s.主, ' gtsp', '<i class="gtspm" title="专项主行：真实时间条（计划起止）">◈</i>');
+    const 名 = (s.主 && s.主.题) || 名册[s.键] || '';
+    const 子段 = s.子.map((g) => 计划时段(g, 档)).filter(Boolean);
+    const 聚 = 子段.length ? 时条({ 起: Math.min(...子段.map((x) => x.起)), 讫: Math.max(...子段.map((x) => x.讫)), 单端: false }, 窗) : null;
+    const 钻 = 钻串(债于(s.键, s.主 && s.主.粒ID, s.主 && s.主.单号));
+    return `<div class="gtrow gtsp agg" data-sp="${esc(s.键)}" title="${esc(`${s.键} ${名}\n专项自身未排计划——灰细线是子粒区间的聚合，不是排期`)}">
+        <span class="gtlab"><i class="gtspm" title="专项主行">◈</i><i class="gts mono">${esc(s.键)}</i><b>${esc(名)}</b>${钻}</span>
+        <span class="gttrack">${聚 ? `<i class="gtagg" style="left:${聚.left.toFixed(3)}%;width:${聚.width.toFixed(3)}%"></i>` : ''}</span>
+        <span class="gtwhen mono">${聚 ? '聚合' : '—'}</span></div>`;
+  };
+
+  // 甬道：专项内工单/粒按 序 **等距**节点串——非时间轴（节点横坐标只表顺序，不表日期），
+  // 底色细网格暗示这半张不是时间刻度。折叠权在制作人（localStorage，不进账）。
+  const 甬道行 = (s) => {
+    if (!s.子.length) return '';
+    const 子 = s.子.slice().sort((a, b) => (Number(a.序) || 0) - (Number(b.序) || 0));
+    if (折表[s.键]) return `<div class="gtlane fold" data-sp="${esc(s.键)}"><span class="gtlab"><button class="gtlfold" onclick="gtFoldSp('${qesc(s.键)}')"
+        title="展开甬道（折叠状态记在本机，折叠权在制作人）">▸ 甬道 ${子.length} 节点</button></span><span class="gtlgrid dim"></span><span class="gtwhen"></span></div>`;
+    const 节 = 子.map((g) => {
+      const 去 = g.单号 ? `location.hash='#/t/${qesc(String(g.单号))}'` : `tqReplan('${qesc(g.粒ID)}')`;
+      const 提 = [`${g.序 ? g.序 + '·' : ''}${g.题 || g.粒ID}`, `状态：${g.状态 || ''}`,
+        g.单号 ? `单号：${g.单号}（点击进详情）` : '未成单（点击改排期）',
+        (g.计划开始 || g.计划完成) ? `计划：${g.计划开始 || '?'} → ${g.计划完成 || '?'}（甬道内按序等距，不按时间落位）` : '未排期'].join('\n');
+      return `<span class="gtnode ${QCLS[g.状态] || ''}" role="button" tabindex="0" title="${esc(提)}"
+          onclick="${去}" onkeydown="if(event.key==='Enter'){${去}}">
+          <i class="gtnd"></i>${钻串(债于(g.粒ID, g.单号))}<b>${esc((g.序 ? g.序 + '·' : '') + (g.题 || g.粒ID))}</b></span>`;
+    }).join('');
+    return `<div class="gtlane" data-sp="${esc(s.键)}"><span class="gtlab"><button class="gtlfold" onclick="gtFoldSp('${qesc(s.键)}')"
+        title="折叠甬道（折叠状态记在本机，折叠权在制作人）">▾ 甬道</button></span><span class="gtlgrid">${节}</span><span class="gtwhen"></span></div>`;
+  };
+
+  const 专项块 = (s) => 专项行(s) + 甬道行(s);
+  const 特性块 = (f) => `<div class="gtfg" title="特性组头（TF 无特性层，自然不出这一行）"><i class="gts mono">${esc(f.键)}</i><b>${esc(名册[f.键] || '')}</b><span class="subnote">特性</span></div>`
+    + f.专项.map((k) => 专项块(组专项.get(k))).join('')
+    + f.直属.filter((g) => 计划时段(g, 档) || 基线时段(g, 档)).map((g) => 条行(g)).join('');
+
+  const 无特专项 = [...组专项.values()].filter((s) => !s.归特性);
+  const 散有期 = 散.filter((g) => 计划时段(g, 档) || 基线时段(g, 档));
+  // 未排期名单 = 不在任何甬道里、又没有一格日期的（甬道子粒无期也在甬道里看得见，不重复列）
+  const 甬内 = new Set([...组专项.values()].flatMap((s) => s.子.map((g) => g.粒ID)));
+  const 没排 = (粒们 || []).filter((g) => !甬内.has(g.粒ID) && g.型 !== '专项' && !计划时段(g, 档) && !基线时段(g, 档));
+  const 在图数 = (粒们 || []).length - 没排.length;
+
+  const 行 = [...组特性.values()].map(特性块).join('')
+    + 无特专项.map(专项块).join('')
+    + 散有期.map((g) => 条行(g)).join('');
+  const 刻度 = 时刻度(窗, 档);
+  const 停带 = 停表 ? '<div class="gtstop" role="status" title="gates.paused＝真：今时线触发判据整条短路（数据层零触发零写入，本层零提示）">产线关闭中 · 停表</div>' : '';
   const 图 = 窗.空
     ? `<div class="gtempty">整张甘特图是空的——<b>${没排.length} 条待办没有一条排过日期</b>。
-        （2026-08-20 盘账：排程账 200 条里「调整 0、项管转移 0」——项管只登记，从不排、从不推。）
-        下面每条「排期 →」就是第一笔：填上计划起讫与因，条立刻出现在这里。</div>`
-    : `<div class="gtwrap">
-        <div class="gtaxis"><span class="gtlab"></span><span class="gttrack">
-          ${刻度.map((k) => `<i class="gttick" style="left:${k.left.toFixed(3)}%"><em>${esc(k.日.slice(5))}</em></i>`).join('')}
-          ${今left == null ? '' : `<i class="gttoday" style="left:${今left.toFixed(3)}%" title="今日 ${esc(今日)}"><em>今</em></i>`}
+        下面每条「排期 →」就是第一笔：填上计划起讫（支持刻钟 YYYY-MM-DDTHH:mm，15 分对齐）与因，条立刻出现在这里。</div>`
+    : `<div class="gtwrap${档 === '日' ? ' q15' : ''}">
+        <div class="gtaxis"><span class="gtlab"><span class="gtzoom"><button class="${档 === '日' ? 'on' : ''}" onclick="gtZoom('日')" title="日视图：分钟几何，刻钟计划按 15 分对齐落位">日</button><button class="${档 === '周' ? 'on' : ''}" onclick="gtZoom('周')" title="周视图：自动降天粒度">周</button></span></span><span class="gttrack">
+          ${刻度.map((k) => `<i class="gttick" style="left:${k.left.toFixed(3)}%"><em>${esc(k.文)}</em></i>`).join('')}
+          ${今左 == null ? '' : `<i class="gttoday" style="left:${今左.toFixed(3)}%" title="今时线（分钟粒度）${esc(附.现在 ? ' ' + 附.现在 : '')}：三大态天然左中右"><em>今</em></i>`}
         </span><span class="gtwhen"></span></div>
         <div class="gtbody">${行}</div></div>`;
   const 未排 = 没排.length
@@ -3552,17 +3696,17 @@ function 甘特Html(粒们, 今日, 未归属 = []) {
     : '';
   return `<div class="rlcard card r14" id="rl-gantt">
     <div class="rlch"><b>甘特图</b>
-      <span class="subnote">一行一条待办 · 实条＝现计划 · 淡底条＝基线（首次排期时立下，此后不随重排变）</span>
+      <span class="subnote">特性组 → 专项主行（真实时间条）→ 甬道（按序等距 · 非时间轴）· 今时线分钟粒度</span>
       <span class="sp"></span>
-      <span class="rlnum mono">已排期 ${排了.length} · 未排期 ${没排.length}</span></div>
-    ${图}${未排}${未归}
+      <span class="rlnum mono">在图 ${在图数} · 未排期 ${没排.length}${停表 ? ' · 停表' : ''}</span></div>
+    ${停带}${图}${未排}${未归}
     <div class="fglegend gtlg">
-      <span><i class="lg-gbar"></i>实条＝计划开始→计划完成</span>
-      <span><i class="lg-gbase"></i>淡底条＝基线区间；两条错位（本行加左侧竖标）＝计划较基线挪过</span>
-      <span><i class="lg-gtoday"></i>今日线</span>
-      <span><i class="lg-gflag"></i>「延 Nd」＝现计划较基线累计后挪；「该重排」＝已超期未了结</span>
-      <span class="subnote">延期/超期的判定只有一处实现：服务端 <span class="mono">lib/pm/schedule.工期判定</span>，
-        随 <span class="mono">GET /api/schedule</span> 逐粒下发；本页只读不算（前端复刻一份就是两把尺）。</span></div>
+      <span><i class="lg-gbar"></i>实条＝计划开始→计划完成（支持刻钟）；◈ 行＝专项主行，灰细线＝子粒区间聚合</span>
+      <span><i class="lg-gbase"></i>淡底条＝基线区间；「延 Nd」＝现计划较基线累计后挪；「该重排」＝已超期未了结</span>
+      <span><i class="lg-gtoday"></i>今时线（分钟）· 越线未表态的条灰标「待重判」，重判前不标红</span>
+      <span>◆＝闸债菱形（/api/attn 逐债自带路由，点击去处置）· 甬道节点按 序 等距，非时间刻度 · 关闸期出灰带并停一切触发提示</span>
+      <span class="subnote">延期/超期判定唯一实现：服务端 <span class="mono">lib/pm/schedule.工期判定</span> 随
+        <span class="mono">GET /api/schedule</span> 逐粒下发；越线触发与立债在数据层独立调度器（H112，gateKey 幂等）。本层只画不判。</span></div>
   </div>`;
 }
 
@@ -3683,7 +3827,7 @@ function 项管行为Html(act, kc) {
 async function viewRelay() {
   // 数据七源。一律 catch 兜底：任何一个接口不在（老部署/桩台）都不许把整页拖白——
   // 本页是四块拼起来的，一块取不到就该只塌那一块。
-  const [d, pl, rs, kc, sch, q, id, act] = await Promise.all([
+  const [d, pl, rs, kc, sch, q, id, act, attn, gz] = await Promise.all([
     api('/api/relay').catch(() => ({ 消息: [] })),
     api('/api/pm/ledger').catch(() => ({ 台账: {} })),
     api('/api/pm/roster').catch(() => null),
@@ -3694,11 +3838,16 @@ async function viewRelay() {
     // 服务端 GET /api/schedule/:action 把 req.query 整个交给 scheduleView.队列页，认 项目 这一格。
     api('/api/schedule/' + encodeURIComponent('队列') + (projActive() ? '?' + encodeURIComponent('项目') + '=' + encodeURIComponent(projActive()) : '')).catch(() => null),
     api('/api/ideas').catch(() => null), // 兜底不许造出「0 条在池」这种假真空（2026-08-22 体检 #66）
-    // 八口全并发（本页每次重绘都要取一遍，实测最慢那口 34ms；串成一列就是白等一个来回）
+    // 十口全并发（本页每次重绘都要取一遍，实测最慢那口 34ms；串成一列就是白等一个来回）
     api('/api/pm/actions').catch(() => null),
+    // H112 丙案：甘特要闸债（节点=菱形标记）与产线开关（关闸灰带「停表」）——
+    // 债与路由由 /api/attn 随行下发（gatereg.填路由），paused 只认 /api/gates 一处，前端不另判。
+    api('/api/attn').catch(() => null),
+    api('/api/gates').catch(() => null),
   ]);
   const now = Date.now();
-  const 今日 = new Date(now - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10); // 本地日，不拿 UTC 串切
+  const 现在 = new Date(now - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16); // 本地钟面到分（今时线分钟粒度）
+  const 今日 = 现在.slice(0, 10); // 本地日，不拿 UTC 串切
   // 项目边界（2026-08-21 制作人：「在一个项目里能看到另外一个项目的东西，这不对，不合理」）。
   // 此前本页刻意**不**过滤，注释写着「项管是工作室级职能，跨项目」——那是总监的判断，被推翻了：
   // 页头写着「监制台 · TK」，内容却给的是全部，等于页头声称一个范围、内容给的是另一个范围。
@@ -3757,7 +3906,7 @@ async function viewRelay() {
         <span class="subnote" style="margin-left:8px">每职能一行 · 池序即路由优先级 · 只读（调整走 /api/pm/roster）</span>
         <div style="margin-top:12px">${Array.isArray(rs && rs.编制) ? rosterSnapHtml(rs.编制) : '<p class="dim">读不到编制（/api/pm/roster 不可达或返回异常）——这不是「无编制数据」。</p>'}</div></div>
     </div>
-    ${甘特Html(在排, 今日, 未归属)}
+    ${甘特Html(在排, 今日, 未归属, { 债: (attn && Array.isArray(attn.债)) ? attn.债 : [], 停表: !!(gz && gz.paused), 现在 })}
     ${待办队列Html(q, 粒表, now)}
     <div class="rlcard card r14" id="rl-ideas">
       <div class="rlch"><b>想法在池</b>

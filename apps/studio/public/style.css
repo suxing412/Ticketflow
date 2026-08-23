@@ -1579,3 +1579,49 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
    没有它，签字就成了对状态机的盖章——S-1/S-3 两次误催签字即此。 */
 .spdone { margin:10px 0 2px; font-size:12px; color:var(--ok); line-height:1.5; }
 .spdone.none { color:var(--warn); }
+
+/* ===== H112/H113 丙案甘特重画（2026-08-24）=====
+   停表灰带 / 越线「待重判」灰标 / 特性组头 / 专项主行(◈) / 甬道等距节点串 / 闸债菱形(◆) / 日周缩放 */
+.gtstop { margin:0 0 10px; padding:8px 12px; border-radius:10px; background:var(--chip); color:var(--ink3);
+  border:1px dashed var(--line); font-size:12.5px; letter-spacing:.06em; text-align:center; }
+/* 越线候重判：灰不红（H112 定：重判前不算超期事故，红色留给服务端判定的超期/延期） */
+.gtflag.rejudge { background:var(--chip); color:var(--ink3); border:1px solid var(--line); }
+.gtrow.xline { border-left-color:var(--ink3); }
+.gtrow.xline .gtbar { opacity:.4; filter:grayscale(1); }
+/* 特性组头（TF 无此层不出） */
+.gtfg { display:flex; align-items:baseline; gap:8px; padding:8px 12px 2px; border-top:1px solid var(--line); }
+.gtfg b { font-size:12.5px; }
+/* 专项主行：◈ 记号；无自身计划时的聚合灰细线 */
+.gtrow.gtsp b { font-weight:600; }
+.gtrow.gtsp.agg { cursor:default; }
+.gtspm { font-style:normal; color:var(--accent-ink); font-size:11px; flex-shrink:0; }
+.gtagg { position:absolute; top:9px; height:3px; border-radius:2px; background:var(--ink3); opacity:.35; }
+/* 甬道：按序等距（flex 均分＝几何上与时间无关），底色细网格暗示非时间刻度 */
+.gtlane { display:grid; grid-template-columns:minmax(150px,26%) 1fr 54px; gap:10px; align-items:center; padding:2px 12px 6px; }
+.gtlane .gtlab { justify-content:flex-end; }
+.gtlane.fold { padding-bottom:2px; }
+.gtlfold { border:none; background:none; color:var(--ink3); font-size:11px; cursor:pointer; padding:2px 4px; white-space:nowrap; }
+.gtlfold:hover, .gtlfold:focus-visible { color:var(--ink); outline:none; }
+.gtlgrid { display:flex; gap:6px; padding:5px 8px; min-height:26px; border-radius:8px; overflow:hidden;
+  background:var(--sect); background-image:repeating-linear-gradient(90deg, transparent 0 41px, var(--line) 41px 42px); }
+.gtlgrid.dim { opacity:.4; min-height:10px; }
+.gtnode { flex:1 1 0; min-width:0; display:flex; align-items:center; gap:5px; font-size:11px; cursor:pointer;
+  padding:2px 6px; border-radius:7px; border:1px solid transparent; }
+.gtnode:hover, .gtnode:focus-visible { background:var(--we); border-color:var(--line); outline:none; }
+.gtnode b { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gtnd { width:8px; height:8px; border-radius:50%; background:var(--ink3); flex-shrink:0; }
+.gtnode.plan .gtnd { background:transparent; border:1px dashed var(--ink3); }
+.gtnode.draft .gtnd { background:var(--warnbg); border:1px solid var(--warnln); }
+.gtnode.made .gtnd { background:var(--accent); }
+.gtnode.done .gtnd { background:var(--ok); }
+.gtnode.drop .gtnd { background:var(--chip); }
+/* 闸债菱形：数据源 /api/attn，点击走债自带路由 */
+.gtgem { font-style:normal; color:var(--warn, #d85a30); cursor:pointer; font-size:11px; flex-shrink:0; margin-left:4px; }
+.gtgem:hover, .gtgem:focus-visible { transform:scale(1.25); outline:none; }
+/* 缩放两档：日/周 */
+.gtzoom { display:inline-flex; gap:2px; }
+.gtzoom button { border:1px solid var(--line); background:var(--card); color:var(--ink3); font-size:10.5px;
+  padding:1px 8px; border-radius:6px; cursor:pointer; }
+.gtzoom button.on { background:var(--sect); color:var(--ink); border-color:var(--ink3); }
+/* 日视图轨道细网格：暗示刻钟（15 分对齐）粒度；周视图不出 */
+.gtwrap.q15 .gtrow .gttrack { background-image:repeating-linear-gradient(90deg, transparent 0 23px, var(--sect) 23px 24px); border-radius:6px; }

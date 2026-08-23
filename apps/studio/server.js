@@ -1862,6 +1862,25 @@ function start() {
       // stop() → stopLoop() 拆的是产线那条 15 秒环，碰不到这条——「人欠的债不因产线停摆而消失」
       // 这句话到此才在机器上成立（上方注释「停止按钮只管本次会话」正是本条的依据）。
       if (!initError) { try { require('./lib/runner').start升格环(ROOT, () => cfg); } catch (e) { console.error('升格环启动失败：' + e.message); } }
+      // 今时线独立调度器（H112 · 2026-08-24）：**数据层判据，不搭 runner 班车**——
+      // runner.tick 是派发环（产线一停整环停、tick 频率随派发节奏调），而今时线问的是
+      // 「排期承诺兑现没有」，与派发节奏无关。触发粒度分钟（H112：计划粒度刻钟、触发粒度分钟）
+      // ＝ 60s 一拍；拍秒可调只为测试能把这条环跑起来看（同 升格环「下限 1ms」的理由），生产不配即 60。
+      // 停表在拍体内（wake.今时线拍：产线关整拍空转零写入），这里只管把钟挂上。
+      if (!initError) {
+        const 拍今时线 = () => {
+          // 桩台传 test：只掐 brain 唤醒接缝（零计费），台账/journal/state 留痕照落——判据要能被端到端验
+          try { require('./lib/pm/wake').今时线拍(ROOT, cfg, { test: STUB }); }
+          catch (e) { try { journal.append(ROOT, '今时线拍异常：' + String((e && e.message) || e).slice(0, 80)); } catch { /* 留痕失败不倒拍 */ } }
+        };
+        拍今时线(); // 开机先拍一次：停机期攒下的越线债不等第一个整分钟
+        const 拍秒 = Number((cfg.闸值 || {}).今时线拍秒) || 60;
+        setInterval(拍今时线, Math.max(200, 拍秒 * 1000)).unref();
+        // 事件驱动的另一半（H112 触发点「任何三大态切换」）：move() 的唯一中心挂钩子——
+        // 单一出队（派发/落袋）债当拍消解、单一回队（收回/验收不过）当拍立债，不等 60s 班车。
+        // 钩子异常 store.触移动 已兜（try 包住不打断转移），这里不必再包一层。
+        store.on移动(() => 拍今时线());
+      }
       resolve({ port, server: srv, initError });
     });
     srv.on('error', reject);

@@ -248,5 +248,63 @@ function 台账对齐拍(root, opts = {}) {
   }
 }
 
+// ⑥ 今时线拍（H112 · 2026-08-24）：G23 越线 / G24 未排期 的**唤醒半边**。
+// 判据本体在 lib/gatereg.js（全系统唯一谓词，只闸轻查口），这里只做「有新债就叫人」：
+// gateKey 集合差记在 state.今时线已报——同一笔债只唤醒一次，债清了抹账（再越线还能再响，
+// 与 runner.人闸升格Tick 纪律①同款）。两条触发路共用这一份：server.js 的 60s 独立调度器
+// （时刻驱动半边）与 store.on移动 钩子（事件驱动半边：任何三大态切换当拍即查，不等班车）。
+//
+// **产线关＝整拍空转零写入**（H112 停表）：G23 判据自己已经短路，但 G24 不停表（没排期这件事
+// 不因关闸而消失）——若关闸期照常记账/发唤醒，「停表」就只停了半边。所以这里在拍口整体早退：
+// 关闸期连「看过了」都不记，重开后第一拍自然把攒下的整批越线债一次端出来。
+//
+// 通知去向三层：台账事件 + journal **必落**（透明化，账先立住）；brain 唤醒走具名接缝
+// brain.项管债唤醒（表态写口那组落地后把函数挂上即通电，火后不理同 ①/② 定式）。接缝空着时
+// 债不是黑洞：/api/attn?归属=项管 全程可见，24h 未消化由 runner 升格环按 逾期() 升格总监。
+// opts.test（含桩台）只掐 brain 接缝，不掐留痕——桩台零计费，但账照记。
+function 今时线拍(root, cfg, opts = {}) {
+  const gates = (opts.deps && opts.deps.gates) || require('../gates');
+  if (gates.isPaused(root)) return { 停表: true, 新增: [], 消解: [] };
+  const gr = require('../gatereg');
+  let r;
+  try { r = gr.等我(root, { 只闸: ['G23', 'G24'], 现在: opts.现在, deps: opts.deps }); }
+  catch (e) { // 取不到数就闭嘴留痕，不许假装零欠债（同 人闸升格Tick 口径）
+    journal.append(root, `今时线拍取数失败：${String((e && e.message) || e).slice(0, 80)}`);
+    return { 停表: false, 新增: [], 消解: [], error: String((e && e.message) || e).slice(0, 80) };
+  }
+  const state = require('../core/state');
+  const 现集 = new Set(r.债.map((d) => d.gateKey));
+  const 已报 = (state.read(root) || {}).今时线已报 || {};
+  const 新增 = r.债.filter((d) => !已报[d.gateKey]);
+  const 消解 = Object.keys(已报).filter((k) => !现集.has(k));
+  if (!新增.length && !消解.length) return { 停表: false, 新增: [], 消解: [] }; // 无差量零写盘：60s 一拍，白写就是白磨盘
+  state.update(root, (st) => {
+    const m = st.今时线已报 || {};
+    for (const d of 新增) m[d.gateKey] = new Date().toISOString();
+    for (const k of 消解) delete m[k]; // 债清了抹账——同一粒将来再越线还能再响一次
+    st.今时线已报 = m;
+  });
+  if (新增.length) {
+    const 越线 = 新增.filter((d) => d.闸号 === 'G23');
+    const 未排 = 新增.filter((d) => d.闸号 === 'G24');
+    ledger.event(root, '项管债唤醒', {
+      越线: 越线.length, 未排期: 未排.length,
+      新债: 新增.map((d) => ({ gateKey: d.gateKey, title: String(d.title || '').slice(0, 80) })),
+    });
+    journal.append(root, `项管唤醒：今时线新债 ${新增.length} 笔`
+      + (越线.length ? `（越线 ${越线.length}：${越线.slice(0, 3).map((d) => d.title).join('、')}${越线.length > 3 ? '…' : ''}）` : '')
+      + (未排.length ? `（${未排[0].title}）` : '')
+      + '——越线强制二选一：派发 或 重排（H112）');
+    if (!opts.test) {
+      const brain = require('./brain');
+      if (typeof brain.项管债唤醒 === 'function') {
+        try { brain.项管债唤醒(root, cfg, 新增); } catch { /* 唤醒失败不阻塞留痕：账已立住，升格环兜底 */ }
+      }
+    }
+  }
+  if (消解.length) journal.append(root, `今时线债消解：${消解.length} 笔已了结（表态/重排/单已出队）`);
+  return { 停表: false, 新增, 消解, 失败: r.失败 };
+}
+
 module.exports = { onCampaignFinalized, on专项立项, onCutResult, onChildDispatched,
-  checkCloseouts, check专项收口, checkChainFailures, isCampaign, childrenOf, 池衡巡检, 台账对齐拍 };
+  checkCloseouts, check专项收口, checkChainFailures, isCampaign, childrenOf, 池衡巡检, 台账对齐拍, 今时线拍 };

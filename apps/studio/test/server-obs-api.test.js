@@ -191,4 +191,80 @@ t('#50 开机接的自动记账回调就是 ledger.记账回调(ROOT) 那一份�
   assert.ok(!o.回调抛错, '回调吃到失败时抛了：' + o.回调抛错);
 });
 
+/* ── H112 今时线调度器（乙 · 2026-08-24）：开机接线三件事，全部真起服务验行为 ──
+ *   ①独立 60s unref 环真在转（拍秒缩到 0.4s：环外无人调用时，数据变了债也要自己消解）；
+ *   ②产线关＝调度器空转零写入（state/journal 都不许有今时线痕迹）；
+ *   ③store.on移动 钩子＝事件驱动半边（拍秒拨到 3600s 排除定时器，转移一落债当拍消解）。
+ * 变异自证：删 setInterval → ①的消解永不发生红；删拍口停表早退 → ②的 G24 写入红；
+ * 删 on移动 挂线 → ③的消解只能等 3600s 红。 */
+const 排程账写 = (root, e) => {
+  fs.mkdirSync(path.join(root, '排程台账'), { recursive: true });
+  fs.appendFileSync(path.join(root, '排程台账', '排程账.jsonl'), JSON.stringify(e) + String.fromCharCode(10), 'utf8');
+};
+const 配拍秒 = (root, 秒) => {
+  const cp = path.join(root, 'studio.config.json');
+  const c = JSON.parse(fs.readFileSync(cp, 'utf8'));
+  c.闸值 = { ...(c.闸值 || {}), 今时线拍秒: 秒 };
+  fs.writeFileSync(cp, JSON.stringify(c), 'utf8');
+};
+
+t('H112① 今时线 60s 环挂在开机处且真在转：越线债入账一次（幂等），数据一变下一拍自己消解', () => {
+  const root = makeRoot();
+  配拍秒(root, 0.4);
+  // 越线粒（无单号但已排期，2020 年早越线）→ G23；待派单无粒 → G24 聚合债
+  排程账写(root, { 粒ID: '粒S', 事件类型: '登记', 字段变更: { 题: '越线的活', 状态: '计划', 来源: '测试', 计划开始: '2020-01-01' }, 版本号: 1, 时刻: '2020-01-01T00:00:00Z', 操作者: '项管' });
+  seed(root, '待派', { id: 'P-H1' });
+  const o = 起(root, 4976, `
+    const NL = String.fromCharCode(10);
+    const 读 = () => { try { return Object.keys(JSON.parse(fs.readFileSync(path.join(ROOT, '.studio-state.json'), 'utf8')).今时线已报 || {}); } catch { return []; } };
+    const 行 = (词) => { const jd = path.join(ROOT, 'journal');
+      try { return fs.readdirSync(jd).map((f) => fs.readFileSync(path.join(jd, f), 'utf8')).join(NL).split(NL).filter((l) => l.includes(词)); } catch { return []; } };
+    await new Promise((r) => setTimeout(r, 700));   // 开机拍 + 至少一拍环
+    const 前 = 读();
+    // 只动数据不打任何 API：把越线粒重排到未来——接下来的消解**只可能来自定时环**
+    fs.appendFileSync(path.join(ROOT, '排程台账', '排程账.jsonl'),
+      JSON.stringify({ 粒ID: '粒S', 事件类型: '重排', 字段变更: { 计划开始: '2099-01-01' }, 版本号: 2, 时刻: new Date().toISOString(), 操作者: '项管' }) + NL, 'utf8');
+    await new Promise((r) => setTimeout(r, 1300));  // 等两三拍
+    return { 前, 后: 读(), 唤醒行: 行('项管唤醒：今时线新债'), 消解行: 行('今时线债消解') };`);
+  assert.ok(o.前.includes('G23:粒S') && o.前.includes('G24:未排期'),
+    '开机拍就该把 G23 越线 + G24 未排期记进 state：' + JSON.stringify(o.前));
+  assert.equal(o.唤醒行.length, 1, '环 0.4s 一拍跑了好几拍，唤醒只许落一笔（gateKey 集合差幂等）：' + JSON.stringify(o.唤醒行));
+  assert.ok(!o.后.includes('G23:粒S') && o.后.includes('G24:未排期'),
+    '重排到 2099 后下一拍必须自己消解 G23（未排期那笔照在）——删掉 setInterval 这里当场红：' + JSON.stringify(o.后));
+  assert.ok(o.消解行.length >= 1, '消解要留痕：' + JSON.stringify(o.消解行));
+});
+
+t('H112② 产线关＝调度器空转零写入：state 无账、journal 无痕（重开后的立债本来就是项管的活）', () => {
+  const root = makeRoot();
+  配拍秒(root, 0.4);
+  排程账写(root, { 粒ID: '粒S2', 事件类型: '登记', 字段变更: { 题: '关闸期越线', 状态: '计划', 来源: '测试', 计划开始: '2020-01-01' }, 版本号: 1, 时刻: '2020-01-01T00:00:00Z', 操作者: '项管' });
+  seed(root, '待派', { id: 'P-H2' });   // G24 素材：拍口早退被删的话，这笔会被写进账 → 本条红
+  fs.writeFileSync(path.join(root, '.studio-state.json'), JSON.stringify({ paused: true }), 'utf8'); // 产线关（H81 总闸）
+  const o = 起(root, 4977, `
+    const NL = String.fromCharCode(10);
+    await new Promise((r) => setTimeout(r, 1200)); // 好几拍的工夫
+    let st = {}; try { st = JSON.parse(fs.readFileSync(path.join(ROOT, '.studio-state.json'), 'utf8')); } catch { st = {}; }
+    const jd = path.join(ROOT, 'journal');
+    let 行 = []; try { 行 = fs.readdirSync(jd).map((f) => fs.readFileSync(path.join(jd, f), 'utf8')).join(NL).split(NL).filter((l) => l.includes('今时线') || l.includes('项管唤醒')); } catch { /* 无流水目录＝零痕 */ }
+    return { 已报: st.今时线已报 || null, 行 };`);
+  assert.equal(o.已报, null, '停表期连「看过了」都不记——G23 短路之外，拍口还必须整体早退（G24 不停表，早退没了它就会写）：' + JSON.stringify(o.已报));
+  assert.deepEqual(o.行, [], '停表期零流水：' + JSON.stringify(o.行));
+});
+
+t('H112③ store.on移动 钩子＝事件驱动半边：转移一落，债当拍消解（定时器拨到 3600s 排除嫌疑）', () => {
+  const root = makeRoot();
+  配拍秒(root, 3600);   // 一小时一拍：本条窗口内定时环绝无可能开火，动静只能来自钩子
+  排程账写(root, { 粒ID: '粒C', 事件类型: '登记', 字段变更: { 题: '挂单越线', 状态: '计划', 单号: 'P-H3', 来源: '测试', 计划开始: '2020-01-01' }, 版本号: 1, 时刻: '2020-01-01T00:00:00Z', 操作者: '项管' });
+  seed(root, '待派', { id: 'P-H3' });
+  const o = 起(root, 4978, `
+    const 读 = () => { try { return Object.keys(JSON.parse(fs.readFileSync(path.join(ROOT, '.studio-state.json'), 'utf8')).今时线已报 || {}); } catch { return []; } };
+    const 前 = 读();
+    const 撤 = await P('/api/act/撤回', { id: 'P-H3' });  // 待派→待审：单出了重派视野，G23 债应当拍消解
+    return { 前, 撤状态: 撤[0], 后: 读() };`);
+  assert.ok(o.前.includes('G23:粒C'), '开机拍先立债（单在待派、粒早越线）：' + JSON.stringify(o.前));
+  assert.equal(o.撤状态, 200, '撤回动作本身要成');
+  assert.ok(!o.后.includes('G23:粒C'),
+    '撤回落地那一刻钩子就该把债消解——3600s 的环帮不上忙，这里红＝on移动 没挂线：' + JSON.stringify(o.后));
+});
+
 收尾('', passed);
