@@ -11,3 +11,6 @@ dist/
 # 「自动记账」这一条路，挡不住谁手工 add 一次。判据：test/ledger-scope.test.js 跑 git ls-files。
 凭据.json
 兼容池配置/
+
+# 体检临时工作单（代理间传参用，非源码）
+apps/studio/.体检工作单.json
