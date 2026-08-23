@@ -68,20 +68,38 @@ function 权限参数(配置, 角色, adapter) {
   };
 }
 
-// 预算冻结：哪些池现在不许派。budget 缺位不阻断派单，但要**明说**。
+// 冻结：哪些池现在不许派。**两道闸并进同一个 挡 map**——
+//   · 预算闸（packages/budget）：token 上限，守的是钱包（按量计费池）
+//   · 额度闸（packages/quota，协-018）：订阅窗口百分比，守的是「接下来几小时还跑不跑得动」
+// 合流在这里，是为了让池序降级、编制快照可用性、/tick 归因三处**零额外接线**地跟着走
+// （budget 当初就是这么接的，额度闸照抄这条先例）。
+//
+// 两道闸的失效方向刻意相反，别把它们合并成一个 ok：
+//   · budget 缺位 → ok:false → 真跑前提 503 拒跑（钱的事，读不到数就别跑）
+//   · quota 缺位 → 照常 ok:true，只在 额度.盲区 里吭声（订阅窗口的事，
+//     查不着就把管线卡死是本末倒置——包 README 的红线也是 fail-open）
 function 冻结情况(公用件, 配置, 账本根) {
+  const 根 = 账本根;
+  // 额度闸先算：它自己内部全程不抛（解读件失效也只是返回 失效:true），不会影响下面预算那段。
+  let 额度 = null;
+  try { 额度 = require('./额度闸').现况(配置, 根); } catch (e) { 额度 = { ok: false, 挡: {}, 盲区: [{ 池: '(全部)', 因: `额度闸不可用：${e.message}` }], 错误: e.message }; }
   try {
     const budget = 公用件.载入('budget', 'budget.js');
-    const 冻 = budget.并入({}, budget.冻结池(配置, 账本根));
+    const 冻 = budget.并入({}, budget.冻结池(配置, 根));
     const 挡 = {};
     for (const [池, 信息] of Object.entries(冻)) {
       if (信息 && 信息.locked) 挡[池] = 信息.reason || '预算闸冻结';
     }
+    // 同一个池两道闸都挡时，两句因都要留住——只留一句的话，人解掉其中一道
+    // 会发现它还是派不出去，而界面上刚刚那条理由已经不见了。
+    for (const [池, 因] of Object.entries((额度 && 额度.挡) || {})) {
+      挡[池] = 挡[池] ? `${挡[池]}；额度闸：${因}` : `额度闸：${因}`;
+    }
     let 账本 = null;
-    try { 账本 = 账本体检(budget.账本(账本根)); } catch { /* 体检本身失败就当没体检 */ }
-    return { ok: true, 挡, 原始: 冻, 账本 };
+    try { 账本 = 账本体检(budget.账本(根)); } catch { /* 体检本身失败就当没体检 */ }
+    return { ok: true, 挡, 原始: 冻, 账本, 额度 };
   } catch (e) {
-    return { ok: false, 挡: {}, 错误: `预算闸不可用：${e.message}` };
+    return { ok: false, 挡: { ...((额度 && 额度.挡) || {}) }, 错误: `预算闸不可用：${e.message}`, 额度 };
   }
 }
 

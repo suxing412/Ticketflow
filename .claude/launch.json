@@ -7,6 +7,13 @@
       "runtimeArgs": ["server.js"],
       "cwd": "apps/studio",
       "port": 4270
+    },
+    {
+      "name": "platform",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start"],
+      "cwd": "apps/platform",
+      "port": 4370
     }
   ]
 }

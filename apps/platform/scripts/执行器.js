@@ -40,6 +40,11 @@ const 计划 = require(path.join(平台根, 'lib', 'orchestration', 'plan.js'));
 const 编排提示 = require(path.join(平台根, 'lib', '编排提示.js'));
 const 提示装配 = require(path.join(平台根, 'lib', '提示装配.js'));
 const 计费 = require(path.join(平台根, 'lib', '计费.js'));
+// 额度取数（协-018）：**只有本进程能引它**——它要拉起 codex app-server，引 child_process。
+// server.js 的闭包里出现 child_process 就破了桩模式的物理保证（接线契约测试盯着）。
+// 判定那一半是纯的（lib/额度闸.js），server 与派单读本进程落下的快照。
+const 额度取数 = require(path.join(平台根, 'lib', '额度取数.js'));
+const 额度闸 = require(path.join(平台根, 'lib', '额度闸.js'));
 
 function 读JSON(p, 缺省) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return 缺省; }
@@ -650,6 +655,19 @@ const 服务 = http.createServer((req, res) => {
     });
   }
 
+  // ——— 额度（协-018）———
+  // GET 只报当下快照的判定（不取数，零副作用）；POST /quota 才去真的取一次。
+  // 分开的理由同 /tick：「看看现在是什么读数」是高频且无害的动作，
+  // 而它和「去拉一次 app-server / 发一次 usage 请求」只差一个 HTTP 方法时，人迟早会点错——
+  // 而 usage 端点有账号级限流，点错的代价是把窗口打满。
+  if (路径 === '/quota' && req.method === 'GET') {
+    return 发JSON(res, 200, { ok: true, ...额度闸.现况(配置, 账本根), 说明: '只读快照，不取数。取一次：POST /quota' });
+  }
+  if (路径 === '/quota' && req.method === 'POST') {
+    return 额度取数.取一轮(配置, 账本根).then((r) => 发JSON(res, r.ok ? 200 : 500, { ok: r.ok, ...r }))
+      .catch((e) => 发JSON(res, 500, { ok: false, error: `取数失败：${e.message}` }));
+  }
+
   if (路径 === '/health') {
     const 工单根 = 取工单根();          // 现解：健康接口报的是**此刻**的状态，不是开机那一刻的
     return 发JSON(res, 200, {
@@ -667,6 +685,10 @@ const 服务 = http.createServer((req, res) => {
       // 自动派发（协-017）：默认关，只能从不入库的 config/执行.local.json 打开。
       // 它走的是和人点按钮同一个 POST /run——不是第二条派活路径。
       自动派发: 自动快照(),
+      // 额度闸（协-018）：订阅窗口此刻挡了谁 + 有哪些池是盲区。
+      // 盲区必须跟着健康一起报——「没有池被锁」有两种成因（真的都没超 / 根本没读到数），
+      // 只报前者就是把 fail-open 显示成了「额度充足」。
+      额度: (() => { const q = 额度闸.现况(配置, 账本根); return { 更新于: q.更新于 || null, 挡: q.挡, 盲区: q.盲区, ...(q.失效 ? { 失效: q.错误 } : {}), ...(q.关闸 ? { 关闸: q.说明 } : {}) }; })(),
       说明: '本进程是唯一被允许拉起 AI CLI 的地方；干跑默认开启；'
         + 'GET /tick 只算不派；自动派发默认关，开了也只是自动去调同一个 POST /run',
     });
@@ -990,4 +1012,20 @@ const 服务 = http.createServer((req, res) => {
   // 和「允许真跑」同一条准绳——本机放宽是本机的事，入库的默认永远是最严的。
   if (自动配.开) 自动开('config 执行.自动派发.开 = true');
   else process.stdout.write('[执行器] 自动派发：关闭（默认）。开：POST /auto {"开":true,"理由":"…"}\n');
+  额度巡();
 });
+
+// ——— 额度取数巡回（协-018）———
+// 开机取一次，之后每 执行.额度间隔分钟 一次（默认 10）。claude 那一口另有节流盘守着
+// （默认 600s 硬间隔 + 失败退避 ×3），间隔调小也不会真的把请求打上去——
+// 节流跳过时这里会如实报出来，不会假装取到了。
+const 额度间隔毫秒 = Math.max(1, Number((配置.执行 && 配置.执行.额度间隔分钟) || 10)) * 60 * 1000;
+function 额度巡() {
+  额度取数.取一轮(配置, 账本根).then((r) => {
+    const 摘 = (r.动作 || []).map((a) => `${a.池}:${a.结果}${a.因 ? `(${String(a.因).slice(0, 60)})` : ''}`).join(' ');
+    // 取数失败**必须响亮**：它失败的表现是「没有池被锁」，跟「额度都还宽裕」一模一样。
+    // 一行控制台是这条信息唯一的落点（快照文件里也留了 因，接口的 盲区 字段读它）。
+    process.stdout.write(`[执行器] 额度取数：${摘 || '无订阅池，跳过'}\n`);
+  }).catch((e) => process.stdout.write(`[执行器] 额度取数异常（额度闸此刻恒不锁）：${e.message}\n`))
+    .then(() => { const t = setTimeout(额度巡, 额度间隔毫秒); if (t.unref) t.unref(); });
+}
