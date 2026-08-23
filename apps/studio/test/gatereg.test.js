@@ -173,6 +173,10 @@ t('值守两闸：判据落在产出物，不落在「定时器挂没挂」（20
   // 立起两个产出物再测
   fs.mkdirSync(馆, { recursive: true });
   fs.writeFileSync(path.join(馆, '2026-08-11-夜班.md'), '归档', 'utf8');
+  // 断更判的是**多久没有新归档**，取文件 mtime。刚写出来的文件 mtime 就是此刻，
+  // 那是「刚补完」不是「断更」——要测断更就得把时间拨老。
+  const 拨老 = (f, 小时) => { const t = new Date(Date.now() - 小时 * 3600000); fs.utimesSync(f, t, t); };
+  拨老(path.join(馆, '2026-08-11-夜班.md'), 72);
   fs.mkdirSync(塔, { recursive: true });
   fs.writeFileSync(path.join(塔, '账本水位.json'), JSON.stringify({ 至: '2026-08-09T18:32:49.756Z' }), 'utf8');
   fs.writeFileSync(path.join(塔, '未读账本.jsonl'),
@@ -198,6 +202,20 @@ t('值守两闸：判据落在产出物，不落在「定时器挂没挂」（20
   assert.equal(r清.债.filter((d) => d.闸号 === 'G14').length, 0,
     '水位推到最新（身后零积压）→ 不许再报债。水位不推进本身不是欠债，水位不推进而身后有人在等才是');
   assert.ok(r清.债.some((d) => d.闸号 === 'G13'), 'G13 不受影响——两闸各判各的，别一起哑掉');
+
+  // 补完归档就不是债——G13 首版也是**恒真闸**（2026-08-24 修）：判据体无条件返回一笔，
+  // 补完最新一期它照报，只是把新文件的时刻当「停摆自」。同 G14 首版一个病，
+  // 而本模块文件头明令要防「永远为满的假账」。
+  fs.writeFileSync(path.join(馆, '2026-08-23-白夜班.md'), '刚补的一期', 'utf8');
+  const r补 = gr.等我(root, { deps: { ...空, 值守 } });
+  assert.equal(r补.债.filter((d) => d.闸号 === 'G13').length, 0,
+    '刚补完班次归档 → 不许再报债。有归档不是债，断更才是债');
+  // 再拨老一次，确认它该报的时候还报得出来（防上一条修过头把闸修哑）
+  拨老(path.join(馆, '2026-08-23-白夜班.md'), 72);
+  const r又断 = gr.等我(root, { deps: { ...空, 值守 } });
+  const g13又 = r又断.债.find((d) => d.闸号 === 'G13');
+  assert.ok(g13又, '拨老到 72 小时前 → 该报还得报，别修成永远不响');
+  assert.match(g13又.title, /小时无新归档/, '要说清断了多久');
 
   // 注入的路径必须**真被用上**，不许有哪一处漏改还在就地拼 root/瞭望塔。
   // 案源：本条实装时 lib 里正有这么一处漏网，而上面那些断言全绿——因为测试里的塔
@@ -278,6 +296,8 @@ t('注册表路由随债下发 · 全响应闸实证：每笔债的 路由 = 注
   const 馆 = path.join(root, '实证馆'); const 塔 = path.join(root, '实证塔'); const 账 = path.join(root, '实证台账');
   fs.mkdirSync(馆, { recursive: true }); fs.mkdirSync(塔, { recursive: true }); fs.mkdirSync(账, { recursive: true });
   fs.writeFileSync(path.join(馆, '2026-08-11-夜班.md'), '归档', 'utf8');
+  // G13 判「多久没有新归档」，刚写的文件不算断更——夹具要把 mtime 拨老才出得了债
+  { const t = new Date(Date.now() - 72 * 3600000); fs.utimesSync(path.join(馆, '2026-08-11-夜班.md'), t, t); }
   fs.writeFileSync(path.join(塔, '账本水位.json'), JSON.stringify({ 至: '2026-08-09T00:00:00Z' }), 'utf8');
   fs.writeFileSync(path.join(塔, '未读账本.jsonl'), JSON.stringify({ t: '2026-08-20T00:00:00Z' }), 'utf8');
   fs.writeFileSync(path.join(塔, '心跳.txt'), '2026-08-20T23:00:00Z', 'utf8');   // G20：距「现在」1 小时 > 90s
