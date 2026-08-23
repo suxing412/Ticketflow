@@ -41,7 +41,11 @@ function 起(root, port, 打法, 前置 = '') {
       catch (e) { out = { 打法抛错: String((e && e.stack) || e) }; }
       process.stdout.write('@@' + JSON.stringify(out) + '@@');
       try { srv.close(); } catch { /* 关不上也不影响取数 */ }
-      process.exit(0);
+      // 硬 process.exit(0) 与 unref 定时器/uv_async 在 Windows node 24 有退出竞态——
+      // 断言全过后 libuv 打 Assertion failed（async.c:94），被跑测试.js 的 stderr 检测判红（codex #15）。
+      // 改为 exitCode + 主动断句柄：事件循环自然排空，不硬切。
+      process.exitCode = 0;
+      setTimeout(() => process.exit(0), 150).unref();
     }).catch((e) => { process.stdout.write('@@' + JSON.stringify({ 起服务失败: String(e.message) }) + '@@'); process.exit(1); });`;
   // 子进程退出时 libuv 偶发 `UV_HANDLE_CLOSING` 断言（Windows，srv.close 与 exit 竞速）——
   // 那是收摊阶段的噪声，与被测行为无关。结果已经写进 stdout 了，认标记不认退出码。
