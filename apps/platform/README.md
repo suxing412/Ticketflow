@@ -16,6 +16,10 @@
 - **驾驶舱**（:4370）：工单看板、路由排名与理由、战绩与成功率、预算、瞭望塔在岗灯。
 - **路由**：公开跑分当先验（权重 0.5）+ 本机实际战绩（0.3）。跑得越多，外部榜单影响越小。
 - **预算闸**：`packages/budget`，按量池 token 上限，超了那个池就不许派。
+- **额度闸**（协-018）：`packages/quota`，订阅池的 5h / 周 **窗口百分比**，越线那个池就不许派。
+  和预算闸是同一件事的两半——那半守钱包，这半守「接下来几小时还跑不跑得动」。
+  读不到额度时**放行**（fail-open，守门查不着不能反过来卡死管线），但界面上如实标**盲区**：
+  「没有池被锁」和「根本没读到数」必须分得出来。
 - **提交链**：一律在隔离 worktree 里干活，检查点校验写区，快进合并回主线。主工作区零改动。
 
 ## 这是什么（安全形状）
@@ -84,7 +88,7 @@ npm run watchtower:status     # 看在岗状态（含心跳戳秒龄）
 Ticketflow/
   apps/studio      游戏工作流产线（suxin 全权）
   apps/platform    本产品（robinwang2 全权）  ← 我们在这里
-  packages/        公用件唯一家（双签共建）：providers、watchtower
+  packages/        公用件唯一家（双签共建）：providers、watchtower、budget、quota
 ```
 
 本产品**不复制正本**，一律经 `lib/公用件` 从仓根 `packages/` 解析——那是唯一的消费入口，
@@ -225,6 +229,8 @@ lib/工单库.js         目录即状态机（草稿/待投/在途/质检/完成
 lib/派单.js           选人 + 权限判定 + 工单流转
 lib/执行加固.js       软超时验尸 / 判官失败不打整单 / 空输出不作数 / 候选链降级
 lib/本地覆盖.js       危险开关只能从不入库的 *.local.json 打开
+lib/额度闸.js         订阅窗口守门（纯，消费 packages/quota）——server 与派单共用同一份判定
+lib/额度取数.js       codex app-server / claude OAuth 取数 + 节流，**引 child_process，只准执行器持有**
 lib/配置位置.js       出厂默认随包只读；本机覆盖与令牌走可写目录（打包态在 exe 同级）
 lib/                 业务零件：orchestration/plan.js · routing/{router,history}.js ·
                        toolchain.js · review-opinion.js（均已接线）
@@ -237,7 +243,8 @@ scripts/watchtower.js 瞭望塔启动器（经 lib/公用件 找正本代为拉�
 scripts/开机.js       总启动器：一条命令带起下面三个，任一个死掉就全停
 scripts/工作区服务.js  唯一被允许起 git 进程的地方，:4371
 scripts/执行器.js      唯一被允许拉起 AI CLI 的地方，:4372
-test/                公用件 9 · 接线 26 · 工单库 20 · 执行链 22 · 产线 40 · 资产接线 8
+test/                公用件 10 · 接线 32 · 工单库 22 · 执行链 31 · 产线 48 · 资产接线 9 ·
+                       视图 15 · 项目 10 · 计费 15 · 工作区 21 · 编制 11 · 额度 18（共 242）
 docs/                边界与协作.md · 接线说明.md（接线台账/门禁/隔离/执行链）
 工程队/              协-001 工单库 · 协-002 执行链 · 协-003 提交链（施工令档案）
 journal/ 呼叫/       运行时流水与本地信箱（占位入库，内容 gitignore）

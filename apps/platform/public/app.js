@@ -490,7 +490,7 @@ async function 跑(id, 干跑, 同意计费) {
       头.appendChild(b);
     }
   } catch (e) { $('运行').textContent = '调用失败：' + e.message; }
-  刷工单(); 刷战绩(); 刷排名(); 刷调度(); 刷消耗();
+  刷工单(); 刷战绩(); 刷排名(); 刷调度(); 刷消耗(); 刷额度();
 }
 
 // 物化：把 orchestrator 的计划落成真实子单。
@@ -748,6 +748,43 @@ async function 刷消耗() {
   } catch { $('消耗体').innerHTML = '<tr><td colspan="5" class="级急">预算接口不可达</td></tr>'; }
 }
 
+// ── 额度（协-018）──
+// 与「消耗」是两件事：那边是 token 累计（按量计费池的刹车），这边是**订阅窗口百分比**
+// （烧穿之后几小时到几天什么都跑不了）。
+//
+// 这张卡最要紧的不是绿的那几行，是**盲区**：读不到额度时闸门 fail-open，
+// 若界面只画「没有池被锁」，人会把「不知道」看成「充足」。所以盲区单独一行摆出来。
+async function 刷额度() {
+  try {
+    const { 码, 体: j } = await 取JSON('/api/quota');
+    if (码 !== 200 || !j.ok) { $('额度体').innerHTML = '<tr><td colspan="5" class="淡">' + 转义(j.error || '不可用') + '</td></tr>'; return; }
+    $('额度更新于').textContent = j.更新于 ? '快照 ' + 转义(String(j.更新于).replace('T', ' ').slice(5, 16)) : '尚无快照';
+    const 适用 = (j.明细 || []).filter((m) => m.适用);
+    const 行 = [];
+    for (const m of 适用) {
+      const 窗 = m.窗口 && m.窗口.length ? m.窗口 : [null];
+      for (const w of 窗) {
+        行.push('<tr><td><code>' + 转义(m.池) + '</code></td>'
+          + '<td>' + 转义(w ? w.label : '—') + '</td>'
+          + '<td>' + (w && w.pct != null ? w.pct + '%' : '<span class="淡">读不到</span>') + '</td>'
+          + '<td class="淡">' + 转义(w ? w.reset : '—') + '</td>'
+          + '<td>' + (m.挡 ? '<span class="级急">锁</span>'
+            : m.盲区 ? '<span style="color:var(--黄)">盲区</span>'
+              : '<span style="color:var(--绿)">可派</span>') + '</td></tr>');
+      }
+    }
+    $('额度体').innerHTML = 行.join('')
+      || '<tr><td colspan="5" class="淡">' + 转义(j.说明 || (j.关闸 ? j.说明 : '没有声明为「订阅」的池——额度闸只管订阅池，按量池归消耗那张表')) + '</td></tr>';
+    const 盲 = j.盲区 || [];
+    $('额度盲区').innerHTML = (j.失效 ? '<div class="级急">' + 转义(j.错误) + '</div>' : '')
+      + (盲.length
+        ? '<div><b>盲区</b>（这些池此刻<b>没有</b>额度刹车，已放行）：'
+          + 盲.map((b) => 转义(b.池) + '——' + 转义(b.因)).join('；') + '</div>'
+        : '')
+      + (j.关闸 ? '<div>' + 转义(j.说明) + '</div>' : '');
+  } catch { $('额度体').innerHTML = '<tr><td colspan="5" class="级急">额度接口不可达</td></tr>'; }
+}
+
 // ── 战绩 ──
 async function 刷战绩() {
   try {
@@ -910,7 +947,7 @@ function 切页() {
   // 设置页装的是观测数据（排名/消耗/战绩/Providers/瞭望塔/账本），进去才拉。
   // 常驻驾驶舱时后台每隔几秒把这些接口全打一遍，纯属白费——
   // 而且真跑时这些请求会跟执行抢日志。
-  if (页 === '设置') { 刷自动(); 刷编制(); 填回收项目().then(刷回收); 刷排名(); 刷消耗(); 刷战绩(); 刷providers(); 刷瞭望塔(); 刷账本(); 刷计费(); }
+  if (页 === '设置') { 刷自动(); 刷编制(); 填回收项目().then(刷回收); 刷排名(); 刷消耗(); 刷额度(); 刷战绩(); 刷providers(); 刷瞭望塔(); 刷账本(); 刷计费(); }
 }
 window.addEventListener('hashchange', 切页);
 
@@ -1591,6 +1628,6 @@ async function 填回收项目() {
   // 刷计费要在刷工单之前：按钮的字与颜色靠计费表决定，晚一步会先渲一遍
   // 「计费未声明」再重渲，而那四个字正是这次要消灭的东西。
   await 刷计费();
-  刷健康(); 刷工单(); 刷调度(); 刷排名(); 刷战绩(); 刷消耗(); 刷providers(); 刷瞭望塔();
+  刷健康(); 刷工单(); 刷调度(); 刷排名(); 刷战绩(); 刷消耗(); 刷额度(); 刷providers(); 刷瞭望塔();
   切页();
 })();
