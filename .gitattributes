@@ -1,0 +1,6 @@
+# 换行归一化（2026-08-23 立，口径同 AI-GameStudio 仓）
+#
+# core.autocrlf=true 会在 checkout 时改写行尾。源码随平台无妨，但**数据档一律钉 LF**：
+# 一行一条事实的账本被逐行改写等于静默改写事实源。
+*.jsonl        text eol=lf
+*.log          text eol=lf
