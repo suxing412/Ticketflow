@@ -176,7 +176,16 @@ function 工期判定(待办, opts = {}) {
 }
 
 // ---- 校验（登记入口的唯一把关处，整批一条不合法则整批不写，同 roster.apply 口径）----
-function 规范依赖(d) {
+// 引用检（P0-4 · 2026-08-24 落实表）：依赖的 ref 必须指向**现存**实体——现存粒ID 或现存工单号。
+// 工单在 store 里，本模块不硬依赖 store（把纯台账拖进文件树就没法整片单测了）：
+// 工单查询走 opts.查引用 回调（(ref) => 有此工单号则真），由调用方（server.js 路由层）注入。
+// **没传回调时保持旧行为不校验**——既有调用方一个不破；opts.强制 === true 显式旁路（调用方担责）。
+function 建引用检(root, opts) {
+  const o = opts || {};
+  if (typeof o.查引用 !== 'function' || o.强制 === true) return null;
+  return { 粒ID集: new Set(现态(root).map((g) => g.粒ID)), 查引用: o.查引用 };
+}
+function 规范依赖(d, 引用检) {
   if (d == null || d === '') return { 值: [] };
   if (!Array.isArray(d)) return { error: '依赖必须是数组' };
   const out = [];
@@ -186,11 +195,20 @@ function 规范依赖(d) {
     if (!ref) return { error: '依赖项缺 ref（粒ID 或单号）' };
     const 规则 = String(it.规则 || '全部完成').trim();
     if (!依赖规则集.includes(规则)) return { error: `依赖规则只能是 ${依赖规则集.join('/')}（收到 ${规则}）` };
-    out.push({ ref: ref.slice(0, 80), 规则 });
+    const 项 = { ref: ref.slice(0, 80), 规则 };
+    if (引用检) {
+      const 命中粒 = 引用检.粒ID集.has(项.ref);
+      let 命中单 = false;
+      if (!命中粒) { try { 命中单 = !!引用检.查引用(项.ref); } catch { 命中单 = false; } }
+      if (!命中粒 && !命中单) {
+        return { error: `依赖 ref 不存在：${项.ref}（须命中现存粒ID 或现存工单号；确系预挂可带 强制:true 旁路）` };
+      }
+    }
+    out.push(项);
   }
   return { 值: out };
 }
-function 规范粒(raw) {
+function 规范粒(raw, 引用检) {
   const x = raw || {};
   const 批 = String(x.批 ?? '').trim();
   const 题 = String(x.题 ?? '').trim();
@@ -216,7 +234,7 @@ function 规范粒(raw) {
   if (!Number.isInteger(序) || 序 < 0) return { error: `序须为非负整数（收到 ${x.序}）` };
   const 状态 = String(x.状态 ?? '计划').trim();
   if (!状态全集.includes(状态)) return { error: `未知状态：${状态}（可选 ${状态全集.join('/')}）` };
-  const dep = 规范依赖(x.依赖);
+  const dep = 规范依赖(x.依赖, 引用检);
   if (dep.error) return { error: dep.error };
   const 单号 = String(x.单号 ?? '').trim();
   // 已成单/完成 必须带单号：没有单号的「已成单」是对不上账的账——迁移终态回填走的正是这条路
@@ -232,6 +250,13 @@ function 规范粒(raw) {
   const 始 = 规范日期(x.计划开始, '计划开始'); if (始.error) return { error: 始.error };
   const 终 = 规范日期(x.计划完成, '计划完成'); if (终.error) return { error: 终.error };
   if (始.值 && 终.值 && 始.值 > 终.值) return { error: `计划开始须早于或等于计划完成（收到 ${始.值} → ${终.值}）` };
+  // 登记堵日期旁路（P0-8 · 2026-08-24 落实表）：带计划日期的登记必须带非空 因。
+  // 案源：08-20 那 41 条造数里 25 条从登记旁路进的——重排强制带因的纪律，被「登记时直接写日期」绕开。
+  // 因 不进字段白名单（不是粒的现态），走登记事件顶层作审计载荷（同 重排 事件的 因）。
+  const 因 = String(x.因 ?? '').trim();
+  if ((始.值 || 终.值) && !因) {
+    return { error: '登记带计划开始/计划完成必须带非空 因（排期纪律：日期从哪来要说得清；同 重排 强制带因）' };
+  }
   let 工期天 = null;
   if (x.工期天 != null && x.工期天 !== '') {
     工期天 = Number(x.工期天);
@@ -265,6 +290,7 @@ function 规范粒(raw) {
       来源: 来源.slice(0, 200),
       单号: 单号 ? 单号.slice(0, 40) : null,
     },
+    因: 因 || null, // 审计载荷，登记时落事件顶层，不进 字段变更 白名单
   };
 }
 
@@ -299,21 +325,23 @@ function 登记(root, 粒们, 操作者, opts = {}) {
     return { ok: false, 越权: true, error: `登记权在 ${操作域.登记.join('/')}（收到「${人 || '空'}」）` };
   }
   const 已有 = new Map(现态(root).map((g) => [判重键(g), g]));
+  const 引用检 = 建引用检(root, opts); // P0-4：调用方注入 opts.查引用 才校验依赖 ref 存在性；opts.强制 旁路
   const 待写 = []; const 跳过 = []; const 错 = [];
   粒们.forEach((raw, i) => {
-    const v = 规范粒(raw);
+    const v = 规范粒(raw, 引用检);
     if (v.error) { 错.push(`第 ${i + 1} 条「${String((raw || {}).题 || '').slice(0, 20)}」：${v.error}`); return; }
     const k = 判重键(v.值);
     const 命中 = 已有.get(k);
     if (命中) { 跳过.push({ 题: v.值.题, 来源: v.值.来源, 已有粒ID: 命中.粒ID }); return; }
     已有.set(k, { ...v.值, 粒ID: '(本批)' }); // 同一批里的重复项也算重，否则一次登记就能造出两条同粒
-    待写.push(v.值);
+    待写.push(v);
   });
   if (错.length) return { ok: false, error: '整批未写入：' + 错.join('；') }; // 整批校验：一条不合法则一条都不落
   const 时刻 = nowIso();
-  const 新增 = 待写.map((g) => {
+  const 新增 = 待写.map(({ 值: g, 因 }) => {
     const 粒ID = crypto.randomUUID();
-    写事件(root, { 粒ID, 事件类型: '登记', 字段变更: { ...g }, 版本号: 1, 时刻, 操作者: 人 });
+    // 因 走事件顶层不进 字段变更（P0-8）：它是这一次登记动作的审计载荷，不是粒的现态字段
+    写事件(root, { 粒ID, 事件类型: '登记', 字段变更: { ...g }, 版本号: 1, 时刻, 操作者: 人, ...(因 ? { 因 } : {}) });
     return { ...g, 粒ID, 版本号: 1, 登记时刻: 时刻, 更新时刻: 时刻, 末次操作者: 人 };
   });
   if (新增.length || 跳过.length) {
@@ -365,7 +393,7 @@ function 转移(root, { 粒ID, 目标, 预期版本, 操作者, 单号, 说明 }
 // 只开这四个字段：题/来源是身份（判重键），批/状态各有专路，单号只由钩子回填，
 // **排期日期走 重排**（它要留「原计划→新计划＋延期几天」的痕，混进这里就只剩一行「改了几个字段」）——
 // 开成通用 patch 口，台账立刻退化成一张可以随便改的表，事件日志就白留了。
-function 调整(root, { 粒ID, 预期版本, 序, 依赖, 池衡建议, 就绪, 项目, 型, 上级, 操作者, 说明 } = {}, opts = {}) {
+function 调整(root, { 粒ID, 预期版本, 序, 依赖, 池衡建议, 就绪, 项目, 型, 上级, 预估单元, 操作者, 说明 } = {}, opts = {}) {
   const g = 取(root, 粒ID);
   if (!g) return { ok: false, error: `待办不存在：${粒ID}` };
   const 人 = String(操作者 || '').trim();
@@ -379,7 +407,7 @@ function 调整(root, { 粒ID, 预期版本, 序, 依赖, 池衡建议, 就绪, 
   // 已是完成/撤销——若一并拒掉，历史账就**永远无法归属**，按项目过滤的报表与队列会永久缺一大块，
   // 而那正是加这一格要解决的问题。故：只带 项目 的调整放行终态，掺了别的字段照拒。
   const 仅改归属 = (项目 !== undefined || 型 !== undefined || 上级 !== undefined)
-    && [序, 依赖, 池衡建议, 就绪].every((v) => v === undefined || v === '');
+    && [序, 依赖, 池衡建议, 就绪, 预估单元].every((v) => v === undefined || v === '');
   if (终态.includes(g.状态) && !仅改归属) return 拒(root, g, `终态待办不可调整（当前 ${g.状态}）——归属（项目）除外，它是分类不是计划`, 人);
   const 变更 = {};
   if (序 != null && 序 !== '') {
@@ -388,12 +416,19 @@ function 调整(root, { 粒ID, 预期版本, 序, 依赖, 池衡建议, 就绪, 
     变更.序 = n;
   }
   if (依赖 !== undefined) {
-    const d = 规范依赖(依赖);
+    const d = 规范依赖(依赖, 建引用检(root, opts)); // P0-4：登记/调整 两个写口同一道引用检，不许只堵一头
     if (d.error) return 拒(root, g, d.error, 人);
     if (d.值.some((x) => x.ref === g.粒ID)) return 拒(root, g, '依赖不能指向自己', 人);
     变更.依赖 = d.值;
   }
   if (池衡建议 !== undefined) 变更.池衡建议 = String(池衡建议 || '').trim().slice(0, 60) || null;
+  // 预估单元（P0-6 · 2026-08-24 落实表）：进调整白名单。它是排期算力的输入（额度感知排程读它），
+  // 项管在排期时修正预估是日常活；但它是计划面字段——终态闸照旧拦（见上面 仅改归属 的口径）。
+  if (预估单元 !== undefined) {
+    const n = Number(预估单元);
+    if (!(n > 0) || !Number.isFinite(n)) return 拒(root, g, `预估单元须为正数（收到 ${String(预估单元).slice(0, 20)}）`, 人);
+    变更.预估单元 = n;
+  }
   // 项目归属可改（2026-08-21）：122 条存量粒全是空归属——字段是今天才有的，老账只能补。
   // 显式传空串即「退回未归属」，不传即不动（同其余各格的口径）。
   if (项目 !== undefined) 变更.项目 = String(项目 || '').trim().slice(0, 40) || null;
@@ -419,7 +454,7 @@ function 调整(root, { 粒ID, 预期版本, 序, 依赖, 池衡建议, 就绪, 
     if (就绪 && g.状态 !== '计划') return 拒(root, g, `只有计划态待办能标就绪（当前 ${g.状态}，已过派单闸）`, 人);
     变更.就绪 = 就绪;
   }
-  if (!Object.keys(变更).length) return { ok: false, error: '调整未给任何可改字段（序/依赖/池衡建议/就绪/项目/型/上级）', 现态: g };
+  if (!Object.keys(变更).length) return { ok: false, error: '调整未给任何可改字段（序/依赖/池衡建议/就绪/项目/型/上级/预估单元）', 现态: g };
   if (String(说明 || '').trim()) 变更.末次说明 = String(说明).trim().slice(0, 200);
   const e = 写事件(root, { 粒ID: g.粒ID, 事件类型: '调整', 字段变更: 变更, 版本号: g.版本号 + 1, 时刻: nowIso(), 操作者: 人 });
   journal(root, `排程粒调整 ${g.粒ID}「${g.题}」：${Object.keys(变更).filter((k) => k !== '末次说明').join('、')}（${人}）`);
@@ -530,7 +565,7 @@ function 挂钩派发(root, 单号, 粒ID) {
 
 module.exports = { 型集,
   DIR, LOG, 转移表, 状态全集, 终态, 依赖规则集, 操作域, 转移域,
-  事件流, 折叠, 现态, 取, 判重键, 规范粒, 规范依赖,
+  事件流, 折叠, 现态, 取, 判重键, 规范粒, 规范依赖, 建引用检,
   规范日期, 日差, 工期判定,          // 纯函数：甘特图与延期/超期判定的唯一算处，视图层调它，别各算各的
   登记, 转移, 调整, 重排, 挂钩起草, 挂钩派发,
 };

@@ -3568,6 +3568,7 @@ function tqRow(c, g, now) {
       ${可就绪 ? `<button class="qrdy${g.就绪 ? ' on' : ''}" onclick="tqReady('${qesc(c.粒ID)}',${g.就绪 ? 'false' : 'true'},this)"
         title="${esc(g.就绪 ? '已就绪 · 候放行成单。再点撤旗' : '标就绪＝项管说「这批排完了、可以放了」。\n放行成单是人闸（总监＋制作人），不在本页')}">${g.就绪 ? '✓ 就绪' : '标就绪'}</button>` : ''}
       ${可排 ? `<button class="qplanbtn" onclick="tqReplan('${qesc(c.粒ID)}')" title="重排：改计划起讫/工期，必须带因（后端强制）">排期</button>` : ''}
+      ${可排 ? `<button class="qplanbtn qdep" onclick="tqEditDeps('${qesc(c.粒ID)}')" title="编依赖：改这条待办的前置依赖（逗号分隔单号/粒ID，走 调整 留痕，CAS）">编依赖${Array.isArray(g.依赖) && g.依赖.length ? ' ' + g.依赖.length : ''}</button>` : ''}
     </div>`;
 }
 function 待办队列Html(q, 粒表, now) {
@@ -3817,6 +3818,49 @@ window.tqSetProjGo = async (粒ID, 预期版本, btn) => {
   const m = document.querySelector('.mwrap'); if (m) m.remove();
   toast(`已归属 ${项目}`);
   repaint('归属');
+};
+/* ---- 编依赖（落实表 P0-5 · 2026-08-24）----
+   待办卡就地改前置依赖，走现成 POST /api/schedule/调整（后端早支持：规范依赖 校验形状、
+   自引用拒、CAS 防两窗互踩），前端不另立判据。输入按逗号分隔 单号/粒ID；
+   规则默认「全部完成」，原有依赖里已带规则的 ref 重提交时沿用原规则，不悄悄重置。
+   CAS 冲突（409/冲突:true）：如实说一句，随后拿服务端回传的现态版本号**只重试一次**——
+   依赖是整格覆盖写，按新版本重发同一份意图是安全的；再冲突就停手让人重看。 */
+let 依赖原规则 = {}; // 打开弹窗那一刻的 ref→规则 快照，Go 时沿用（内联 onclick 传不了对象）
+window.tqEditDeps = async (粒ID) => {
+  const g = await 取待办(粒ID);
+  if (!g) return toast('这条待办已不在现态（可能刚成单或被撤销）');
+  if (排期终态.includes(g.状态)) return toast(`终态待办不可改依赖（当前 ${g.状态}）——活都做完了再改计划是改史`);
+  const 现依 = Array.isArray(g.依赖) ? g.依赖 : [];
+  依赖原规则 = Object.fromEntries(现依.map((x) => [x.ref, x.规则]));
+  const w = showModal(`<h3>编依赖 · <span class="mono">${esc(上级名(g.上级))}${g.序 ? '·' + g.序 : ''}</span>
+      <span class="x" onclick="this.closest('.mwrap').remove()">×</span></h3>
+    <p class="dim" style="margin:-4px 0 12px;font-size:12.5px">${esc(g.题 || '')}</p>
+    <div class="f-field"><label>前置依赖（逗号分隔 单号/粒ID，留空＝清空全部）</label>
+      <input id="dep-v" class="mono" value="${esc(现依.map((x) => x.ref).join(', '))}" placeholder="如：TK-13, Q5"/></div>
+    <div class="note">规则默认「全部完成」（已有规则的 ref 沿用原规则）。依赖决定队列置灰与派发顺序。
+      写账署名 <b>${esc(排期署名)}</b> · 版本 ${g.版本号}（CAS）</div>
+    <div class="mfoot"><div class="rgt2"><button class="btn h36" onclick="this.closest('.mwrap').remove()">取消</button>
+      <button class="btn accent h36" onclick="tqEditDepsGo('${qesc(粒ID)}',${g.版本号},this)">保存依赖</button></div></div>`);
+  const v = w.querySelector('#dep-v'); if (v) v.focus();
+};
+window.tqEditDepsGo = async (粒ID, 预期版本, btn) => {
+  const 文 = String((($('dep-v') || {}).value || '')).trim();
+  const refs = [...new Set(文.split(/[，,、\s]+/).map((s) => s.trim()).filter(Boolean))];
+  if (refs.includes(粒ID)) return toast('依赖不能指向自己（后端同判据，这里先拦一道省一趟）');
+  const 依赖 = refs.map((ref) => ({ ref, 规则: 依赖原规则[ref] || '全部完成' }));
+  if (btn) btn.disabled = true;
+  const 发 = (版) => post('/api/schedule/' + encodeURIComponent('调整'),
+    { 粒ID, 预期版本: 版, 依赖, 操作者: 排期署名, 说明: '编依赖' }).catch((e) => ({ error: String((e && e.message) || e) }));
+  let r = await 发(预期版本);
+  if (r && r.冲突 && r.现态 && r.现态.版本号 != null) {
+    toast(`版本冲突：这条刚被改过（现版本 ${r.现态.版本号}）——已按新版本重试一次`);
+    r = await 发(r.现态.版本号);
+  }
+  if (btn) btn.disabled = false;
+  if (!r || !r.ok) return toast('编依赖失败：' + ((r && r.error) || '未知') + (r && r.冲突 ? '（重试后仍冲突，请刷新后按新现态再改）' : ''));
+  const m = document.querySelector('.mwrap'); if (m) m.remove();
+  toast(refs.length ? `已更新依赖（${refs.length} 条）` : '已清空依赖');
+  repaint('编依赖');
 };
 window.tqReplan = async (粒ID) => {
   const g = await 取待办(粒ID);

@@ -33,8 +33,8 @@ function poolLock(cfg, pool, rl, cu) {
   // 显示口径（额度卡按此画条）：只列**实际存在**的窗口，各带自己的杆——codex 于是只画一条周条，
   // 不再摆一条空的「5h ··」误导读数。fivePct/weekPct 两个老字段原样保留（护城河/概览数字仍在用）。
   const 窗口 = [];
-  if (five) 窗口.push({ label: five.label, pct: fivePct, reset: five.reset, 阈值: th, 已越: fivePct != null && fivePct >= th });
-  if (week) 窗口.push({ label: week.label, pct: weekPct, reset: week.reset, 阈值: wth, 已越: weekPct != null && weekPct >= wth });
+  if (five) 窗口.push({ label: five.label, pct: fivePct, reset: five.reset, resetAtISO: five.resetAtISO, 阈值: th, 已越: fivePct != null && fivePct >= th });
+  if (week) 窗口.push({ label: week.label, pct: weekPct, reset: week.reset, resetAtISO: week.resetAtISO, 阈值: wth, 已越: weekPct != null && weekPct >= wth });
   const out = { pool, locked, reason, resetAt, fivePct, weekPct, 窗口 };
   if (pool !== 'codex' && cu && cu.更新于) { out.更新于 = cu.更新于; out.陈旧 = !!cu.陈旧; } // 节流窗口内供的是旧读数，如实标注
   return out;

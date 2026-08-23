@@ -29,7 +29,13 @@ function 台(root, opts = {}) {
   const 关 = (名, 值) => { 计[名]++; if (炸.has(名)) throw new Error(名 + '故意炸'); return 值; };
   const deps = {
     journal: { append: (_r, s) => 痕.push(s) },
-    store: { list: () => 关('在途扫描', opts.在途 || []) },
+    // P0-3 起 store.list 按态问三次（在途/待投/池）——桩子按态分答，计数与炸点只挂在 在途 那一问上
+    store: { list: (_r, 态) => {
+      if (态 === '在途') return 关('在途扫描', opts.在途 || []);
+      if (态 === '待投') return opts.待投 || [];
+      if (态 === '池') return opts.池中 || [];
+      return [];
+    } },
     runner: { running: new Map(opts.会话 || []) },
     pmLedger: { event: (_r, _t, p) => 关('巡检记账', 记账参数.push(p)) },
     patrol: {
@@ -96,7 +102,7 @@ t('在途扫描能扫出异常并告警；告警那只炸了也不拖死后面',
   const 单 = [{ id: 'TK-1', fm: { 父单类型: null, 预计时间: '0.5' } }];
   const 好 = 台(root, { 在途: 单 });
   好.拍();
-  assert.deepEqual(好.记账参数[0], { 在途: 1, 异常: 1 }, '在途 1 张、无执行会话即 1 条异常——记账数要真是扫出来的');
+  assert.deepEqual(好.记账参数[0], { 在途: 1, 异常: 1, 在途按池: { 未知: 1 }, 队列长: 0 }, '在途 1 张、无执行会话即 1 条异常——记账数要真是扫出来的');
   assert.ok(好.信箱.find((m) => m.题 === '巡检异常' && /TK-1 在途但无执行会话/.test(m.摘)), '异常要进信箱');
 
   const 坏 = 台(root, { 在途: 单, 炸: ['巡检告警'] });
@@ -104,6 +110,32 @@ t('在途扫描能扫出异常并告警；告警那只炸了也不拖死后面',
   assert.equal(坏.计.巡检告警, 1);
   assert.equal(坏.计.池衡巡检, 1, '告警炸了，后面的池衡巡检照跑');
   assert.equal(r.本拍全好, false);
+});
+
+t('P0-3 按池并发+队列长：2 claude + 1 codex 在途、3 张待投 → 事件账拆得开，旧格照留', () => {
+  const root = makeRoot();
+  const 在途 = [
+    { id: 'TK-C1', fm: { 父单类型: null, 预计时间: '0.5', 执行池: 'claude' } },
+    { id: 'TK-C2', fm: { 父单类型: null, 预计时间: '0.5', 执行池: 'claude' } },
+    { id: 'TK-X1', fm: { 父单类型: null, 预计时间: '0.5', 执行池: 'codex' } },
+  ];
+  const 待投 = [{ id: 'TK-Q1', fm: {} }, { id: 'TK-Q2', fm: {} }, { id: 'TK-Q3', fm: {} }];
+  const s = 台(root, { 在途, 待投 });
+  s.拍();
+  const 账 = s.记账参数[0];
+  assert.equal(账.在途, 3, '旧 在途 总数照留——消费方还在读旧格，新增不替换');
+  assert.deepEqual(账.在途按池, { claude: 2, codex: 1 }, '并发按池拆开：claude 2 条、codex 1 条');
+  assert.equal(账.队列长, 3, '三张待投都在排队');
+
+  // 判不出池的归 未知（fm 无执行池、cfg 空 poolFor 也答不出）；池 态与待投同算队列
+  const s2 = 台(root, {
+    在途: [{ id: 'TK-N1', fm: { 父单类型: null, 预计时间: '0.5' } }],
+    待投: [{ id: 'TK-Q1', fm: {} }],
+    池中: [{ id: 'TK-P1', fm: {} }],
+  });
+  s2.拍();
+  assert.deepEqual(s2.记账参数[0].在途按池, { 未知: 1 }, '判不出池的归 未知，不许瞎猜也不许丢');
+  assert.equal(s2.记账参数[0].队列长, 2, '待投+池 两态都算排队');
 });
 
 t('#28 生产端：连炸三拍才立债，第三拍发急件，且消费端 G16 真捞得到（两端接一次线）', () => {

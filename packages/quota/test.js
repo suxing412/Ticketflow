@@ -198,9 +198,35 @@ t('同输入恒同输出：连调两次逐字节相同（无缓存、无时钟�
   assert.equal(JSON.stringify(rl), 原, '快照被本包改写了——纯函数不许有副作用');
 });
 
-t('导出面锁死七个：少一个消费方就静默瞎（壳的形状校验按这份清单）', () => {
+t('导出面锁死：老七个 + P0 批次新增两个纯函数（壳的形状校验仍按老七个，兼容旧包）', () => {
   assert.deepEqual(Object.keys(Q).sort(),
-    ['claudeWindows', 'describe', 'describeClaude', 'fmtReset', 'gateOf', 'windowLabel', 'windowsOf']);
+    ['claudeUsageRows', 'claudeWindows', 'describe', 'describeClaude', 'fmtReset', 'gateOf', 'resetISO', 'windowLabel', 'windowsOf']);
+});
+
+// ---- P0 批次（落实表-状态机与排期-2026-08-24）：resetAtISO 透出 + 时序账行 ----
+t('resetISO：字符串原值原样、数值时间戳归 ISO、解不出给 null——机器可读，不编时间', () => {
+  assert.equal(Q.resetISO('2026-08-24T15:00:00.000Z'), '2026-08-24T15:00:00.000Z');
+  assert.equal(Date.parse(Q.resetISO(1756191600)), 1756191600 * 1000);
+  assert.equal(Q.resetISO('看不懂的串'), null);
+  assert.equal(Q.resetISO(null), null);
+});
+
+t('窗口对象并列带 resetAtISO：人读 reset 照留，机器另拿一份可 parse 的', () => {
+  const ws = Q.claudeWindows({ fiveHour: { utilization: 30, resets_at: '2026-08-24T15:00:00.000Z' } });
+  assert.equal(ws[0].resetAtISO, '2026-08-24T15:00:00.000Z');
+  assert.ok(Number.isFinite(Date.parse(ws[0].resetAtISO)));
+  assert.ok(ws[0].reset && !ws[0].reset.includes('T'), '人读串还在，且没被 ISO 顶掉');
+  const cw = Q.windowsOf({ primary: { usedPercent: 10, windowDurationMins: 10080, resetsAt: 1756191600 } });
+  assert.equal(Date.parse(cw[0].resetAtISO), 1756191600 * 1000);
+});
+
+t('claudeUsageRows：逐窗行 {窗, utilization, resets_at}——原值不取整，resets_at 可 parse', () => {
+  const rows = Q.claudeUsageRows({ fiveHour: { utilization: 42.5, resets_at: '2026-08-24T15:00:00.000Z' }, sevenDay: { utilization: 7.2, resets_at: 1756191600 } });
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows[0], { 窗: '5小时', utilization: 42.5, resets_at: '2026-08-24T15:00:00.000Z' });
+  assert.equal(rows[1].窗, '周');
+  assert.equal(Date.parse(rows[1].resets_at), 1756191600 * 1000);
+  assert.deepEqual(Q.claudeUsageRows(null), [], '无快照给空清单，不抛');
 });
 
 console.log(`全部通过：${passed} 项`);

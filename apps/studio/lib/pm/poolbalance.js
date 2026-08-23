@@ -157,6 +157,19 @@ function 按量池们(cfg) {
 function 归一读数(cfg, { locks, 余额, 时刻, claude凭据 } = {}) {
   const 参 = 参数(cfg);
   const out = {};
+  // resetAtISO 的来处（落实表 P0-2）：优先取 gates.窗口 条目自带的 resetAtISO；条目没带时从
+  // allLocks 顺手捎回的原始快照（locks.rl / locks.cu）现算——poolbalance 正是数据源头，
+  // 不必等 gates 层透传就能把机器可读的重置时刻端到 /api/pm/poolbalance 明细里。
+  // 解读（label→ISO 的映射）用 packages/quota 的 windowsOf/claudeWindows，不另写第二实现。
+  const 重置表 = (池) => {
+    const m = {};
+    try {
+      const Q = require('../quota');
+      const ws = 池 === 'codex' ? Q.windowsOf(locks && locks.rl) : Q.claudeWindows(locks && locks.cu);
+      for (const w of ws) if (w && w.label && w.resetAtISO) m[w.label] = w.resetAtISO;
+    } catch { /* 解读件失效时明细照出，只是 resetAtISO 为 null */ }
+    return m;
+  };
   for (const 池 of ['claude', 'codex']) {
     const 源 = 池 === 'codex' ? 'codex app-server 探针' : 'claude OAuth 用量接口';
     const l = locks && locks[池];
@@ -166,11 +179,12 @@ function 归一读数(cfg, { locks, 余额, 时刻, claude凭据 } = {}) {
     const wins = (l.窗口 || []).filter((w) => w && w.pct != null);
     if (!wins.length) { out[池] = 盲(池, '额度接口无可用窗口读数', 时刻, 源); continue; }
     const 读时 = l.更新于 ? new Date(l.更新于).toISOString() : 时刻;
+    const 重置 = 重置表(池);
     out[池] = {
       池, 源, 盲区: false, 读数时刻: 读时 || null,
       可用度: l.locked ? 0 : 订阅可用度(wins),
       冻结: !!l.locked, 因: l.locked ? (l.reason || '额度锁已合') : null,
-      明细: wins.map((w) => ({ 窗: w.label, 已用: w.pct, 阈值: w.阈值 })),
+      明细: wins.map((w) => ({ 窗: w.label, 已用: w.pct, 阈值: w.阈值, resetAtISO: w.resetAtISO || 重置[w.label] || null })),
     };
   }
   for (const 池 of 按量池们(cfg)) {

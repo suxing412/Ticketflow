@@ -311,11 +311,31 @@ app.post('/api/pm/draft', (req, res) => {
   // 粒ID（施工令-040 第 6 条）：这次起草是在**兑现哪一条排程计划**。可选——手工委托照旧不带。
   // 带了就当场校验存在性：等到十分钟后起草回调里才发现粒不存在，那条 token 已经烧掉了。
   const 粒ID = String((req.body || {}).粒ID || '').trim();
-  if (粒ID && !schedule.取(ROOT, 粒ID)) {
+  const 兑现粒 = 粒ID ? schedule.取(ROOT, 粒ID) : null;
+  if (粒ID && !兑现粒) {
     // 丙-4 补留痕：受理即拒也是一次「项管想起草但没起成」，此前只回 400、台账零痕，
     // 事后查「这条计划粒为什么一直没兑现」查不到任何东西。
     记事件('起草失败', { 阶段: '受理', 粒ID, error: '计划粒不存在' });
     return res.status(400).json({ error: '计划粒不存在：' + 粒ID });
+  }
+  // P0-7（2026-08-24）：带粒起草时把粒的依赖透传给起草链落 frontmatter。
+  // 粒.依赖 是 [{ref,规则}]，ref 两形：单号形（TK-12）直取；粒ID 形解析成**该粒回填的单号**
+  // （没成单的前置解析不出单号——工单 frontmatter 的 依赖 只认单号，落一个 UUID 进去
+  // 全链没人认得）。解析不了的丢弃并 journal 留痕：静默吞依赖正是本条要治的病，不能自己再犯。
+  let 依赖串 = '';
+  if (兑现粒 && Array.isArray(兑现粒.依赖) && 兑现粒.依赖.length) {
+    const 单号形 = /^[A-Za-z]+-\d+$/;
+    const 取到 = []; const 丢弃 = [];
+    for (const it of 兑现粒.依赖) {
+      const ref = String((it && it.ref) || '').trim();
+      if (!ref) continue;
+      if (单号形.test(ref)) { 取到.push(ref); continue; }
+      const dg = schedule.取(ROOT, ref);
+      if (dg && dg.单号) 取到.push(dg.单号);
+      else 丢弃.push(ref);
+    }
+    依赖串 = 取到.join('，');
+    if (丢弃.length) journal.append(ROOT, `派单委托依赖透传丢弃（粒 ${粒ID}）：${丢弃.join('、')}——非单号形且解析不出已回填单号`);
   }
   const reg = (cfg.项目 && cfg.项目.注册) || {};
   // 项目透传（2026-08-21 对账补）：施工令-061 让 Ticketflow 自立为第二项目（前缀 TF），
@@ -336,7 +356,7 @@ app.post('/api/pm/draft', (req, res) => {
     // 而 journal 是给人读的长文流水，机器对不了账。不新增写盘链路，就借既有 记事件 出口补齐；
     // 成功不补记（会与 待审 双计，把起草次数报高）。
     if (!r.ok) 记事件('起草失败', { 阶段: '起草', 需求: 需求.slice(0, 120), error: String(r.error || '').slice(0, 200), ...(粒ID ? { 粒ID } : {}) });
-  }, { 粒ID: 粒ID || null, 项目: name || null });
+  }, { 粒ID: 粒ID || null, 项目: name || null, 依赖: 依赖串 || null }); // P0-7：依赖单号串直落 fm
   res.json({ ok: true, 状态: '项管起草中，完成后草稿区+信道可见', 项目: name, ...(粒ID ? { 粒ID } : {}) });
 });
 
@@ -1242,8 +1262,18 @@ app.get('/api/schedule', (req, res) => {
 // 三条写路由走 :action 参数而不是三个中文字面量路径——express 4 的静态路径按**原始 URL**
 // 匹配，而 fetch('/api/schedule/登记') 发出去的是百分号编码，字面量路由一律 404（本令实测踩到）。
 // 参数位由 express 解码，中文动作名从此两种写法都认。同 /api/act/:name 的既有口径。
+// 查引用（P0-4 协调预留，2026-08-24）：依赖 ref 的存在性回调——粒存在或单存在即真。
+// schedule.js 的 ref 校验（排程写口组在改）支持 opts.查引用 之前，这只是个被忽略的键，
+// 登记/调整 行为零变化；支持之后此处即自动接上，不必回头再改调用点。强制 同理原样透传（旁路钥匙）。
+const 查引用 = (ref) => {
+  const r = String(ref || '').trim();
+  if (!r) return false;
+  try { if (schedule.取(ROOT, r)) return true; } catch { /* 排程账不可读＝查无此粒 */ }
+  try { if (store.find(ROOT, r)) return true; } catch { /* 工单池查无此单 */ }
+  return false;
+};
 const 排程动作 = {
-  登记: (b) => schedule.登记(ROOT, b.粒 || b.批次 || [], b.操作者),
+  登记: (b) => schedule.登记(ROOT, b.粒 || b.批次 || [], b.操作者, { 查引用, 强制: b.强制 === true }),
   转移: (b) => {
     const 人 = String(b.操作者 || '').trim();
     if (!schedule.操作域.转移.includes(人)) return { ok: false, 越权: true, error: `转移权在 ${schedule.操作域.转移.join('/')}（收到「${人 || '空'}」）` };
@@ -1251,7 +1281,7 @@ const 排程动作 = {
   },
   // 就绪 透传（2026-08-20）：项管排完一批说「这批可以放了」，G8「待办放行成单」人闸的判据读的就是它。
   // **必须原样透传，不许 `b.就绪 || false` 兜底**——省略键在 lib 侧是「这一格不动」，兜底会把它变成「改成 false」。
-  调整: (b) => schedule.调整(ROOT, { 粒ID: b.粒ID, 预期版本: b.预期版本, 序: b.序, 依赖: b.依赖, 池衡建议: b.池衡建议, 就绪: b.就绪, 项目: b.项目, 型: b.型, 上级: b.上级, 操作者: b.操作者, 说明: b.说明 }),
+  调整: (b) => schedule.调整(ROOT, { 粒ID: b.粒ID, 预期版本: b.预期版本, 序: b.序, 依赖: b.依赖, 池衡建议: b.池衡建议, 就绪: b.就绪, 项目: b.项目, 型: b.型, 上级: b.上级, 操作者: b.操作者, 说明: b.说明 }, { 查引用, 强制: b.强制 === true }),
   // 重排（制作人：「发生延期或是超期完成需要重新排期」）：另开一口不并进 调整——
   // 排期改动必须留下「从哪天挪到哪天、较基线延几天、为什么」，混进调整就只剩一行「改了几个字段」。
   // 三格同样原样透传：不传＝不动，显式 null＝清空。

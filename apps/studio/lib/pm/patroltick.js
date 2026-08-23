@@ -20,6 +20,7 @@ const 默认deps = () => ({
   pmLedger: require('./ledger'),
   patrol: require('./patrol'),
   oauth: require('../oauth'),
+  pool: require('../pool'),
   wake: require('./wake'),
   inbox: require('../inbox'),
   state: require('../core/state'),
@@ -55,8 +56,19 @@ function 造巡检拍(取ROOT, 取cfg, opts = {}) {
       // 它裸在逐狗之外就等于「①一炸，②～⑦ 当拍全不跑」——OAuth 续命哨兵正在这条链上。
       let inflight = [];
       const anomalies = [];
+      const 在途按池 = {}; // P0-3（2026-08-24）：并发按池拆开——「在途 3」看不出是谁家的 3
+      let 队列长 = 0; // P0-3：待投/池 里排着的张数，排期估算的另一半输入
       const 扫到 = 逐狗('在途扫描', () => {
         inflight = d.store.list(ROOT, '在途').filter((t) => !['战役', '专项'].includes(t.fm.父单类型));
+        // P0-3 按池统计：执行池以工单 fm 落章为准（领单时盖的），没落章按职能查池归属，都判不出的归 未知——不许瞎猜
+        for (const t of inflight) {
+          const 池 = t.fm.执行池 || d.pool.poolFor(cfg, t.fm.职能) || '未知';
+          在途按池[池] = (在途按池[池] || 0) + 1;
+        }
+        // P0-3 队列长：待投+池 两态都算排队；容器单（战役/专项）过滤口径与在途同
+        for (const 态 of ['待投', '池']) {
+          队列长 += d.store.list(ROOT, 态).filter((t) => !['战役', '专项'].includes(t.fm.父单类型)).length;
+        }
         for (const t of inflight) {
           const e = [...d.runner.running.values()].find((x) => x.id === t.id && x.kind === '执行');
           if (!e) { anomalies.push(`${t.id} 在途但无执行会话`); patrolTails.delete(t.id); continue; }
@@ -78,7 +90,8 @@ function 造巡检拍(取ROOT, 取cfg, opts = {}) {
       // ② 记账与告警各包一层：台账写盘失败（EPERM/锁竞争都发生过）不该把后面五只狗掐掉。
       // 扫不到就不记——拿「在途 0」冒充真读数，比缺一拍心跳更坏（假零会把零派发看门狗也骗过去）。
       if (扫到) {
-        本拍全好 = 逐狗('巡检记账', () => d.pmLedger.event(ROOT, '巡检', { 在途: inflight.length, 异常: anomalies.length })) && 本拍全好;
+        // P0-3：旧 在途 总数照留（消费方还在读旧格），在途按池/队列长 是新增不是替换
+        本拍全好 = 逐狗('巡检记账', () => d.pmLedger.event(ROOT, '巡检', { 在途: inflight.length, 异常: anomalies.length, 在途按池, 队列长 })) && 本拍全好;
       }
       if (anomalies.length) {
         本拍全好 = 逐狗('巡检告警', () => {

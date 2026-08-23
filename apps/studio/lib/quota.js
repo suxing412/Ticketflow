@@ -203,10 +203,34 @@ const THROTTLE_PATH = path.join(os.homedir(), '.claude', '.studio-usage-throttle
 function readThrottle() { try { return JSON.parse(fs.readFileSync(THROTTLE_PATH, 'utf8')); } catch { return {}; } }
 function writeThrottle(t) { try { fs.writeFileSync(THROTTLE_PATH, JSON.stringify(t)); } catch { /* 尽力 */ } }
 
-async function queryClaudeUsage() { // 保留原始一次性查询（CLI 模式用），不走节流
-  const oauth = readClaudeOauth();
+// ===== 额度读数时序账（落实表 P0-1 · 2026-08-24）=====
+// 每次**成功**读数把逐窗行 {t, 池, 窗, utilization, resets_at} 追加到 生产根/瞭望塔/额度读数.jsonl。
+// 行怎么摊、resets_at 归成什么形态是解读活，在 包.claudeUsageRows（纯函数）；这儿只做追加落盘。
+// 只追加（appendFileSync）不整文件重写——时序账天生只增，整写反而给断电留「全文变 NUL」的窗口
+//（durable.写 的 fsync+改名是给「整文件就是现值」的档准备的，账簿口径用追加即可）。
+// 写失败绝不打断查询本身：时序账是旁账，额度查询是主业。
+function 记读数(root, 池, data, t) {
+  try {
+    if (!root || !data || typeof 包.claudeUsageRows !== 'function') return 0;
+    const 行们 = 包.claudeUsageRows(data);
+    if (!行们.length) return 0;
+    const now = t || new Date().toISOString();
+    const file = path.join(root, '瞭望塔', '额度读数.jsonl');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, 行们.map((r) => JSON.stringify({ t: now, 池, ...r })).join('\n') + '\n', 'utf8');
+    return 行们.length;
+  } catch { return 0; }
+}
+function 默根() { try { return require('./core/config').resolveRoot(); } catch { return null; } }
+
+// 保留原始一次性查询（CLI 模式用），不走节流。root/opts 皆可注入（测试用）：
+// root 缺省走 resolveRoot；opts.oauth/opts.fetch 让测试零凭据零外呼地走完真流程。
+async function queryClaudeUsage(root, opts = {}) {
+  const oauth = opts.oauth !== undefined ? opts.oauth : readClaudeOauth();
   if (!oauth || !oauth.accessToken) return null;
-  return fetchUsage(oauth.accessToken);
+  const data = await (opts.fetch || fetchUsage)(oauth.accessToken);
+  if (data) 记读数(root !== undefined ? root : 默根(), 'claude', data);
+  return data;
 }
 
 // 事件驱动急刷（0.7.2）：完工瞬间才是额度真变化的时刻——把节流窗口提前作废，
@@ -237,7 +261,7 @@ async function getClaudeUsage(cfg) {
   let token = oauth.accessToken;
   if (oauth.expiresAt && oauth.expiresAt < now + 60000) token = (await refreshClaudeToken(oauth)) || token;
   const data = await fetchUsage(token);
-  if (data) { t.backoffMs = minMs; t.lastGood = { at: now, data }; writeThrottle(t); return { ...data, 更新于: now }; }
+  if (data) { t.backoffMs = minMs; t.lastGood = { at: now, data }; writeThrottle(t); 记读数(默根(), 'claude', data); return { ...data, 更新于: now }; }
   t.backoffMs = Math.min((t.backoffMs || minMs) * 3, 3600000); writeThrottle(t);
   return stale(t.lastGood);
 }
@@ -318,7 +342,7 @@ async function checkGate(cfg) {
 }
 
 module.exports = { queryRateLimits, getRateLimits, checkGate,
-  queryClaudeUsage, getClaudeUsage, eagerRefresh, getProxyUrl,
+  queryClaudeUsage, getClaudeUsage, eagerRefresh, getProxyUrl, 记读数,
   // 以下七个是 packages/quota 的纯函数，本壳原样转发（消费方 require 路径与调用名不变）
   describe: 包.describe, describeClaude: 包.describeClaude, fmtReset: 包.fmtReset, windowLabel: 包.windowLabel,
   windowsOf: 包.windowsOf, claudeWindows: 包.claudeWindows, gateOf: 包.gateOf,

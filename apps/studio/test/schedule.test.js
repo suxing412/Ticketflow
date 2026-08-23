@@ -444,7 +444,7 @@ const 登记一 = (root, o = {}, 人 = '总监') => {
 
   await t('时间字段：登记落 计划开始/计划完成/工期天，并按「首次排期」立基线', async () => {
     const root = makeRoot();
-    const g = 登记一(root, { 计划开始: '2026-08-20', 计划完成: '2026-08-24', 工期天: 3 });
+    const g = 登记一(root, { 计划开始: '2026-08-20', 计划完成: '2026-08-24', 工期天: 3, 因: '首排' }); // P0-8：带日期必带因
     const now = S.取(root, g.粒ID);
     assert.equal(now.计划开始, '2026-08-20');
     assert.equal(now.计划完成, '2026-08-24');
@@ -456,7 +456,7 @@ const 登记一 = (root, o = {}, 人 = '总监') => {
     const n2 = S.取(root, 登记一(root, { 题: '无日期', 来源: '老账' }).粒ID);
     assert.deepEqual([n2.计划开始, n2.计划完成, n2.工期天, n2.基线完成], [null, null, null, null]);
     // ISO 时刻串按日归一：前端传 datetime、后端存 date，两种写法都认，存的一律是日
-    assert.equal(S.取(root, 登记一(root, { 题: 'ISO时刻', 来源: 'ISO', 计划完成: '2026-09-01T10:30:00.000Z' }).粒ID).计划完成, '2026-09-01');
+    assert.equal(S.取(root, 登记一(root, { 题: 'ISO时刻', 来源: 'ISO', 计划完成: '2026-09-01T10:30:00.000Z', 因: '首排' }).粒ID).计划完成, '2026-09-01');
   });
 
   await t('时间字段校验：坏格式/不存在的日期/开始晚于完成/负工期/非布尔就绪 → 整批不写', async () => {
@@ -476,7 +476,7 @@ const 登记一 = (root, o = {}, 人 = '总监') => {
       assert.ok(r.error.includes(词), `拒因应含「${词}」，实际：${r.error}`);
       assert.equal(S.现态(root).length, 0, '整批未写入：一条不合法则一条都不落');
     }
-    assert.ok(S.登记(root, [粒模板({ 计划开始: '2026-08-20', 计划完成: '2026-08-20' })], '总监').ok, '同日起止＝一日活，合法');
+    assert.ok(S.登记(root, [粒模板({ 计划开始: '2026-08-20', 计划完成: '2026-08-20', 因: '首排' })], '总监').ok, '同日起止＝一日活，合法');
   });
 
   await t('就绪：项管标得动，G8 人闸判据从此筛得出东西（此前结构性恒空）', async () => {
@@ -538,7 +538,7 @@ const 登记一 = (root, o = {}, 人 = '总监') => {
 
   await t('重排：因必填 / 无字段拒 / 无变化拒 / 坏日期拒 / 起止倒挂拒 / 可清空排期', async () => {
     const root = makeRoot();
-    const g = 登记一(root, { 计划开始: '2026-08-20', 计划完成: '2026-08-24' });
+    const g = 登记一(root, { 计划开始: '2026-08-20', 计划完成: '2026-08-24', 因: '首排' }); // P0-8：带日期必带因
     const 试 = (p) => S.重排(root, { 粒ID: g.粒ID, 操作者: '项管', 预期版本: 1, ...p });
     assert.match(试({ 计划完成: '2026-08-25' }).error, /必须带因/, '没有因的甘特图没人敢照着排产');
     assert.match(试({ 因: 'x' }).error, /未给任何排期字段/);
@@ -634,6 +634,75 @@ const 登记一 = (root, o = {}, 人 = '总监') => {
     const c = S.调整(root, { 粒ID: id, 预期版本: S.取(root, id).版本号, 项目: 'TK', 序: 9, 操作者: '总监' });
     assert.equal(c.ok, false, '掺了计划面字段就照拒——开的是归属这一个口子，不是把终态闸拆了');
     assert.match(String(c.error), /终态待办不可调整/);
+  });
+
+  // ── ⑨ P0 批次（2026-08-24 落实表：依赖 ref 存在性 / 预估进调整白名单 / 登记堵日期旁路）──
+
+  await t('P0-4 登记依赖 ref 存在性：坏 ref 拒 / 真工单号过 / 真粒ID过 / 强制旁路 / 不传回调保持旧行为', async () => {
+    const root = makeRoot();
+    const 查引用 = (ref) => ref === 'TK-127'; // 桩工单库：只有 TK-127 这一张现存工单
+    const 坏 = S.登记(root, [粒模板({ 依赖: [{ ref: 'Q5', 规则: '全部完成' }] })], '总监', { 查引用 });
+    assert.ok(!坏.ok, 'ref 指向不存在实体应拒');
+    assert.match(坏.error, /依赖 ref 不存在：Q5/);
+    assert.equal(S.现态(root).length, 0, '整批未写入：一条不合法则一条都不落');
+    const 甲 = S.登记(root, [粒模板({ 依赖: [{ ref: 'TK-127', 规则: '全部完成' }] })], '总监', { 查引用 });
+    assert.ok(甲.ok, '真工单号应过：' + 甲.error);
+    const 乙 = S.登记(root, [粒模板({ 题: '面单二', 依赖: [{ ref: 甲.新增[0].粒ID, 规则: '任一完成' }] })], '总监', { 查引用 });
+    assert.ok(乙.ok, '真粒ID应过（命中现存粒不需要回调认识它）：' + 乙.error);
+    const 强 = S.登记(root, [粒模板({ 题: '预挂', 依赖: [{ ref: 'TK-999', 规则: '全部完成' }] })], '总监', { 查引用, 强制: true });
+    assert.ok(强.ok, '强制:true 应旁路存在性校验：' + 强.error);
+    assert.ok(S.登记(root, [粒模板({ 题: '旧调用方', 依赖: [{ ref: '不存在的东西' }] })], '总监').ok,
+      '没传回调保持旧行为不校验——既有调用方一个不破');
+  });
+
+  await t('P0-4 调整同一道引用检：坏 ref 拒且留痕、现态不动；真实体过；强制旁路', async () => {
+    const root = makeRoot();
+    const 查引用 = (ref) => ref === 'TK-127';
+    const g = 登记一(root);
+    const 坏 = S.调整(root, { 粒ID: g.粒ID, 预期版本: 1, 依赖: [{ ref: 'Q5', 规则: '全部完成' }], 操作者: '项管' }, { 查引用 });
+    assert.ok(!坏.ok, '调整坏 ref 应拒');
+    assert.match(坏.error, /依赖 ref 不存在：Q5/);
+    assert.equal(S.取(root, g.粒ID).版本号, 1, '被拒不改现态不顶版本');
+    assert.ok(S.事件流(root).some((e) => e.事件类型 === '拒绝' && /依赖 ref 不存在/.test(e.因)), '拒绝留痕');
+    const 好 = S.调整(root, { 粒ID: g.粒ID, 预期版本: 1, 依赖: [{ ref: 'TK-127', 规则: '全部完成' }], 操作者: '项管' }, { 查引用 });
+    assert.ok(好.ok, 好.error);
+    assert.deepEqual(S.取(root, g.粒ID).依赖, [{ ref: 'TK-127', 规则: '全部完成' }]);
+    const 强 = S.调整(root, { 粒ID: g.粒ID, 预期版本: 2, 依赖: [{ ref: 'TK-888' }], 操作者: '项管' }, { 查引用, 强制: true });
+    assert.ok(强.ok, '强制旁路：' + 强.error);
+  });
+
+  await t('P0-6 预估单元进调整白名单：改得动且变更留痕；0/负/非数拒；终态粒拦', async () => {
+    const root = makeRoot();
+    const g = 登记一(root, { 预估单元: 2 });
+    const r = S.调整(root, { 粒ID: g.粒ID, 预期版本: 1, 预估单元: 5, 操作者: '项管' });
+    assert.ok(r.ok, r.error);
+    assert.equal(S.取(root, g.粒ID).预估单元, 5, '现态更新');
+    const e = S.事件流(root).find((x) => x.事件类型 === '调整');
+    assert.equal(e.字段变更.预估单元, 5, '变更留痕在调整事件的字段变更里');
+    for (const v of [0, -1, 'abc']) {
+      const 拒 = S.调整(root, { 粒ID: g.粒ID, 预期版本: 2, 预估单元: v, 操作者: '项管' });
+      assert.ok(!拒.ok && /预估单元须为正数/.test(拒.error), `坏值 ${v} 应拒：` + 拒.error);
+    }
+    assert.equal(S.取(root, g.粒ID).版本号, 2, '坏值全拒，现态不动');
+    S.转移(root, { 粒ID: g.粒ID, 目标: '撤销', 预期版本: 2, 操作者: '总监' });
+    const 拦 = S.调整(root, { 粒ID: g.粒ID, 预期版本: 3, 预估单元: 8, 操作者: '项管' });
+    assert.ok(!拦.ok && /终态待办不可调整/.test(拦.error), '终态粒传预估单元应被终态闸拦：' + 拦.error);
+  });
+
+  await t('P0-8 登记堵日期旁路：带计划日期必须带非空因；带因过且因落事件顶层；无日期照旧免因', async () => {
+    const root = makeRoot();
+    for (const 补 of [{ 计划完成: '2026-09-01' }, { 计划开始: '2026-09-01' }, { 计划开始: '2026-09-01', 计划完成: '2026-09-03', 因: '   ' }]) {
+      const r = S.登记(root, [粒模板(补)], '总监');
+      assert.ok(!r.ok, '带日期不带因应拒：' + JSON.stringify(补));
+      assert.match(r.error, /必须带非空 因/);
+      assert.equal(S.现态(root).length, 0, '整批未写入');
+    }
+    const r = S.登记(root, [粒模板({ 计划完成: '2026-09-01', 因: '排期依据：落实表 P0 批次' })], '总监');
+    assert.ok(r.ok, r.error);
+    const e = S.事件流(root)[0];
+    assert.equal(e.因, '排期依据：落实表 P0 批次', '因走登记事件顶层作审计载荷（同 重排 的口径）');
+    assert.ok(!('因' in S.取(root, r.新增[0].粒ID)), '因不进现态，不动字段白名单');
+    assert.ok(S.登记(root, [粒模板({ 题: '无日期不需要因' })], '总监').ok, '不带日期的登记照旧不需要因（老账形态不破）');
   });
 
   console.log(`全部通过：${passed} 项`);

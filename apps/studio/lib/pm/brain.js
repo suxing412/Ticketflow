@@ -305,7 +305,7 @@ function childFm(tk, { id, ids, parentId, 项目, 挂链, 容器管线 }) {
 
 // 单张起草单的 frontmatter 白名单（draftTicket 用，与 childFm 同口径、独立一份因为无父单/无同批依赖）。
 // 无父单意味着归属没得继承——管线漏写就直接进散单行（TK-115/116 案发现场），比子单路径更该带。
-function draftFm(tk, { id, 项目, 粒ID }) {
+function draftFm(tk, { id, 项目, 粒ID, 依赖 }) {
   return {
     id, title: tk.fm.title || '起草单', 职能: tk.fm.职能 || '程序', 产出物类型: tk.fm.产出物类型 || '代码',
     优先级: tk.fm.优先级 || 'P1', 规模: '单兵', QA: tk.fm.QA || '开', 验收方式: tk.fm.验收方式 || '委托',
@@ -313,6 +313,12 @@ function draftFm(tk, { id, 项目, 粒ID }) {
     单型: tk.fm.单型 || '修复单', 切单人: '项管', 创建时间: new Date().toISOString().slice(0, 10),
     ...(tk.fm.依据 ? { 依据: tk.fm.依据 } : {}), // H88：同 cut，依据栏要落盘
     ...(tk.fm.管线 ? { 管线: tk.fm.管线 } : {}), // TK-106~116：同 cut，管线归属要落盘
+    // P0-7（2026-08-24）：依赖 同 H88 依据——提示词契约里本来就有这一栏（「需求点名了就写」），
+    // 白名单不带就静默吞掉，起草单从此看不出前置。改法照抄 依据 那次。
+    ...(tk.fm.依赖 ? { 依赖: tk.fm.依赖 } : {}),
+    // P0-7 委托注入：/api/pm/draft 把排程粒的依赖解析成单号串从 opts 传进来。
+    // 放在模型自填之后＝注入盖过自填：排程台账是依赖的事实源，模型只是转述者。
+    ...(依赖 ? { 依赖: String(依赖) } : {}),
     // 施工令-040：粒ID 由委托方（/api/pm/draft 请求体）指定，不由起草模型自填——
     // 它是台账与工单池的对账钥匙，让模型猜一个等于让账目自己长出来。
     ...(粒ID ? { 粒ID: String(粒ID) } : {}),
@@ -583,7 +589,8 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
     const nid = 下一号(root, 前缀Of(cfg, 项目));
     const tk = tickets[0];
     const 粒ID = ((opts || {}).粒ID) || null;
-    const fm = draftFm(tk, { id: nid, 项目, 粒ID });
+    // P0-7：委托方（/api/pm/draft）解析好的依赖单号串，直落 fm——不依赖模型转述。
+    const fm = draftFm(tk, { id: nid, 项目, 粒ID, 依赖: ((opts || {}).依赖) || null });
     const 记 = 校准落fm(root, nid, fm, 校.表); // H101 机器兜底：落盘前复核估值
     const r = store.create(root, nid, fm, tk.body);
     if (!r.ok) return cb(r);

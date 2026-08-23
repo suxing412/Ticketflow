@@ -17,6 +17,19 @@ function fmtReset(resetsAt) {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// 重置时刻的**机器**可读形态（落实表 P0-2）：fmtReset 的人读串无年无秒无时区，gates/poolbalance
+// 明细里拿它没法排程（「额度不够 → 到达 resets_at」的时刻驱动要 Date.parse 得动的值）。
+// 口径：字符串且可 parse → **原样透出**（等于 OAuth 原值）；数值时间戳（秒/毫秒）→ ISO；解不出 → null。
+function resetISO(resetsAt) {
+  if (resetsAt == null) return null;
+  if (typeof resetsAt === 'number') {
+    const d = new Date(resetsAt * (resetsAt > 1e12 ? 1 : 1000));
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  const s = String(resetsAt);
+  return isNaN(new Date(s).getTime()) ? null : s;
+}
+
 // 窗口自报的时长 → 人读 label（施工令-010 窗口正名：文案按真窗口说话，不写死「5小时」）。
 function windowLabel(w) {
   if (!w || w.windowDurationMins == null) return '窗口';
@@ -33,7 +46,7 @@ function windowsOf(rl) {
   for (const key of ['primary', 'secondary']) {
     const w = rl[key];
     if (!w || w.usedPercent == null) continue;
-    out.push({ label: windowLabel(w), pct: Math.round(w.usedPercent), reset: fmtReset(w.resetsAt) });
+    out.push({ label: windowLabel(w), pct: Math.round(w.usedPercent), reset: fmtReset(w.resetsAt), resetAtISO: resetISO(w.resetsAt) });
   }
   return out;
 }
@@ -41,7 +54,19 @@ function windowsOf(rl) {
 function claudeWindows(cu) {
   const out = [];
   if (!cu) return out;
-  const push = (w, label) => { if (w && w.utilization != null) out.push({ label, pct: Math.round(w.utilization), reset: fmtReset(w.resets_at) }); };
+  const push = (w, label) => { if (w && w.utilization != null) out.push({ label, pct: Math.round(w.utilization), reset: fmtReset(w.resets_at), resetAtISO: resetISO(w.resets_at) }); };
+  push(cu.fiveHour, '5小时');
+  push(cu.sevenDay, '周');
+  return out;
+}
+
+// 时序账行（落实表 P0-1）：把一次 claude 用量快照摊成逐窗行 {窗, utilization, resets_at}。
+// **解读归包**：字段怎么读、resets_at 归成什么形态是解读活，落在这儿；追加落盘的 I/O 归壳
+// （lib/quota.js 记读数）。utilization 存原值不四舍五入——时序账是给机器算斜率的，不是画进度条。
+function claudeUsageRows(cu) {
+  const out = [];
+  if (!cu) return out;
+  const push = (w, 窗) => { if (w && w.utilization != null) out.push({ 窗, utilization: w.utilization, resets_at: resetISO(w.resets_at) }); };
   push(cu.fiveHour, '5小时');
   push(cu.sevenDay, '周');
   return out;
@@ -111,4 +136,4 @@ function gateOf(rl, cfg) {
   return { allowed: true, threshold, snapshot: rl, usedPercent: used };
 }
 
-module.exports = { windowsOf, claudeWindows, describe, describeClaude, fmtReset, windowLabel, gateOf };
+module.exports = { windowsOf, claudeWindows, describe, describeClaude, fmtReset, windowLabel, gateOf, resetISO, claudeUsageRows };
