@@ -42,6 +42,10 @@ for (const f of 套件) {
   for (const m of out.matchAll(/(\d+) 项通过/g)) 断言 += Number(m[1]);
   // 超时（status===null 且有 signal）与非零退出一律算红，不许把「跑挂了」读成「跑过了」
   if (r.status !== 0) 红.push({ 套件: f, 退出: r.status, 信号: r.signal || null });
+  // codex 事后审 #15（2026-08-24）：libuv 级崩溃（Assertion failed: !(handle->flags...)）可能
+  // 发生在断言全过、退出码已定为 0 之后——聚合器若不看 stderr，「红 0」就躲过了一次进程级异常。
+  // 这类崩溃不该当发布门槛的漏网：stderr 见 Assertion failed 一律判红，逼人去查成因。
+  else if (/Assertion failed/.test(String(r.stderr || ''))) 红.push({ 套件: f, 退出: 0, 信号: 'stderr:Assertion failed' });
   else if (out.includes(叉)) 绿带叉.push(f);
 }
 

@@ -1520,9 +1520,9 @@ const ACTIONS = {
     // 先掐后冻：反过来的话，冻结与掐会话之间那一小段里会话可能刚好收线，
     // 交产出虽被 life 层的挂起守卫挡住，却会白白走一趟失败路径（回执已落盘、状态没动）。
     runner.killTicket(ROOT, b.id);
-    if (!b.全树) return life.挂起(ROOT, b.id, b.操作者, b.理由);
+    if (!b.全树) return life.挂起(ROOT, b.id, b.理由, b.操作者); // codex 事后审 #7：原参数反序（因/操作者互换落盘）
     for (const c of life.子孙(ROOT, b.id)) runner.killTicket(ROOT, c.id);
-    return life.挂起树(ROOT, b.id, b.操作者, b.理由);
+    return life.挂起树(ROOT, b.id, b.理由, b.操作者);
   },
   解挂: (b) => (b.全树 ? life.解挂树(ROOT, b.id, b.操作者) : life.解挂(ROOT, b.id, b.操作者)),
   放行: (b) => { // H108 项管闸：待派单标 fm.放行（不再是目录跳变——原 待投→池 语义收成标记写口）
