@@ -22,6 +22,7 @@ npm-debug.log*
 
 # 本地覆盖配置（如有）
 *.local.json
+*.local.json.bak      # 改配置前的备份，同样是本机的东西
 node_modules/
 package-lock.json
 dist/
