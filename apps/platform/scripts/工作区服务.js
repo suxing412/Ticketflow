@@ -278,3 +278,14 @@ const 服务 = http.createServer((req, res) => {
 `);
   process.stdout.write(`[工作区服务] 写操作：${允许写 ? '**已启用**（可建分支/提交/合并）' : '关闭（默认）'}\n`);
 });
+
+// 优雅停机（协-019）：本进程没有在跑的活要保全（git 操作都是同步短命的），
+// 但**得走**——监工收摊时若它不退，整台停机就得等满宽限再硬杀，Ctrl-C 会变得很钝。
+// IPC 是 Windows 上唯一收得到的通道：信号在那儿是无条件终止，handler 根本不执行。
+function 收工(因) {
+  process.stdout.write(`[工作区服务] 收到 ${因}，停机\n`);
+  try { 服务.close(); } catch { /* 已经关了 */ }
+  setTimeout(() => process.exit(0), 200).unref();
+}
+for (const 信号 of ['SIGINT', 'SIGTERM']) process.on(信号, () => 收工(信号));
+process.on('message', (m) => { if (m && m.停机) 收工(`IPC:${m.停机}`); });
