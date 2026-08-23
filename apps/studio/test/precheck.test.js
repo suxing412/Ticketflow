@@ -1,6 +1,9 @@
 // precheck.test.js — 初检机判（施工令-031 / H96）。五类场景照案源逐条回归：
 //   截断（TK-102）/ 豁免（TK-112·TK-113）/ 真空壳 / 禁语 / 缺章
 // 外加 runner 接线的端到端：tick 一轮机判初检写 fm（结论/时间/备注 同构）、零 CLI 零会话。
+// 外呼绊线必须排在任何 lib/ require 之前（lib/quota.js:9 在模块加载那一刻就把
+// child_process 的函数引用解构走了，事后再替字段无效）。见 test/外呼绊线.js 抬头。
+const 绊线 = require('./外呼绊线'); 绊线.装绊线();
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -53,7 +56,9 @@ function 铺(root, id, 回执文本, opts = {}) {
 
 (async () => {
 // ================= 基线：合格回执必须过 =================
-await t('合格回执 → 过（✗ 也是应答：判定对错归深检，初检不越界）', () => {
+// 用例名里不许出现 ✗：deploy-ritual 换装闸判据是 `npm test 2>&1 | grep -c "✗"` 必须为 0，
+// 全绿输出里带 ✗ 的用例名会让那道闸结构性不可达（2026-08-22 体检 #1/#5/#7）。
+await t('合格回执 → 过（不通过判定也是应答：判定对错归深检，初检不越界）', () => {
   const root = makeRoot();
   const t1 = 铺(root, 'X-01', 好回执);
   const r = precheck.run(root, t1, CFG);
@@ -510,5 +515,11 @@ await t('接线：机判自身抛异常 → 按判官失败计数，不盖章不
   } finally { precheck.run = 原; }
 });
 
-console.log(`全部通过：${passed} 项`);
+// #71 余量：本套 6 例走 runner.tick（内含 pool.claim / gates.canPull 那条路）。
+// 顶部的 quota 打桩光有桩不算判据——桩子被删掉测试照绿。这一格把「有没有真外呼」变成账。
+await t('全套零真实外呼：不点真 API、不起真会话、不读真凭据（#71）', () => {
+  绊线.断言无外呼(assert, 'precheck.test.js');
+});
+
+require('./helper').收尾('precheck', passed);
 })().catch((e) => { console.error('  ✗ ' + e.message); process.exit(1); });

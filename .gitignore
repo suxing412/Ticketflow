@@ -5,3 +5,9 @@ dist/
 .studio-state.json
 .studio-state.lock
 *.log
+# 运行态与密钥（2026-08-22 体检 #76）：AI-GameStudio 那边 监制台/.studio-state.json
+# 被手工 add 过一次，从此工作区永远脏、记账每一拍都在提交噪声。
+# 本仓这两行已在（第 5-6 行），这里补上同族的密钥文件——lib/ledger.js 的排除名单挡的是
+# 「自动记账」这一条路，挡不住谁手工 add 一次。判据：test/ledger-scope.test.js 跑 git ls-files。
+凭据.json
+兼容池配置/

@@ -1,5 +1,8 @@
 # 施工令-009 · enginectl attach 模式 + 子集通道 + 基线归档（制作人 2026-08-06 23:59 批准）
 
+> **后续变更注（2026-08-19 对账补记，正文不改只加注）**：本单三件套 **现行有效**——attach（`packages/enginectl/enginectl.js` discoverAttach/attachSend）、`--filter` 子集（parseFilters/buildTest）、基线归档（`enginectl-baselines/results-<UTC>.xml` 留 10 份）三条均在活体运行。
+> 唯 **冷 batchmode 回落一路已整族退役**（2026-08-07 施工令-011「编辑器绝对可见化」）：下文范围 1 的「无→回落现有冷 batchmode」、范围 2 的「冷热两路都支持」、范围 4 的「全量必冷 batch」三处 **作废**，现行口径为「探测不到监听器→可见拉起 Unity.exe→等监听器→投递；拉不起就报错，绝不回落无头」（enginectl.js:8 头注、:328 `--no-attach` 硬拒、:330-332 无冷 batch 回落）。勿按下文旧句去实现或复原冷路。
+
 设定考古（H86）：TK-49 案定死 enginectl 入口必须落仓内 shim（本单不动 shim，只改真实套件）；deploy-ritual 案定死取数禁 tail 截尾（结果仍以 results.xml 为准）；H67 两检与「质检全量走冷 batch 净室」并存不冲突。职权切割新决议：程序不跑测试，测试执行归审检；装配走静态方法。
 
 ## 范围（仓：D:\GitHub\Ticketflow，工区：套件/enginectl/ + 套件/执行技能模板/）

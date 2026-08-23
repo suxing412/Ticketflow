@@ -1407,6 +1407,12 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 .tkcard .tkname { font-size:14px; }
 .tkcard .tkmeta { display:flex; align-items:baseline; gap:8px; margin:6px 0 5px; }
 .tkcard .tkfoot { font-size:11px; color:var(--ink3); margin-top:8px; }
+/* 待审特性的审核出口（2026-08-22 体检 #59）：只画一个「待审」徽章而不给动作，
+   等于告诉人「去别处找」，而别处并没有。钮跟卡片的钻取 onclick 抢事件，故渲染侧一律 stopPropagation。 */
+.tkcard .tkacts { display:flex; gap:8px; margin-top:9px; }
+.tkcard .tkacts .btn { height:28px; font-size:12px; }
+/* 管线封存/复线（#14/#64 G9）：贴在卡头右端，尺寸压到不抢标题 */
+.tkcard .tkseal { height:22px; margin-left:auto; font-size:11px; padding:0 8px; }
 /* 双击改名的就地输入框：尺寸与它替换掉的标题一致，免得一进编辑态整张卡跳一下 */
 .tkrename { font:inherit; font-size:14px; padding:1px 5px; border:1px solid var(--accent); border-radius:4px;
   background:var(--bg); color:var(--ink); min-width:120px; max-width:100%; }
@@ -1415,6 +1421,15 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 .tkdirect > summary { cursor:pointer; font-size:13px; padding:2px 0; }
 .bdone { margin:14px 2px 4px; font-size:12px; }
 .bdone a { color:var(--accent-ink); }
+/* 值守区（2026-08-22 体检 #9/#31）：注册表 G13–G17 五条的落点写着「总览 · 值守」而总览没有这块区。
+   刻意做成折叠件并排在收件箱之下：总监自己的债不许消失，但也不该抢制作人的第一屏。
+   逾期时由渲染侧加 open 自动展开——只有"该喊"的时候才占版面。 */
+.ovwatch { padding:10px 16px 4px; }
+.ovwatch > summary { cursor:pointer; font-size:12.5px; color:var(--ink2); padding:2px 0 8px; list-style:none; }
+.ovwatch > summary::-webkit-details-marker { display:none; }
+.ovwatch > summary::before { content:"▸"; display:inline-block; width:14px; color:var(--ink3); }
+.ovwatch[open] > summary::before { content:"▾"; }
+.ovwatch .inbox-row { height:52px; padding:0 14px; margin-bottom:8px; }
 /* 收件箱逾期红标（施工令-061 二·4 超时升格）：停摆超阈值的债左边一道红——
    页面不会主动找人，这道红是它唯一的"喊"。 */
 .inbox-row.od { border-left:3px solid var(--danger); }
@@ -1481,6 +1496,20 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 .gtunh b { font-size:14px; }
 .gtunh .subnote { color:var(--gatetx); opacity:.8; }
 .gtunl { display:flex; flex-direction:column; gap:2px; margin-top:8px; max-height:30vh; overflow-y:auto; }
+/* 未归属块（2026-08-21）：与「未排期」同形不同色——两者是不同的欠账，混成一个颜色就分不清
+   「没写日期」和「没写项目」。借既有中性描边，不新造色板变量。 */
+.gtun-x { border-style:dotted; opacity:.95; }
+/* 甘特延期/超期标记（2026-08-21 体检：脚注曾说「判定未下发」，实际早就下发，藏了 3 条真延期）。
+   徽标贴在行标签上而不是条上——条的位置由日期决定，读数不该跟着它跑。 */
+.gtflag { font-style:normal; font-size:10.5px; margin-left:6px; padding:1px 5px; border-radius:6px;
+  background:var(--gatebg); color:var(--gatetx); border:0.5px solid var(--gateln); white-space:nowrap; }
+.gtflag.late { opacity:.85; }
+.gtrow.gt-od .gtbar { outline:1px solid var(--warn, #d85a30); outline-offset:-1px; }
+/* 延期（现计划较基线往后挪）与超期（说好的日子到了活还在）是两笔账，故实线/虚线分开。
+   2026-08-22 体检 #29：原样只写了 .gt-od 一条，gt-late 是个没有主的空 class——
+   渲染函数老老实实挂上了这个 class，3 条真延期在条子上却一点色都没有。 */
+.gtrow.gt-late .gtbar { outline:1px dashed var(--warn, #d85a30); outline-offset:-1px; }
+.fglegend i.lg-gflag { background:var(--gatebg); border:0.5px solid var(--gateln); }
 .gtunrow { display:flex; align-items:center; gap:8px; width:100%; text-align:left; padding:4px 8px;
   border:1px solid transparent; border-radius:7px; background:transparent; cursor:pointer; font:inherit; color:var(--ink); }
 .gtunrow:hover, .gtunrow:focus-visible { background:var(--card); border-color:var(--gateln); outline:none; }

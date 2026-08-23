@@ -390,13 +390,73 @@ await ta('探针节流：同一到期窗口至多 2 发，第三拍不再烧调�
   const root = makeRoot(); oauth.重置(root);
   let 发数 = 0;
   const 桩 = async () => { 发数++; return { ok: false, 因: '桩：续不上' }; };
-  const f = 凭据(root, 25); // 三拍都读同一张凭据＝同一到期窗口
-  for (const m of [0, 15, 30]) await oauth.哨兵(root, CFG, { now: 分(m), 文件: f, 探针: 桩 });
+  // 四拍都读同一张凭据、且都落在「临期」里＝同一窗口（体检 #27 起窗口键带态，
+  // 原来的 0/15/30 三拍会在第 30 分钟跨进「过期」，那是**另一个**窗口，不该拿来验本条）
+  const f = 凭据(root, 25);
+  for (const m of [0, 5, 10]) await oauth.哨兵(root, CFG, { now: 分(m), 文件: f, 探针: 桩 });
   assert.equal(发数, 2, `同窗口至多两发，实发 ${发数}`);
-  const r = await oauth.哨兵(root, CFG, { now: 分(45), 文件: f, 探针: 桩 });
+  const r = await oauth.哨兵(root, CFG, { now: 分(15), 文件: f, 探针: 桩 });
   assert.equal(发数, 2, '第四拍照样不发');
   assert.equal(r.自续.已尽, true);
   assert.ok(r.自续.因.includes('上限 2'), '把「为什么不再试」说出来：' + r.自续.因);
+});
+
+await ta('临期烧完的额度不殃及过期：同一张 token 过期后有它自己的 2 发（08-22 06:16→10:30 案）', async () => {
+  // 临期那一发的典型下场是「探针跑通了但 expiresAt 没动」——token 还没到点，CLI 本来
+  // 就不换新的。用同一份额度，等于让两发注定打空的探针把过期后真正管用的那两发吃光，
+  // 之后只剩每 30 分钟重复同一封急件。
+  const root = makeRoot(); oauth.重置(root);
+  let 发数 = 0;
+  const 桩 = async () => { 发数++; return { ok: true, 因: '桩：跑通但 expiresAt 没动' }; };
+  const f = 凭据(root, 20); // T0 时剩 20 分钟＝临期
+  await oauth.哨兵(root, CFG, { now: 分(0), 文件: f, 探针: 桩 });
+  await oauth.哨兵(root, CFG, { now: 分(5), 文件: f, 探针: 桩 });
+  assert.equal(发数, 2, '临期这个窗口的两发先打光');
+  const 满 = await oauth.哨兵(root, CFG, { now: 分(10), 文件: f, 探针: 桩 });
+  assert.equal(发数, 2, '临期窗口内确实封顶了');
+  assert.equal(满.自续.已尽, true);
+  const r = await oauth.哨兵(root, CFG, { now: 分(25), 文件: f, 探针: 桩 }); // 已过期 5 分钟
+  assert.equal(r.态, '过期');
+  assert.equal(r.自续.尝试, true, '过期是另一个态、另一份额度——临期那两发本来就不可能换出新 token');
+  assert.equal(发数, 3);
+});
+
+await ta('探针额度落盘：换个进程不许把「防烧钱」上限重新开两发（今晨那次「修好」实为重启撞对）', async () => {
+  const root = makeRoot(); oauth.重置(root);
+  let 发数 = 0;
+  const 桩 = async () => { 发数++; return { ok: false, 因: '桩：续不上' }; };
+  const f = 凭据(root, -10); // 已过期，全程同一个态
+  await oauth.哨兵(root, CFG, { now: 分(0), 文件: f, 探针: 桩 });
+  await oauth.哨兵(root, CFG, { now: 分(5), 文件: f, 探针: 桩 });
+  assert.equal(发数, 2, '同进程内先把额度打满');
+  // 模拟重启：把模块整个从 require 缓存里拆掉重建（进程内存归零，盘上那份不动）
+  for (const k of Object.keys(require.cache)) if (k.includes('oauth')) delete require.cache[k];
+  const oauth2 = require('../lib/oauth');
+  const r = await oauth2.哨兵(root, CFG, { now: 分(10), 文件: f, 探针: 桩 });
+  assert.equal(发数, 2, `换进程后照样封顶——额度住在盘上不住在进程里，实发 ${发数}`);
+  assert.equal(r.自续.已尽, true, '并且要说清是「本窗额度已尽」，不是「第 1 发」');
+});
+
+await ta('同窗重挂：额度打空后满 N 分钟放行一发（不许「两发打空即永久锁死」卡 3h50m）', async () => {
+  const root = makeRoot(); oauth.重置(root);
+  let 发数 = 0;
+  const 桩 = async () => { 发数++; return { ok: false, 因: '桩：续不上' }; };
+  const f = 凭据(root, -8); // 已过期，态全程不变＝同一窗口
+  await oauth.哨兵(root, CFG, { now: 分(0), 文件: f, 探针: 桩 });
+  await oauth.哨兵(root, CFG, { now: 分(5), 文件: f, 探针: 桩 });
+  assert.equal(发数, 2, '先打满');
+  await oauth.哨兵(root, CFG, { now: 分(20), 文件: f, 探针: 桩 });
+  assert.equal(发数, 2, '距上一发不足 N=30 分钟，不重发（防烧钱那条约束仍在）');
+  const r = await oauth.哨兵(root, CFG, { now: 分(36), 文件: f, 探针: 桩 });
+  assert.equal(发数, 3, '距上一发满 30 分钟 → 重挂一发。本窗解锁只能靠探针，而探针被本窗锁死＝自指死锁');
+  assert.equal(r.自续.尝试, true);
+  const cfg关 = { ...CFG, 凭据: { 自续重挂分钟: 0 } };
+  const root2 = makeRoot(); oauth.重置(root2);
+  let 发2 = 0;
+  const 桩2 = async () => { 发2++; return { ok: false, 因: '桩：续不上' }; };
+  const f2 = 凭据(root2, -8);
+  for (const m of [0, 5, 36, 120]) await oauth.哨兵(root2, cfg关, { now: 分(m), 文件: f2, 探针: 桩2 });
+  assert.equal(发2, 2, '重挂间隔配成 0 = 关掉重挂，退回 055 老行为（打满即锁死）');
 });
 
 await ta('窗口随 expiresAt 复位：续成后的新 token 再临期时，探针额度是新的', async () => {

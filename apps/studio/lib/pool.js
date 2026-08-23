@@ -76,6 +76,9 @@ function depsSatisfied(root, t) {
 async function claim(root, cfg, agentId, now) {
   // 编制读取统一走 lib/roster（H85 补章去岗位化）：新形态下一个职能就是一个执行位、id 即职能名；
   // 仍持旧 config.agents 的内存态 cfg 由 roster 兼容返回，本函数行为不变。
+  // Q20 哨兵：同号双态时拉取制这条路同样得堵——派发制堵了它还能从池里被捞走（同 施工令-021 挂起旗的教训）
+  const 哨 = require('./sentinel').熔断(root);
+  if (哨.熔断) return { ok: false, error: `同号双态哨兵熔断派发：${哨.签名}`, 熔断: true };
   const agent = require('./roster').agents(cfg).find((a) => a.id === agentId);
   if (!agent) return { ok: false, error: `执行位未注册：${agentId}（编制表里没有这个职能）` };
   if (agent.上线 === false) return { ok: false, error: `${agentId} 未上线` };

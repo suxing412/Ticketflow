@@ -143,9 +143,15 @@ AI工作室/
 ```
 cd apps/studio
 npm install          # electron 下载慢可用镜像
-npm test             # 134 项测试
+npm test             # 跑全部套件；尾行报「套件 N · 断言 M · 红 K」，红 0 才算过
 npm run dist         # 产出便携 exe（见 package.json build.directories.output）
 powershell -ExecutionPolicy Bypass -File ..\..\套件\打包套件.ps1   # 打分发包
+```
+
+仓级测试（studio + `packages/*` 各包一起跑）在仓根：
+
+```
+npm test             # = node scripts/test-all.js；尾行报「包 N · 套件 M · 红 K」，红 0 才算过
 ```
 
 ## License

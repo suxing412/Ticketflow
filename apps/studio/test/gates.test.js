@@ -1,4 +1,6 @@
 // gates.test.js — 两道闸：暂停总闸（H81 单闸）+ 额度锁（双池独立）
+// 外呼绊线必须排在任何 lib/ 之前：lib/quota.js 在加载那一刻就把 child_process 解构走了（体检 #71）
+const 绊线 = require('./外呼绊线'); 绊线.装绊线();
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');

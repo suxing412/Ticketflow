@@ -14,10 +14,9 @@ function list(root) {
 }
 
 function saveAll(root, arr) {
-  fs.mkdirSync(path.dirname(FILE(root)), { recursive: true });
-  const tmp = FILE(root) + '.tmp';
-  fs.writeFileSync(tmp, arr.map((x) => JSON.stringify(x)).join('\n') + (arr.length ? '\n' : ''), 'utf8');
-  fs.renameSync(tmp, FILE(root));
+  // 走 core/durable：写 → fsync → 改名（2026-08-21 台账被断电写成全 NUL 案）
+  // 尾换行只在非空时加：空数组要写成空文件，写成 "\n" 会让读侧多出一条空行记录
+  require('../core/durable').写(FILE(root), arr.map((x) => JSON.stringify(x)).join('\n') + (arr.length ? '\n' : ''));
 }
 
 function add(root, 文本, 备注) {

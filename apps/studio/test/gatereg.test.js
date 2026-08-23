@@ -18,12 +18,25 @@ const 空 = {
   ideas: { list: () => [] },
   schedule: { 现态: () => [] },
   wiki: { pending: () => [] },
+  features: { list: () => [] },   // G19 同理：不注桩就会去读真盘的 特性/，还会顺手 mkdir 一个空目录
+  // G18 同理：目录走注入而不是就地拼 root/项管台账——注入了才验得出「有没有哪一处漏改还在就地拼」
+  台账目录: (r) => path.join(r, '__无台账__'),
+  // 值守三闸的产出物在 root 之外（白夜馆是 root 的兄弟），测试 root 的父目录是系统共享临时目录——
+  // 不注空实现就会把别人扔在 <tmp> 里的东西当成本仓的值守馆。指向 root 内的不存在路径 = 恒空。
+  值守: { 班档目录: (r) => path.join(r, '__无馆__'), 瞭望塔目录: (r) => path.join(r, '__无塔__') },
+  // G15 同理：不注空实现就会拿真源码树去比，把测试结果绑到开发机的当下状态上
+  码印: { 比对: () => ({ 一致: true, 因: '测试桩' }), 源码改动时刻: () => null },
+  配置: () => ({}),
+  配置状态: () => ({}),   // G16 同理：不注桩就会去读真盘的 state，把测试绑到开发机当下状态
+  台账: { 事件流体检: () => ({ 总行: 0, 坏行: [], 含NUL: false }) },  // G17 同理
 };
 
-t('注册表：文件缺失回落缺省 13 条，不静默变空', () => {
+t('注册表：文件缺失回落缺省表，不静默变空（条数由缺省表自证，标题不写死数字免得它自己先腐）', () => {
   const root = makeRoot();
   const 表 = gr.注册表(root);
-  assert.equal(表.length, 13, '缺省 13 条闸（12 条法源闸 + G12 失败分诊）');
+  assert.equal(表.length, gr.缺省注册表.length, '缺失文件时回落的必须是整张缺省表，不是子集');
+  assert.ok(表.length >= 16, '至少 16 条：12 条法源闸 + G12 失败分诊 + G13/G14 值守 + G15 码印');
+  assert.equal(new Set(表.map((g) => g.闸号)).size, 表.length, '闸号不许重——重号会让 gateKey 撞车，两笔债折成一笔');
   assert.ok(表.every((g) => g.闸号 && g.名称 && g.法源 && g.型 && g.归属), '每条闸五要素齐（含归属）');
   assert.ok(表.some((g) => g.名称 === '专项关账'), 'H103 专项关账在册——它正是决策台看不见的那个');
 });
@@ -143,6 +156,62 @@ t('归属分流：总监的闸不报进制作人清单（混数就说不清欠�
   assert.equal(gr.等我(root, { deps: 空 }).计数, 2, '不传归属即全收');
 });
 
+t('值守两闸：判据落在产出物，不落在「定时器挂没挂」（2026-08-21 案）', () => {
+  // 案源：审计疑「晨晚报定时任务阵亡」，复核推翻——瞭望塔时钟天天准点开火、心跳在跳，
+  // 断的是消费侧：账本水位卡 11 天、身后积压 1271 条含急件 178。**闹钟天天响，屋里没人。**
+  // 教训一句话：器材查得再全也证明不了产出发生。故这两闸只认产出物的时间戳。
+  const root = makeRoot();
+  // 白夜馆在 root 的**兄弟位**，而测试 root 是系统临时目录下的一格——
+  // 于是上一轮崩在中途的运行会把 <tmp>/白夜馆 留在原地，让下一轮的「空仓」断言失真。
+  // 先清场再断言，收尾走 finally：测试自己不许有隐藏前置状态。
+  const 馆 = path.join(root, '白夜馆'); const 塔 = path.join(root, '瞭望塔');
+  const 值守 = { 班档目录: () => 馆, 瞭望塔目录: () => 塔 };
+  const 空债 = gr.等我(root, { deps: { ...空, 值守 } }).债;
+  assert.equal(空债.filter((d) => ['G13', 'G14'].includes(d.闸号)).length, 0,
+    '没有白夜馆/瞭望塔的仓 = 没立值守制，不许凭空报债（宁可恒空也不虚报）');
+
+  // 立起两个产出物再测
+  fs.mkdirSync(馆, { recursive: true });
+  fs.writeFileSync(path.join(馆, '2026-08-11-夜班.md'), '归档', 'utf8');
+  fs.mkdirSync(塔, { recursive: true });
+  fs.writeFileSync(path.join(塔, '账本水位.json'), JSON.stringify({ 至: '2026-08-09T18:32:49.756Z' }), 'utf8');
+  fs.writeFileSync(path.join(塔, '未读账本.jsonl'),
+    ['2026-08-08T00:00:00Z', '2026-08-15T00:00:00Z', '2026-08-20T00:00:00Z'].map((t) => JSON.stringify({ t })).join(String.fromCharCode(10)), 'utf8');
+
+  const r = gr.等我(root, { 现在: '2026-08-21T00:00:00Z', deps: { ...空, 值守 } });
+  const g13 = r.债.find((d) => d.闸号 === 'G13');
+  const g14 = r.债.find((d) => d.闸号 === 'G14');
+  assert.ok(g13, '班档断更收得到');
+  assert.match(g13.title, /2026-08-11-夜班\.md/, '报的是最新那一份，不是随便一份');
+  assert.ok(g14, '账本水位停滞收得到');
+  assert.equal(g14.停摆小时, 269.5, '停摆自 = 水位的「至」（08-09 18:32 → 08-21 00:00 = 11 天余），于是停多久一目了然');
+  assert.match(g14.title, /积压 2 条/, '水位之后的才算积压（3 条里有 1 条在水位之前）');
+  assert.equal(g13.归属, '总监');
+  assert.equal(g14.归属, '总监');
+  assert.equal(gr.等我(root, { deps: { ...空, 值守 }, 归属: '制作人' }).债.filter((d) => ['G13', 'G14'].includes(d.闸号)).length, 0,
+    '值守是总监自己的账，不占制作人版面');
+
+  // 积压为零就不是债——**恒真判据**是本模块头注明令要防的那种「永远为满的假账」，
+  // 而 G14 首版正是恒真：1300 条清完账 3 秒它又报「水位未推进」。
+  fs.writeFileSync(path.join(塔, '账本水位.json'), JSON.stringify({ 至: '2026-08-20T23:59:59.000Z' }), 'utf8');
+  const r清 = gr.等我(root, { 现在: '2026-08-21T00:00:00Z', deps: { ...空, 值守 } });
+  assert.equal(r清.债.filter((d) => d.闸号 === 'G14').length, 0,
+    '水位推到最新（身后零积压）→ 不许再报债。水位不推进本身不是欠债，水位不推进而身后有人在等才是');
+  assert.ok(r清.债.some((d) => d.闸号 === 'G13'), 'G13 不受影响——两闸各判各的，别一起哑掉');
+
+  // 注入的路径必须**真被用上**，不许有哪一处漏改还在就地拼 root/瞭望塔。
+  // 案源：本条实装时 lib 里正有这么一处漏网，而上面那些断言全绿——因为测试里的塔
+  // 恰好就在 root/瞭望塔，两条路径重合，漏改看不出来。故这里把塔挪到别处再验一次。
+  const 塔2 = path.join(root, '别处的塔');
+  fs.mkdirSync(塔2, { recursive: true });
+  fs.writeFileSync(path.join(塔2, '账本水位.json'), JSON.stringify({ 至: '2026-08-09T18:32:49.756Z' }), 'utf8');
+  fs.writeFileSync(path.join(塔2, '未读账本.jsonl'),
+    ['2026-08-15T00:00:00Z', '2026-08-16T00:00:00Z', '2026-08-17T00:00:00Z', '2026-08-18T00:00:00Z']
+      .map((t) => JSON.stringify({ t })).join(String.fromCharCode(10)), 'utf8');
+  const r2 = gr.等我(root, { 现在: '2026-08-21T00:00:00Z', deps: { ...空, 值守: { 班档目录: () => 馆, 瞭望塔目录: () => 塔2 } } });
+  assert.match(r2.债.find((d) => d.闸号 === 'G14').title, /积压 4 条/, '积压数要来自注入的那个塔，不是 root/瞭望塔');
+});
+
 t('端点实跑 · /api/attn 与 /api/features：真起服务打一遍（漏传参这类只有起服务才炸得出来）', () => {
   // 案源：0.26.15 换装冒烟。/api/attn 里 runner.status() 漏传 cfg，函数内读 cfg.执行器 抛 TypeError，
   // 端点 500。lib 层 13 项测试全绿——因为炸的是**端点接线**不是判据逻辑。
@@ -174,6 +243,329 @@ t('端点实跑 · /api/attn 与 /api/features：真起服务打一遍（漏传�
   assert.deepEqual(out.attn, [200, 'number', true, 'number'], '/api/attn 必须 200 且形状完整——500 说明接线断了');
   assert.deepEqual(out.attn归属, [200, true], '带归属参数照样 200');
   assert.deepEqual(out.features, [200, true], '/api/features 200 且回特性数组');
+});
+
+t('每条闸自带路由，且随债下发（2026-08-21 收件箱死链族）', () => {
+  // 案源：注册表逐闸写好了 落点（「项管页 · 待办队列」「Wiki 页」…），但那一格只拿去拼文案；
+  // 真正决定跳哪儿的是前端一行「按 id 形状猜」——想法 I-xxx、待办 uuid、wiki 名称全不匹配，
+  // 一律跳 #/t/<非工单号>，服务端明确回「工单不存在」。而注释上面就写着「按注册表落点直达」。
+  const root = makeRoot();
+  const 缺 = gr.缺省注册表.filter((g) => !g.路由);
+  assert.deepEqual(缺.map((g) => g.闸号), [], '每条闸都要有路由——将来加闸忘写，这一格会红');
+  assert.ok(gr.缺省注册表.every((g) => String(g.路由).startsWith('#/')), '路由是 hash 形，不是页面名');
+
+  const 空 = { specials: { list: () => [] }, schedule: { 现态: () => [] }, wiki: { pending: () => [] },
+    ideas: { list: () => [{ id: 'I-abc', 文本: '做个存档系统', t: '2026-08-20T00:00:00Z' }] },
+    值守: { 班档目录: (r) => path.join(r, '__无__'), 瞭望塔目录: (r) => path.join(r, '__无__') },
+    码印: { 比对: () => ({ 一致: true }), 源码改动时刻: () => null }, 配置: () => ({}) };
+  seed(root, '待验收', { id: 'TK-9', 验收方式: '保留' });
+  const 债 = gr.等我(root, { deps: 空 }).债;
+  const g3 = 债.find((d) => d.闸号 === 'G3');
+  const g7 = 债.find((d) => d.闸号 === 'G7');
+  assert.equal(g3.路由, '#/t/TK-9', '{id} 占位在服务端就替换掉——替换规则只许有一处');
+  assert.equal(g7.路由, '#/relay', '非工单实体跳它自己的落点，不跳工单详情页');
+  assert.equal(g7.title, '做个存档系统',
+    '想法的标题字段叫 **文本**；原写 x.文||x.题 两个都不存在，三级兜底全落到 id，收件箱上只剩个裸号');
+});
+
+t('注册表路由随债下发 · 全响应闸实证：每笔债的 路由 = 注册表那一格，非工单实体绝不跳 #/t/', () => {
+  // 案源（2026-08-21 收件箱死链族 · 2026-08-22 复核重立）：注册表逐闸写着落点，消费端却「按 id
+  // 形状猜」——想法 I-xxx、待办 uuid、wiki 名称一律被送去 `#/t/<非工单号>`，服务端只会回
+  // 「工单不存在」，点进去就是死页。治法是**路由随债下发**，而上一版判据是两句源码 grep：
+  // 复核实测把病灶原样种回去（前端改回猜形状、闸表删掉 路由 列），19 项测试一格没红。
+  // 故这一格改成真跑：给**每一条响应闸**都造一笔真债，逐笔比对债上的 路由 与注册表那一格。
+  const root = makeRoot();
+  const 馆 = path.join(root, '实证馆'); const 塔 = path.join(root, '实证塔'); const 账 = path.join(root, '实证台账');
+  fs.mkdirSync(馆, { recursive: true }); fs.mkdirSync(塔, { recursive: true }); fs.mkdirSync(账, { recursive: true });
+  fs.writeFileSync(path.join(馆, '2026-08-11-夜班.md'), '归档', 'utf8');
+  fs.writeFileSync(path.join(塔, '账本水位.json'), JSON.stringify({ 至: '2026-08-09T00:00:00Z' }), 'utf8');
+  fs.writeFileSync(path.join(塔, '未读账本.jsonl'), JSON.stringify({ t: '2026-08-20T00:00:00Z' }), 'utf8');
+  fs.writeFileSync(path.join(塔, '心跳.txt'), '2026-08-20T23:00:00Z', 'utf8');   // G20：距「现在」1 小时 > 90s
+  fs.writeFileSync(path.join(账, '台账.json.损毁-1.json'), '{}', 'utf8');          // G18：退空现场
+  fs.writeFileSync(path.join(账, '台账.json.待人裁'), '{}', 'utf8');
+  // 工单四态（G1/G2/G3/G12）走真盘，不注桩——路由带 {id} 的正是这几条
+  seed(root, '待投', { id: 'TK-1' });
+  seed(root, '待定夺', { id: 'TK-2' });
+  seed(root, '待验收', { id: 'TK-3', 验收方式: '保留' });
+  seed(root, '执行失败', { id: 'TK-4' });
+  const 待办uuid = '68ad57db-9ccc-4135-b5e9-fac139b526f0';   // 待办的 id 是 uuid，怎么猜都猜不成工单号
+  const 全 = {
+    specials: { list: () => [{ id: 'S-1', fm: { 名称: '编辑器专项', 状态: '收口', 关账时间: null, 收口时间: '2026-08-18T00:00:00Z', 管线: 'P-1', 特性: 'F-3' } }] },
+    ideas: { list: () => [{ id: 'I-m5x2k9', 文本: '做个存档系统', t: '2026-08-19T00:00:00Z' }] },
+    schedule: { 现态: () => [{ 粒ID: 待办uuid, 题: '河道分段', 状态: '计划', 就绪: true }] },
+    wiki: { pending: () => [{ 名称: '美术标杆-配色' }] },
+    features: { list: () => [{ id: 'F-7', fm: { 名称: '水体图层', 状态: '待审', 管线: 'P-2', 提请时间: '2026-08-19T00:00:00Z' } }] },
+    台账目录: () => 账,
+    值守: { 班档目录: () => 馆, 瞭望塔目录: () => 塔 },
+    码印: { 比对: () => ({ 一致: false, 因: '活体 0.26.1 / 源码 0.26.9' }), 源码改动时刻: () => '2026-08-20T00:00:00Z' },
+    配置: () => ({}),
+    配置状态: () => ({ 巡检异常拍: 3, 巡检异常起: '2026-08-20T00:00:00Z' }),
+    台账: { 事件流体检: () => ({ 总行: 3445, 坏行: [2728], 含NUL: true }) },
+  };
+  const r = gr.等我(root, { 现在: '2026-08-21T00:00:00Z', deps: 全 });
+  const 表 = gr.注册表(root);
+  const 响应 = 表.filter((g) => g.判据);
+
+  // ① 覆盖完备：每条响应闸都真出了债。将来加一条闸而这里没给它造数据，**这一格先红**——
+  //    免得新闸的路由一次都没被验过就上线（G7/G10 当年正是「现网空队列＝潜伏未爆」）。
+  const 出债的 = new Set(r.债.map((d) => d.闸号));
+  assert.deepEqual(响应.filter((g) => !出债的.has(g.闸号)).map((g) => g.闸号), [],
+    '每条响应闸都要被这一格覆盖到（新闸要在这补夹具）；判据失败列：' + JSON.stringify(r.失败));
+
+  // ② 逐笔比对：债上的 路由 必须等于**这里写死的那一格**。
+  //    早先这一格是拿注册表模板现算 `g.路由.replace('{id}',…)` 出来比的——那等于用被测对象
+  //    自己算一遍期望值，改坏模板两边一起变，判据照绿。故期望值在测试里独立写死一张表：
+  //    新闸没写进来先红（逼人当场想清它该跳哪儿），改坏任何一条模板也红。
+  const 期望路由 = {
+    G1: '#/board', G2: '#/t/TK-2', G3: '#/t/TK-3', G12: '#/board',
+    G6: '#/tickets/P-1/F-3',      // 专项挂 P-1/F-3 → 第三层那页，spCard 与关账签字钮都在那儿
+    G7: '#/relay', G8: '#/relay', G10: '#/wiki',
+    G13: '#/', G14: '#/', G15: '#/', G16: '#/', G17: '#/', G18: '#/', G20: '#/',
+    G19: '#/tickets/P-2',         // 待审特性挂 P-2 → 该管线的特性层，审核两颗钮画在特性卡上
+  };
+  assert.deepEqual(响应.filter((g) => !(g.闸号 in 期望路由)).map((g) => g.闸号), [],
+    '新加的响应闸要在 期望路由 表里写明它跳哪儿——写不出来说明这条闸没想清落点');
+  for (const d of r.债) {
+    assert.equal(d.路由, 期望路由[d.闸号],
+      `${d.闸号} 的路由不对：债上「${d.路由}」应为「${期望路由[d.闸号]}」（注册表模板「${表.find((x) => x.闸号 === d.闸号).路由}」）`);
+    assert.ok(d.路由 && d.路由.startsWith('#/'), `${d.闸号} 的路由要是 hash 形，拿到的是「${d.路由}」`);
+    assert.ok(!String(d.路由).includes('{'), `${d.闸号} 的占位没被替换：「${d.路由}」`);
+  }
+
+  // ③ 真病：非工单实体一笔都不许跳 #/t/。服务端对那个 id 只会回「工单不存在」，那就是死链。
+  const 工单号 = /^[A-Z][A-Za-z]*-\d+$/;
+  const 死链 = r.债.filter((d) => String(d.路由).startsWith('#/t/') && !工单号.test(String(d.id)));
+  assert.deepEqual(死链.map((d) => d.闸号 + ':' + d.id + '→' + d.路由), [], '任何 #/t/<非工单号> 都是死链');
+
+  // ④ 点名三类非工单实体各自的落点，免得 ③ 靠「恰好一笔非工单债都没有」空过
+  const 取 = (n) => r.债.find((d) => d.闸号 === n);
+  assert.deepEqual([取('G7').id, 取('G7').路由], ['I-m5x2k9', '#/relay'], '想法（I-xxx）落项管页待办队列');
+  assert.deepEqual([取('G8').id, 取('G8').路由], [待办uuid, '#/relay'], '待办（uuid）落项管页待办队列');
+  assert.deepEqual([取('G10').id, 取('G10').路由], ['美术标杆-配色', '#/wiki'], 'wiki（名称）落 Wiki 页');
+  assert.deepEqual([取('G3').id, 取('G3').路由], ['TK-3', '#/t/TK-3'], '真工单才跳工单详情页');
+  assert.equal(取('G6').路由, '#/tickets/P-1/F-3', '专项落它那张 spCard 真被画出来的那一层，不是管线网格');
+  assert.deepEqual([取('G19').id, 取('G19').路由], ['F-7', '#/tickets/P-2'], '待审特性落它自己管线的特性层');
+});
+
+t('桌面通知读的是全系统唯一谓词（main.js 接线）', () => {
+  // 这一格原先还压着两句 app.js 源码 grep，2026-08-22 复核当场判掉，故删：
+  //   · 负向那句写 `到: /^[A-Z]\d+$/.test`，而病灶写的是 `[A-Z]-\d+`——差一个连字符，
+  //     把病灶原样贴回去它照绿。守着一个匹配不到病灶的正则，比没守更坏：让人以为有人在看。
+  //   · 正向那句 `assert.match(src, /到: x\.路由 \|\|/)` 只证明「某几个字还在」，
+  //     换个写法就假红、被外层 if 绕过就假绿——本项目已明令这类判据不算数。
+  // 闸表这一侧的真判据改由下面那格「注册表路由随债下发 · 全响应闸实证」承担（真调 等我() 取 路由）；
+  // 前端那一侧（viewOverview 到底把 hash 拼成什么）由 test/frontend-sandbox.js 真跑渲染函数另立一格。
+  const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const NL = String.fromCharCode(10); // 字面换行经不住本项目的编辑管道（当日五犯），用码点写
+  const 代码 = m.split(NL).filter((l) => !l.trim().startsWith('//')).join(NL);
+  assert.ok(!/api\/attention/.test(代码), '桌面通知不许再读已退役的 /api/attention（那条轴看不见非工单人闸）');
+  assert.match(代码, /api\/attn\?/, '改读全系统唯一谓词');
+  assert.match(代码, /gateKey/, '按 gateKey 集合比新增，不按计数上涨——签掉一笔又来一笔时计数净值不变，会整笔漏报');
+});
+
+t('G16 巡检连炸：一次不算，连三拍（45 分钟）才立债', () => {
+  // 案源：六只看门狗原本串在一个裸 catch 里同生共死，先炸的一只把后面全静默掐掉。
+  // 逐狗兜异常之后，还得有人知道「狗自己坏了」——不然只是把静默从一处挪到另一处。
+  const root = makeRoot();
+  const 造 = (n, 起) => ({ ...空, 配置状态: () => ({ 巡检异常拍: n, 巡检异常起: 起 }) });
+  assert.equal(gr.等我(root, { deps: 造(0) }).债.filter((d) => d.闸号 === 'G16').length, 0, '零异常不报');
+  assert.equal(gr.等我(root, { deps: 造(2) }).债.filter((d) => d.闸号 === 'G16').length, 0, '两拍还不算——一次异常可能只是瞬时的');
+  const r = gr.等我(root, { 现在: '2026-08-21T12:00:00Z', deps: 造(3, '2026-08-21T11:00:00Z') });
+  const g16 = r.债.find((d) => d.闸号 === 'G16');
+  assert.ok(g16, '三拍即立债');
+  assert.equal(g16.归属, '总监', '看门狗是我的活，不占制作人版面');
+  assert.equal(g16.停摆小时, 1, '停摆自 = 第一拍炸的时刻，据它算欠了多久');
+  assert.match(g16.title, /连续 3 拍/);
+});
+
+t('G17 台账坏行：读不出来的行不许静默跳过（2026-08-21 案）', () => {
+  // 案源：事件.jsonl 第 2728 行有 133 个前导 NUL，JSON 本体完好却被读侧 .filter(Boolean) 抹掉——
+  // 账少算一笔而没人知道。**坏行不是「少一条」，是「整本账不可信」**：
+  // append-only 的日志中间坏一行，后面全部内容的可信度都要打折。
+  const root = makeRoot();
+  const 注 = (体检) => ({ ...空, 台账: { 事件流体检: () => 体检 } });
+  assert.equal(gr.等我(root, { deps: 注({ 总行: 3445, 坏行: [], 含NUL: false }) }).债.filter((d) => d.闸号 === 'G17').length, 0,
+    '干净账本零债');
+  const r = gr.等我(root, { deps: 注({ 总行: 3445, 坏行: [2728], 含NUL: true }) });
+  const g17 = r.债.find((d) => d.闸号 === 'G17');
+  assert.ok(g17, '有坏行就要立债');
+  assert.match(g17.title, /行号 2728/, '要点名是哪一行——不点名等于让人自己去翻 3445 行');
+  assert.match(g17.title, /NUL/, 'NUL 是成因线索，要报出来');
+  assert.equal(g17.归属, '总监');
+  // 只有 NUL 没有坏行（NUL 落在无关位置）同样要报——它是断电写坏的证据
+  assert.equal(gr.等我(root, { deps: 注({ 总行: 10, 坏行: [], 含NUL: true }) }).债.filter((d) => d.闸号 === 'G17').length, 1);
+});
+
+t('G18 台账退空：主档崩了退回空账，账面看着正常只是数字全是 0（2026-08-20 管理费 98.1 万归零案）', () => {
+  // G17 盯的是事件流里读不出来的**行**，这条盯的是**主档本身**崩了。
+  // lib/pm/ledger.js 已经把损毁现场留档、把记账改道 台账.json.待人裁——可那两样都只是留痕：
+  // 留档在、人不知道，就等于没留。所以这条闸的活是「把留痕摆上值守板」。
+  const root = makeRoot();
+  const 账 = path.join(root, '台账区'); fs.mkdirSync(账, { recursive: true });
+  const 注 = { ...空, 台账目录: () => 账 };
+  const 取 = () => gr.等我(root, { deps: 注 }).债.filter((d) => d.闸号 === 'G18');
+  assert.equal(取().length, 0, '空目录零债');
+  fs.writeFileSync(path.join(账, '台账.json'), '{}', 'utf8');
+  fs.writeFileSync(path.join(账, '台账.json.bak'), '{}', 'utf8');
+  assert.equal(取().length, 0, '主档与副本都好好的，同样零债——正常记账不许被当成灾情');
+
+  // 现场之一：损毁档（真账坏过的物证）
+  const 损 = path.join(账, '台账.json.损毁-1755800000000.json');
+  fs.writeFileSync(损, '{}', 'utf8');
+  const a = 取();
+  assert.equal(a.length, 1, '留了损毁档就立债');
+  assert.equal(a[0].gateKey, 'G18:项管台账');
+  assert.ok(a[0].title.includes('损毁档 1 份'), '份数要报出来：' + a[0].title);
+  assert.equal(a[0].归属, '总监', '记账是我的活，不占制作人版面');
+  assert.ok(a[0].停摆自, '停摆自取现场文件的落盘时刻——退空多久了要看得见');
+
+  // 现场之二：记账改道（门闩此刻还挂着 = 还没捞回来）
+  const 裁 = path.join(账, '台账.json.待人裁');
+  fs.writeFileSync(裁, '{}', 'utf8');
+  assert.ok(取()[0].title.includes('待人裁'), '门闩还挂着要报出来，那是「此刻仍未捞回」的证据：' + 取()[0].title);
+
+  // **反向用例**（本项目 G14 犯过「清完账 3 秒又报债」的恒真闸事故）：
+  // 人把损毁档里的账捞回来、现场清掉之后，这条闸必须当场归零。
+  fs.rmSync(裁); fs.rmSync(损);
+  assert.equal(取().length, 0, '现场清干净就必须销债——盯的是「现场还在不在」，不是「历史上出过事」');
+
+  // 注入的目录必须真被用上：真 root 下另铺一份现场，注入指向别处时不许把它算进来
+  const 别处 = path.join(root, '项管台账'); fs.mkdirSync(别处, { recursive: true });
+  fs.writeFileSync(path.join(别处, '台账.json.待人裁'), '{}', 'utf8');
+  assert.equal(取().length, 0, '算的是注入的那个目录，不是就地拼的 root/项管台账');
+  assert.equal(gr.等我(root, { deps: { ...空, 台账目录: () => 别处 } }).债.filter((d) => d.闸号 === 'G18').length, 1,
+    '指到那个目录才算得到——两句合起来才证明路径真的走了注入');
+});
+
+t('G19 特性待审：审批事实推导不出来，没闸催它就只会烂在树里（2026-08-22 体检 #59）', () => {
+  // 「待审」的行为差别是**挂不了单**（lib/features.js 头注）：项管提请完就躺在那儿，
+  // 界面上审核两颗钮已经有了，但没有任何东西会催——特性卡在待审，它名下的活一张单也开不出来。
+  const root = makeRoot();
+  const F = (id, 状态, o = {}) => ({ id, fm: { 名称: id + ' 号特性', 状态, 管线: 'P-2', ...o } });
+  const 造 = (...fx) => ({ ...空, features: { list: () => fx } });
+  const 取 = (d) => gr.等我(root, { 现在: '2026-08-22T00:00:00Z', deps: d }).债.filter((x) => x.闸号 === 'G19');
+  assert.equal(取(造()).length, 0, '一个特性都没有 → 零债');
+  assert.equal(取(造(F('F-1', '活跃'), F('F-2', '封存'))).length, 0,
+    '**反向用例**：活跃/封存都不是在等人——审完就必须销债，不许恒真（G14 案）');
+  const r = 取(造(F('F-1', '活跃'), F('F-99', '待审', { 提请时间: '2026-08-21T00:00:00Z' })));
+  assert.equal(r.length, 1, '只有待审那一条算债');
+  assert.deepEqual([r[0].gateKey, r[0].id, r[0].title], ['G19:F-99', 'F-99', 'F-99 号特性']);
+  assert.equal(r[0].归属, '总监', '开线是制作人人闸、开特性下放项管、**审归总监**');
+  assert.equal(r[0].停摆小时, 24, '停摆自 = 提请时刻，项管提请之后压了多久一目了然');
+  assert.equal(r[0].路由, '#/tickets/P-2', '跳它自己管线的特性层——审核两颗钮画在那一页的特性卡上');
+
+  // 真盘一趟：形状假设（list() 回 { id, fm, body }）直接拿 lib/features 验。
+  // 猜成扁平的 f.状态 就是**恒空**——闸立了、判据在、一笔也出不来，比没立更坏。
+  const 特性目录 = path.join(root, '特性'); fs.mkdirSync(特性目录, { recursive: true });
+  const NL = String.fromCharCode(10);
+  fs.writeFileSync(path.join(特性目录, 'F-98.md'),
+    ['---', 'id: F-98', '名称: 真盘特性', '管线: P-3', '状态: 待审', "提请时间: '2026-08-21T00:00:00Z'", '---', ''].join(NL), 'utf8');
+  const 真 = { ...空 }; delete 真.features;   // 只放开这一路走真模块
+  const rr = gr.等我(root, { 现在: '2026-08-22T00:00:00Z', deps: 真 }).债.filter((x) => x.闸号 === 'G19');
+  assert.deepEqual(rr.map((x) => [x.id, x.title, x.路由]), [['F-98', '真盘特性', '#/tickets/P-3']],
+    'lib/features.list 的真形状喂进来照样出债——桩上绿不算数');
+});
+
+t('G20 瞭望塔失守：塔是值守的眼睛，它自己死的那一刻最不可能有人喊（2026-08-22 体检 #68）', () => {
+  // G13/G14 治的都是「塔在跳、消费侧断了」；这条治的是塔本身停跳。
+  // 阈值 90 秒 = 三个心跳周期，与 packages/watchtower/watchtower.js 自报「在跳」同一把尺
+  // （塔每 30s 覆盖写一行 ISO）。取 45s 就是一拍半，一次写盘抖动即立债——那是把噪声当灾情。
+  const root = makeRoot();
+  const 塔 = path.join(root, '实证塔20');
+  const 注 = { ...空, 值守: { 班档目录: (r) => path.join(r, '__无馆__'), 瞭望塔目录: () => 塔 } };
+  const 现在 = '2026-08-22T12:00:00Z'; const T0 = Date.parse(现在);
+  const 取 = () => gr.等我(root, { 现在, deps: 注 }).债.filter((d) => d.闸号 === 'G20');
+  assert.equal(取().length, 0, '心跳文件不存在 = 本仓没装塔 → 一笔都不许报（宁可恒空也不虚报）');
+  fs.mkdirSync(塔, { recursive: true });
+  const 写戳 = (偏秒) => fs.writeFileSync(path.join(塔, '心跳.txt'), new Date(T0 - 偏秒 * 1000).toISOString(), 'utf8');
+  写戳(10); assert.equal(取().length, 0, '10 秒前跳过 → 在岗');
+  写戳(90); assert.equal(取().length, 0, '恰好 90 秒（三拍）仍算在岗——边界含等号，与写口那把尺同一档');
+  写戳(91);
+  const r = 取();
+  assert.equal(r.length, 1, '91 秒即断更立债');
+  assert.deepEqual([r[0].gateKey, r[0].归属], ['G20:瞭望塔', '总监']);
+  assert.ok(r[0].title.includes('心跳断更'), '标题要说清是断更：' + r[0].title);
+  assert.ok(r[0].停摆自, '停摆自 = 最后一跳，据它算断了多久');
+  // **反向用例**：塔重挂上就必须当场销债（G14 恒真闸案）
+  写戳(5);
+  assert.equal(取().length, 0, '塔活过来 → 立刻销债');
+  // 戳读不出来 ≠ 断更：那是塔写坏了（G16 巡检族的活），这条闸判不出在不在岗就不许报
+  fs.writeFileSync(path.join(塔, '心跳.txt'), '不是个时间', 'utf8');
+  assert.equal(取().length, 0, '戳解析不出 → 不虚报');
+  fs.writeFileSync(path.join(塔, '心跳.txt'), '', 'utf8');
+  assert.equal(取().length, 0, '空文件同样不报');
+  // 注入的塔必须真被用上：root/瞭望塔 放一份**新鲜**戳，注入的塔放一份陈旧戳 → 债要按注入那份算
+  const 就地塔 = path.join(root, '瞭望塔'); fs.mkdirSync(就地塔, { recursive: true });
+  fs.writeFileSync(path.join(就地塔, '心跳.txt'), new Date(T0 - 5000).toISOString(), 'utf8');
+  写戳(600);
+  assert.equal(取().length, 1, '读的是注入的那个塔，不是就地拼的 root/瞭望塔——两份戳一新一旧才验得出来');
+});
+
+t('G6 路由分流：spCard 画在哪一页就跳哪一页，够不着的老实回落（2026-08-22 体检 #67③）', () => {
+  // 病灶：注册表 G6 写 路由 '#/tickets'——那是**管线网格**，而「关账签字」那颗钮画在 spCard 上，
+  // spCard 只在 tkL3（#/tickets/<管线>/<特性>）与 TF 专用层（#/tickets/Ticketflow）两处渲染。
+  // 门牌指到一层，人点进去看见一片管线卡，那颗钮在哪儿全靠自己找。
+  const root = makeRoot();
+  const 路 = (fm) => gr.等我(root, { deps: { ...空, specials: { list: () => [
+    { id: 'S-1', fm: { 名称: 'x', 状态: '收口', 关账时间: null, 收口时间: '2026-08-18T00:00:00Z', ...fm } },
+  ] } } }).债.find((d) => d.闸号 === 'G6').路由;
+  assert.equal(路({ 管线: 'P-1', 特性: 'F-3' }), '#/tickets/P-1/F-3', '两格都在 → 第三层，spCard 与关账钮都在那儿');
+  assert.equal(路({ 管线: null, 特性: null, 项目: 'Ticketflow' }), '#/tickets/Ticketflow',
+    'TF 不设管线与特性层（H52 不同项目不同形状），它的卡画在 TF 专用层');
+  assert.equal(路({ 管线: 'P-1' }), '#/tickets',
+    '有管线无特性（S-1/S-2/S-3 那批存量）→ 现有界面没有一页画得出它的卡，回落一层。回落是实话，编个 hash 只是把死链换个位置');
+  assert.equal(路({}), '#/tickets', '三格全无照样回落');
+  // 占位漏出去比不跳更坏：'#/tickets/undefined' 点进去是空页，看的人会以为数据没了
+  for (const fm of [{ 管线: 'P-1' }, {}, { 特性: 'F-3' }, { 管线: '', 特性: 'F-3' }]) {
+    const h = 路(fm);
+    assert.ok(h && !h.includes('{') && !h.includes('undefined') && !h.includes('null'),
+      '回落路由不许带占位/undefined/null，拿到的是「' + h + '」（' + JSON.stringify(fm) + '）');
+  }
+});
+
+t('T<=0 = 关闭升格，不是「阈值 0 即全红」：口径落进判定本身，不指望调用方各记一遍（2026-08-21 案）', () => {
+  // 案源：runner.js 用 `?? 24` 并注明「0 是合法值＝关闭升格」，/api/attn 那侧用 `|| 24`——
+  // 把 闸值.人闸超时小时 设成 0，runner 侧一封信不发，界面侧照旧按 24 小时把债标红，两边打架且无提示。
+  // 逾期阈值() 当时把 T 的**取值**收成一处，但「T<=0 怎么办」仍散在各调用方，等着第三个人不知道。
+  const root = makeRoot();
+  const deps = { ...空, specials: { list: () => [
+    { id: 'S-老', fm: { 名称: '老', 状态: '收口', 关账时间: null, 收口时间: '2026-08-18T00:00:00Z' } },
+  ] } };
+  const o = { 现在: '2026-08-20T00:00:00Z', deps };
+  assert.deepEqual(gr.逾期(root, 1, o).map((x) => x.id), ['S-老'], 'T=1 该有逾期——这一格不成立，下面两格就是假绿');
+  assert.deepEqual(gr.逾期(root, 0, o), [], 'T=0 是「关闭升格」，不是「阈值 0 故全部逾期」——读反了正是本案病灶');
+  assert.deepEqual(gr.逾期(root, -1, o), [], '负值同待遇');
+  assert.deepEqual(gr.逾期(root, 24, o).map((x) => x.id), ['S-老'], '关掉的只有 T<=0 那一档，正常阈值照旧出数');
+  assert.deepEqual(gr.逾期(root, null, o).map((x) => x.id), ['S-老'], '不传 T 仍走缺省 24，不许被新早退顺手吃掉');
+});
+
+t('端点实跑 · 人闸超时小时=0 时 /api/attn 必须下发「关闭升格」（阈值 null + 零逾期，债照常在）', () => {
+  // 上一格判的是谓词；这一格判的是**接线**：前端 public/app.js 拿 逾期阈值小时 自己重算红标，
+  // 阈值留着 0 的话页面照样全红——所以端点必须下发 null，而不是只把 逾期 数组清空。
+  const { execFileSync } = require('child_process');
+  const root = makeRoot();
+  const port = 4934;
+  const cfg = JSON.parse(fs.readFileSync(path.join(root, 'studio.config.json'), 'utf8'));
+  cfg.闸值 = { ...(cfg.闸值 || {}), 人闸超时小时: 0 };
+  fs.writeFileSync(path.join(root, 'studio.config.json'), JSON.stringify(cfg), 'utf8');
+  seed(root, '待验收', { id: 'TK-77', 验收方式: '保留' });   // 造一笔真债（更新时间 2026-07-08，早就该逾期）
+  const code = `
+    require(${JSON.stringify(path.join(__dirname, '..', 'server.js'))}).start().then(async ({ server: srv }) => {
+      const r = await fetch('http://127.0.0.1:${port}/api/attn');
+      const j = await r.json();
+      process.stdout.write('@@' + JSON.stringify([r.status, j.逾期阈值小时, (j.逾期 || []).length, (j.债 || []).map((x) => x.id)]) + '@@');
+      srv.close();
+    }).catch((e) => { process.stdout.write('@@' + JSON.stringify(['起服务失败', String(e.message)]) + '@@'); process.exit(1); });
+  `;
+  const raw = execFileSync(process.execPath, ['-e', code], {
+    encoding: 'utf8', timeout: 30000,
+    env: { ...process.env, STUDIO_ROOT: root, STUDIO_PORT: String(port), STUDIO_STUB: '1' },
+  });
+  const out = JSON.parse((raw.match(/@@([\s\S]*)@@/) || [])[1] || '[]');
+  assert.deepEqual(out.slice(0, 3), [200, null, 0],
+    'T=0 → 阈值下发 null（不是 0）、逾期清空；拿到的是 ' + JSON.stringify(out));
+  assert.ok(out[3] && out[3].includes('TK-77'),
+    '债本身照常在——关的是升格，不是把债藏起来。这一格若空，上面那两格就是空过：' + JSON.stringify(out));
 });
 
 console.log('全部通过：' + passed + ' 项');

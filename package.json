@@ -1,0 +1,8 @@
+{
+  "name": "ticketflow",
+  "private": true,
+  "description": "Ticketflow 仓根：只放仓级脚本，不放依赖。业务在 apps/ 与 packages/ 各自的 package.json 里。",
+  "scripts": {
+    "test": "node scripts/test-all.js"
+  }
+}

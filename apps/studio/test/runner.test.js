@@ -1,4 +1,6 @@
 // runner.test.js — 执行器 D30/D31/D32：领单执行/QA质检执行/执行失败入位与分诊/闸门/断点恢复/实弹门
+// 外呼绊线必须排在任何 lib/ 之前：lib/quota.js 在加载那一刻就把 child_process 解构走了（体检 #71）
+const 绊线 = require('./外呼绊线'); 绊线.装绊线();
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -7,7 +9,7 @@ const life = require('../lib/lifecycle');
 const state = require('../lib/core/state');
 const store = require('../lib/core/store');
 const gates = require('../lib/gates');
-const { makeRoot, seed, CFG } = require('./helper');
+const { makeRoot, seed, CFG, 等到 } = require('./helper');
 const quota = require('../lib/quota');
 // 测试隔离（2026-08-05 案：额度闸曾查真实订阅用量——codex 实际用量爬过 70% 时本套件假失败数版无人察觉）
 quota.getRateLimits = async () => null; quota.getClaudeUsage = async () => null;
@@ -496,20 +498,34 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     const src = `const E=String.fromCharCode(27);`
       + `process.stderr.write(E+'[32mcodex'+E+'[0m\\n');`
       + `process.stderr.write(E+'[2mtokens used: 1234'+E+'[0m\\n');`
-      + `setTimeout(()=>process.stdout.write('done'),60);`;
+      // 终答由**父进程发信号**触发，不再用墙钟（2026-08-21 修）：
+      // 原样是 setTimeout(…,60)，配上父侧固定 sleep(40) 断言——两个墙钟赛跑。
+      // 实测本机连跑 10 次 10 红（观测值 "codex"＝只到了第一条 stderr）。
+      // 这一格坐在 deploy-ritual 换装闸与完工判据制的唯一机器出口上，不许靠运气。
+      + `process.stdin.once('data',()=>{process.stdout.write('done');process.stdin.pause();});`
+      + `process.stdin.resume();`;
     const child = spawn(process.execPath, ['-e', src], { windowsHide: true });
     const entry = { id: 'S-1', kind: '执行', 池: 'codex', startedAt: new Date(Date.now() - 30 * 60000).toISOString() };
     let out = '', errout = '';
     child.stdout.on('data', (d) => { out += d; entry.收字节 = (entry.收字节 || 0) + d.length; Object.assign(entry, runner.tailFrom(out, errout)); });
     child.stderr.on('data', (d) => { errout += d; entry.收字节 = (entry.收字节 || 0) + d.length; Object.assign(entry, runner.tailFrom(out, errout)); });
-    // 过程期（stdout 还空）：尾巴必须已经有内容，且看门狗不许报
-    await new Promise((r) => setTimeout(r, 40));
+    // 过程期（stdout 还空）：尾巴必须已经有内容，且看门狗不许报。
+    // **等真实事件，不等墙钟**：等到两条 stderr 都进了 entry.tail 为止。
+    // 不能改成「轮询 tokens used」了事——子进程终答一落，tailFrom 是 stdout 优先，
+    // 条件就永远不可能再成立，那样只会把偶发红变成必然的超时挂死（外部协作方 08-08 的
+    // 修法建议是两半，只抄前半就是这个坑）。故：终答改由父进程发信号触发，
+    // 在此之前 stdout 恒空，等待条件单调可达。
+    await 等到(() => entry.tail && entry.tail.includes('tokens used'), 5000, '过程期 stderr 尾巴');
     assert.ok(entry.tail && entry.tail.includes('tokens used'), '过程期尾巴有内容（旧样这里是空的）：' + JSON.stringify(entry.tail));
     assert.ok(entry.收字节 > 0, '活性字节 = stdout∪stderr');
     const patrol = require('../lib/pm/patrol');
     const root = makeRoot(); patrol.重置(root);
     const r1 = patrol.零输出(root, CFG, { 执行中: [entry] });
     assert.equal(r1.告警.length, 0, '跑了 30 分钟但一路在 stderr 吐字 → 不许误报挂死');
+    // ← 放行终答：此刻之前 stdout 必空，上面的等待条件才单调。
+    // end() 而不是 write()：只写不关，父侧这个 stdin 管道会一直挂在事件循环上，
+    // 整个套件跑到这里就再也退不出去（实测：32 个 ✓ 之后卡死，超时 124）。
+    child.stdin.end('go' + String.fromCharCode(10));
     await new Promise((r) => child.on('close', r));
     assert.equal(out, 'done', '终答仍只从 stdout 取（收线裁决口径不变）');
     assert.equal(entry.tail, 'done', 'stdout 一有货，尾巴立刻切回真报告');

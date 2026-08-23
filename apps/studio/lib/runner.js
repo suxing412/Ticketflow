@@ -129,6 +129,49 @@ function autoUnlockTick(root, cfg) {
   editorSeenPrevTick = seen;
 }
 
+// ---- 人闸超时升格（施工令-061 二·4；制作人 2026-08-21 00:23 拍板 T=24h）----
+// 病灶：闸注册表**算得出**「这笔停摆 37 小时」，却没有任何东西会**主动**把它端到人跟前。
+// 总览红条是被动的——人不开那一页就永远看不见，TK-180 在台上躺 26 小时无人吭声正是这么来的。
+// 「主动」这两个字此前只存在于我的口头描述里：全库 grep，gatereg.逾期() 零调用者。本函数就是那半。
+//
+// 三条纪律，每条都有案源：
+// ① **一笔债只升格一次**（按 gateKey 记账，债清了才抹账）。池衡拒因没这一条，
+//    同一条理由在 journal 里刷了 9 天 265 次；15 秒一拍的循环里，忘了去重就是一夜 5760 条。
+// ② **只把制作人的债送进收件箱**（归属 ∈ 制作人/双）。总监自己的债走 journal——
+//    收件箱是制作人的第一屏，我的欠账不该占他的版面（归属分流在 等我() 里已经分好了，这里只是用它）。
+// ③ **升格不改判据**。它不新造「谁欠债」的口径，只订阅 等我() 的结论；
+//    两套口径必然有一套是旧的（甘特红条那次的教训：判定只许有一个实现）。
+function 人闸升格Tick(root, cfg) {
+  const T = require('./gatereg').逾期阈值(cfg); // 唯一取值口，见该函数头注（两处各写一遍就是口径分裂）
+  if (!(T > 0)) return; // T<=0 视为关闭升格，不是「立刻全红」
+  const gr = require('./gatereg');
+  const 活跃 = new Set([...running.values()].filter((e) => e.kind === '执行' && e.id).map((e) => e.id));
+  let 逾期;
+  try { 逾期 = gr.逾期(root, T, { deps: { 活跃单: 活跃 } }); } catch (e) {
+    journal.append(root, `人闸升格取数失败：${e.message}`); return; // 取不到数就闭嘴，不许假装零欠债
+  }
+  const 现存 = new Set(逾期.map((d) => d.gateKey));
+  const state2 = require('./core/state');
+  const 已报 = (state2.read(root) || {}).人闸升格 || {};
+  const 新增 = 逾期.filter((d) => !已报[d.gateKey]);
+  const 消解 = Object.keys(已报).filter((k) => !现存.has(k));
+  if (!新增.length && !消解.length) return;
+  for (const d of 新增) {
+    const 归 = d.归属 || '制作人';
+    const 摘 = `${d.闸名}：${d.title || d.id} 已停摆 ${Math.round(d.停摆小时)}h（超 ${T}h）`;
+    if (归 === '制作人' || 归 === '双') inbox.post(root, '急', '人闸逾期', 摘, { 单号: d.id, 到: d.落点 || '' });
+    else journal.append(root, `人闸逾期（${归}）：${摘}`); // 总监自己的账，记在流水里自己认
+  }
+  if (新增.length) journal.append(root, `人闸超时升格：新增 ${新增.length} 笔逾期（T=${T}h）`);
+  if (消解.length) journal.append(root, `人闸逾期消解：${消解.length} 笔已了结`);
+  state2.update(root, (st2) => {
+    const m = st2.人闸升格 || {};
+    for (const d of 新增) m[d.gateKey] = new Date().toISOString();
+    for (const k of 消解) delete m[k]; // 债清了就抹账——同一笔债将来再逾期还能再响一次
+    st2.人闸升格 = m;
+  });
+}
+
 // ---- 实弹 CLI 定位：exe 的 GUI 进程 PATH 不全（探针实证），按候选绝对路径解析 ----
 function resolveCli(poolName, model, allowedTools) {
   if (poolName === 'codex') {
@@ -789,6 +832,11 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
 
 // 一轮扫描。所有闸都复用既有路径（pool.claim / gates），执行器不自带门。
 async function tick(root, cfg, opts = {}) {
+  // 人闸升格放在 isOn 早退**之前**（2026-08-21 体检纠正）：
+  // 原先放在早退之后，于是「执行器一停，升格就整个停」——而注释写着「人欠的债不因产线停摆而消失」。
+  // 注释本身没说谎（本仓「暂停」是专名，指 H81 暂停总闸，它只在领单路径判），
+  // 但 isOn 这道早退是另一条依赖，实质缺口成立：产线停着的时候，正是最该有人来看债的时候。
+  人闸升格Tick(root, cfg);
   if (!isOn(root)) return { skipped: true, reason: '执行器未运行' };
   const sim = isSim(opts);
   const result = { at: opts.nowIso || new Date().toISOString(), 领单: [], 执行: [], 质检: [], 拒因: [] };
@@ -796,7 +844,13 @@ async function tick(root, cfg, opts = {}) {
 
   const st = state.read(root);
 
-  const dispatchMode = !!(cfg.执行器 && cfg.执行器.派发制); // H49 特性开关：true=派发制，false=旧拉取制（可回退）
+  // H49「拉取制退役、派发制立宪」的缺省语义（2026-08-21 对账反转）。
+  // 病灶：原写法是 `!!(cfg.执行器 && cfg.执行器.派发制)` —— **缺键即 false**，
+  // 于是任何手写的、被裁剪过的、或从旧版本升上来的 config 少这一格，执行链就静默回落到
+  // 一条已被决议废止的路，且不报一个字。立宪的东西不该靠「记得手填」。
+  // 反转后：缺键＝派发制（立宪态），要回退旧路必须**显式写 false**——退回旧制是需要留下意图的动作。
+  // 发行侧两份模板同批补了这一格（lib/setup.js 内置模板 + 套件模板），此处是最后一道兜底。
+  const dispatchMode = !(cfg.执行器 && cfg.执行器.派发制 === false);
 
   // ① 断点恢复 + 在途执行（待复核单不起工，D36）
   for (const t of store.list(root, '在途')) {
@@ -844,7 +898,12 @@ async function tick(root, cfg, opts = {}) {
         const 主办 = `${t0.fm.职能}·${p.id}`; // 一次性 agent：一人一单一生命周期
         const mv = store.move(root, p.id, '待投', '在途', (fm) => {
           fm.主办 = 主办; fm.执行池 = p.池; fm.领单时间 = opts.nowIso || new Date().toISOString();
-          if (p.改挂) fm.临时改池 = `${p.改挂.原池}→${p.池}（${p.改挂.因}）`; // H85 死局自愈留痕：工单上看得见它为什么不在本职池跑
+          // H85 死局自愈留痕：工单上看得见它为什么不在本职池跑。
+          // **写对象不写字符串**（2026-08-21 体检）：原样是模板字符串，而追溯链
+          // （lib/pm/chain.js:128）按对象取 .原池/.新池/.因/.时间 —— 在字符串上取一律 undefined，
+          // 于是那一行永远渲染成「临时改池 ? → xxx」、无时间、无原因。
+          // 同族对照证明这是笔误不是约定：fm.实证放行、fm.待复核 等同类留痕字段全是对象。
+          if (p.改挂) fm.临时改池 = { 原池: p.改挂.原池, 新池: p.池, 因: p.改挂.因, 时间: opts.nowIso || new Date().toISOString() };
           if (p.降级) fm.计费降级 = `${p.降级.原池}(订阅)→${p.池}(按量)`; // 工单自己也要写明这单是花钱跑的
         }, opts.nowIso || new Date().toISOString());
         if (!mv.ok) continue;
@@ -981,6 +1040,25 @@ function startLoop(root, getCfg) {
 }
 function stopLoop() { if (loopTimer) { clearInterval(loopTimer); loopTimer = null; } }
 
+// ---- 升格环（2026-08-22 体检二修）：与产线环彻底分开 ----
+// 一修把 人闸升格Tick 挪到 tick() 的 isOn 早退之前，但那只堵了第一重。第二重是：
+// stop() → stopLoop() → clearInterval 把整条 15 秒环拆了，tick 根本不再被调用，
+// 升格随产线一起停。而「停止」按章程只管本次产线会话，人欠的债与它无关。
+// 这条环 stopLoop() 碰不到——「人欠的债不因产线停摆而消失」这句话到此才在机器上成立。
+let 升格Timer = null;
+function start升格环(root, getCfg) {
+  stop升格环();
+  const 分 = ((getCfg().执行器 || {}).升格间隔分钟 ?? 5);
+  const 跑 = () => {
+    try { 人闸升格Tick(root, getCfg()); }
+    catch (e) { try { journal.append(root, '人闸升格环异常：' + String((e && e.message) || e).slice(0, 80)); } catch { /* 留痕失败不倒环 */ } }
+  };
+  升格Timer = setInterval(跑, Math.max(1, 分 * 60000)); // 下限 1ms 而非 1 分钟：判据要能把这条环跑起来看
+  if (升格Timer.unref) 升格Timer.unref();
+  跑();
+}
+function stop升格环() { if (升格Timer) { clearInterval(升格Timer); 升格Timer = null; } }
+
 function start(root, getCfg) {
   state.update(root, (s) => { s.执行器 = { ...(s.执行器 || {}), 运行: true }; delete s.执行器.试跑; delete s.执行器.实弹解锁; });
   journal.append(root, '执行器启动（实弹：运行即真调 CLI，停手闸=暂停总闸）');
@@ -1033,4 +1111,4 @@ function killTicket(root, id, 因) {
   return false;
 }
 
-module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi, 计量回灌, 流分拣器, 流尾 };
+module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi, 计量回灌, 流分拣器, 流尾, 人闸升格Tick, start升格环, stop升格环 };

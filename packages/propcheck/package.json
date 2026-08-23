@@ -1,0 +1,13 @@
+{
+  "name": "@ticketflow/propcheck",
+  "version": "0.1.0",
+  "private": true,
+  "description": "传播核查：给一个关键词，遍历 H78 八站（决议史/协议库/岗位协议/提示词接线/技能舰队/机制代码与config/记忆/汇报模板）报「全库零活体命中」与否。把「改了正本忘了副本」这一族从口头判据升级为机判。",
+  "main": "propcheck.js",
+  "bin": { "propcheck": "propcheck.js" },
+  "scripts": {
+    "test": "node ../../apps/studio/test/propcheck.test.js"
+  },
+  "author": "suxing412",
+  "license": "UNLICENSED"
+}

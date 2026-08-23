@@ -1,5 +1,7 @@
 // dispatch-tick.test.js — 派发制 tick 集成：迁移/派发/一次性主办/模拟续流
 // 同步执行靠测试内部钩子 opts.durMs（H81 起替代旧「试跑」语义；生产路径不传 durMs）
+// 外呼绊线必须排在任何 lib/ 之前：lib/quota.js 在加载那一刻就把 child_process 解构走了（体检 #71）
+const 绊线 = require('./外呼绊线'); 绊线.装绊线();
 const assert = require('node:assert');
 const { makeRoot, seed } = require('./helper');
 const store = require('../lib/core/store');
@@ -66,7 +68,15 @@ const CFG = {
       await runner.tick(root, cfg, { durMs: 0 });
       const h = store.find(root, 'H-1');
       assert.equal(h.fm.执行池, 'claude', 'codex 冻结应改挂 claude（当前 ' + h.fm.执行池 + '）');
-      assert.ok(String(h.fm.临时改池 || '').startsWith('codex→claude'), '工单须留 临时改池 痕迹：' + h.fm.临时改池);
+      // 2026-08-21 体检：本字段由模板字符串改为**对象**——追溯链（chain.fm行）按对象取
+      // .原池/.新池/.因/.时间，写成字符串则那一行永远是「临时改池 ? → xxx」且无时间无原因。
+      // 断言随之改成逐格校验，比原来的 startsWith 更严：光有字符串形状不算留痕，得读得出来。
+      const 改 = h.fm.临时改池;
+      assert.ok(改 && typeof 改 === 'object', '临时改池 必须是对象（读侧按对象取）：' + JSON.stringify(改));
+      assert.equal(改.原池, 'codex');
+      assert.equal(改.新池, 'claude');
+      assert.ok(改.因, '因不许空——「为什么这单没在本职池跑」正是这一格要答的');
+      assert.ok(改.时间 && !Number.isNaN(Date.parse(改.时间)), '时间要是可解析的时刻');
       const evs = require('../lib/pm/ledger').events(root, 200);
       assert.ok(evs.some((e) => e.类型 === '临时改池' && e.id === 'H-1' && e.原池 === 'codex' && e.新池 === 'claude'), '台账须有 临时改池 记账');
     } finally { gates.allLocks = 原; }

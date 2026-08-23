@@ -4,6 +4,8 @@
 // + 5 分钟例行兜底 + 首跑全量）。
 // 纪律沿用 schedule.test：接线那一格走**真 runner.tick**，不拿 mock 冒充接线证据——
 // 挂接点挂错了而单测全绿，正是施工令-039 那类事故的温床。
+// 外呼绊线必须排在任何 lib/ 之前：lib/quota.js 在加载那一刻就把 child_process 解构走了（体检 #71）
+const 绊线 = require('./外呼绊线'); 绊线.装绊线();
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -333,5 +335,24 @@ const 差 = (root) => LS.差量(store.snapshot(root), S.现态(root));
     assert.ok(pmLedger.events(root).some((e) => e.类型 === '台账对齐' && e.触发 === '首跑'));
   });
 
+
+  // ---- ⑧ 哨兵号不是孤粒（2026-08-22 体检 #62）----
+  await t('直接落码的粒不算孤粒（三粒对账回填哨兵号，54 秒后炸出三条 台账孤粒 告警）', async () => {
+    const root = makeRoot(); // 空库：任何单号都查无此单
+    const { 异常 } = LS.差量(store.snapshot(root), [
+      { 粒ID: 'g1', 单号: "（无单·直接落码）", 状态: '已成单', 题: '活早落地，从没开过单' },
+      { 粒ID: 'g2', 单号: 'TK-9999', 状态: '已成单', 题: '真挂错了单号' },
+    ], []);
+    assert.deepEqual(异常.map((x) => x.粒ID), ['g2'], '真挂错单号的才报孤粒；哨兵号是显式无单声明，报了就是每次对账回填都白送一条告警');
+  });
+
+  await t('哨兵号只赦免它自己：形似的号照报孤粒（赦免面不许糊成前缀匹配）', async () => {
+    const root = makeRoot();
+    const { 异常 } = LS.差量(store.snapshot(root), [
+      { 粒ID: 'g3', 单号: '（无单）', 状态: '已成单', 题: '形似但不是那个哨兵' },
+      { 粒ID: 'g4', 单号: "（无单·直接落码）-2", 状态: '已成单', 题: '哨兵号加了尾巴' },
+    ], []);
+    assert.deepEqual(异常.map((x) => x.粒ID).sort(), ['g3', 'g4'], '整串相等才赦免——放宽成前缀/包含，就等于给任何写错的号开后门');
+  });
   console.log(`全部通过：${passed} 项`);
 })().catch((e) => { console.error('  ✗ ' + (e.stack || e.message)); process.exit(1); });

@@ -8,6 +8,8 @@
 //   ⑤ 052 台账适配：专项批名=专项名、子单挂粒规则不变、伪单不登粒、战役老路零回归
 //   ⑥ 隔离：专项实体不进工单目录（store 扫不到）、不参与机判/QA/派发
 // 纪律沿用 ledger-sync.test：接线那一格走真 runner.tick，不拿 mock 冒充接线证据。
+// 外呼绊线必须排在任何 lib/ 之前：lib/quota.js 在加载那一刻就把 child_process 解构走了（体检 #71）
+const 绊线 = require('./外呼绊线'); 绊线.装绊线();
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
@@ -90,6 +92,34 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     assert.deepEqual(r.活单, ['TK-1']);
     assert.equal(SP.find(root, 'S-1').fm.状态, '进行');
     assert.equal(SP.find(root, 'S-1').fm.收口时间, null, '复工要把收口时间抹掉，不然纸面上还留着个假收口');
+  });
+
+  await t('人手复工优先于机器自检：复工后无新子单，机器不得推回收口（2026-08-21 S-3 案）', async () => {
+    // 案源实测：总监把 S-3 从收口退回「进行」（完成定义要求过制作人手感闸，而手感闸从未通过），
+    // **10 秒后**自检以「全部子单落袋（2 张）」把它推回收口——那两张正是复工时判定「不够」的那两张。
+    // 病根：自检的判据是「子单有没有活」，而复工是**人说「这事没完」**，两者说的不是一件事。
+    // 后果比状态错更坏：推回来的痕迹与正常收口一模一样，事后看不出发生过复工，
+    // 于是「假收口」第三次成立——而且这次是机制自己造的。
+    const root = makeRoot();
+    立(root);
+    seed(root, '完成', { id: 'TK-1', 专项: 'S-1' });
+    SP.转移(root, 'S-1', '进行');
+    assert.equal(SP.收口自检(root, 'S-1').动作, '收口');
+
+    // 人手复工（这是人闸动作，不是系统方）
+    const 复 = SP.转移(root, 'S-1', '进行', { 操作者: '总监', 因: '完成定义未达成' });
+    assert.ok(复.ok);
+    assert.ok(SP.find(root, 'S-1').fm.复工时间, '复工要留时刻，自检据它判「人刚说过没完」');
+
+    // 关键：此刻子单仍是全落袋的，但机器**不许**推回收口
+    const r = SP.收口自检(root, 'S-1');
+    assert.equal(r.动作, null, '复工后无新子单 → 自检必须挂起，不得替人宣布做完');
+    assert.match(String(r.挂起自检 || ''), /复工/);
+    assert.equal(SP.find(root, 'S-1').fm.状态, '进行', '状态要守住——守不住，复工这条退路就形同虚设');
+
+    // 有了新子单，机器才重新拿回收口权（新单落袋后正常收口，不误伤正常流程）
+    seed(root, '完成', { id: 'TK-2', 专项: 'S-1', 创建时间: new Date(Date.now() + 60000).toISOString() });
+    assert.equal(SP.收口自检(root, 'S-1').动作, '收口', '新子单出现并落袋后，自检恢复常态');
   });
 
   await t('首派：立项 → 进行（只推一次，非立项态不动）', async () => {

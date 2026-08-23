@@ -55,8 +55,42 @@ function setStatus(root, id, 状态) {
 }
 
 // 工单→管线解析：显式字段优先，否则沿父链上溯（子单继承战役父单的管线章）。
-function pipelineOf(t, byId, guard) {
-  let c = t, g = 0;
+/**
+ * 一张单属于哪条管线。
+ *
+ * 两条路，按 H107 的优先级：
+ *   ① **逐级推导**（四层架构正路）：工单 → 专项 → 特性 → 管线。H107「只记直接上级、
+ *      不多处记同一事实」——工单只记 专项，管线由上级链推出来，不在工单上再记一遍。
+ *   ② 存量兜底：单上/父链上直写的 管线 章。H51 挂载律时代的写法，H107 已取代，
+ *      但存量单里满是这一格，读侧必须继续认，否则一改章程就全库丢归属。
+ *
+ * 先推导后兜底：新单没有 管线 章也能定位；老单两样都有时以推导为准（推导才是权威链）。
+ * deps 注入是为了能单测，也为了不让本模块硬依赖 specials/features（它们反向依赖 pipelines）。
+ */
+function pipelineOf(t, byId, guard, deps) {
+  const d = deps || {};
+  const 专项表 = d.specials || (() => { try { return require('./specials'); } catch { return null; } })();
+  const 特性表 = d.features || (() => { try { return require('./features'); } catch { return null; } })();
+  const root = d.root;
+
+  // ① 逐级推导：本单或父链上任一节点挂了专项，就从专项那条链往上推
+  let c = t; let g = 0;
+  while (c && g++ < (guard || 10)) {
+    const sid = c.专项;
+    if (sid && 专项表 && root) {
+      const s = 专项表.find(root, String(sid));
+      const fm = (s && s.fm) || {};
+      if (fm.特性 && 特性表) {
+        const f = 特性表.find(root, String(fm.特性));
+        const p = f && f.fm && f.fm.管线;
+        if (p) return p;
+      }
+      if (fm.管线) return fm.管线;   // 专项直挂管线（无特性层的项目形状）
+    }
+    c = c.父单 ? byId[c.父单] : null;
+  }
+  // ② 存量兜底：直写的 管线 章
+  c = t; g = 0;
   while (c && g++ < (guard || 10)) {
     if (c.管线) return c.管线;
     c = c.父单 ? byId[c.父单] : null;

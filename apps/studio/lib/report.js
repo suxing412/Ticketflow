@@ -21,7 +21,15 @@ function parseReceipt(root, id) {
   } catch { return { 实际消耗: null, token估计: null, 代核报告: false, 代裁报告: false }; }
 }
 
-function aggregate(root) {
+// aggregate(root, opts) —— opts.项目 传了就**在取行的源头切一次**，此后所有读数自然同源。
+// 案源（2026-08-21 体检）：报表页头写着「监制台 · Ticketflow」，顶栏 8 个读数却是全工作室的；
+// 前端注释还自称「明细/分组按项目过滤」，实际只过滤了明细一处——一张卡格里两种尺并排。
+// 为什么切在源头而不是让前端各自过滤：**过滤只许有一把尺**。前端复算一遍，
+// 迟早出现「顶栏说 140 完成、分组加起来 12」这种没人说得清谁对的局面。
+// opts.项目 为空即全工作室（单项目部署/未选项目时本来就该是全量）。
+function aggregate(root, opts = {}) {
+  const 项目 = String((opts && opts.项目) || '').trim();
+  const 默认项目 = String((opts && opts.默认项目) || '').trim();
   const rows = [];
   for (const s of store.STATES) {
     for (const t of store.list(root, s)) {
@@ -39,7 +47,12 @@ function aggregate(root) {
       });
     }
   }
-  const worked = rows.filter((r) => r.实际h != null);
+  // 源头切一次：此后 总览/按职能/按池/每日/明细 全部同源，页面上不会再出现两把尺。
+  // 归属口径与 projOf 一致：无章的单归项目默认（老账兼容，不静默丢）。
+  // **不原地改 rows**：首版写成 `rows.length=0; rows.push(...全行)`，而不传项目时
+  // 全行 === rows 本身，清空即把源数据一起清了，全局读数当场归零（自测当场打红）。
+  const 本账 = 项目 ? rows.filter((r) => (r.项目 || 默认项目) === 项目) : rows.slice();
+  const worked = 本账.filter((r) => r.实际h != null);
   const sum = (arr, f) => arr.reduce((a, x) => a + (f(x) || 0), 0);
   const group = (arr, key) => {
     const g = {};
@@ -58,21 +71,25 @@ function aggregate(root) {
   for (const r of worked) if (r.交付日) { byDay[r.交付日] = byDay[r.交付日] || { 交付: 0, 实际h: 0 }; byDay[r.交付日].交付++; byDay[r.交付日].实际h += r.实际h; }
   const days = Object.entries(byDay).map(([d, v]) => ({ 日: d, 交付: v.交付, 实际h: Math.round(v.实际h * 10) / 10 })).sort((a, b) => a.日.localeCompare(b.日)).slice(-14);
   return {
+    项目: 项目 || null, // 页面据它如实标注这份数是谁的——不标就会被当成全工作室
     总览: {
-      总单数: rows.length, 完成: rows.filter((r) => r.state === '完成').length,
-      已归档: rows.filter((r) => r.state === '已归档').length,
+      总单数: 本账.length, 完成: 本账.filter((r) => r.state === '完成').length,
+      已归档: 本账.filter((r) => r.state === '已归档').length,
       实际h合计: Math.round(sum(worked, (x) => x.实际h) * 10) / 10,
       预估偏差pct: 偏差, // 100=踩点，>100=实际超预计
-      自修总轮: sum(rows, (x) => x.自修次数),
-      代核通过: rows.filter((r) => r.代核 === '通过').length, 代核不过: rows.filter((r) => r.代核 === '不过').length,
-      代裁给方向: rows.filter((r) => r.代裁 === '给方向').length, 代裁上呈: rows.filter((r) => r.代裁 === '上呈').length,
-      token估计合计: sum(rows, (x) => x.token估计),
+      自修总轮: sum(本账, (x) => x.自修次数),
+      代核通过: 本账.filter((r) => r.代核 === '通过').length, 代核不过: 本账.filter((r) => r.代核 === '不过').length,
+      代裁给方向: 本账.filter((r) => r.代裁 === '给方向').length, 代裁上呈: 本账.filter((r) => r.代裁 === '上呈').length,
+      token估计合计: sum(本账, (x) => x.token估计),
     },
     按职能: group(worked, '职能'), 按主办: group(worked.filter((r) => r.主办), '主办'),
     按池: group(worked.filter((r) => r.执行池), '执行池'), 按项目: group(worked, '项目'),
     每日: days,
-    明细: rows.filter((r) => r.实际h != null || r.state === '完成' || r.state === '已归档')
+    明细: 本账.filter((r) => r.实际h != null || r.state === '完成' || r.state === '已归档')
       .sort((a, b) => String(b.交付日 || '').localeCompare(String(a.交付日 || ''))).slice(0, 100),
+    // 明细被上限截过没有——页面据它如实说明「更早的未取」。
+    // 静默截断读起来跟「一共就这些」一模一样，那正是本次体检要治的那类。
+    明细满: 本账.filter((r) => r.实际h != null || r.state === '完成' || r.state === '已归档').length > 100,
   };
 }
 

@@ -4,8 +4,14 @@
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
+// 行为面夹具：在 node 里真装 public/app.js、真调它的函数（见 test/frontend-sandbox.js 抬头那段案由）。
+// 2026-08-22 复核判掉 22 条「grep 源码文本」的假判据后，本文件里凡是能真跑的一律真跑。
+const { 装载前端, 设项目 } = require('./frontend-sandbox');
 
 let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
+// 异步用例串行跑：几条行为面判据共用 test/minidom 的那一份 doc，并发交错会互相踩现场。
+const 异步 = []; const at = (n, f) => 异步.push([n, f]);
 console.log('pulse 脉冲刷新决策测试（施工令-048）');
 
 const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
@@ -71,19 +77,76 @@ t('退役页转向表：ideas/flow/queue/tree 一律落 relay，且用 replace �
   const 退役页 = new Function('return ' + m[1])();
   // decisions: '' → 落总览（2026-08-21 撤决策台：签字随对象走，聚合上收服务端 等我()）
   assert.deepEqual(退役页, { ideas: 'relay', flow: 'relay', queue: 'relay', tree: 'relay', decisions: '' });
-  const 转向行 = src.slice(src.indexOf('if (退役页['), src.indexOf('if (退役页[') + 220);
-  assert.ok(/location\.replace/.test(转向行), '退役页转向必须 location.replace——assign 会让退役页占一格历史，用户按返回又被弹回来');
-  assert.ok(!/location\.hash *=/.test(转向行), '转向行里出现了 location.hash= 赋值（等价 assign）');
-  // 带参旧链接（#/queue?项目=TK）也要落地：转向认的是首段，不是整串
-  assert.ok(/h\.split\('\?'\)\[0\]\.split\('\/'\)\[0\]/.test(转向行), '转向应按 hash 首段查表，整串比对会漏掉带参旧书签');
 });
 
-t('四张退役页的视图函数不再挂路由：viewQueue 已删，viewFlow/viewDecisions 摘牌留档', () => {
-  assert.ok(!/\bviewQueue\b\s*\(\)/.test(src.replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '')), 'viewQueue 还在被调用');
-  assert.ok(!/function viewQueue/.test(src), 'viewQueue 函数体应随本次退役删除（项管页 tqRow 是它的超集）');
-  assert.ok(!/function viewIdeas/.test(src), 'viewIdeas 应化成片段函数 ideaPoolHtml，不再是路由视图');
-  assert.ok(/function ideaPoolHtml/.test(src), '想法在池的片段函数 ideaPoolHtml 不见了');
-  assert.ok(/async function viewFlow/.test(src), 'viewFlow 是摘牌留档，函数体应原样保留（管线现在线暂无接班人）');
+/* 「用 replace 不用 assign」「带参旧书签也要落地」这两条原本 grep 转向那一行的源码文本
+   （/location\.replace/、/h\.split\('\?'\)\[0\]…/）——同样的接线换个写法它就假红，
+   而真正的病（转向压根没触发、或触发到别处去）它一个都拦不住。改成真跑 route() 看它把人送去哪。 */
+at('退役页转向真把人送到 relay：用 replace 不用 assign，带参旧书签同样落地', async () => {
+  const 走一趟 = async (旧hash) => {
+    const ctx = 装载前端();
+    const 换 = [];
+    let hash = 旧hash;
+    // location.hash 换成可观测的存取器：assign 语义（location.hash = x）会被记下来
+    Object.defineProperty(ctx.location, 'hash', {
+      get: () => hash, set: (v) => { 换.push(['hash=', v]); hash = v; }, configurable: true,
+    });
+    ctx.location.replace = (u) => 换.push(['replace', u]);
+    ctx.location.assign = (u) => 换.push(['assign', u]);
+    ctx.fetch = async (u) => {
+      const url = String(u).split('?')[0];
+      return { ok: true, json: async () => (url === '/api/setup/state' ? { 需要向导: false }
+        : url === '/api/config' ? { 项目: { 注册: { TK: {} }, 默认: 'TK' }, 闸值: {} } : {}) };
+    };
+    await ctx.route();
+    return 换;
+  };
+  for (const 旧 of ['#/ideas', '#/flow', '#/queue', '#/tree']) {
+    assert.deepEqual(await 走一趟(旧), [['replace', '#/relay']],
+      `${旧} 没被转向到 #/relay（或用了 assign/hash= —— 那会让退役页占一格历史，用户按返回又被弹回来）`);
+  }
+  assert.deepEqual(await 走一趟('#/queue?项目=TK'), [['replace', '#/relay']],
+    '带参旧书签 #/queue?项目=TK 没落地——转向若按整串比对就会把它漏进 ROUTES 查表，落成一张空白页');
+  assert.deepEqual(await 走一趟('#/board'), [], '在役页不许被转向');
+});
+
+t('四张退役页的视图函数不再挂路由：viewQueue/viewIdeas 运行时真的不存在，ideaPoolHtml 真出片段', () => {
+  // 判据换面（2026-08-22）：原本四条 assert.ok(/function viewQueue/.test(src)) 之流——
+  // 那只证明「源码里有没有这串字」。改名成 viewQueue2 它照绿，注释里提一句 viewQueue 它照红。
+  // 这里真装一遍 app.js，函数在不在**以运行时为准**；片段函数还要真出片段，只剩个名字不算数。
+  const ctx = 装载前端();
+  assert.equal(typeof ctx.viewQueue, 'undefined', 'viewQueue 还在（项管页 tqRow 是它的超集，退役就该真的没有）');
+  assert.equal(typeof ctx.viewIdeas, 'undefined', 'viewIdeas 应化成片段函数 ideaPoolHtml，不再是独立视图');
+  assert.equal(typeof ctx.ideaPoolHtml, 'function', '想法在池的片段函数 ideaPoolHtml 不见了');
+  const 片段 = ctx.ideaPoolHtml([{ id: 'I-1', 文本: '一条想法', t: '2026-08-01T10:00:00Z' }]);
+  assert.ok(片段.includes('一条想法') && 片段.includes("ideaAct('拍板'"),
+    'ideaPoolHtml 出不了带拍板钮的片段——想法并进项管页等于并了个空壳');
+  assert.equal(typeof ctx.viewFlow, 'function', 'viewFlow 是摘牌留档，函数体应原样保留（管线现在线暂无接班人）');
+});
+
+/* ---- 一c、标语点名的页必须还活着（2026-08-22 体检 #67①）----
+   案源：08-20 撤了决策台，页头标语却还写着「工单 · 审检 · 决策台」——制作人照着标语找页，找不到。
+   判的是「标语里点的名字是不是一个已退役的页」，不判具体措辞：改叫法、换顺序、挪位置都不误伤。 */
+t('页头标语不许点名任何一张已退役的页（#67①）', () => {
+  const ctx = 装载前端();
+  const 壳 = ctx.shell('board', '');
+  const m = /<p class="tagline">([\s\S]*?)<\/p>/.exec(壳);
+  assert.ok(m, '页头标语找不到了——它是制作人对这台机器是干什么的第一印象，不许悄悄拿掉');
+  // 标语形如「工单 · 审检 · 验收——制作人的驾驶舱：…」，破折号前那截才是页名枚举
+  const 页名们 = String(m[1]).split('——')[0].split('·').map((s) => s.trim()).filter(Boolean);
+  assert.ok(页名们.length >= 2, '标语里没有可核对的页名枚举：' + m[1]);
+  // 退役页中文名对照（键＝route() 的 退役页 表的键）
+  const 退役名 = { decisions: '决策台', ideas: '想法', flow: '流程', queue: '队列', tree: '树' };
+  const 表 = /const 退役页 = (\{[^}]*\})/.exec(src);
+  assert.ok(表, '退役页转向表找不到了');
+  // eslint-disable-next-line no-new-func
+  for (const k of Object.keys(new Function('return ' + 表[1])())) {
+    assert.ok(退役名[k], `退役页新增了 ${k}，本用例的中文名对照表没跟上——补一格再跑`);
+  }
+  for (const n of 页名们) {
+    assert.ok(!Object.values(退役名).includes(n),
+      `页头标语点名「${n}」，而这张页已退役——制作人会照着标语去找一张不存在的页。标语现为：${m[1]}`);
+  }
 });
 
 t('总览是空键：裸 #/ 与认不出的 hash 都落总览（与 route() 同口径）', () => {
@@ -209,18 +272,73 @@ t('弹窗关掉那一拍立刻补刷一次（合并成一次，不是补 40 次�
 
 /* ---- 四、防倒退：病灶写法不许回来 ---- */
 
-t('脉冲轮询里不再直呼 route()（整页重建的旧路已封）', () => {
+/* 这两条原本是 `src.indexOf(...)` + 正则查源码块（「块里有没有 repaint(」「有没有 data-live 这串字」）。
+   那种断言证明不了接线：repaint 这串字可能出现在注释里、data-live 可能挂错了元素、
+   morph 的 data-live 闸可能被上面某个分支提前 return 绕过——它一概照绿。
+   下面两条改成真跑那一段接线：把脉冲那一拍**真的打出去**，看它落在哪个函数上；
+   把详情页**真的渲染出来**、真喂给 morph，看秒表上的实时值还在不在。 */
+
+at('脉冲那一拍真落在 repaint 上，不是 route（整页重建的旧路已封）', async () => {
+  // 把生产那一段 setInterval 接线原样搬进沙盒重跑：setInterval 换成收集器，
+  // route/repaint 换成记录桩（两者都是顶层 function 声明，在 vm 全局上可覆盖）。
   const a = src.indexOf('let lastPulse = null;');
-  assert.ok(a > 0, '脉冲轮询块找不到了');
-  const 块 = src.slice(a, a + 1400);
-  assert.ok(!/if \(lastPulse && d\.token !== lastPulse\) route\(\)/.test(块), '旧的「令牌一变就 route()」又回来了');
-  assert.ok(块.includes('repaint('), '脉冲块里应当走 repaint 原地重绘');
+  const b = src.indexOf('}, 3000);', a);
+  assert.ok(a > 0 && b > a, '脉冲轮询块找不到了——接线换了地方，这条判据已脱钩');
+  const 块 = src.slice(a, b + '}, 3000);'.length).replace('let lastPulse = null;', 'lastPulse = null;');
+
+  const ctx = 装载前端();
+  let 拍 = null;
+  ctx.setInterval = (fn, ms) => { 拍 = { fn, ms }; return 1; };
+  const 记 = [];
+  ctx.route = async () => { 记.push('route'); };
+  ctx.repaint = async () => { 记.push('repaint'); return 'ok'; };
+  // 弹窗开着() 是 const（覆不掉），它读 document.querySelector('.mwrap, .ask-ov')——从 document 这一侧关掉
+  const 原doc = ctx.document;
+  ctx.document = new Proxy(原doc, {
+    get: (o, k) => (k === 'querySelector' ? ((s) => (/mwrap|ask-ov/.test(s) ? null : o.querySelector(s))) : o[k]),
+  });
+  let 令牌 = 't1';
+  ctx.fetch = async (u) => ({ ok: true, json: async () => (String(u) === '/api/pulse' ? { token: 令牌 } : {}) });
+  ctx.location.hash = '#/board';
+  vm.runInContext(块, ctx, { filename: 'app.js#脉冲接线' });
+  assert.ok(拍 && 拍.ms === 3000, '脉冲不是 3s 一拍：' + JSON.stringify(拍 && 拍.ms));
+
+  await 拍.fn();
+  assert.deepEqual(记, [], '第一拍只该建立令牌基线，一动都不许动版面');
+  令牌 = 't2';
+  await 拍.fn();
+  assert.deepEqual(记, ['repaint'],
+    '令牌变了该原地重绘。落在 route 上就是整页重建——施工令-048 治的频闪正是这一下。实测：' + JSON.stringify(记));
+
+  ctx.location.hash = '#/draft'; 令牌 = 't3';
+  await 拍.fn();
+  assert.deepEqual(记, ['repaint'], '起草页免打扰：正在填的东西不许被脉冲冲掉');
+  ctx.location.hash = '#/board';
+  await 拍.fn(); // 令牌这一拍没再变，靠待办把补刷接上
+  assert.deepEqual(记, ['repaint', 'repaint'], '免打扰期间挡下的那一笔要补刷回来，不许无声吞掉');
 });
 
-t('详情页秒表格子挂着 data-live，morph 不许碰（要件3）', () => {
-  assert.ok(/id="lv-step-t" data-live/.test(src), 'lv-step-t 的 data-live 记号没了，秒表会被脉冲拨回 --:--');
-  assert.ok(/id="lv-all-t" data-live/.test(src), 'lv-all-t 的 data-live 记号没了');
-  assert.ok(/hasAttribute\('data-live'\)/.test(src), 'morph 里认 data-live 的那道闸没了');
+at('详情页秒表：真渲染 → 真走表 → 真 morph，实时值必须原样活下来（要件3）', async () => {
+  const ctx = 装载前端();
+  const J = (o) => ({ ok: true, json: async () => o });
+  ctx.fetch = async (u) => {
+    const url = decodeURIComponent(String(u)).split('?')[0];
+    if (url === '/api/ticket') return J({ id: 'A-1', state: '在途', fm: { id: 'A-1', title: '活儿', 职能: '程序', 优先级: 'P1' }, 链: { 父子: { 父: null, 子: [] }, 依赖: [] }, body: '正文' });
+    if (url === '/api/runner') return J({ 执行中: [{ id: 'A-1', agent: '程序-A', kind: '执行', startedAt: new Date().toISOString(), 进度: { 百分比: 60, 段: [] } }], 间隔秒: 15 });
+    return J({});
+  };
+  const html = await ctx.viewDetail('A-1'); // 生产那一份详情页，不是抄本
+
+  const box = 现场(html);
+  for (const id of ['lv-step-t', 'lv-all-t']) {
+    const 表 = doc.getElementById(id);
+    assert.ok(表, `详情页没渲染出 ${id}——秒表格子不见了`);
+    表.childNodes[0].nodeValue = '02:17';           // 1s 计时器写进去的实时值
+    morph(box, html);                               // 服务端那份永远是占位 --:--
+    assert.equal(doc.getElementById(id), 表, `${id} 被 morph 重建了`);
+    assert.equal(表.childNodes[0].nodeValue, '02:17',
+      `${id} 被脉冲拨回了占位值——正是要件3 要防的闪（记号丢了，或 morph 那道 data-live 闸失灵）`);
+  }
 });
 
 /* ---- 五、morph 实弹：三态不丢是「根本没碰」，拿节点身份验（要件1）----
@@ -322,4 +440,38 @@ t('标签换了才真替换（span → div 这种结构变化不能糊过去）'
   assert.equal(w.childNodes[0].tagName, 'DIV');
 });
 
-console.log(`  —— ${passed} 项通过`);
+at('项目边界：一个项目里不许看见另一个项目的东西（2026-08-21 制作人指出）', async () => {
+  // 案源：制作人截图——页头写着「监制台 · TK」，工单页却摆着 TF 卡，项管页甘特混着全部项目。
+  // 病根有二：① tkL1 的 TF 卡条件写反了（看 TK 时露出 TF，总监当初当成「通往另一个项目的入口」）；
+  // ② viewRelay 刻意不过滤，注释还写着「跨项目（口径二）」——那是总监的判断，被制作人推翻。
+  // **判据换面（2026-08-22）**：这一组原本清一色 assert.ok(src.includes('某串字'))。
+  // 当日给管线层补空态时把 `${p === 'Ticketflow' ? tf : ''}` 挪进了一个中间变量——
+  // **行为一字未改，判据照红**；反过来，换个写法照样越界它也照绿。两头都不成立，故整组改真跑。
+  const ctx = 装载前端();
+
+  // ① TF 入口卡：只在身处 Ticketflow 时露出，不在别人的地盘上开后门
+  await 设项目(ctx, 'Ticketflow');
+  assert.match(ctx.tkL1([], []), /自维护/, '身处 Ticketflow 时 TF 卡要在');
+  await 设项目(ctx, 'TK');
+  assert.ok(!/自维护/.test(ctx.tkL1([], [])), 'TF 卡不许在 TK 视野里露出——那正是被指出的越界');
+
+  // ② 管线卡按项目过滤，且无章者归项目默认（projOf 口径）——原为 grep '.filter((x) => !p || projOf(x) === p)'
+  const 管线们 = [
+    { id: 'P-1', 名称: 'TK主线', 状态: '活跃', 项目: 'TK' },
+    { id: 'P-9', 名称: '别家管线', 状态: '活跃', 项目: 'Ticketflow' },
+    { id: 'P-0', 名称: '无章老线', 状态: '活跃' }, // 没写项目 ⇒ 归默认项目（夹具默认 TK）
+  ];
+  const h = ctx.tkL1(管线们, []);
+  assert.ok(h.includes('TK主线'), '本项目的管线卡没了');
+  assert.ok(!h.includes('别家管线'), '别的项目的管线卡露在 TK 的管线层上——正是被指出的越界');
+  assert.ok(h.includes('无章老线'),
+    '没写项目的老管线被一并滤掉了：它在 TK 看不见、在 TF 也看不见，比越界更糟（漏账）');
+
+  // ③ 项管页甘特/队列卡/未归属那一组，判据在 test/relay-scope.test.js（要连着 fetch 桩一起跑，
+  //    单跑一个渲染函数量不出「传没传项目参数」这件事），此处不再留同款文本断言。
+});
+
+(async () => {
+  for (const [名, f] of 异步) { await f(); passed++; console.log('  ✓ ' + 名); }
+  require('./helper').收尾('pulse', passed);
+})().catch((e) => { console.error('  ✗ ' + e.message); process.exit(1); });

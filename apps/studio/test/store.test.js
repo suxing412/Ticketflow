@@ -7,7 +7,7 @@ const { makeRoot, seed } = require('./helper');
 let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
 console.log('store 目录即状态机测试');
 
-t('ensureDirs 建齐 9 状态目录 + 回执 + journal', () => {
+t('ensureDirs 建齐全部状态目录（10 态）+ 回执 + journal', () => {
   const root = makeRoot();
   for (const s of store.STATES) assert.ok(fs.existsSync(store.stateDir(root, s)), s);
   assert.ok(fs.existsSync(require('path').join(root, '回执')));

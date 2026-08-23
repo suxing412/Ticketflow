@@ -36,13 +36,25 @@ function read(root) {
       try { journal(root, '台账主档读失败（' + e1.message + '），已用 .bak 副本回退'); } catch { /* 留痕失败不阻塞 */ }
       return { ...DEFAULT(), ...b };
     } catch {
+      // 退空账是**灾情**，不是一次读失败（2026-08-20 管理费 98.1 万 token/34 次归零案）：
+      // 原样只 journal 留痕，而 journal 是人读流水、没人盯，于是账在无声中被下一拍 update() 抹平。
+      // 判「是不是灾情」只看主档在不在：主档存在却读不出＝真账坏了；主档压根没有＝首写，正常。
+      // 留档 copy 失败不改变这个事实，故 退空 标记不挂在 copy 成功与否上（挂上去就等于「留不住痕就默默盖账」）。
+      const 有主档 = (() => { try { return fs.existsSync(STATE(root)); } catch { return false; } })();
+      if (!有主档) return DEFAULT();   // 首写/空仓：这条路必须原样活着
       try {
-        if (fs.existsSync(STATE(root))) {
-          fs.copyFileSync(STATE(root), STATE(root) + '.损毁-' + Date.now() + '.json');
-          journal(root, '台账主档与副本均不可读，退回空账（损毁现场已留档）');
-        }
+        fs.copyFileSync(STATE(root), STATE(root) + '.损毁-' + Date.now() + '.json');
+        journal(root, '台账主档与副本均不可读，退回空账（损毁现场已留档）');
       } catch { /* 留痕失败不阻塞 */ }
-      return DEFAULT();
+      // 收件箱是机器信道，急=需要行动；「台账损毁」不在 inbox.js 的噪声表里，拦不掉。
+      try {
+        require('../inbox').post(root, '急', '台账损毁',
+          '项管台账主档与副本均不可读，已退回空账并留档损毁现场——真账捞回来之前，记账一律改道 台账.json.待人裁，主档不动');
+      } catch { /* 信箱失败不阻塞记账 */ }
+      // 退空标记走不可枚举属性：老调用方一个字不用改，也不会被 JSON.stringify 写进盘。
+      const 空 = DEFAULT();
+      Object.defineProperty(空, '退空', { value: true, enumerable: false });
+      return 空;
     }
   }
 }
@@ -52,17 +64,28 @@ function journal(root, msg) { try { require('../journal').append(root, msg); } c
 function write(root, ledger) {
   fs.mkdirSync(DIR(root), { recursive: true });
   ledger.更新时间 = new Date().toISOString();
-  const tmp = STATE(root) + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(ledger, null, 2), 'utf8');
   // 写盘前留一份可解析的旧档做 .bak（600B 量级）；旧档已损毁则不覆盖现有 .bak
   try { JSON.parse(fs.readFileSync(STATE(root), 'utf8')); fs.copyFileSync(STATE(root), STATE(root) + '.bak'); } catch { /* 首写或旧档损毁：保留既有 .bak */ }
-  fs.renameSync(tmp, STATE(root));
+  // 走 core/durable：写 → **fsync** → 改名。**本案的原发现场就是这个文件**——
+  // 2026-08-21 查实它被写成 21918 字节全 NUL（大小正好等于坏前那版），管理费记账不可重算地丢了。
+  require('../core/durable').写JSON(STATE(root), ledger);
   return ledger;
 }
 
 function update(root, fn) {
   const l = read(root);
   fn(l);
+  // 退空门闩（2026-08-20 案）：read() 走过「双档不可读」分支时，l 是空账不是真账。
+  // 让它照常 write() 回主档，等于用 0 把真账永久盖掉——损毁档只留了坏内容，账目再也算不回来。
+  // 一次撕裂写 + 一拍 15 秒的巡检，就足够把账抹平，而全程零告警。
+  // 故：退空态下改道写 台账.json.待人裁，主档原样不动，等人拿损毁档把账捞回来。
+  // 注意门闩只认 退空 这一格——.bak 回退路径 read() 不打这个标记，那条路必须仍然活着。
+  if (l.退空) {
+    fs.mkdirSync(DIR(root), { recursive: true });
+    l.更新时间 = new Date().toISOString();
+    require('../core/durable').写JSON(STATE(root) + '.待人裁', l);
+    return l;
+  }
   return write(root, l);
 }
 
@@ -72,15 +95,60 @@ function event(root, 类型, data) {
   if (INBOX_TYPES[类型]) { try { require('../inbox').post(root, INBOX_TYPES[类型], 类型, JSON.stringify(data).slice(0, 200), data && data.父单 ? { 单号: data.父单 } : undefined); } catch { /* 信箱失败不阻塞记账 */ } }
   fs.mkdirSync(DIR(root), { recursive: true });
   const e = { t: new Date().toISOString(), 类型, ...(data || {}) };
+  // 追加前先确认上一行完整收尾（2026-08-21 体检：事件.jsonl 第 2728 行有 133 个前导 NUL）。
+  // 成因同「原子改名 ≠ 数据落盘」那一族：上次 append 的元数据落了盘、数据没落，断电后那段读出来是 NUL。
+  // **append-only 的文件中间坏一行，后面全部内容的可信度都要打折**——这条日志是项管台账的事实源。
+  // 补一个换行不改 jsonl 语义（空行读侧本来就过滤），却能保证新记录一定从行首开始。
+  try {
+    const st = fs.existsSync(EVENTS(root)) ? fs.statSync(EVENTS(root)) : null;
+    if (st && st.size > 0) {
+      const fd = fs.openSync(EVENTS(root), 'r');
+      const 末 = Buffer.alloc(1);
+      try { fs.readSync(fd, 末, 0, 1, st.size - 1); } finally { fs.closeSync(fd); }
+      if (末[0] !== 0x0a) fs.appendFileSync(EVENTS(root), '\n', 'utf8'); // 上次没写完，先收尾
+    }
+  } catch { /* 探测失败不阻塞记账——记不上账比记歪账更坏 */ }
   fs.appendFileSync(EVENTS(root), JSON.stringify(e) + '\n', 'utf8');
   return e;
 }
 
+// 读事件流。**坏行不静默丢**（2026-08-21 体检）：原样 `.filter(Boolean)` 把解析失败的整条抹掉，
+// 于是文件坏了一行、账少算一笔，而调用方一无所知。改为如实登记坏行数，供上层立债。
+// 返回仍是数组（老调用方一个字不用改），坏行数挂在不可枚举属性上——
+// 想知道的取得到，不想知道的不受影响；但**再没有「不知道」这个选项**。
 function events(root, limit = 200) {
   try {
     const lines = fs.readFileSync(EVENTS(root), 'utf8').split(/\r?\n/).filter(Boolean);
-    return lines.slice(-limit).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    let 坏行数 = 0;
+    const out = lines.slice(-limit).map((l) => {
+      try { return JSON.parse(l); } catch { 坏行数++; return null; }
+    }).filter(Boolean);
+    Object.defineProperty(out, '坏行数', { value: 坏行数, enumerable: false });
+    return out;
   } catch { return []; }
+}
+
+/**
+ * 事件流体检 —— 全量扫坏行与 NUL（不受 limit 限制）。给闸与巡检用，不进热路径。
+ * 案源：事件.jsonl 曾有一行 133 个前导 NUL，JSON 本体完好但整行被读侧静默跳过。
+ */
+function 事件流体检(root) {
+  try {
+    const buf = fs.readFileSync(EVENTS(root));
+    const 含NUL = buf.includes(0);
+    const lines = buf.toString('utf8').split(/\r?\n/).filter(Boolean);
+    const 坏行 = []; const 无类型 = [];
+    // 「解析得过」不等于「读得懂」（2026-08-22 亲历）：修那行 NUL 时我把整本账 latin1→utf8
+    // 重编码，3442 行的字段名全成了乱码（"类型" → "ç±»å"）。JSON.parse 一条不报错、
+    // NUL 一个没有，于是 **G17 全绿而账已经废了**——判据盯的是「读得出」，不是「读得懂」。
+    // event() 写的每条都带 类型：缺了它就是这行被谁改坏过。这是最便宜的可读性判据。
+    lines.forEach((l, i) => {
+      let o = null;
+      try { o = JSON.parse(l); } catch { 坏行.push(i + 1); return; }
+      if (!o || typeof o.类型 !== 'string') 无类型.push(i + 1);
+    });
+    return { 总行: lines.length, 坏行, 无类型, 含NUL };
+  } catch { return { 总行: 0, 坏行: [], 无类型: [], 含NUL: false }; }
 }
 
 // H69 评分仪表盘：三线评分寄生采集，append-only jsonl。定位=路由决策仪表盘，不接任何自动奖惩。
@@ -293,7 +361,7 @@ function 分桶(事件们, opts = {}) {
   };
 }
 
-module.exports = {
+module.exports = { 事件流体检,
   read, write, update, event, events, score, scores, DIR, DEFAULT,
   成本, 视图, 分桶, 回执token, 字段权威, 桶表, 桶序, 心跳桶, 其他桶, 终态, 容器类,
 };

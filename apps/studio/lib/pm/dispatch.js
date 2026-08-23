@@ -24,6 +24,10 @@ function depsDone(root, t) {
 
 // 就绪盘点：待投目录中 已放行 + 依赖就绪 的单（待投=九态下「待起」的物理家）
 function readySet(root, crit) {
+  // Q20 哨兵（案源 2026-08-18 伪单事故）：同号双态 = 事实源自相矛盾 → 全线熔断，一张都不派。
+  // 落在这里而不是 runner：readySet 是派发制唯一的就绪入口，堵住它就堵住整条派发路；
+  // 且巡检的零派发看门狗走同一函数，熔断期它读到空队列，不会再叠一条「该派没派」的误报。
+  if (require('../sentinel').熔断(root).熔断) return [];
   const out = [];
   for (const t of store.list(root, '待投')) {
     if (!t.fm.放行) continue;

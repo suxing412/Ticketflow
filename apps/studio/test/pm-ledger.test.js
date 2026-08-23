@@ -217,4 +217,67 @@ t('分桶是纯函数：不读盘不写盘（活体台账体积不因调用而�
   assert.equal(fs.statSync(path.join(L.DIR(root), '事件.jsonl')).size, 前);
 });
 
+
+// ---------------- ④ 坏行不静默丢（2026-08-21 事件.jsonl 第 2728 行 133 个 NUL 案）----------------
+t('坏行要被计数：NUL 半截行不许无声消失（events 报坏行数，体检点得出行号）', () => {
+  const root = makeRoot();
+  L.event(root, '派发', { id: 'K-1' });
+  const EV = path.join(L.DIR(root), '事件.jsonl');
+  // 复刻断电现场：133 个前导 NUL + 一条没写完的 JSON
+  fs.appendFileSync(EV, Buffer.concat([Buffer.alloc(133, 0),
+    Buffer.from('{"t":"2026-08-20T14:30:17.055Z","类型":"台账孤粒"' + String.fromCharCode(10), 'utf8')]));
+  L.event(root, '完成', { id: 'K-2' });
+  const out = L.events(root, 200);
+  assert.equal(out.length, 2, '两条好行照读');
+  assert.equal(out.坏行数, 1, '坏行必须计数——这一格是「账不可信」的唯一证据，丢了就回到静默吞');
+  const r = L.事件流体检(root);
+  assert.equal(r.总行, 3);
+  assert.deepEqual(r.坏行, [2], '体检要点出行号，不能只说「有坏行」');
+  assert.equal(r.含NUL, true, 'NUL 是断电写坏的物证');
+});
+
+// ---------------- ⑤ 退空账不许盖真账（2026-08-20 管理费 98.1 万 token/34 次归零案）------------
+t('双档不可读：退空账要喊人，且不许拿空账盖掉主档', () => {
+  const root = makeRoot();
+  const dir = path.join(root, '项管台账'); fs.mkdirSync(dir, { recursive: true });
+  const p = path.join(dir, '台账.json');
+  fs.writeFileSync(p, JSON.stringify({ 管理费: { token合计: 981000, 次数: 34 } }), 'utf8');
+  fs.copyFileSync(p, p + '.bak');
+  fs.writeFileSync(p, Buffer.alloc(200, 0));          // 撕裂写实测形态：全 NUL
+  fs.writeFileSync(p + '.bak', Buffer.alloc(200, 0)); // 副本同样坏 → 双档不可读
+  L.update(root, (l) => { l.管理费.token合计 += 100; l.管理费.次数 += 1; });  // 下一拍照常记账
+  let 盖了 = false;
+  try { 盖了 = JSON.parse(fs.readFileSync(p, 'utf8')).管理费.token合计 < 981000; } catch { 盖了 = false; } // 仍是 NUL＝没盖
+  assert.ok(!盖了, '主档不许被空账覆盖——盖了真账就再也算不回来（原样这里会变成 100）');
+  assert.ok(fs.existsSync(p + '.待人裁'), '退空态的写要改道到人能看见的落点，不能默默丢弃这一拍');
+  assert.equal(JSON.parse(fs.readFileSync(p + '.待人裁', 'utf8')).管理费.token合计, 100, '改道那份要如实是空账起算，供人比对');
+  assert.ok(fs.readdirSync(dir).some((f) => f.startsWith('台账.json.损毁-')), '损毁现场要留档，人靠它捞账');
+  const ibx = path.join(root, '呼叫', 'inbox.jsonl');
+  assert.ok(fs.existsSync(ibx), '退空账必须进收件箱——不喊人账就在无声中归零（原样这里根本没有这个文件）');
+  const 件 = fs.readFileSync(ibx, 'utf8').trim().split(String.fromCharCode(10)).filter(Boolean).map((l) => JSON.parse(l));
+  const 报 = 件.find((e) => e.类型 === '台账损毁');
+  assert.ok(报, '收件箱里要有 台账损毁 这一件');
+  assert.equal(报.级别, '急', '这是急件不是知会——降成常就会被淹在 377 条未读里');
+});
+
+t('单档损毁走 .bak 回退：真账要活着回来（防上一条修过头，把正常回退也堵死）', () => {
+  const root = makeRoot();
+  const dir = path.join(root, '项管台账'); fs.mkdirSync(dir, { recursive: true });
+  const p = path.join(dir, '台账.json');
+  fs.writeFileSync(p, JSON.stringify({ 管理费: { token合计: 981000, 次数: 34 } }), 'utf8');
+  fs.copyFileSync(p, p + '.bak');
+  fs.writeFileSync(p, Buffer.alloc(200, 0));   // 只坏主档，副本完好
+  L.update(root, (l) => { l.管理费.token合计 += 100; });
+  assert.equal(JSON.parse(fs.readFileSync(p, 'utf8')).管理费.token合计, 981100, '.bak 回退这条路不许被门闩误伤');
+  assert.ok(!fs.existsSync(p + '.待人裁'), '没退空就不该改道');
+});
+
+t('空仓首写不算退空：没有主档 ≠ 主档坏了（门闩不许把新仓库的第一笔账扣在 .待人裁）', () => {
+  const root = makeRoot();   // 项管台账/台账.json 压根不存在
+  L.update(root, (l) => { l.管理费.次数 += 1; });
+  const p = path.join(root, '项管台账', '台账.json');
+  assert.equal(JSON.parse(fs.readFileSync(p, 'utf8')).管理费.次数, 1, '首写必须落主档');
+  assert.ok(!fs.existsSync(p + '.待人裁'), '首写不是灾情，不许改道');
+  assert.ok(!fs.existsSync(path.join(root, '呼叫', 'inbox.jsonl')), '首写更不该往信箱里丢急件');
+});
 console.log(`全部通过：${passed} 项`);

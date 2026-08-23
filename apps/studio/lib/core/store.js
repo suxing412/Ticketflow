@@ -75,6 +75,29 @@ function snapshot(root) {
   return out;
 }
 
+// Q20 状态目录互斥哨兵的**取证半边**（案源 2026-08-18 伪单事故：制作人往「在途」目录里
+// 追加内容造出一张幻影单，同号在两个状态目录各住一份；派发引擎照单派 QA 去审那张近乎空的单，
+// 无判词、无限重试约 61 轮 ≈ 117 万 token）。
+// 病根在 find()：它按 STATES 顺序返回**第一命中**，同号双态时静默挑一个，链路全程无人喊停。
+// 本函数只报事实——纯读、不写、不抛（目录缺失按空算）；熔断与急件在 lib/sentinel.js。
+// 返回 [{ id, 状态: ['在途','完成'] }]，按单号排序；无冲突返回 []。
+function 双态(root) {
+  const 表 = new Map();
+  for (const s of STATES) {
+    let files;
+    try { files = fs.readdirSync(stateDir(root, s)); } catch { continue; } // 目录不存在=该状态无单
+    for (const f of files) {
+      if (!f.endsWith('.md')) continue; // .claiming 抢占中间态不算（move 的原子占位）
+      const id = f.replace(/\.md$/, '');
+      if (!表.has(id)) 表.set(id, []);
+      表.get(id).push(s);
+    }
+  }
+  const out = [];
+  for (const [id, 状态] of 表) if (状态.length > 1) out.push({ id, 状态 });
+  return out.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+}
+
 function isLegal(from, to) {
   return TRANSITIONS[from] && TRANSITIONS[from].includes(to);
 }
@@ -136,5 +159,5 @@ function create(root, id, fm, body) {
 module.exports = {
   STATES, TERMINAL, TRANSITIONS,
   stateDir, ticketPath, ensureDirs, parse, serialize,
-  find, list, snapshot, isLegal, move, update, create,
+  find, list, snapshot, isLegal, move, update, create, 双态,
 };

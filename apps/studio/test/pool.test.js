@@ -1,4 +1,6 @@
 // pool.test.js — 拉取制：排序/职能匹配/在途上限/一人一张/依赖/原子领单
+// 外呼绊线必须排在任何 lib/ 之前：lib/quota.js 在加载那一刻就把 child_process 解构走了（体检 #71）
+const 绊线 = require('./外呼绊线'); 绊线.装绊线();
 const assert = require('node:assert');
 const pool = require('../lib/pool');
 const store = require('../lib/core/store');

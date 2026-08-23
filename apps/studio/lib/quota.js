@@ -164,9 +164,9 @@ function refreshClaudeToken(oauth) {
         cred.claudeAiOauth = { ...cred.claudeAiOauth, accessToken: d.access_token,
           refreshToken: d.refresh_token || oauth.refreshToken,
           expiresAt: Date.now() + (Number(d.expires_in) > 0 ? Number(d.expires_in) * 1000 : 3600000) };
-        const tmp = CRED_PATH + '.tmp';
-        fs.writeFileSync(tmp, JSON.stringify(cred), 'utf8');
-        fs.renameSync(tmp, CRED_PATH);
+        // 走 core/durable：写 → fsync → 改名。凭据被断电写成 NUL 的后果是**下次开机登不上**，
+        // 比台账丢账更急（2026-08-21 台账 21918 字节全 NUL 案同族）。
+        require('./core/durable').写(CRED_PATH, JSON.stringify(cred));
         resolve(cred.claudeAiOauth.accessToken);
       } catch { resolve(null); }
     });

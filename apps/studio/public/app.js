@@ -101,7 +101,7 @@ function shell(active, inner) {
   const p = projActive();
   return `<div class="topbar">
       <div class="tleft"><a class="logohome" href="#/hub" title="回项目启动页"><img class="logo" src="favicon.ico" alt="监制台"/></a><div>
-        <h1>监制台${p ? ` · ${esc(p)}` : ''}</h1><p class="tagline">工单 · 审检 · 决策台——制作人的驾驶舱：你拍板与放行，系统派发执行（H49）</p></div></div>
+        <h1>监制台${p ? ` · ${esc(p)}` : ''}</h1><p class="tagline">工单 · 审检 · 验收——制作人的驾驶舱：你拍板与放行，系统派发执行（H49）</p></div></div>
       <div class="tright"><div class="searchbox"><input id="gsearch" placeholder="搜索工单 编号 / 标题" autocomplete="off" oninput="gSearch(this.value)" onfocus="gSearch(this.value)" onkeydown="gEnter(event)"/><div id="gsr" class="gsr"></div></div>
         <a class="gear" href="#/params" title="全局参数与额度（单项目不经启动页也能到）">⚙</a></div></div>
     <nav class="snav">${tabs}</nav>
@@ -143,15 +143,32 @@ function buildTree(all) {
 async function viewHub() {
   const cfg = await loadCfg(true);
   const names = projNames();
-  const d = await api('/api/board');
+  // 债的判据只有一处：等我()（/api/attn）。**不许在这里按工单状态另算一遍**——
+  // 那正是 08-21 撤决策台时判死的那条轴：专项关账、投池放行、值守断更都不是工单状态，
+  // 它结构上看不见。实测同一时刻本页两张卡都写「安好」，而 /api/attn 报 5 笔债、3 笔逾期
+  // （含一笔停 47.9 小时）。取不到就退化成「读数中」，**不许拿旧轴顶上冒充安好**。
+  const [d, attn] = await Promise.all([api('/api/board'), api('/api/attn').catch(() => null)]);
   const raw = []; for (const s of d.states) for (const t of d.board[s]) raw.push({ ...t, state: s });
   const reg = (cfg.项目 && cfg.项目.注册) || {};
   const def = projDefault();
   const cnt = (arr, ...sts) => arr.filter((t) => sts.includes(t.state)).length;
+  // 债的 id → 项目：工单号带前缀（TK-9 / TF-1），照注册表的 单号前缀 反查；查不到即非本类实体
+  const 前缀表 = Object.entries(reg).map(([名, v]) => [String((v && v.单号前缀) || 名), 名]);
+  const 归项目 = (id) => { const m = String(id).match(/^([A-Za-z]+)-/); if (!m) return null;
+    const hit = 前缀表.find(([px]) => px === m[1]); return hit ? hit[1] : null; };
   const cards = names.map((n) => {
     const a = raw.filter((t) => projOf(t) === n);
-    const need = cnt(a, '待验收') + cnt(a, '待定夺');
-    const counts = [['在途', cnt(a, '在途', '质检'), ''], ['在池', cnt(a, '池'), ''], ['待验收', cnt(a, '待验收'), ''],
+    // 债按项目归：工单号带项目前缀（TK-n / TF-n），非工单实体（专项 S-n、待办 uuid、值守）
+    // 走它自己的 项目 字段；两者都判不出的算全局，不摊到任一项目头上（宁可少报也不错报到别人账上）。
+    const 本项目债 = attn && Array.isArray(attn.债)
+      ? attn.债.filter((x) => (x.项目 ? String(x.项目) === n : 归项目(String(x.id)) === n))
+      : null;
+    const need = 本项目债 ? 本项目债.length : null;
+    const 逾 = 本项目债 && attn.逾期阈值小时 != null
+      ? 本项目债.filter((x) => x.停摆小时 != null && x.停摆小时 >= attn.逾期阈值小时).length : 0;
+    // 待投这一栏 2026-08-22 补：G1「投池放行」的落点就是它，卡上没有这个数，
+    // 「需处理 N」里那笔投池债在项目卡上就找不到对应的去处。
+    const counts = [['在途', cnt(a, '在途', '质检'), ''], ['在池', cnt(a, '池'), ''], ['待投', cnt(a, '待投'), ''], ['待验收', cnt(a, '待验收'), ''],
       ['待定夺', cnt(a, '待定夺'), 'err'], ['失败', cnt(a, '执行失败'), 'err']];
     const eng = reg[n] && reg[n].引擎;
     // H-2 零值灰显 / H-3 键盘可达（2026-08-06 UI 评审 hub 页）
@@ -159,7 +176,8 @@ async function viewHub() {
         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();enterProj('${esc(n)}')}">
       <div class="hn"><b>${esc(n)}</b>${n === def ? '<span class="pill sm mut">默认</span>' : ''}
         ${eng ? `<span class="pill sm mut" title="引擎档案（探针按此自检）">${esc(eng.类型)}${eng.版本 ? ' ' + esc(eng.版本) : ''}</span>` : ''}
-        ${need ? `<span class="pill sm red">需处理 ${need}</span>` : '<span class="pill sm ok">安好</span>'}</div>
+        ${need == null ? '<span class="pill sm mut">债读数中</span>'
+          : (need ? `<span class="pill sm red">需处理 ${need}${逾 ? ` · 逾期 ${逾}` : ''}</span>` : '<span class="pill sm ok">安好</span>')}</div>
       <div class="hpath mono" title="${esc((reg[n] && reg[n].路径) || '')}">${esc((reg[n] && reg[n].路径) || '')}</div>
       ${reg[n] && reg[n].说明 ? `<div class="hnote">${esc(reg[n].说明)}</div>` : ''}
       <div class="hcounts">${counts.map(([l, v, c]) => `<span class="hc"><i class="${v ? (c || '') : 'z'}">${v}</i>${l}</span>`).join('')}</div>
@@ -296,7 +314,7 @@ function ovRunHtml(ag) {
   }).join('')}</div>`;
 }
 async function viewOverview() {
-  const [{ all, board }, jn, ag, attn] = await Promise.all([loadBoard(), api('/api/journal').catch(() => ({})), api('/api/agents').catch(() => ({})), api('/api/attn').catch(() => null)]);
+  const [{ all, board }, jn, ag, attn] = await Promise.all([loadBoard(), api('/api/journal').catch(() => null), api('/api/agents').catch(() => ({})), api('/api/attn').catch(() => null)]);
   const n = (s) => (board[s] || []).length;
   const groups = [['在途', n('在途') + n('质检'), ''], ['待验收', n('待验收'), ''], ['待定夺', n('待定夺'), n('待定夺') ? 'err' : ''], ['在池', n('池'), ''], ['待投', n('待投'), '']];
   const strip = groups.map(([l, v, c], i) => `${i ? '<div class="vdiv"></div>' : ''}<div class="grp"><span class="lbl">${l}</span><span class="num ${c}">${v}</span></div>`).join('');
@@ -310,21 +328,47 @@ async function viewOverview() {
         id: x.id, title: x.title, k: x.闸名,
         note: x.停摆小时 == null ? x.落点 : `已停 ${x.停摆小时 < 24 ? x.停摆小时 + ' 小时' : Math.round(x.停摆小时 / 24 * 10) / 10 + ' 天'} · ${x.落点}`,
         逾期: attn.逾期阈值小时 != null && x.停摆小时 != null && x.停摆小时 >= attn.逾期阈值小时,
-        到: /^[A-Z]-\d+$/.test(String(x.id)) ? `#/tickets` : `#/t/${x.id}`,
+        // 读注册表下发的**路由**，不按 id 形状猜（2026-08-21 体检）。
+        // 原样是 `/^[A-Z]-\d+$/.test(id) ? '#/tickets' : '#/t/'+id` —— 想法（I-xxx）、
+        // 待办（uuid）、wiki（名称）全都不匹配，一律跳 `#/t/<非工单号>`，服务端明确回「工单不存在」。
+        // 而同一段注释上面就写着「点击按注册表落点直达」——注册表逐闸写好的落点从没参与过路由。
+        // 现网那几条恰好空队列，属潜伏未爆：**空队列不是没病，是还没轮到它**。
+        到: x.路由 || (/^[A-Z]+-\d+$/.test(String(x.id)) ? `#/t/${x.id}` : '#/'),
       }))
     : [
       ...(board['待验收'] || []).map((t) => ({ ...t, k: '待验收', note: t.验收方式 === '保留' ? '保留 · 待品味终审' : '委托 · 核查可代签', 到: `#/t/${t.id}` })),
       ...(board['待定夺'] || []).map((t) => ({ ...t, k: '待定夺', note: 'QA 未过，四件套已备', 到: `#/t/${t.id}` })),
     ];
+  // 值守区（2026-08-22 体检 #9/#31）：闸注册表 G13/G14/G15/G16/G17 五条的落点都写着「总览 · 值守」，
+  // 而总览从来没有这块区，这几笔又被上面那道「归属 !== 总监」滤掉——**注册表指着一个不存在的门牌**。
+  // 实测停最久的两笔（G14 停 274h、G13 停 243h）在七个页签里一个像素都没有。
+  // 这里把门牌兑现，同时守住老纪律：总监的债折叠着放在制作人的收件箱**之下**，不抢第一屏。
+  // 上面那道 归属 !== '总监' 保持不动：两块互补、不重不漏，「需你处理 N」永远只数制作人的。
+  const 值守停文 = (h) => (h == null ? '' : h < 24 ? h + ' 小时' : Math.round(h / 24 * 10) / 10 + ' 天');
+  const 值守逾 = (x) => !!(attn && attn.逾期阈值小时 != null && x.停摆小时 != null && x.停摆小时 >= attn.逾期阈值小时);
+  const 值守债 = (attn && Array.isArray(attn.债)) ? attn.债.filter((x) => x.归属 === '总监') : [];
+  const 值守逾数 = 值守债.filter(值守逾).length;
+  const 值守Html = !值守债.length ? '' : `<div class="sec-h" style="margin-top:28px"><h3 class="h17">值守</h3>
+      <span class="subnote">${值守债.length} 项归总监${值守逾数 ? ` · 逾期 ${值守逾数}` : ''}——不占你的版面，但不许消失</span></div>
+    <details class="ovwatch card r14"${值守逾数 ? ' open' : ''}>
+      <summary>总监自己的债 ${值守债.length} 笔${值守逾数 ? `（逾期 ${值守逾数}）` : ''} · 点开看</summary>
+      ${值守债.map((x) => `<div class="inbox-row card${值守逾(x) ? ' od' : ''}" onclick="location.hash='${esc(x.路由 || '#/')}'" tabindex="0" role="button"
+        onkeydown="if(event.key==='Enter'){location.hash='${esc(x.路由 || '#/')}'}">
+        <span class="rid">${esc(x.id)}</span><span class="rt clamp2" title="${esc(x.title)}">${esc(x.title)}</span>
+        <span class="rnote">${esc((值守停文(x.停摆小时) ? '已停 ' + 值守停文(x.停摆小时) + ' · ' : '') + (x.按钮 || x.落点 || ''))}</span>
+        ${stPill(x.闸名)}</div>`).join('')}</details>`;
   const inboxHtml = inbox.map((r) => `<div class="inbox-row card${r.逾期 ? ' od' : ''}" onclick="location.hash='${esc(r.到)}'" tabindex="0" role="button"
       onkeydown="if(event.key==='Enter'){location.hash='${esc(r.到)}'}">
       <span class="rid">${esc(r.id)}</span><span class="rt clamp2" title="${esc(r.title)}">${esc(r.title)}</span><span class="rnote">${esc(r.note)}</span>
       ${stPill(r.k)}</div>`).join('')
     || `<p class="dim">你不欠任何签字——改造后这句话第一次是可证的（服务端逐闸扫过）${n('待投') ? `；<a href="#/board" style="color:var(--accent-ink)">待投区还有 ${n('待投')} 张可放行 →</a>` : ''}</p>`;
   // 池首投放建议已随拉取制退役（0.24.7 视图清仓）
-  const lines = (jn.lines || []).slice(-5).reverse();
+  // 判**正形**不判 null（2026-08-22 体检 #66）：api() 不看 res.ok，ready() 的 500 也带合法 JSON 体，
+  // catch 压根不触发——只把兜底换成 null 会落成一个跑绿却漏一半的假修。
+  const 动态可读 = !!(jn && Array.isArray(jn.lines));
+  const lines = (动态可读 ? jn.lines : []).slice(-5).reverse();
   const logHtml = lines.map((l) => { const m = String(l).match(/^\[([\d-]+ )?([\d:]{5})[^\]]*\]\s*(.*)$/); const tm = m ? m[2] : ''; const tx = m ? m[3] : String(l);
-    const cls = /锁|超|告警|打回/.test(tx) ? 'err' : /通过|完成|验收/.test(tx) ? 'okc' : ''; return `<div class="logrow"><time>${esc(tm)}</time><span class="${cls}" title="${esc(tx)}">${esc(tx.slice(0, 56))}</span></div>`; }).join('') || '<p class="dim">无动态</p>';
+    const cls = /锁|超|告警|打回/.test(tx) ? 'err' : /通过|完成|验收/.test(tx) ? 'okc' : ''; return `<div class="logrow"><time>${esc(tm)}</time><span class="${cls}" title="${esc(tx)}">${esc(tx.slice(0, 56))}</span></div>`; }).join('') || (动态可读 ? '<p class="dim">无动态</p>' : '<p class="dim">读不到 journal（/api/journal 不可达或返回异常）——这不是「没有动态」</p>');
   // 额度卡按池实际窗口画杆（施工令-010）：窗口清单由 /api/gates 直供（lib/gates.poolLock.窗口），
   // claude 双窗画 5小时+周，codex 现实只有周窗就只画一条周条——旧样写死两杆，codex 那条空的
   // 「5h ··」既误导又占版面。周额度烧穿是灾难级，周条永远在。陈旧读数带时间戳。
@@ -402,6 +446,7 @@ async function viewOverview() {
       <div class="sec-h"><h3 class="h17">需你处理</h3><span class="subnote">${inbox.length} 项待你决定</span></div>
       ${inboxHtml}
       <div id="ov-sched"></div>
+      ${值守Html}
       <div class="sec-h" style="margin-top:28px"><span class="subnote" style="font-weight:500">派发窗（H49）</span></div>
       ${ovRunHtml(ag)}
       <div class="suggest card">${n('待投') ? `<div style="font-size:13px">待投区 <b>${n('待投')}</b> 单——依赖就绪且已放行的会被自动派发</div>
@@ -477,11 +522,12 @@ window.boardFold = (s) => {
 };
 // 看板 = **流转面**（谁在哪一态）。2026-08-20 制作人裁定：完成/已归档两列整体移出——
 // 「看板页非常麻烦，有很多竖列……并且已完成堆了一百多单，真的找起来也很麻烦」。
-// 落袋即离开看板，故这一页永不堆积；要找做完的去报表页（可搜可筛可按耗时排序）。
+// 落袋即离开看板，故这一页永不堆积；要找做完的去报表页。
+// （原写「可搜可筛可按耗时排序」——报表页那三样一样都没有，2026-08-21 体检查实后改口。）
 // 归属结构去工单页看（管线→特性→专项→工单），两页分工不重叠。
 const BOARD_OUT = new Set(['完成', '已归档']);
 async function viewBoard() {
-  const { states: 全态, board } = await loadBoard();
+  const { states: 全态, board, raw } = await loadBoard();
   const states = 全态.filter((s) => !BOARD_OUT.has(s));
   const conf = await api('/api/config').catch(() => ({ 闸值: {} }));
   const widths = { 池: 'w168', 在途: 'w168', 待验收: 'w168', 执行失败: 'w128', 完成: 'w128', 已归档: 'w128' };
@@ -513,9 +559,12 @@ async function viewBoard() {
   const fillBar = async () => {
     const g = await api('/api/gates'); gateCache = g;
     const gb = $('gatebar-slot');
-    if (gb) { const key = JSON.stringify([g.paused, g.locks.codex, g.locks.claude, g.推荐 && g.推荐.推荐]);
+    if (gb) { const key = JSON.stringify([g.paused, g.locks.codex, g.locks.claude]); // 推荐 已随 D28 退役，服务端不再下发
       if (gb.dataset.k !== key) { gb.dataset.k = key; gb.innerHTML = gatebarHtml(g); } }
-    const bn = $('backlogN'); if (bn) bn.textContent = `${(board['待验收'] || []).length} / ${conf.闸值?.待验收积压闸 ?? 8}`;
+    // 分子分母同尺（2026-08-22 体检 #65）：闸在 lib/recommend.js 按**全局** store.list('待验收') 数，
+    // 这里原先拿项目过滤后的 board 去比它——TK 显 3/8 而实况 7/8，读数系统性低估离闸距离。
+    // 不改成「都按项目」：config 没有 per-project 闸值，UI 项目化会与真正生效的闸彻底两套尺。
+    const bn = $('backlogN'); if (bn) bn.textContent = `${raw.filter((t) => t.state === '待验收').length} / ${conf.闸值?.待验收积压闸 ?? 8}`;
   };
   setTimeout(() => { fillBar().catch(() => { const gb = $('gatebar-slot'); if (gb && gateCache) gb.innerHTML = gatebarHtml(gateCache); }); }, 0);
   pollLoop('gatebar-slot', 5000, fillBar); // 额度/闸门读数活体刷新（变了才重画）
@@ -547,7 +596,7 @@ async function viewBoard() {
   return `<div id="gatebar-slot">${gatebarHtml(gateCache)}</div><div class="board2" id="board2">${cols}</div>
     <div class="hsync" id="hsync"><div id="hsync-w" style="height:1px"></div></div>
     <div class="bdone subnote">看板只留活态——落袋即离开，这一页永不堆积。
-      已完成 ${落} · 已归档 ${档} 去 <a href="#/report">报表</a> 查（可搜可筛可按耗时排序）；
+      已完成 ${落} · 已归档 ${档} 去 <a href="#/report">报表</a> 查明细与消耗；
       要看归属结构（管线→特性→专项）去 <a href="#/tickets">工单</a>。</div>`;
 }
 
@@ -707,7 +756,7 @@ async function viewFlow() {
   const planBar = (c) => `<div class="fgbar queue plan" onclick="${计划点击(c)}" tabindex="0" role="button"
       onkeydown="if(event.key==='Enter'){${计划点击(c)}}" title="${esc(c.提示)}"
       aria-label="计划粒 ${esc(c.题)}（尚未成单）">
-      <span class="id">${esc(c.批)}${c.序 ? '·' + c.序 : ''}</span><span class="t">${esc(c.题)}</span>
+      <span class="id">${esc(上级名(c.上级))}${c.序 ? '·' + c.序 : ''}</span><span class="t">${esc(c.题)}</span>
       <span class="plb">${esc(c.徽章)}</span>
       <span class="st">${c.预估单元 != null ? esc(c.预估单元 + ' 单元') : '无预估'}</span></div>`;
   window._fgPlan = {};
@@ -859,7 +908,7 @@ window.fgDrawer = (key, cat) => {
       <span class="why">${esc(cur === 'susp' ? '挂起 · 原位冻结' : (t.why || t.state))}</span></a>`).join('')
     + (list.length > 60 ? `<span class="dim" style="font-size:11px;padding:4px 10px">…还有 ${list.length - 60} 单</span>` : '');
   box.className = 'fgdrawer open ' + cur;
-  box.innerHTML = `<div class="fgdh">${esc(名)} · ${list.length} 单${cur === 'susp' ? '（挂起=原位冻结，全链路跳过；解挂在详情页/决策台）' : ''}</div><div class="fgdl">${rows}</div>`;
+  box.innerHTML = `<div class="fgdh">${esc(名)} · ${list.length} 单${cur === 'susp' ? '（挂起=原位冻结，全链路跳过；解挂在工单详情页）' : ''}</div><div class="fgdl">${rows}</div>`;
 };
 
 /* ===== 批分组折叠（原 P12b 队列页 · 施工令-042 §一 → 2026-08-20 并入项管页「待办队列」）=====
@@ -1066,12 +1115,20 @@ function viewAgentsDispatch(d, all) {
       const ce = $('agc-' + r.id); if (ce) ce.classList.toggle('noagent', r.有会话 === false); // 会话起来了就退出「卡住」形态
     }
   });
-  const busyBanner = (d.编辑器占用||[]).length ? `<div class="r14" style="padding:10px 16px;margin-top:16px;background:var(--gatebg);border:1px solid var(--gateln);color:var(--gatetx)"><b>编辑器锁已关（验收中）</b> · 项目 ${d.编辑器占用.map(esc).join('、')} 派发挂起——制作人用完关闭编辑器即自动开锁（H64），或在本页顶部开锁</div>` : '';
+  // 锁按项目过滤（2026-08-21 体检）：本页是按项目过滤的，横幅却报全部被锁项目——
+  // 于是在 Ticketflow 视野里会看见「TK 派发挂起」，而 TK 的活这一页上一条也没有。
+  // 本项目名下的锁才是这一页的事；别的项目被锁另起一行说明，不混进主横幅。
+  const 本项目 = projActive() || projDefault();
+  const 全锁 = d.编辑器占用 || [];
+  const 本锁 = 全锁.filter((n) => n === 本项目);
+  const 他锁 = 全锁.filter((n) => n !== 本项目);
+  const busyBanner = (本锁.length ? `<div class="r14" style="padding:10px 16px;margin-top:16px;background:var(--gatebg);border:1px solid var(--gateln);color:var(--gatetx)"><b>编辑器锁已关（验收中）</b> · 项目 ${本锁.map(esc).join('、')} 派发挂起——用完关闭编辑器即自动开锁（H64），或在本页顶部开锁</div>` : '')
+    + (他锁.length ? `<p class="subnote" style="margin-top:8px">另有项目 ${他锁.map(esc).join('、')} 的编辑器锁也关着（不影响本项目派发）</p>` : '');
   // H64 编辑器锁迁来在途页（2026-08-20，施工令-061 四·3 孤儿闸安家）。
   // 原落决策台（2026-08-05 制作人指正「锁属验收流程」），但决策台按定案要撤；
   // 且占用本就发生在这一页——原先在途页只有只读横幅写着「或在本页顶部开锁」，
   // 看见了却得跳一页才按得动，是白白多一跳。锁的语义没变，只是回到发生地。
-  const 锁定 = (d.编辑器占用 || []).length > 0;
+  const 锁定 = 本锁.length > 0; // 按钮态看**本项目**的锁，不看别人的
   const lockCard = `<div class="card r14" style="padding:12px 16px;margin-top:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <b style="font-size:13px">编辑器锁</b>
       <button class="btn h32 ${锁定 ? 'accent' : 'primary'}" onclick="editorLock(${锁定 ? 'false' : 'true'})"
@@ -1258,16 +1315,23 @@ function pmLedgerCard(L) {
     const tk = typeof c === 'object' ? (c.token合计 ?? c.tokens ?? 0) : c;
     return '<tr><td class="mono">' + esc(pid) + '</td><td style="text-align:right">' + Number(tk).toLocaleString() + '</td></tr>';
   }).join('') || '<tr><td colspan="2" class="dim">暂无归集</td></tr>';
-  return '<div class="rp-card card r14"><h4>项目管理台账<span class="subnote" style="margin-left:10px">管理费 '
+  return '<div class="rp-card card r14"><h4>项目管理台账 · 全工作室<span class="subnote" style="margin-left:10px">管理费 '
     + Number(fee.token合计 || 0).toLocaleString() + ' tk · ' + (fee.次数 || 0) + ' 次 · 并发 ' + caps + '</span></h4>'
     + '<table class="rp-t"><tr><th>专项成本归集</th><th style="text-align:right">tokens</th></tr>' + costRows + '</table></div>';
 }
 async function viewReport() {
-  const [d, , pl, sc] = await Promise.all([api('/api/report'), loadCfg(), api('/api/pm/ledger').catch(() => null), api('/api/scores').catch(() => null)]);
+  await loadCfg(); // 先拿配置，projActive() 依赖它（前端过滤已下放服务端，参数得先备好）
+  const p0 = projActive();
+  const [d, pl, sc] = await Promise.all([
+    // 项目切分在**服务端**（2026-08-21 体检）：原样是服务端全量、前端只切明细一处，
+    // 于是顶栏 8 个读数、按职能、按池、每日全是全工作室的，而页头写着「监制台 · Ticketflow」；
+    // 同一段注释还自称「明细/分组按项目过滤」。切在源头，此后所有读数同源，不会再有两把尺。
+    api('/api/report' + (p0 ? '?' + encodeURIComponent('项目') + '=' + encodeURIComponent(p0) : '')),
+    api('/api/pm/ledger').catch(() => null), api('/api/scores').catch(() => null),
+  ]);
   const dispatch = !!(_cfg && _cfg.执行器 && _cfg.执行器.派发制);
-  const p = projActive();
-  // D42 项目语境：明细/分组按项目过滤（服务端全量，客户端切片——报表数据量小）
-  const rows = p ? d.明细.filter((r) => (r.项目 || projDefault()) === p) : d.明细;
+  const p = p0;
+  const rows = d.明细;
   const o = d.总览;
   const stat = (l, v, c) => `<div class="grp"><span class="lbl">${l}</span><span class="num ${c || ''}">${v}</span></div>`;
   const strip = [
@@ -1277,7 +1341,7 @@ async function viewReport() {
     stat('核查 过/不过', o.代核通过 + '/' + o.代核不过),
     stat('仲裁 向/呈', o.代裁给方向 + '/' + o.代裁上呈),
     stat('token(agent自报)', o.token估计合计 ? o.token估计合计.toLocaleString() : '—'),
-    ...(dispatch && pl && pl.台账 && pl.台账.管理费 ? [stat('管理费(项管)', (pl.台账.管理费.token合计 || 0).toLocaleString() + ' tk·' + (pl.台账.管理费.次数 || 0) + '次')] : []),
+    ...(dispatch && pl && pl.台账 && pl.台账.管理费 ? [stat('管理费(项管·全工作室)', (pl.台账.管理费.token合计 || 0).toLocaleString() + ' tk·' + (pl.台账.管理费.次数 || 0) + '次')] : []),
   ].join('<div class="vdiv"></div>');
   // 报表口径混排修（施工令-044 F4 · 巡礼）：「按职能」表的项管行原先把 token 数塞进「均 h」列
   // （"1,385,033 tk" 与同列的 "2.4"（小时）同列而居），一列两种量纲，读表的人得逐格辨认单位。
@@ -1286,8 +1350,8 @@ async function viewReport() {
   const 项管行 = (L) => {
     const f = L.管理费 || {};
     const tk = (f.token合计 || 0).toLocaleString();
-    return { 名: '项目管理', 单数: f.次数 || 0, 实际h合计: '—', 平均h: '—', 自修合计: 0,
-      提示: `项目管理（项管自身开销）：${f.次数 || 0} 次 · ${tk} tokens —— 按次计，不产生工时。明细见「项目管理台账」卡。` };
+    return { 名: '项目管理（全工作室）', 单数: f.次数 || 0, 实际h合计: '—', 平均h: '—', 自修合计: 0,
+      提示: `项目管理（项管自身开销 · **全工作室口径，未按项目切**）：${f.次数 || 0} 次 · ${tk} tokens —— 按次计，不产生工时。明细见「项目管理台账」卡。` };
   };
   const gtable = (title, rows2, note) => `<div class="rp-card card r14"><h4>${title}<span class="subnote" style="margin-left:10px">${note || ''}</span></h4>
     <table class="rp-t"><tr><th></th><th>单数</th><th>合计h</th><th>均h</th><th>自修</th></tr>
@@ -1307,24 +1371,29 @@ async function viewReport() {
     dispatch && pl && pl.台账 ? '项目管理行按次计，不计工时——它的 token 归项目管理台账' : '')}${dispatch ? costRankTable(rows) : gtable('按主办', d.按主办)}${dispatch && pl && pl.台账 ? pmLedgerCard(pl.台账) : ''}${gtable('按执行池', d.按池, '订阅额度去向')}${scoreCard(sc)}</div>
       <div><div class="rp-card card r14"><h4>每日交付<span class="subnote" style="margin-left:10px">近 14 天</span></h4>
         <div class="rp-days">${daysHtml}</div></div>
-        ${gtable('按项目', d.按项目)}</div>
+        ${gtable(p ? `按项目（当前语境：${p}）` : '按项目（全工作室）', d.按项目)}</div>
     </div>
     <div class="rp-card card r14" style="margin-top:20px"><h4>工单明细${p ? `<span class="subnote" style="margin-left:10px">项目 ${esc(p)}</span>` : ''}</h4>
       <div class="rp-scroll"><table class="rp-t"><tr><th>编号</th><th>职能</th><th>阶段</th><th>预计</th><th>实际</th><th>偏差</th><th>自修</th><th>agent 自报消耗</th></tr>${detail || '<tr><td colspan="8" class="dim">无数据</td></tr>'}</table></div>
-      <p class="subnote" style="margin-top:10px">实际=交付-领单的墙钟时长 · token 为 agent 回执自报（参考值）· 点行进详情</p></div>`;
+      <p class="subnote" style="margin-top:10px">本表 ${Math.min(40, rows.length)} 行${
+        rows.length > 40 ? `（明细共 ${rows.length} 条，只画最近 40 条）` : ''}${
+        d.明细满 ? ' · 服务端上限 100 条，更早的未取' : ''} · 实际=交付-领单的墙钟时长 · token 为 agent 回执自报（参考值）· 点行进详情</p></div>`;
 }
 
 /* ===== P6 参数与额度 =====
    铁律：视图保持渲染——首屏立即画（额度先占位后原地填），调参只原地改数字，绝不整页重载 */
-const P6META = { 全局在途上限: '同时最多 N 张在途', 待验收积压闸: '≥N 停止建议投放', QA自修上限: '轮，超则上交四件套', 滞留超时小时: '小时，超则告警（不自动撤回）',
-  速度窗口小时: '统计处理速度的回看窗口 N 小时', 每档处理数: '窗口内每处理 N 项决策，推荐 +1',
+// P6META 是**说明表**，不是闸门（2026-08-22 体检 #70）：它天然是写口白名单的超集
+// （执行器/额度那几格根本不走 /api/config/gate）。三格死键同批清掉：
+// 全局在途上限＝0.23.11 拉取制退役、速度窗口小时/每档处理数＝D28 推荐在途退役（#58）。
+const P6META = { 待验收积压闸: '≥N 停止建议投放', QA自修上限: '轮，超则上交四件套', 滞留超时小时: '小时，超则告警（不自动撤回）',
+  人闸超时小时: '小时，人闸停摆超 N 小时即标逾期并升格急件（0=关闭升格）',
   间隔秒: '每 N 秒扫一轮（派发+起执行）', 执行超时分钟: 'N 分钟到点先验尸：仍在进展续命，停滞才树杀（硬顶 3N，H63）', 记账间隔分钟: '每 N 分钟自动 git 落袋（0=关）',
   额度刷新秒: '两次额度请求最小间隔 N 秒（防限流硬保证）' };
 // 模型档空值文案：不是所有档留空都等于「CLI 默认」——代裁留空是跟核查档走
 // （runner.modelOf：代裁 → 仲裁 || 代裁 || 核查 || 代核 || claude默认）。下拉与旁注必须同一口径（施工令-006）
 const MEMPTY = { 代裁: '跟核查档' };
 const mEmptyLbl = (key) => MEMPTY[key] || 'CLI 默认';
-const P6NAMES = { 滞留超时小时: '滞留超时', 速度窗口小时: '速度窗口', 每档处理数: '每档处理数',
+const P6NAMES = { 滞留超时小时: '滞留超时', 人闸超时小时: '人闸超时',
   间隔秒: '扫池间隔', 执行超时分钟: '执行超时', 记账间隔分钟: '记账间隔', 额度刷新秒: '额度刷新间隔' };
 // 额度双池卡。口径纪律（施工令-006）：每个窗口只跟管得着它的那根杆并排——
 // 旧版把「5h X% · 周 Y% · 阈值 Z%」串成一行，读起来像周窗也归 阈值 管（周 61% > 阈值 70%？
@@ -1530,7 +1599,13 @@ async function viewParams() {
       <div id="env-body"><p class="dim" style="margin:10px 0 4px">全链路自检运行中…</p></div></div>`;
   const staffCards = ''; const capCard = ''; // 编制/在途上限（D17）已随拉取制退役：派发制并发上限在项管台账（0.23.11）
   
-  const params = Object.entries(c.闸值 || {}).map(([k, v]) => `<div class="paramcard card" data-key="${esc(k)}"><h4>${esc(P6NAMES[k] || k)}</h4><p class="pmeta">${esc((P6META[k] || '').replace('N', v))}</p>
+  // 闸门＝**管写的那张表**（2026-08-22 体检 #70/#37）：上一版拿 P6META（说明表）当闸门，
+  // 而它是写口白名单的超集——闸值里冒出 全局在途上限 就照样长出一张点一下必 400 的卡。
+  // 现在优先认服务端随 /api/config 下发的 闸值白名单（＝ /api/config/gate 的 ALLOW 同一份），
+  // 服务端还没下发这一格时回落旧口径（有说明才画），不至于把整个参数区画空。
+  // 说明栏保持 (P6META[k] || '') 兜底：白名单里有、说明还没写的，卡照出但不带说明。
+  const 闸门 = (k) => (c.闸值白名单 ? c.闸值白名单[k] != null : P6META[k] != null);
+  const params = Object.entries(c.闸值 || {}).filter(([k]) => 闸门(k)).map(([k, v]) => `<div class="paramcard card" data-key="${esc(k)}"><h4>${esc(P6NAMES[k] || k)}</h4><p class="pmeta">${esc((P6META[k] || '').replace('N', v))}</p>
       <div class="stepper"><button onclick="pStep('${k}',-1)">−</button><span class="val">${v}</span><button onclick="pStep('${k}',1)">＋</button></div></div>`).join('');
   const recCards = ''; // 精力档/推荐在途（D28）已随拉取制退役（0.23.11）
   void staffCards; void capCard; void recCards; // 退役占位，仅为注释留痕
@@ -1716,18 +1791,8 @@ window.envProbe = async (btn) => {
 };
 // 精力档切换已随拉取制退役（0.23.11）
 
-// 推荐速度参数步进：POST 后只原地更新该卡片，视图保持渲染
-window.rStep = async (k, delta) => {
-  const card = document.querySelector(`.paramcard[data-rkey="${k}"]`); if (!card) return;
-  const valEl = card.querySelector('.val');
-  const next = Number(valEl.textContent) + delta;
-  const r = await post('/api/config/recommend', { key: k, value: next });
-  if (!r.ok) return toast(r.error || '失败');
-  valEl.textContent = String(next); bump(valEl);
-  const pm = card.querySelector('.pmeta'); if (pm) pm.textContent = (P6META[k] || '').replace('N', next);
-  if (window._p6cfg) window._p6cfg.推荐 = r.推荐;
-  toast(`${P6NAMES[k] || k} → ${next}`);
-};
+// 推荐速度参数步进 window.rStep 已摘（2026-08-22 体检 #58）：它找的 .paramcard[data-rkey] 全库不存在，
+// 打的 POST /api/config/recommend 端点也随 D28「推荐在途」退役一并撤了——点了必静默失败。
 
 /* ===== P7 起草 ===== */
 function parseSections(body) {
@@ -2770,6 +2835,32 @@ function tkLevel() {
 }
 window.tkGo = (h) => { location.hash = h; };
 
+// G9 管线开线/封存（2026-08-22 体检 #14/#64）：注册表 lib/gatereg.js 写着「落点 工单页 · 管线层 /
+// 按钮 开线」，服务端 POST /api/pipelines 与 /api/pipelines/status 也一直在位，唯独前端零调用——
+// 五条发起型闸里只有它落空。顺带补上 window._showSealed 的写口（此前全库一处读、零处写，
+// 封存的线在界面上永远调不出来）。状态取值只有 活跃/封存（lib/pipelines.js STATUSES）。
+window.plOpen = async () => {
+  const 名称 = await askInput('新管线的名称（管线＝项目里的一套系统，常驻、无终点；开线是制作人人闸 H51）', '', { placeholder: '例：地图管线' });
+  if (名称 == null) return;
+  if (!String(名称).trim()) return toast('名称不能为空，开线取消');
+  const 阶段 = await askInput(`「${String(名称).trim()}」现在处在哪个阶段？（可留空，缺省 L0）`, '', { placeholder: '例：L0 / 原型' });
+  if (阶段 == null) return;
+  const r = await post('/api/pipelines', { 名称: String(名称).trim(), 阶段: String(阶段 || '').trim() }).catch((e) => ({ error: String((e && e.message) || e) }));
+  if (!r || !r.ok) return toast('开线失败：' + ((r && r.error) || '未知'));
+  toast(`已开线 ${r.id || ''}「${String(名称).trim()}」`);
+  route();
+};
+window.plSeal = async (id, 状态) => {
+  if (!await ask(状态 === '封存'
+    ? `封存管线 ${id}？封存＝不再接新活；历史照常在树里可查，不是删除。`
+    : `复线 ${id}？它将重新可以接新活。`)) return;
+  const r = await post('/api/pipelines/status', { id, 状态 }).catch((e) => ({ error: String((e && e.message) || e) }));
+  if (!r || !r.ok) return toast((r && r.error) || '失败');
+  toast(`管线${状态} ${id}`);
+  route();
+};
+window.plToggleSealed = () => { window._showSealed = !window._showSealed; route(); };
+
 async function viewTickets() {
   const { 管线: pl, 特性: ft } = tkLevel();
   const [fd, sd, pls] = await Promise.all([
@@ -2779,6 +2870,11 @@ async function viewTickets() {
   ]);
   const 特性们 = fd.特性 || []; const 专项们 = sd.专项 || []; const 管线们 = pls.管线 || pls || [];
   if (!pl) return tkL1(管线们, 特性们);
+  // Ticketflow 没有管线也没有特性（H52 不同项目不同形状），走它自己的两层视图。
+  // 原样落 tkL2('Ticketflow')，而 tkL2 按 f.管线 === 'Ticketflow' 过滤——18 条特性挂的
+  // 全是 P-1..P-4，必空，于是页面写「这条管线下还没有特性」+ 面包屑「管线 / Ticketflow」，
+  // 两处都在骗人：TF 压根不该有管线层。TF 的专项与工单在本页由此不可达（2026-08-21 体检）。
+  if (pl === 'Ticketflow') return tkTF(专项们);
   if (!ft) return tkL2(pl, 管线们, 特性们);
   return tkL3(pl, ft, 特性们, 专项们);
 }
@@ -2801,7 +2897,11 @@ function tkBar(v) {
 /* ---- 第一层：管线卡片 ---- */
 function tkL1(管线们, 特性们) {
   const p = projActive();
-  const 卡 = 管线们.filter((x) => x.状态 !== '封存' || window._showSealed).map((x) => {
+  // 项目边界（2026-08-21 制作人：「在一个项目里能看到另外一个项目的东西，这不对，不合理」）。
+  // 此前这里只过滤封存、不过滤项目，于是页头写着「监制台 · TK」而卡片里混着别的项目。
+  // 管线没有 项目 这一格（四条 P 线都是 TK 建的），故按 projOf 口径：无章者归项目默认。
+  const 卡 = 管线们.filter((x) => x.状态 !== '封存' || window._showSealed)
+    .filter((x) => !p || projOf(x) === p).map((x) => {
     const fs = 特性们.filter((f) => f.管线 === x.id);
     const 单数 = fs.reduce((n, f) => n + (f.单数 || 0), 0);
     const 落袋 = fs.reduce((n, f) => n + (f.落袋 || 0), 0);
@@ -2812,7 +2912,9 @@ function tkL1(管线们, 特性们) {
         onkeydown="if(event.key==='Enter')tkGo('${esc(到)}')" aria-label="进入 ${esc(x.名称 || x.id)} 的特性层">
       <div class="tkh"><span class="mono tkno">${esc(x.id)}</span><b class="tkname">${esc(x.名称 || '')}</b>
         ${x.阶段 ? `<span class="pill sm mut">${esc(x.阶段)}</span>` : ''}
-        ${x.状态 === '封存' ? '<span class="pill sm mut">封存</span>' : ''}</div>
+        ${x.状态 === '封存' ? '<span class="pill sm mut">封存</span>' : ''}
+        <button class="btn h32 tkseal" onclick="event.stopPropagation();plSeal('${qesc(x.id)}','${x.状态 === '封存' ? '活跃' : '封存'}')"
+          title="G9 人闸：${x.状态 === '封存' ? '复线＝重新接新活' : '封存＝不再接新活，历史照常可查'}">${x.状态 === '封存' ? '复线' : '封存'}</button></div>
       <div class="tkmeta"><span class="sppct">${单数 ? pct + '%' : '—'}</span>
         <span class="subnote">${单数 ? `${落袋}/${单数} 落袋` : '还没有单'}</span></div>
       ${tkBar({ 单数, 落袋 })}
@@ -2820,20 +2922,67 @@ function tkL1(管线们, 特性们) {
   }).join('');
   // TF（监制台自维护）不挂管线：不同项目不同形状（H52）——它只有「专项+工单」两层，
   // 故在管线层给它一张独立入口卡，不硬塞进 P 序列里冒充一条管线。
+  // **2026-08-21 方向修正**：这张卡原先的显示条件是 `!p || p === 'TK'`——即**看 TK 时露出 TF**，
+  // 我当初把它当「通往另一个项目的入口」，方向正好反了：那恰恰就是制作人指出的越界。
+  // 现在它只在**身处 Ticketflow 项目时**露出，作为该项目没有管线层的替代入口。
+  // 换项目走启动页（#/hub，enterProj 写 localStorage），不在别人的地盘上开后门。
   const tf = `<div class="tkcard card r14" onclick="tkGo('#/tickets/Ticketflow')" tabindex="0" role="button"
       onkeydown="if(event.key==='Enter')tkGo('#/tickets/Ticketflow')" aria-label="进入 Ticketflow 项目">
     <div class="tkh"><span class="mono tkno">TF</span><b class="tkname">Ticketflow</b>
       <span class="pill sm mut" title="工作室自维护自优化：常驻服务，无终点故无管线（制作人 2026-08-20 定）">自维护</span></div>
     <div class="tkfoot">不挂管线——只有「专项 + 工单」两层</div></div>`;
+  // 空态：过滤后一张卡都不剩时必须说话。原样直接吐空 tkgrid——白屏一片，
+  // 看的人无从判断是「本项目确实没有管线」还是「页面挂了」（2026-08-21 体检）。
+  const 身 = 卡 + (p === 'Ticketflow' ? tf : '');
+  const 体 = 身 || `<div class="emptycard"><h5>${esc(p || '本项目')}名下还没有管线</h5>
+      <p>管线是项目里的一套系统，由制作人立。没有管线不影响开单——单可以直挂专项。</p></div>`;
   return `<div class="sp-head"><b style="font-size:15px">工单 · 归属结构</b>
+      <button class="btn accent h32" style="margin-left:auto" onclick="plOpen()" title="G9 人闸：开一条新管线（管线＝项目里的一套系统，由制作人立）">＋ 开线</button>
+      <button class="btn h32" onclick="plToggleSealed()" title="封存＝不再接新活，不是删除——历史照常在树里可查">${window._showSealed ? '隐藏封存' : '显示封存'}</button>
       <span class="subnote">管线（系统）→ 特性（功能/规则）→ 专项（一段活）→ 工单。
       点卡进下一层；<b>看板</b>页管的是流转（谁在哪一态），这里管的是归属（谁属于谁）。</span></div>
-    <div class="tkgrid">${卡}${(!p || p === 'TK') ? tf : ''}</div>`;
+    <div class="tkgrid">${体}</div>`;
+}
+
+/* ---- Ticketflow 专用层：专项 + 直挂工单（不经管线/特性）----
+ * H52「不同项目不同形状」：TF 是工作室自维护的常驻服务，无终点故无管线，也没立过特性。
+ * 它只有两层——专项与工单——所以这里不是「特性层的替身」，是本项目真正的第二层。
+ * 建这个函数的直接理由：TF 卡点进去原先落 tkL2，按 f.管线 过滤必空，页面反倒宣称
+ * 「这条管线下还没有特性」，把「本项目没有这一层」谎报成「这一层是空的」。*/
+async function tkTF(专项们) {
+  const sps = 专项们.filter((x) => x.项目 === 'Ticketflow')
+    .sort((a, b) => Number(String(a.id).slice(2)) - Number(String(b.id).slice(2)));
+  const 待签 = sps.filter((x) => x.状态 === '收口').length;
+  const 卡 = sps.map(spCard).join('')
+    || `<div class="emptycard"><h5>还没有专项</h5><p>成团的活开专项，孤的单独挂——散单见下方。</p></div>`;
+  setTimeout(() => tkTFDirect(), 0);
+  return tkCrumb([{ 名: '工单', 到: '#/tickets' }, { 名: 'Ticketflow' }])
+    + `<div class="sp-head"><b style="font-size:15px">Ticketflow · 专项与散单</b>
+      <span class="subnote">工作室自维护：常驻服务、无终点，故不设管线与特性层。
+      成团的活开专项，孤的继续散着（制作人 2026-08-21 定）。${待签 ? ` <b class="sp-wait">${待签} 个等你关账</b>` : ''}</span></div>
+    ${卡}<div id="tk-direct"></div>`;
+}
+
+// TF 散单：本项目下不挂任何专项的单。TF 没有特性层，故「无专项」即「散」——
+// 不必再问「有没有特性」（features 全挂 P-1..P-4，与 TF 无涉）。
+async function tkTFDirect() {
+  const el = $('tk-direct'); if (!el) return;
+  const d = await loadBoard().catch(() => null);
+  if (!d || !$('tk-direct')) return;
+  const 单 = (d.all || []).filter((t) => t.项目 === 'Ticketflow' && !t.专项);
+  if (!单.length) { el.innerHTML = `<div class="emptycard"><h5>没有散单</h5><p>本项目的活此刻都在专项里。</p></div>`; return; }
+  const 终 = new Set(['完成', '已归档']);
+  const 落 = 单.filter((t) => 终.has(t.state)).length;
+  const 行 = 单.map((t) => `<a class="sprow${终.has(t.state) ? ' done' : ''}" href="#/t/${esc(t.id)}" title="${esc(t.title || '')}">
+      <span class="mono spid">${esc(t.id)}</span><span class="spt">${esc(t.title || '')}</span>
+      ${fnPill(t.职能)}${stPill(t.state)}</a>`).join('');
+  el.innerHTML = `<details class="spcard card r14 tkdirect" open><summary>散单 ${单.length} 张 · 落袋 ${落}
+      <span class="subnote">（不属任何专项）</span></summary><div class="spkids">${行}</div></details>`;
 }
 
 /* ---- 第二层：特性卡片（按编号升序——旧专项页乱序是制作人点名的丑因）---- */
 function tkL2(pl, 管线们, 特性们) {
-  const 线 = 管线们.find((x) => x.id === pl) || { id: pl, 名称: pl === 'Ticketflow' ? 'Ticketflow' : pl };
+  const 线 = 管线们.find((x) => x.id === pl) || { id: pl, 名称: pl };  // TF 已改走 tkTF，此处不再需要它的回落名
   const fs = 特性们.filter((f) => f.管线 === pl)
     .sort((a, b) => Number(String(a.id).slice(2)) - Number(String(b.id).slice(2)));
   const 卡 = fs.map(tkFeatCard).join('')
@@ -2845,6 +2994,22 @@ function tkL2(pl, 管线们, 特性们) {
     <div class="tkgrid">${卡}</div>`;
 }
 
+// 特性审核署名（2026-08-22 体检 #59）：审核是**总监的人闸**（lib/features 头注：开线是制作人人闸、
+// 开特性下放项管、总监审），故与排期同口径显式署名，不吃服务端 FT_ACTIONS.审核 的缺省值。
+const 特性审核署名 = '总监';
+// 五个写口（提请/审核/编辑/封存/复活）里，前端此前只接了 编辑。「待审」是卡片上唯一画得出来的
+// 审批事实，却既无按钮也无闸——项管提请完就躺在那儿，没有任何东西会催（本条只补 审核 这一动作，
+// 封存/复活 仍未接线，见交单 note）。
+window.ftAudit = async (id, 通过) => {
+  if (!await ask(通过 ? `审核通过 ${id}？通过后它才挂得上单。` : `退回 ${id}？退回＝就地封存留痕（不删除），日后可复活。`)) return;
+  const 说明 = await askInput(通过 ? '通过理由（可留空）' : '退回理由（写清为什么这个特性不该开）', '');
+  if (说明 == null) return;
+  const r = await post('/api/features/' + encodeURIComponent('审核'),
+    { id, 通过: !!通过, 审核人: 特性审核署名, 说明: String(说明 || '') }).catch((e) => ({ error: String((e && e.message) || e) }));
+  if (!r || r.ok === false) return toast((r && r.error) || '审核失败');
+  toast(通过 ? `已通过 ${id}（活跃，可挂单）` : `已退回 ${id}（就地封存留痕）`);
+  route();
+};
 function tkFeatCard(f) {
   const 待审 = f.状态 === '待审'; const 封 = f.状态 === '封存';
   const 态 = 待审 ? '<span class="pill sm warn" title="项管提请、总监未审——审过才能挂单">待审</span>'
@@ -2860,6 +3025,8 @@ function tkFeatCard(f) {
     <div class="tkmeta"><span class="sppct">${f.单数 ? f.百分比 + '%' : '—'}</span>
       <span class="subnote">${f.单数 ? `${f.落袋}/${f.单数} 落袋` : '还没有单'}</span></div>
     ${tkBar(f)}
+    ${待审 ? `<div class="tkacts"><button class="btn accent h32" onclick="event.stopPropagation();ftAudit('${qesc(f.id)}',true)" title="总监人闸：审过才能挂单">审核通过</button>
+      <button class="btn h32" onclick="event.stopPropagation();ftAudit('${qesc(f.id)}',false)" title="退回＝就地封存留痕，不是删除">退回</button></div>` : ''}
     <div class="tkfoot">专项 ${f.专项数 || 0} · 直挂单 ${f.直挂单数 || 0}</div></div>`;
 }
 
@@ -3037,8 +3204,16 @@ window.ideaAct = async (动作, id) => {
   if (动作 === '放弃' && !await ask('放弃这个想法？')) return;
   const r = await post('/api/ideas', { 动作, id });
   if (!r.ok) return toast(r.error || '失败');
-  // 施工令-058：拍板落的是专项容器，不再是伪工单——去处随之从起草页改成专项页。
-  if (动作 === '拍板') { toast(`专项 ${r.专项} 已立项——去补齐边界与验收标准`); location.hash = '#/specials'; return; }
+  // 施工令-058：拍板落的是专项容器，不再是伪工单。
+  // **落点订正（2026-08-21 体检）**：原先跳 `#/specials`，而那一页已随四层架构改版摘牌，
+  // 经 tkLevel() 解析后落到管线卡片层——制作人被告知「去补齐边界」，看到的却是管线网格，
+  // 而新立的专项**不在其中**（它的 特性 恒为 null，全 UI 无处可寻）。
+  // 现改跳工单页顶层并如实说明它还没归属；「立项时定归属」是改人闸流程的活，另列待办不在此处顺手做。
+  if (动作 === '拍板') {
+    toast(`专项 ${r.专项} 已立项 · 尚未挂到特性下，需先指定归属才在结构里找得到`);
+    location.hash = '#/tickets';
+    return;
+  }
   route();
 };
 
@@ -3186,13 +3361,14 @@ const kSig = (链) => (链 || []).map((c) => `${c.id}|${c.态}|${c.徽}|${(c.链
 
    【三条落地时踩定的口径，改一处就是改事实源】
    一· **不自己算延期/超期**。判定的唯一实现是 lib/pm/schedule.工期判定（服务端纯函数，已单测），
-        而 GET /api/schedule 眼下只下发现态字段、不下发判定结果。前端复刻一遍＝同一件事两把尺，
-        迟早出现「甘特图说超期 3 天、晨晚报说没超期」而无人判得清谁对。故本版**只画不判**：
-        计划条与基线影子逐字照现态里那四个日期画，红条与「该重排了」徽标暂缺，
-        页面上如实写明它们在等什么（交付 pending：/api/schedule 应下发 工期判定 结果）。
-   二· **本页跨项目，不随项目滤镜**。项管是工作室级职能（编制/池衡/派发本来就全局）；
-        且实测项目滤镜会把 20 条 Q 队列待办整批判成「未归属」——未了结待办里绝大多数是 Q 系列，
-        套上滤镜这一页就只剩两条，那正是本次要治的「看不见后续队列」。
+        前端复刻一遍＝同一件事两把尺，迟早出现「甘特图说超期 3 天、晨晚报说没超期」而无人判得清谁对。
+        **2026-08-21 体检纠正**：服务端从 08-20 起已随每粒下发 判定（server.js 的 /api/schedule），
+        而本页脚注还写着「不下发、故只画不判」——那句话把 3 条真延期藏了一整天。
+        现在改为**读服务端判定**挂红条与徽标；纪律不变：只读不算。
+   二· ~~本页跨项目，不随项目滤镜~~ —— **2026-08-21 制作人推翻**：「在一个项目里能看到另外一个
+        项目的东西，这不对，不合理」。当时不过滤的理由是「滤镜会把 20 条 Q 队列整批判成未归属」，
+        那是**待办没有 项目 这一格**时的症状；同日补了字段并回填 122 条，滤镜即恢复正常
+        （实测 TK 13 / TF 24，未归属 0）。判据只许有服务端 项目视界() 一处。
    三· **写账署名「总监」**。后端 操作域.调整/重排 = ['项管','总监']，**制作人不在域内**
         （2026-08-20 随职责收窄：排期归项管主动维护）。页面上的手一律以总监代劳落账并在页面明说，
         不冒充项管——排程账是只追加的审计账，署错名比少一个按钮糟得多。 */
@@ -3274,7 +3450,13 @@ const 停摆天 = (g, now) => {
 };
 
 /* ---- ① 甘特图 ---- */
-function 甘特Html(粒们, 今日) {
+// 上级名：F-10 这种裸号在界面上没意义，得显示「手修编辑器」。
+// 名册由 /api/schedule 随现态下发（服务端合并特性册与专项册，前端不自己拼——两处各拼一遍就是两把尺）。
+// 取不到就退化成裸号：**退化要看得见**，不许显示成空白让人以为这条没有归属。
+let 名册 = {};
+const 上级名 = (up) => (up ? (名册[up] ? `${up} ${名册[up]}` : up) : '散单');
+
+function 甘特Html(粒们, 今日, 未归属 = []) {
   const 排了 = []; const 没排 = [];
   for (const g of (粒们 || [])) (甘特端点(g).已排期 || 甘特端点(g).有基线 ? 排了 : 没排).push(g);
   const 窗 = 甘特窗(排了, 今日);
@@ -3284,18 +3466,30 @@ function 甘特Html(粒们, 今日) {
     const e = 甘特端点(g);
     const 计划 = 甘特段(e.计划起, e.计划讫, 窗);
     const 基线 = 甘特段(e.基线起, e.基线讫, 窗);
-    const 提 = [`${g.批 || ''}${g.序 ? '·' + g.序 : ''}　${g.题 || ''}`,
+    // 判定由服务端下发（lib/pm/schedule.工期判定），前端只读不算——两把尺是这本账最贵的病。
+    const j = g.判定 || null;
+    const 提 = [`${上级名(g.上级)}${g.序 ? '·' + g.序 : ''}　${g.题 || ''}`,
       `状态：${g.状态 || ''}`,
       `计划：${e.计划起 ? 毫日(e.计划起) : '未定'} → ${e.计划讫 ? 毫日(e.计划讫) : '未定'}`,
       `基线：${e.基线起 ? 毫日(e.基线起) : '未立'} → ${e.基线讫 ? 毫日(e.基线讫) : '未立'}`,
       g.工期天 == null ? '' : `工期 ${g.工期天} 天`,
-      e.挪过 ? '计划较基线挪过（延期天数待服务端下发 工期判定，本页不自算）' : '',
+      // 2026-08-21 体检纠正：原先这里写「延期天数待服务端下发」，而服务端从 08-20 起
+      // 就随每粒下发 判定 了——**这句话把 3 条真延期藏了一整天**。
+      j && j.延期 ? `延期 ${j.延期天} 天（现计划较基线累计往后挪了这么多）` : '',
+      j && j.超期 ? `已超期 ${j.超期天} 天（说好的日子到了，活还在）` : '',
+      j && !j.超期 && !排期终态.includes(g.状态) && j.余量天 != null ? `余量 ${j.余量天} 天` : '',
+      j && j.超期完成 ? `超期完成 ${j.超期完成天} 天` : '',
+      j && j.需重排 ? '★ 该重排了' : '',
+      e.挪过 && !(j && j.延期) ? '计划较基线挪过（方向未判：缺基线或缺计划日）' : '',
       '点这一行改排期',
     ].filter(Boolean).join('\n');
-    return `<div class="gtrow${e.挪过 ? ' moved' : ''}" data-gid="${esc(g.粒ID)}" title="${esc(提)}"
+    return `<div class="gtrow${e.挪过 ? ' moved' : ''}${j && j.超期 ? ' gt-od' : ''}${j && j.延期 ? ' gt-late' : ''}" data-gid="${esc(g.粒ID)}" title="${esc(提)}"
         tabindex="0" role="button" onclick="tqReplan('${qesc(g.粒ID)}')"
         onkeydown="if(event.key==='Enter'){tqReplan('${qesc(g.粒ID)}')}">
-        <span class="gtlab"><i class="gts mono">${esc(g.批 || '')}${g.序 ? '·' + g.序 : ''}</i><b>${esc(g.题 || '')}</b></span>
+        <span class="gtlab"><i class="gts mono">${esc(上级名(g.上级))}${g.序 ? '·' + g.序 : ''}</i><b>${esc(g.题 || '')}</b>${
+          j && j.需重排 ? '<em class="gtflag" title="超期未了结：该重排了">该重排</em>'
+            : (j && j.延期 ? `<em class="gtflag late" title="现计划较基线累计挪了 ${j.延期天} 天">延 ${j.延期天}d</em>` : '')
+        }</span>
         <span class="gttrack">
           ${基线 ? `<i class="gtbase" style="left:${基线.left.toFixed(3)}%;width:${基线.width.toFixed(3)}%"></i>` : ''}
           ${计划 ? `<i class="gtbar ${QCLS[g.状态] || ''}${计划.单端 ? ' half' : ''}" style="left:${计划.left.toFixed(3)}%;width:${计划.width.toFixed(3)}%"></i>` : ''}
@@ -3317,22 +3511,34 @@ function 甘特Html(粒们, 今日) {
         <span class="subnote">点任一条排期（写账署名 ${esc(排期署名)}）</span></div>
       <div class="gtunl">${没排.map((g) => `<button class="gtunrow" onclick="tqReplan('${qesc(g.粒ID)}')"
         title="${esc(`${g.题 || ''}\n来源：${g.来源 || '（未注明）'}\n状态：${g.状态 || ''}`)}">
-        <i class="gts mono">${esc(g.批 || '')}${g.序 ? '·' + g.序 : ''}</i><b>${esc(g.题 || '')}</b>
+        <i class="gts mono">${esc(上级名(g.上级))}${g.序 ? '·' + g.序 : ''}</i><b>${esc(g.题 || '')}</b>
         <span class="qb ${QCLS[g.状态] || ''}">${esc(g.状态 || '')}</span><em>排期 →</em></button>`).join('')}</div></div>`
+    : '';
+  // 未归属：按项目过滤时，没有 项目 这一格的待办会**两个项目都看不见**——那是比越界更糟的漏账。
+  // 故单列一行如实报出来，并给一键归属的入口。零条时整块不渲染（空态不占版面）。
+  const 未归 = 未归属.length
+    ? `<div class="gtun gtun-x"><div class="gtunh">未归属 <b>${未归属.length}</b> 条 —— 没写项目的待办不属于任何一个项目视图，
+        <span class="subnote">按项目过滤时它们两边都看不见；点一条指定归属</span></div>
+      <div class="gtunl">${未归属.map((g) => `<button class="gtunrow" onclick="tqSetProj('${qesc(g.粒ID)}')"
+        title="${esc(`${g.题 || ''}
+来源：${g.来源 || '（未注明）'}
+状态：${g.状态 || ''}`)}">
+        <i class="gts mono">${esc(上级名(g.上级))}${g.序 ? '·' + g.序 : ''}</i><b>${esc(g.题 || '')}</b>
+        <span class="qb ${QCLS[g.状态] || ''}">${esc(g.状态 || '')}</span><em>归属 →</em></button>`).join('')}</div></div>`
     : '';
   return `<div class="rlcard card r14" id="rl-gantt">
     <div class="rlch"><b>甘特图</b>
       <span class="subnote">一行一条待办 · 实条＝现计划 · 淡底条＝基线（首次排期时立下，此后不随重排变）</span>
       <span class="sp"></span>
       <span class="rlnum mono">已排期 ${排了.length} · 未排期 ${没排.length}</span></div>
-    ${图}${未排}
+    ${图}${未排}${未归}
     <div class="fglegend gtlg">
       <span><i class="lg-gbar"></i>实条＝计划开始→计划完成</span>
       <span><i class="lg-gbase"></i>淡底条＝基线区间；两条错位（本行加左侧竖标）＝计划较基线挪过</span>
       <span><i class="lg-gtoday"></i>今日线</span>
-      <span class="gtwait">红条与「该重排了」徽标暂缺：延期/超期的唯一判定是服务端
-        <span class="mono">lib/pm/schedule.工期判定</span>，而 <span class="mono">GET /api/schedule</span>
-        眼下不下发判定结果。前端复刻一份就是两把尺，故本页只画不判（已列 pending）。</span></div>
+      <span><i class="lg-gflag"></i>「延 Nd」＝现计划较基线累计后挪；「该重排」＝已超期未了结</span>
+      <span class="subnote">延期/超期的判定只有一处实现：服务端 <span class="mono">lib/pm/schedule.工期判定</span>，
+        随 <span class="mono">GET /api/schedule</span> 逐粒下发；本页只读不算（前端复刻一份就是两把尺）。</span></div>
   </div>`;
 }
 
@@ -3351,7 +3557,7 @@ function tqRow(c, g, now) {
   const 提 = c.提示 + (g ? `\n排期：${排期文}${g.基线完成 ? `（基线 ${g.基线开始 || '?'} → ${g.基线完成}）` : ''}`
     + (停 == null ? '' : `\n停摆 ${停} 天未动`) : '');
   return `<div class="qrow${c.置灰 ? ' blocked' : ''}${终 ? ' fin' : ''}" data-gid="${esc(c.粒ID || '')}" title="${esc(提)}">
-      <span class="qs mono">${esc(c.批)}${c.序 ? '·' + c.序 : ''}</span>
+      <span class="qs mono">${esc(上级名(c.上级))}${c.序 ? '·' + c.序 : ''}</span>
       <span class="qb ${QCLS[c.状态] || ''}">${esc(c.徽章)}</span>
       <span class="qt">${esc(c.题)}</span>${链}
       ${c.候 ? `<span class="qwait" title="${esc('未满足依赖：' + (c.未满足 || []).map((x) => x.名 + (x.态 ? '（' + x.态 + '）' : '')).join('、'))}">候：${esc(c.候)}</span>` : ''}
@@ -3389,9 +3595,10 @@ function 待办队列Html(q, 粒表, now) {
       <span class="subnote">按 批 → 序（口径同排程台账）· 点批头折叠 · 悬浮任一行看来源与基线全文</span>
       <span class="sp"></span>
       <span class="rlnum mono">${esc(q.摘要.文 || '')}</span></div>
-    <div class="rlgate">已就绪 <b>${就绪数}</b> 条候放行
-      <span class="subnote">放行成单是<b>人闸</b>（总监＋制作人按产线节奏一堆一堆扔进工单队列），
-      不在本页——本页只到「排完了、举旗」为止。写账署名 ${esc(排期署名)}（调整/重排 操作域＝项管/总监）。</span></div>
+    <div class="rlgate">已就绪 <b>${就绪数}</b> 条候放行${就绪数 ? ` <button class="qrdy on" onclick="tqRelease()" title="G8 人闸：把已就绪的待办整批放行进工单队列（转移 计划→起草中，署名 ${esc(排期署名)}）">⇧ 放行成单 ${就绪数}</button>` : ''}
+      <span class="subnote">放行成单是<b>人闸</b>（总监＋制作人按产线节奏一堆一堆扔进工单队列）——
+      本页排完、举旗，右边那颗钮就是那一闸（2026-08-22 体检 #64：注册表 G8 的 落点「项管页 · 待办队列」/ 按钮「放行成单」此前全前端零命中）。
+      写账署名 ${esc(排期署名)}（调整/重排 操作域＝项管/总监；放行走 转移 计划→起草中，逐边操作域＝总监/制作人）。</span></div>
     <div class="qboard" id="q-board">${批Html}</div>
     <div class="fglegend" style="margin-top:10px">
       <span><i class="lg-plan"></i>计划＝还没起草的活 · 起草中＝草稿在台上 · 已成单→点单号进详情</span>
@@ -3427,8 +3634,11 @@ function 行为桶Html(b) {
     <div class="ablist">${明细}</div></div>`;
 }
 function 项管行为Html(act, kc) {
-  const 桶 = (act && act.桶) || [];
-  const 判断 = 桶.filter((b) => b.类 !== '心跳');
+  // 取数失败不许伪装成真空态（2026-08-22 体检 #66）：原样 (act && act.桶) || [] 把
+  // 「/api/pm/actions 挂了」画成「台账窗内没有任何事件」——这两件事的处置完全相反。
+  // 判**正形**不判 null：api() 不看 res.ok，500 带合法 JSON 体时 catch 根本不触发。
+  const 桶 = act && Array.isArray(act.桶) ? act.桶 : null;
+  const 判断 = (桶 || []).filter((b) => b.类 !== '心跳');
   const 判断数 = 判断.reduce((a, b) => a + b.计数, 0);
   const 窗 = (act && act.窗) || {};
   const 窗文 = 窗.起 ? `${String(窗.起).slice(0, 10)} → ${String(窗.讫).slice(0, 10)}` : '—';
@@ -3440,8 +3650,8 @@ function 项管行为Html(act, kc) {
     <div class="rlsub subnote">行为窗 ${esc(窗文)}${(act && act.未归类 && act.未归类.length) ? ` · 未归类类型：${esc(act.未归类.join('、'))}` : ''}</div>
     <div class="rlsec"><b style="font-size:13px">关键汇报</b>
       <span class="subnote" style="margin-left:8px">一单一链 · 点头行展开 · 尾端永远回答「现在等什么」</span>
-      <div class="kchain" id="kchain">${kChainHtml(kc && kc.链)}</div></div>
-    <div class="abgrid">${桶.map(行为桶Html).join('') || '<p class="dim">台账窗内没有任何事件。</p>'}</div>
+      <div class="kchain" id="kchain">${Array.isArray(kc && kc.链) ? kChainHtml(kc.链) : '<p class="dim">读不到关键汇报（/api/pm/chains 不可达或返回异常）——这不是「暂无关键汇报」。</p>'}</div></div>
+    <div class="abgrid">${!桶 ? '<p class="dim">读不到项管台账（/api/pm/actions 不可达或返回异常）——这不是「窗内没有事件」。</p>' : (桶.map(行为桶Html).join('') || '<p class="dim">台账窗内没有任何事件。</p>')}</div>
   </div>`;
 }
 
@@ -3451,19 +3661,34 @@ async function viewRelay() {
   const [d, pl, rs, kc, sch, q, id, act] = await Promise.all([
     api('/api/relay').catch(() => ({ 消息: [] })),
     api('/api/pm/ledger').catch(() => ({ 台账: {} })),
-    api('/api/pm/roster').catch(() => ({ 编制: [] })),
-    api('/api/pm/chains').catch(() => ({ 链: [] })),
+    api('/api/pm/roster').catch(() => null),
+    api('/api/pm/chains').catch(() => null),
     api('/api/schedule').catch(() => ({ 粒: [], 计数: {} })),
-    // 跨项目：不传 项目 参数（口径二）。传了会把 Q 队列整批判成「未归属」，页面只剩两条。
-    api('/api/schedule/' + encodeURIComponent('队列')).catch(() => null),
-    api('/api/ideas').catch(() => ({ 想法: [] })),
+    // 队列卡也吃当前项目（2026-08-22 体检 #4）：页头写着「监制台 · TK」、甘特已按 g.项目 === p 切过，
+    // 而这一口原样不带参数 ⇒ 后端 项目视界 拿不到项目、返回全量，于是页头 13 / 队列卡 34，两把尺。
+    // 服务端 GET /api/schedule/:action 把 req.query 整个交给 scheduleView.队列页，认 项目 这一格。
+    api('/api/schedule/' + encodeURIComponent('队列') + (projActive() ? '?' + encodeURIComponent('项目') + '=' + encodeURIComponent(projActive()) : '')).catch(() => null),
+    api('/api/ideas').catch(() => null), // 兜底不许造出「0 条在池」这种假真空（2026-08-22 体检 #66）
     // 八口全并发（本页每次重绘都要取一遍，实测最慢那口 34ms；串成一列就是白等一个来回）
-    api('/api/pm/actions').catch(() => ({ 桶: [], 合计: 0 })),
+    api('/api/pm/actions').catch(() => null),
   ]);
   const now = Date.now();
   const 今日 = new Date(now - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10); // 本地日，不拿 UTC 串切
-  const 粒们 = (sch && sch.粒) || [];
-  const 粒表 = Object.fromEntries(粒们.map((g) => [g.粒ID, g]));
+  // 项目边界（2026-08-21 制作人：「在一个项目里能看到另外一个项目的东西，这不对，不合理」）。
+  // 此前本页刻意**不**过滤，注释写着「项管是工作室级职能，跨项目」——那是总监的判断，被推翻了：
+  // 页头写着「监制台 · TK」，内容却给的是全部，等于页头声称一个范围、内容给的是另一个范围。
+  // 待办的 项目 这一格同日才加（此前数据层根本没有，物理上过滤不了），存量已回填。
+  // **未归属的不许静默消失**：过滤会让它们两个项目都看不见，那是比越界更糟的漏账，故单列一行。
+  const p = projActive();
+  名册 = (sch && sch.名册) || {}; // 服务端下发，画之前先接住
+  const 全粒 = (sch && sch.粒) || [];
+  const 未归属 = p ? 全粒.filter((g) => !g.项目 && !排期终态.includes(g.状态)) : [];
+  // 甘特与队列卡必须是**同一把尺**（2026-08-21 三把尺案：页头 13 / 队列卡 37 / 后端旧滤镜 2）。
+  // 甘特吃 /api/schedule 的原始现态，队列卡吃 /api/schedule/队列（后端 项目视界 已筛）——
+  // 两边都认同一个权威字段 g.项目，故数字必然一致。**前端不许再有第二套认亲逻辑**：
+  // 后端那套「管线/单号/批传染」的推断术已在同批改动里降为「无 项目 字段时的回落」。
+  const 粒们 = p ? 全粒.filter((g) => g.项目 === p) : 全粒;
+  const 粒表 = Object.fromEntries(全粒.map((g) => [g.粒ID, g])); // 依赖可跨项目引用，查表用全量
   // 甘特只上未了结的（计划/起草中/已成单）：一张画满已完成条的图是报表，不是排期表。
   const 在排 = 粒们.filter((g) => !排期终态.includes(g.状态));
   const 了结数 = 粒们.length - 在排.length;
@@ -3475,7 +3700,7 @@ async function viewRelay() {
   const stateText = working ? `作业中 · ${esc(working.用途)}${working.对象 ? ' ' + esc(working.对象) : ''}` : (on ? '在线值守' : '离线（执行器停）');
   // 15s 活体（与在途页同一口径）：只在「卡片构成或态/徽/链长度变了」时重画关键汇报区，
   // 平稳期一个字都不动——每 15s 无脑重刷 innerHTML 会把文本选择和展开动画打断。
-  let sig0 = kSig(kc.链);
+  let sig0 = kSig(kc && kc.链);
   pollLoop('kchain', 15000, async () => {
     const nd = await api('/api/pm/chains');
     const s = kSig(nd.链);
@@ -3505,15 +3730,15 @@ async function viewRelay() {
     <div class="rlroster${rlFold.编制 ? ' fold' : ''}" id="rl-编制">
       <div class="logcard card r14"><b style="font-size:13px">编制快照</b>
         <span class="subnote" style="margin-left:8px">每职能一行 · 池序即路由优先级 · 只读（调整走 /api/pm/roster）</span>
-        <div style="margin-top:12px">${rosterSnapHtml(rs.编制)}</div></div>
+        <div style="margin-top:12px">${Array.isArray(rs && rs.编制) ? rosterSnapHtml(rs.编制) : '<p class="dim">读不到编制（/api/pm/roster 不可达或返回异常）——这不是「无编制数据」。</p>'}</div></div>
     </div>
-    ${甘特Html(在排, 今日)}
+    ${甘特Html(在排, 今日, 未归属)}
     ${待办队列Html(q, 粒表, now)}
     <div class="rlcard card r14" id="rl-ideas">
       <div class="rlch"><b>想法在池</b>
         <span class="subnote">随聊随记 → <b>拍板</b>成专项容器（补边界＋验收标准）→ 项管切单派发。拍板是制作人唯一人闸</span>
-        <span class="sp"></span><span class="rlnum mono">${(id.想法 || []).length} 条在池</span></div>
-      ${ideaPoolHtml(id.想法)}
+        <span class="sp"></span><span class="rlnum mono">${Array.isArray(id && id.想法) ? `${id.想法.length} 条在池` : '读不到想法池（/api/ideas 不可达或返回异常）'}</span></div>
+      ${Array.isArray(id && id.想法) ? ideaPoolHtml(id.想法) : '<p class="dim" style="text-align:center;margin:24px 0">读不到想法池（/api/ideas 不可达或返回异常）——这不是「池是空的」。</p>'}
     </div>
     ${项管行为Html(act, kc)}
   </div>`;
@@ -3541,11 +3766,58 @@ window.tqReady = async (粒ID, 值, btn) => {
   await 排程写('调整', { 粒ID, 预期版本: g.版本号, 就绪: !!值 }, 值 ? '已标就绪，候放行成单' : '已撤就绪旗');
   if (btn) btn.disabled = false;
 };
+// G8 放行成单（2026-08-22 体检 #64）：走 转移 计划→起草中（lib/pm/schedule 逐边操作域＝总监/制作人），
+// 逐粒 CAS、不并批、不吞错——一批里有一条冲突，其余照放，未过的逐条报出来。
+// 版本号现读现取（同 tqReady/tqReplan 的纪律）：页面上那份读数可能已被项管改过。
+window.tqRelease = async () => {
+  const d = await api('/api/schedule').catch(() => null);
+  const 待 = ((d && d.粒) || []).filter((g) => g.状态 === '计划' && g.就绪);
+  if (!待.length) return toast('没有已就绪的待办可放行（就绪旗由项管在本页举）');
+  if (!await ask(`放行 ${待.length} 条已就绪待办进工单队列？放行后归项管全权推进。`)) return;
+  let 成 = 0; const 败 = [];
+  for (const g of 待) {
+    const r = await post('/api/schedule/' + encodeURIComponent('转移'),
+      { 粒ID: g.粒ID, 预期版本: g.版本号, 目标: '起草中', 操作者: 排期署名, 说明: 'G8 放行成单' }).catch((e) => ({ error: String((e && e.message) || e) }));
+    if (r && r.ok) 成++; else 败.push(`${g.题 || g.粒ID}：${(r && r.error) || '未知'}`);
+  }
+  toast(败.length ? `放行 ${成} 条，${败.length} 条未过：${败[0]}` : `已放行 ${成} 条成单`);
+  repaint('G8 放行成单');
+};
 // 重排现读现态取版本号，不吃页面上那份可能已经过期的读数——CAS 的意义正在于此。
 async function 取待办(粒ID) {
   const d = await api('/api/schedule').catch(() => null);
   return (d && d.粒 || []).find((x) => x.粒ID === 粒ID) || null;
 }
+// 归属（2026-08-21）：给未归属待办指派项目。终态粒也能改——归属是分类不是计划，
+// 而存量里大半已是完成/撤销；一并拒掉的话历史账永远归不了属，按项目过滤就永久缺一块。
+window.tqSetProj = async (粒ID) => {
+  const g = await 取待办(粒ID);
+  if (!g) return toast('这条待办已不在现态');
+  const 可选 = projNames();
+  if (!可选.length) return toast('配置里没有注册任何项目');
+  const w = showModal(`<h3>指定归属 · <span class="mono">${esc(上级名(g.上级))}${g.序 ? '·' + g.序 : ''}</span>
+      <span class="x" onclick="this.closest('.mwrap').remove()">×</span></h3>
+    <p class="dim" style="margin:-4px 0 12px;font-size:12.5px">${esc(g.题 || '')}</p>
+    <div class="f-field"><label>项目</label><select id="pj-v" class="mono">
+      ${可选.map((n) => `<option value="${esc(n)}"${g.项目 === n ? ' selected' : ''}>${esc(n)}</option>`).join('')}
+    </select></div>
+    <div class="note">归属决定它出现在哪个项目的队列与甘特里。写账署名 <b>${esc(排期署名)}</b> · 版本 ${g.版本号}（CAS）</div>
+    <div class="mfoot"><div class="rgt2"><button class="btn h36" onclick="this.closest('.mwrap').remove()">取消</button>
+      <button class="btn accent h36" onclick="tqSetProjGo('${qesc(粒ID)}',${g.版本号},this)">归属</button></div></div>`);
+  const v = w.querySelector('#pj-v'); if (v) v.focus();
+};
+window.tqSetProjGo = async (粒ID, 预期版本, btn) => {
+  const 项目 = (($('pj-v') || {}).value || '').trim();
+  if (!项目) return toast('要选一个项目');
+  if (btn) btn.disabled = true;
+  const r = await post('/api/schedule/' + encodeURIComponent('调整'),
+    { 粒ID, 预期版本, 项目, 操作者: 排期署名, 说明: '指定归属' }).catch((e) => ({ error: String(e.message || e) }));
+  if (btn) btn.disabled = false;
+  if (!r || r.error) return toast('归属失败：' + ((r && r.error) || '未知'));
+  const m = document.querySelector('.mwrap'); if (m) m.remove();
+  toast(`已归属 ${项目}`);
+  repaint('归属');
+};
 window.tqReplan = async (粒ID) => {
   const g = await 取待办(粒ID);
   if (!g) return toast('这条待办已不在现态（可能刚成单或被撤销）');
@@ -3553,7 +3825,7 @@ window.tqReplan = async (粒ID) => {
   const 基 = g.基线完成 || g.基线开始
     ? `<div class="note">基线 ${esc(g.基线开始 || '?')} → ${esc(g.基线完成 || '?')}（首次排期时立下，不随重排变；延期＝现计划较它挪了多少，由服务端判定）</div>`
     : '<div class="note">这条还没有基线——本次若填了计划完成，系统就以这一份作为基线（首次排期）</div>';
-  const w = showModal(`<h3>重排 · <span class="mono">${esc(g.批 || '')}${g.序 ? '·' + g.序 : ''}</span>
+  const w = showModal(`<h3>重排 · <span class="mono">${esc(上级名(g.上级))}${g.序 ? '·' + g.序 : ''}</span>
       <span class="x" onclick="this.closest('.mwrap').remove()">×</span></h3>
     <p class="dim" style="margin:-4px 0 12px;font-size:12.5px">${esc(g.题 || '')}</p>
     <div class="f-row2">
@@ -3627,11 +3899,15 @@ window.askInput = (label, def, opts) => new Promise((res) => {
   inp.focus(); inp.select();
 });
 
-// H64 编辑器锁开关（默认项目）
+// H64 编辑器锁开关
+// **带项目**（2026-08-21 体检）：原先请求体不带 项目，服务端一律落项目默认（TK）；
+// 而这颗按钮所在的在途页**是按项目过滤的**——于是在 Ticketflow 语境下按一下，
+// 挂起的是 TK 的派发，而你在这一页上根本看不见 TK。锁错项目比锁不上更坏。
 window.editorLock = async (关) => {
-  const r = await post('/api/editor-lock', { 关 });
+  const 项目 = projActive() || projDefault();
+  const r = await post('/api/editor-lock', { 关, 项目 });
   if (!r.ok) return toast(r.error || '失败');
-  toast(关 ? '已关锁：派发挂起，放心开 Unity 验收' : '已开锁：派发恢复');
+  toast(`${关 ? '已关锁' : '已开锁'} · ${项目}${关 ? '：派发挂起，放心开引擎验收' : '：派发恢复'}`);
   route();
 };
 const markIn = (key) => { if (window._lastViewKey !== key) { const v = $('view') || $('app').firstElementChild; if (v) v.classList.add('vin'); } window._lastViewKey = key; };

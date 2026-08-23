@@ -203,4 +203,4 @@ t('容错：空输入/脏样本不炸（取数失败时整条链降级到不校�
   assert.equal(est.系数查(null, '程序', '实现单', '时间').系数, 1);
 });
 
-console.log(`estimate: ${passed} 项通过`);
+require('./helper').收尾('estimate', passed);

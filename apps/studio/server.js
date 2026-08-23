@@ -17,6 +17,7 @@ const dialogscan = require('./lib/dialogscan'); // 原生对话框哑弹扫描�
 
 // ROOT 可变（2026-08-08 首次运行向导）：没有 studio.config.json 时不再是死局——
 // 向导建完工作区后**就地重挂**，不用重启进程。模块作用域的 let，所有闭包读到的都是新值。
+const 起动时刻 = new Date().toISOString(); // 版本自证用：跑了多久，配合版本号判断是不是刚换的那一份
 let ROOT = config.resolveRoot();
 let cfg = null; let initError = null;
 if (!ROOT) initError = '未找到监制台仓库（缺 studio.config.json）。';
@@ -81,18 +82,35 @@ app.use(express.json({ limit: '2mb' }));
 // ---- 远程访问（0.17.10）：默认只听 127.0.0.1；config.网络.远程.开 = true 时听 0.0.0.0，
 // 一切请求须持令牌（?t= 首访换 cookie / x-studio-token 头）。实弹台有项目仓全写权，令牌是底线。
 const REMOTE = () => (cfg && cfg.网络 && cfg.网络.远程) || {};
+// 令牌三候选（2026-08-21 体检）：环境变量 > 凭据.json（.gitignore 第 4 行早已排除）> 配置文件。
+// 案源：令牌原先明文写在 studio.config.json 的 网络.远程.令牌，而该文件**被版本控制**，
+// 已随 97 次自动记账推进远端仓（该仓私有、远程监听关着，故是隐患不是失火）。
+// 同一份 .gitignore 早就把 凭据.json 排除在外——「密钥不进库」是既定纪律，只有这一条漏网。
+// 配置里保留旧值仍可用（不砸现网），但新写一律落 凭据.json；置空即彻底搬走。
+function 远程令牌() {
+  const 环 = String(process.env.STUDIO_REMOTE_TOKEN || '').trim();
+  if (环) return 环;
+  try {
+    const c = require('./lib/creds').read(ROOT);
+    const t = c && c.远程令牌;
+    if (t) return String(t).trim();
+  } catch { /* 无凭据档：回落配置 */ }
+  return String(REMOTE().令牌 || '').trim();
+}
 const isLocalReq = (req) => {
   const ip = String(req.socket.remoteAddress || '');
   return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
 };
 const tokenOk = (req) => {
-  const tk = REMOTE().令牌;
+  const tk = 远程令牌();
   if (!tk) return false;
   const got = req.query.t || req.headers['x-studio-token'] || (String(req.headers.cookie || '').match(/studio_t=([\w-]+)/) || [])[1];
   return got === tk;
 };
 app.use((req, res, next) => {
-  const remoteOn = !!REMOTE().开;
+  // 硬约束：**没令牌就不许开远程**。原样只在写配置那一刻补生成，
+  // 而人手把配置里的令牌删空之后，开关仍是 true —— 那一刻门就是敞的。
+  const remoteOn = !!REMOTE().开 && !!远程令牌();
   if (!isLocalReq(req)) {
     if (!remoteOn) return res.status(403).json({ error: '远程访问未开启' });
     if (!tokenOk(req)) return res.status(401).send('<meta charset="utf-8">需要访问令牌：请用带 ?t=令牌 的链接打开');
@@ -300,7 +318,12 @@ app.post('/api/pm/draft', (req, res) => {
     return res.status(400).json({ error: '计划粒不存在：' + 粒ID });
   }
   const reg = (cfg.项目 && cfg.项目.注册) || {};
-  const name = (cfg.项目 && cfg.项目.默认) || '';
+  // 项目透传（2026-08-21 对账补）：施工令-061 让 Ticketflow 自立为第二项目（前缀 TF），
+  // brain.draftTicket 也早就认 opts.项目 并据此选号段——**唯独这条委托路没把它传下去**，
+  // 于是任何走派单委托起的单一律落项目默认值（TK），监制台自维护的活会被编进游戏的号段里。
+  // 缺省仍是项目默认：不传项目的老调用方行为一字不变。
+  const name = String((req.body || {}).项目 || '').trim() || (cfg.项目 && cfg.项目.默认) || '';
+  if (name && !reg[name]) return res.status(400).json({ error: `未注册的项目：${name}（可选 ${Object.keys(reg).join('/')}）` });
   const projPath = name && reg[name] && reg[name].路径;
   journal.append(ROOT, '派单委托受理（H57）：' + 需求.slice(0, 60) + (粒ID ? `（兑现计划粒 ${粒ID}）` : ''));
   // 这条事件是关键汇报链「委托事由」的唯一来源（chain.js 按 30 分钟窗与随后的 单张待审 配对）——
@@ -313,8 +336,8 @@ app.post('/api/pm/draft', (req, res) => {
     // 而 journal 是给人读的长文流水，机器对不了账。不新增写盘链路，就借既有 记事件 出口补齐；
     // 成功不补记（会与 待审 双计，把起草次数报高）。
     if (!r.ok) 记事件('起草失败', { 阶段: '起草', 需求: 需求.slice(0, 120), error: String(r.error || '').slice(0, 200), ...(粒ID ? { 粒ID } : {}) });
-  }, { 粒ID: 粒ID || null });
-  res.json({ ok: true, 状态: '项管起草中，完成后草稿区+信道可见', ...(粒ID ? { 粒ID } : {}) });
+  }, { 粒ID: 粒ID || null, 项目: name || null });
+  res.json({ ok: true, 状态: '项管起草中，完成后草稿区+信道可见', 项目: name, ...(粒ID ? { 粒ID } : {}) });
 });
 
 // ---- Wiki（0.20，H52 第三类实体）：设计事实源浏览 + 待审人闸 + 关系图 ----
@@ -548,10 +571,16 @@ app.post('/api/specials/:action', (req, res) => {
 });
 
 // ---- 参数步进（P6）：白名单闸值写回 studio.config.json（全局在途上限已废——编制即上限）----
+// 闸值写口白名单：**哪些格能调、各自区间多少，全系统只有这一份**（2026-08-22 体检 #37/#70）。
+// 原先它锁在 /api/config/gate 的函数体里，外面读不到，于是参数页只能自己另拿一张「说明表」
+// 当闸门画卡——两张表一分裂，闸值里冒出一格没进白名单的，页面就长出一颗点一下必 400 的钮。
+// 提到模块级并随 /api/config 下发，画口与写口从此吃同一份。
+const 闸值白名单 = { 待验收积压闸: [1, 50], QA自修上限: [0, 10], 滞留超时小时: [1, 72], 人闸超时小时: [0, 168] };
+
 app.post('/api/config/gate', (req, res) => {
   if (!ready(res)) return;
   const { key, value } = req.body || {};
-  const ALLOW = { 待验收积压闸: [1, 50], QA自修上限: [0, 10], 滞留超时小时: [1, 72] };
+  const ALLOW = 闸值白名单;
   if (!(key in ALLOW)) return res.status(400).json({ error: '不可调整的参数：' + key });
   const v = Number(value);
   if (!Number.isInteger(v) || v < ALLOW[key][0] || v > ALLOW[key][1]) return res.status(400).json({ error: `取值须在 ${ALLOW[key][0]}–${ALLOW[key][1]}` });
@@ -851,7 +880,9 @@ app.get('/api/env', async (req, res) => {
   try {
     const t = path.join(ROOT, '回执', '.probe-' + Date.now());
     fs.writeFileSync(t, 'x'); fs.unlinkSync(t);
-    项目目录.push(item('监制台目录', '绿', '九态目录 + 回执/journal 可写'));
+    // 态数活读 store.STATES（2026-08-22 体检 #67②）：原文写死「九态」，而 STATES 早已 10 态——
+    // 自检面每加一态就腐一次，报的是一个过期的数。写死中文数字＝把常量抄进文案。
+    项目目录.push(item('监制台目录', '绿', `${store.STATES.length} 态目录 + 回执/journal 可写`));
   } catch (e) { 项目目录.push(item('监制台目录', '红', '不可写：' + e.message.slice(0, 50))); }
 
   // 组4 协议资产与配置完整性
@@ -896,25 +927,31 @@ app.get('/api/env', async (req, res) => {
   res.json(data);
 });
 
-// ---- 推荐参数（P6）：精力档 + 速度参数（D28 推荐在途=制作人精力参考值）----
-app.post('/api/config/recommend', (req, res) => {
+// ---- 瞭望塔心跳（2026-08-22 体检 #68②）----
+// 塔死要看得见：守护每 30s 覆盖写一行 ISO 时刻到 <ROOT>/瞭望塔/心跳.txt（packages/watchtower
+// 接线说明 §五·1），断更即守护不在。**无塔≠塔死**：本仓没装瞭望塔时下发 在岗:null，
+// 不立债也不假红——否则每一个测试根、每一台没装塔的机器都会被打满红。
+//
+// 阈值 90 秒 = 三个心跳周期，**与 G20 闸判据同一把尺**（lib/gatereg.js:90 与 :265）。
+// 原补丁写的是 apps/platform 那侧的 45s，闸表组落 G20 时已书面否掉：45s 只留一拍半余量，
+// 一次调度抖动就报塔死。这一格与闸各写一个数，就会出现「值守板不立债、端点说塔死」的分叉——
+// 本项目反复修的正是这一种。要改阈值请连 gatereg.js:265 一起改。
+const 心跳阈值秒 = 90;
+app.get('/api/watchtower', (req, res) => {
   if (!ready(res)) return;
-  const { key, value } = req.body || {};
-  cfg.推荐 = cfg.推荐 || {};
-  if (key === '精力档') {
-    if (value !== '低' && value !== '高') return res.status(400).json({ error: '精力档只能是 低/高' });
-    cfg.推荐.精力档 = value;
-  } else {
-    const NUM = { 速度窗口小时: [1, 24], 每档处理数: [1, 10] };
-    if (!(key in NUM)) return res.status(400).json({ error: '不可调整的参数：' + key });
-    const v = Number(value);
-    if (!Number.isInteger(v) || v < NUM[key][0] || v > NUM[key][1]) return res.status(400).json({ error: `取值须在 ${NUM[key][0]}–${NUM[key][1]}` });
-    cfg.推荐[key] = v;
-  }
-  fs.writeFileSync(path.join(ROOT, 'studio.config.json'), JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-  journal.append(ROOT, `推荐参数调整：${key} → ${value}`);
-  res.json({ ok: true, 推荐: cfg.推荐 });
+  let 原文 = null;
+  try { 原文 = fs.readFileSync(path.join(ROOT, '瞭望塔', '心跳.txt'), 'utf8').trim(); } catch { /* 未装塔或塔没写过 */ }
+  if (!原文) return res.json({ 在岗: null, 说明: '本仓未装瞭望塔（无 瞭望塔/心跳.txt）——不立债，不假红' });
+  const t = Date.parse(原文);
+  if (!Number.isFinite(t)) return res.json({ 在岗: null, 说明: '心跳戳读不出：' + 原文.slice(0, 40) });
+  const 秒龄 = Math.round((Date.now() - t) / 1000);
+  res.json({ 在岗: 秒龄 <= 心跳阈值秒, 秒龄, 戳: 原文, 阈值秒: 心跳阈值秒 });
 });
+
+// ---- 推荐参数（P6）已摘除（2026-08-22 体检 #58）----
+// 精力档 + 速度参数是「推荐在途」那张卡的写口，卡随 0.23.11 制度改版 / 0.24.7 视图清仓撤了，
+// 写口却活到今天。唯一调用方 public/app.js 的 window.rStep 是个孤儿——它找的
+// `.paramcard[data-rkey]` 全库不存在，点了必静默失败。留着只是给人一个能 200 的死路。
 
 // ---- 职能编制变更（P6 · 已退役）：按人数扩缩编（职能-A/-B/-C）随 H85 补章「去岗位化」一并拆除。
 // 编制表现在每职能一行，唯一写口是 /api/pm/roster（改的是池序，不是人头）。lib/staff.js 已删除。
@@ -1011,12 +1048,22 @@ app.post('/api/config/remote', (req, res) => {
   const { 开, 重生成令牌 } = req.body || {};
   cfg.网络 = cfg.网络 || {}; cfg.网络.远程 = cfg.网络.远程 || {};
   if (typeof 开 === 'boolean') cfg.网络.远程.开 = 开;
-  if (重生成令牌 || (cfg.网络.远程.开 && !cfg.网络.远程.令牌)) {
-    cfg.网络.远程.令牌 = require('crypto').randomBytes(16).toString('hex');
+  // 新令牌一律落**凭据档**（.gitignore 已排除），不再写回 studio.config.json——
+  // 那个文件进版本控制，写回去等于再泄一次（2026-08-21 体检：旧值已随 97 次记账推进远端仓）。
+  let 新令牌 = null;
+  if (重生成令牌 || (cfg.网络.远程.开 && !远程令牌())) {
+    新令牌 = require('crypto').randomBytes(16).toString('hex');
+    const creds = require('./lib/creds');
+    const cur = creds.read(ROOT) || {};
+    cur.远程令牌 = 新令牌;
+    creds.write(ROOT, cur);
+    cfg.网络.远程.令牌 = ''; // 配置里只留空位，值在凭据档
   }
-  fs.writeFileSync(path.join(ROOT, 'studio.config.json'), JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-  journal.append(ROOT, `远程访问：${cfg.网络.远程.开 ? '开' : '关'}${重生成令牌 ? '（令牌已重生成）' : ''}（重启生效监听地址）`);
-  res.json({ ok: true, 远程: { 开: !!cfg.网络.远程.开, 令牌: cfg.网络.远程.令牌 || '' } });
+  require('./lib/core/durable').写(path.join(ROOT, 'studio.config.json'), JSON.stringify(cfg, null, 2) + '\n');
+  const 有令牌 = !!远程令牌();
+  journal.append(ROOT, `远程访问：${cfg.网络.远程.开 ? '开' : '关'}${新令牌 ? '（令牌已重生成，落凭据档）' : ''}${cfg.网络.远程.开 && !有令牌 ? ' ⚠ 无令牌，实际不放行' : ''}（重启生效监听地址）`);
+  // 令牌只在**刚生成**时回一次（人得拿到它）；此后一律不回显——回显等于给每个能打开参数页的东西一份口令。
+  res.json({ ok: true, 远程: { 开: !!cfg.网络.远程.开, 有令牌, ...(新令牌 ? { 令牌: 新令牌 } : {}) } });
 });
 
 // ---- H49 双域：想法池 + 项管 ----
@@ -1185,7 +1232,12 @@ app.get('/api/schedule', (req, res) => {
   // 要么自己复刻一套判定——那就成了两把尺，同一条待办在甘特图和晨晚报里给出不同的延期天数。
   // 判定挂在每粒身上而不是另开一个端点：它是这粒的属性，分两处取必然有一处拿的是旧的。
   const 带判定 = 粒.map((g) => ({ ...g, 判定: schedule.工期判定(g) }));
-  res.json({ 粒: 带判定, 计数, 状态全集: schedule.状态全集, 转移表: schedule.转移表 });
+  // 名册随现态下发（2026-08-21 归属换轴）：上级号 → 可读名。
+  // 前端不自己去拼——特性册与专项册各有权威源，两处各拼一遍就是两把尺。
+  const 名册 = {};
+  try { for (const f of require('./lib/features').list(ROOT) || []) 名册[f.id] = (f.fm && f.fm.名称) || ''; } catch { /* 退化成裸号，不炸页 */ }
+  try { for (const sp of require('./lib/specials').list(ROOT) || []) 名册[sp.id] = (sp.fm && sp.fm.名称) || ''; } catch { /* 同上 */ }
+  res.json({ 粒: 带判定, 计数, 名册, 型集: schedule.型集, 状态全集: schedule.状态全集, 转移表: schedule.转移表 });
 });
 // 三条写路由走 :action 参数而不是三个中文字面量路径——express 4 的静态路径按**原始 URL**
 // 匹配，而 fetch('/api/schedule/登记') 发出去的是百分号编码，字面量路由一律 404（本令实测踩到）。
@@ -1199,7 +1251,7 @@ const 排程动作 = {
   },
   // 就绪 透传（2026-08-20）：项管排完一批说「这批可以放了」，G8「待办放行成单」人闸的判据读的就是它。
   // **必须原样透传，不许 `b.就绪 || false` 兜底**——省略键在 lib 侧是「这一格不动」，兜底会把它变成「改成 false」。
-  调整: (b) => schedule.调整(ROOT, { 粒ID: b.粒ID, 预期版本: b.预期版本, 序: b.序, 依赖: b.依赖, 池衡建议: b.池衡建议, 就绪: b.就绪, 操作者: b.操作者, 说明: b.说明 }),
+  调整: (b) => schedule.调整(ROOT, { 粒ID: b.粒ID, 预期版本: b.预期版本, 序: b.序, 依赖: b.依赖, 池衡建议: b.池衡建议, 就绪: b.就绪, 项目: b.项目, 型: b.型, 上级: b.上级, 操作者: b.操作者, 说明: b.说明 }),
   // 重排（制作人：「发生延期或是超期完成需要重新排期」）：另开一口不并进 调整——
   // 排期改动必须留下「从哪天挪到哪天、较基线延几天、为什么」，混进调整就只剩一行「改了几个字段」。
   // 三格同样原样透传：不传＝不动，显式 null＝清空。
@@ -1247,7 +1299,12 @@ const 排程读 = {
   // 项目内「队列」页（施工令-042 §一）：本项目全量五态计划粒，按 批→序 分组 + 依赖置灰
   队列: (q) => {
     const ctx = 工单语境(q.项目);
-    return scheduleView.队列页(schedule.现态(ROOT), { 项目: q.项目, 管线集: ctx.管线集, 单号集: ctx.单号集, 单号态: ctx.单号态 });
+    // 名册：上级号 → 可读名。不喂的话组头只剩「F-10」这种裸号，人得自己去背编号表。
+    // 特性与专项各有权威源，在这里合并一次喂给纯函数（视图层不去读盘）。
+    const 名册 = {};
+    try { for (const f of require('./lib/features').list(ROOT) || []) 名册[f.id] = (f.fm && f.fm.名称) || ''; } catch { /* 特性册不可读：退化成裸号，不炸页 */ }
+    try { for (const sp of require('./lib/specials').list(ROOT) || []) 名册[sp.id] = (sp.fm && sp.fm.名称) || ''; } catch { /* 同上 */ }
+    return scheduleView.队列页(schedule.现态(ROOT), { 项目: q.项目, 管线集: ctx.管线集, 单号集: ctx.单号集, 单号态: ctx.单号态, 名册 });
   },
   // 主页工程队队列卡（施工令-042 §二）：无管线的待办粒（Q 队列），最多 N 行
   工程队: (q) => scheduleView.工程队队列(schedule.现态(ROOT), {
@@ -1323,9 +1380,11 @@ app.get('/api/attn', (req, res) => {
   // status 要 (root, cfg) 两参——漏传 cfg 会在函数内读 cfg.执行器 时抛 TypeError，
   // 而这条端点没被单测覆盖，只有真机冒烟才炸得出来（0.26.15 换装冒烟实录）。
   const 活跃 = new Set((runner.status(ROOT, cfg).执行中 || []).map((s) => s.id));
-  const T = Number((cfg.闸值 || {}).人闸超时小时 || 24);
+  const T = gr.逾期阈值(cfg); // 唯一取值口（原为 `|| 24`，与 runner 的 `?? 24` 打架：T=0 时两边判反）
   const r = gr.等我(ROOT, { 归属: req.query.归属 || undefined, deps: { 活跃单: 活跃 } });
-  res.json({ ...r, 逾期阈值小时: T, 逾期: r.债.filter((x) => x.停摆小时 != null && x.停摆小时 >= T) });
+  // T<=0 = 关闭升格（2026-08-21 案）：阈值那一格必须下发 null，不能只清 逾期 数组——
+  // public/app.js:167-168 与 :328 是拿 逾期阈值小时 自己重算标记的，阈值留着 0 的话前端照样全红。
+  res.json({ ...r, 逾期阈值小时: T > 0 ? T : null, 逾期: T > 0 ? r.债.filter((x) => x.停摆小时 != null && x.停摆小时 >= T) : [] });
 });
 
 // ---- 两道闸状态（P1/P2 横幅）----
@@ -1333,7 +1392,6 @@ app.get('/api/gates', async (req, res) => {
   if (!ready(res)) return;
   try {
     const locks = await gates.allLocks(cfg);
-    const rec = require('./lib/recommend').recommend(ROOT, cfg, { codex: locks.codex, claude: locks.claude });
     // 沟通护城河读数（施工令-006）：UI 此前完全不提示，制作人看不出「claude 生产单为什么不动」。
     // 判定不另写一套——直接问 dispatch.moatBlocked，UI 与调度同一把尺，绝不各算各的。
     const gi = require('./lib/budget').并入({ codex: locks.codex, claude: locks.claude }, require('./lib/budget').冻结池(cfg, ROOT));
@@ -1344,7 +1402,10 @@ app.get('/api/gates', async (req, res) => {
     // 这一位是那台哑火保险丝在 API 面的唯一出口，参数页额度卡据此挂红标。正常命中时返回体逐字节不变。
     // OAuth 门禁横幅（施工令-055 要件 1）：已过期/未登录才出条（临期只走急件），纯读盘无副作用。
     // 挂在 /api/gates 而不是新开端点——门禁位本来就是「为什么不派单」的唯一问答处，凭据死了也是一种闸。
-    res.json({ paused: require('./lib/core/state').read(ROOT).paused, locks: gi, 推荐: rec, 护城河: moat,
+    // 推荐在途（D28）已随精力档/拉取制退役：前端 0.23.11 撤制度、0.24.7 清视图（app.js `const recCards = '';`
+    // 就是它的墓碑）。服务端这一格却留到今天——前端每 5 秒轮一次 /api/gates，于是每 5 秒
+    // 算一整套 recommend()（内含 countDecisions 全量读 journal，活体 2.4MB），算出来的数零处显示。
+    res.json({ paused: require('./lib/core/state').read(ROOT).paused, locks: gi, 护城河: moat,
       OAuth: require('./lib/oauth').横幅(cfg),
       ...require('./lib/budget-resolve').失效位(require('./lib/budget')) });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1523,6 +1584,22 @@ app.post('/api/anchor/migrate', (req, res) => {
 });
 
 // ---- 参数与额度（P6）----
+// ---- 版本自证（2026-08-21 体检）----
+// 案源：换装脚本的「验活」只 GET /api/config 看有没有应答，**证明不了换的是新版**；
+// 而整个活体（API 与 UI）都不报自己是哪个版本，想比也无从比起。
+// 实证：当日确认 G15 真进了包，靠的是 grep 活体解包出来的 app.asar 二进制——那不该是常规手段。
+// 本端点不看 ready()：**服务半死时更需要知道跑的是哪一版**，而版本号是编译进包的静态值，不依赖仓库就绪。
+app.get('/api/version', (req, res) => {
+  let 码印 = null;
+  try { 码印 = require('./lib/buildstamp').活体(); } catch { /* 指纹算不出不影响报版本 */ }
+  res.json({
+    版本: require('./package.json').version,
+    码印: 码印 ? 码印.指纹 : null,
+    文件数: 码印 ? 码印.文件数 : null,
+    起于: 起动时刻,
+  });
+});
+
 app.get('/api/config', (req, res) => {
   if (!ready(res)) return;
   // 兼容池密钥脱敏（0.22.1）：config 会流向远程客户端，密钥只留尾四位指纹
@@ -1536,7 +1613,7 @@ app.get('/api/config', (req, res) => {
     if (p.兼容.key) p.兼容.key = '●●●●' + String(p.兼容.key).slice(-4);
     if (托管池.has(n)) p.兼容.托管 = true;
   }
-  res.json({ 闸值: cfg.闸值, 执行池: pools, 编制: cfg.编制 || roster.read(cfg), 职能: cfg.职能, 推荐: cfg.推荐 || {}, 项目: cfg.项目 || {}, 模型: cfg.模型 || {}, 执行器: cfg.执行器 || {}, quota: cfg.quota || {}, server: cfg.server || {} });
+  res.json({ 闸值: cfg.闸值, 闸值白名单, 执行池: pools, 编制: cfg.编制 || roster.read(cfg), 职能: cfg.职能, 项目: cfg.项目 || {}, 模型: cfg.模型 || {}, 执行器: cfg.执行器 || {}, quota: cfg.quota || {}, server: cfg.server || {} });
 });
 app.get('/api/quota', async (req, res) => {
   if (!ready(res)) return;
@@ -1622,7 +1699,12 @@ app.get('/api/models', (req, res) => {
 const report = require('./lib/report');
 app.get('/api/report', (req, res) => {
   if (!ready(res)) return;
-  res.json(report.aggregate(ROOT));
+  // 项目切分在服务端做（2026-08-21 体检）：前端各自过滤就是两把尺——
+  // 实测报表页头写「监制台 · Ticketflow」而顶栏 8 个读数是全工作室的。
+  res.json(report.aggregate(ROOT, {
+    项目: String(req.query.项目 || '').trim(),
+    默认项目: (cfg.项目 && cfg.项目.默认) || '',
+  }));
 });
 
 // ---- 阶段字典与阶段标准（D43）：字典=项目可配默认 L0-L2；标准=阶段标准.md 明文（缺则落模板）----
@@ -1645,7 +1727,14 @@ app.post('/api/review-flag', (req, res) => {
   res.json(life.标记待复核(ROOT, String(锚号), 说明));
 });
 
-// ---- 需注意计数（Electron 桌面通知轮询用）----
+// ---- 需注意计数 · **已退役，零消费方**（2026-08-21 体检换轴）----
+// 原为 Electron 桌面通知的数据源。判据轴是「哪些**工单**处于 待验收∪待定夺∪执行失败」，
+// 正是 lib/gatereg.js 立模块时判定必须换掉的那条轴——投池放行、专项关账、值守断更这些
+// 非工单态的人闸它结构上看不见。当日同一分钟实测：本端点报全 0，/api/attn 报 计数 5。
+// main.js 已改读 /api/attn?归属=制作人。本端点**留而不删**：
+//   ① 旧版 exe 若还在跑会打它，删了就是把老客户端打成 404；
+//   ② 留着这段代码 + 这段注释，比在 git 史里找「为什么当年有两条轴」便宜。
+// 判据：全库零调用方 —— grep -rn "api/attention" apps packages | grep -v "^apps/studio/server.js" | grep -v "// " → 应为空。
 app.get('/api/attention', (req, res) => {
   if (!ready(res)) return;
   const stalled = ['在途', '质检', '待定夺'].reduce((n, s) => n + store.list(ROOT, s).filter((t) => t.fm.滞留告警).length, 0);
@@ -1707,62 +1796,30 @@ function start() {
         const 记账分 = (cfg.执行器 || {}).记账间隔分钟 ?? 10;
         if (记账分 > 0) {
           const ledger = require('./lib/ledger');
-          const 记 = () => ledger.commitStudio(ROOT, (ok, note) => { if (ok) console.log('自动记账：' + note); });
+          // 失败也要留痕（2026-08-21 体检）：原样 `if (ok)` —— 成功打屏、失败静默。
+          // 收尾处置已抽成 lib/ledger.js 的具名工厂（#50）：写在这里的匿名闭包除了 grep 源码
+          // 没有第二种验法，抽出去才验得动（判据见 test/ledger-scope.test.js）。
+          const 记 = () => ledger.commitStudio(ROOT, ledger.记账回调(ROOT)); // 回调实现与判据都在 lib/ledger.js
           setInterval(记, 记账分 * 60000).unref();
         }
       }
       // 项管在途巡检（H61，2026-08-05 用户拍板）：每 15 分钟体检在途单——会话存活/进展尾巴/
       // 耗时对预估。确定性检查零 token；异常入呼叫信箱上报总监裁决，台账留巡检心跳。
       if (!initError) {
-        const patrolTails = new Map();
-        setInterval(() => {
-          try {
-            const runnerMod = require('./lib/runner');
-            const pmLedger = require('./lib/pm/ledger');
-            const inflight = store.list(ROOT, '在途').filter((t) => !['战役', '专项'].includes(t.fm.父单类型));
-            const anomalies = [];
-            for (const t of inflight) {
-              const e = [...runnerMod.running.values()].find((x) => x.id === t.id && x.kind === '执行');
-              if (!e) { anomalies.push(`${t.id} 在途但无执行会话`); patrolTails.delete(t.id); continue; }
-              const prev = patrolTails.get(t.id);
-              const tailNow = e.tail || '';
-              // 引擎测试活跃时不计尾巴停滞（2026-08-06 狼来了案：会话前台等测试，尾巴静止是纪律不是僵死）
-              const engActive = (() => { try {
-                const reg = (cfg.项目 && cfg.项目.注册) || {}; const pj = t.fm.项目 && reg[t.fm.项目] && reg[t.fm.项目].路径;
-                return pj && (Date.now() - require('fs').statSync(require('path').join(pj, 'enginectl-test.log')).mtimeMs) < 5 * 60000;
-              } catch { return false; } })();
-              if (prev !== undefined && prev === tailNow && tailNow !== '' && !engActive) anomalies.push(`${t.id} 15 分钟进展尾巴无变化`);
-              patrolTails.set(t.id, tailNow);
-              const mins = (Date.now() - new Date(e.startedAt).getTime()) / 60000;
-              const est = (parseFloat(t.fm.预计时间) * 60) || 30;
-              if (mins > est * 2) anomalies.push(`${t.id} 已跑 ${Math.round(mins)} 分钟 > 预估 ${est} 分钟 ×2`);
-            }
-            pmLedger.event(ROOT, '巡检', { 在途: inflight.length, 异常: anomalies.length });
-            if (anomalies.length) {
-              journal.append(ROOT, `项管巡检异常：${anomalies.join('；')}`);
-              require('./lib/inbox').post(ROOT, '常', '巡检异常', anomalies.join('；').slice(0, 200));
-            }
-            // H81 零派发看门狗：有放行就绪单却连续 ≥2 个周期零派发零执行 → 信箱告警（换装漏开闸案）
-            require('./lib/pm/patrol').零派发告警(ROOT, cfg);
-            // 施工令-004 打点停滞：签了打点软契约却不动了才提醒（无打点的单不适用）
-            require('./lib/pm/patrol').打点停滞(ROOT, cfg);
-            // 施工令-010 零输出看门狗：会话拉起 ≥config.并发.零输出分钟 仍一个字没吐 → 急件（TK-102 挂死 48 分钟案）
-            require('./lib/pm/patrol').零输出(ROOT, cfg);
-            // 施工令-055/057 OAuth 续命哨兵：拍读凭据 expiresAt；临期/过期先发一发无头探针自续
-            // （08-13 16:49 实证 +8h），续成只留流水，**续不上才**发急件（同状态 30 分钟至多一封）。
-            // 二期起是 async（探针最多 60 秒）——不 await，异常自吞进流水，别把同一拍的其余巡检拖住。
-            require('./lib/oauth').哨兵(ROOT, cfg)
-              .catch((e) => journal.append(ROOT, `OAuth 哨兵异常：${String(e && e.message).slice(0, 80)}`));
-            // H99 池衡巡检（施工令-045）：读三池额度 → 决策 → 受限动作落配置。异步且自吞异常，
-            // 不 await——池衡是优化面，它的外呼慢一点不该把同一拍的其余巡检项拖住。
-            require('./lib/pm/wake').池衡巡检(ROOT, cfg, { 保存: saveCfg })
-              .catch((e) => journal.append(ROOT, `池衡巡检异常：${String(e.message).slice(0, 80)}`));
-          } catch { /* 巡检失败不阻塞 */ }
-        }, 15 * 60000).unref();
+        // 拍体已搬进 lib/pm/patroltick.js（2026-08-22 体检 #24/#28）：闭在 setInterval 里的代码
+        // 只能被源码文本判据看着，而「一只狗炸了后面几只还跑不跑」「连炸三拍立不立债」这两件事
+        // 全是运行期行为——搬出来才验得动（测试真造一只必炸的狗、真跑三拍、真看 state 与信箱）。
+        // ROOT/cfg 传取值函数：首次运行向导会就地重挂这两个，按值捕获会一直拿着旧仓库。
+        const 巡检拍 = require('./lib/pm/patroltick').造巡检拍(() => ROOT, () => cfg, { 保存: saveCfg });
+        setInterval(巡检拍, 15 * 60000).unref();
       }
       // 执行器随服务自动开工（D30 修订：开 exe 即开工厂，无需手动点启动）；
       // 停止按钮只管本次会话，"别干活"的常设语义交给暂停闸门/额度锁
       if (!initError) { try { require('./lib/runner').start(ROOT, () => cfg); } catch (e) { console.error('执行器启动失败：' + e.message); } }
+      // 升格环与执行器开关解耦（2026-08-22 体检 #25 第二重）：挂在**开机处**而不是 start() 里。
+      // stop() → stopLoop() 拆的是产线那条 15 秒环，碰不到这条——「人欠的债不因产线停摆而消失」
+      // 这句话到此才在机器上成立（上方注释「停止按钮只管本次会话」正是本条的依据）。
+      if (!initError) { try { require('./lib/runner').start升格环(ROOT, () => cfg); } catch (e) { console.error('升格环启动失败：' + e.message); } }
       resolve({ port, server: srv, initError });
     });
     srv.on('error', reject);

@@ -26,10 +26,9 @@ function read(root) {
 }
 
 function writeAtomic(root, state) {
-  const p = path.join(root, STATE_FILE);
-  const tmp = `${p}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
-  fs.renameSync(tmp, p);
+  // 走 core/durable：写 → **fsync** → 改名。原子改名只保证「要么旧要么新」，
+  // 保证不了「新的那份真在盘上」——2026-08-21 项管台账被断电写成 21918 字节全 NUL 即此洞。
+  require('./durable').写JSON(path.join(root, STATE_FILE), state);
 }
 
 function withLock(root, fn) {

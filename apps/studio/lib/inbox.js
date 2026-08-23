@@ -40,16 +40,24 @@ function post(root, 级别, 类型, 摘要, extra) {
 function list(root, limit) {
   try {
     const lines = fs.readFileSync(FILE(root), 'utf8').trim().split('\n').filter(Boolean);
-    return lines.slice(-(limit || 100)).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    // limit === Infinity ＝ 要全量（未读走这条）。显式判出来，别依赖 slice(-Infinity) 返回全量这个冷知识。
+    const 取 = (limit === Infinity) ? lines : lines.slice(-(limit || 100));
+    return 取.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   } catch { return []; }
 }
 
 // 已读水位（游标制，不改写历史行——append-only 纪律）
 const CURSOR = (root) => path.join(root, '呼叫', 'cursor.json');
+// 未读**不走尾截**（2026-08-22 体检 #69）：原写 list(root, 500) 先切到末 500 行再按游标过滤——
+// 早于游标线但落在 500 行之外的未读会被静默丢掉，不报错、不计数，把「读不完」伪装成「没有更多」。
+// 也不改成「从尾向前扫到首个 t <= at 即停」：post() 由 server/agent/瞭望塔多进程各自 append 且各取
+// new Date()，一次乱序就会让早停提前终止，丢得比现在更多。直接全量读——list() 本来就 readFileSync
+// 全文再 slice，尾截一分钱 I/O 都没省（现网 61KB）。
+// 缺 t 的行不许静默消失：undefined > string 恒 false，故显式当未读处理，由消费端看见它。
 function unread(root) {
   let at = '';
   try { at = JSON.parse(fs.readFileSync(CURSOR(root), 'utf8')).at || ''; } catch { /* 从头 */ }
-  return list(root, 500).filter((e) => e.t > at);
+  return list(root, Infinity).filter((e) => !e.t || e.t > at);
 }
 function markRead(root) {
   fs.mkdirSync(path.dirname(CURSOR(root)), { recursive: true });
