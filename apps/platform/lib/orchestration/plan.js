@@ -143,7 +143,17 @@ function materialize(root, cfg, parent, plan, store) {
     const id = idByKey[task.key];
     const fm = {
       id, title: task.title, role: task.role, 职能: task.role,
-      产出物类型: task.role === 'reviewer' ? '文档' : '代码',
+      // reviewer 的产出是**判定**，不是文件（协-020）。
+      //
+      // 这里原先写的是 `reviewer ? '文档' : '代码'`——而同一个文件第 93 行刚刚禁止过
+      // reviewer 声明 writeScope（「reviewer 是只读角色」），报错里还写着
+      // 「编写集成测试/报告请用 integrator」。**一边不许它写文件，一边给它标一份要落盘的产出**，
+      // 于是造出的单从派出去那一刻就注定空转：2026-08-23 HW-3 实测 7 分 21 秒、零改动。
+      //
+      // 「评审意见」是个**不落盘**的类型：它的归宿是回执与 review-opinion 通道，
+      // 平台捞走那段判定，不需要 agent 往仓里写任何东西。要产出一份报告/盘点文档的活，
+      // 按第 93 行那句话交给 integrator——那个角色本来就能写。
+      产出物类型: task.role === 'reviewer' ? '评审意见' : '代码',
       优先级: task.priority || parent.fm.优先级 || 'P1', 规模: '单兵',
       QA: task.qa ? '开' : '关', 验收方式: task.acceptanceMode,
       项目: parent.fm.项目 || '', 阶段: task.stage || 'BUILD',

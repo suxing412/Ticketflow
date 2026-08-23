@@ -99,4 +99,45 @@ t('自检的总结论不因这一条变红（只跑评审的机器，白名单�
   assert.equal(结.级别, '全链路就绪');
 });
 
+// ---------- 只读产出：零改动是**正确结果**，不是空转 ----------
+t('判定类的单，交付物本来就不是文件', () => {
+  assert.equal(派单.只读产出(单({ 产出物类型: '评审意见' })), true);
+  assert.equal(派单.只读产出(单({ 产出物类型: '结论' })), true);
+  assert.equal(派单.只读产出(单({ 产出物类型: '代码' })), false);
+  assert.equal(派单.只读产出(单({ 产出物类型: '文档' })), false, '文档要落盘，那是 integrator 的活');
+});
+
+t('声明了 write_scope 就是打算写——一票否决（不许把失败洗成成功）', () => {
+  // 宁可漏判成普通单（顶多退回待投让人看一眼），也不能把一个真该写代码却什么都没写的单
+  // 说成「它本来就不用写」。
+  assert.equal(派单.只读产出(单({ 产出物类型: '评审意见', write_scope: ['src/**'] })), false);
+});
+
+t('产出物类型没写时不猜（角色是 reviewer 也不猜）', () => {
+  assert.equal(派单.只读产出(单({ role: 'reviewer' })), false);
+});
+
+t('执行器把「只读单零改动」判成完成，而不是退回待投', () => {
+  const 源 = fs.readFileSync(path.join(平台根, 'scripts', '执行器.js'), 'utf8');
+  const 分叉 = 源.indexOf('if (派单.只读产出(t))');
+  assert.ok(分叉 > 0, '空转分支里要先分出只读单这一类');
+  const 段 = 源.slice(分叉, 分叉 + 3000);
+  assert.match(段, /'在途', '完成'/, '只读单零改动应当流转到完成');
+  assert.match(段, /报告落于/, '报告必须落进工单——只读单的全部产出就是那段文字');
+  assert.match(段, /免检原因/, '不送质检要留下明确的免检原因，不能假装它被自动验过');
+  assert.ok(!/'在途', '质检'/.test(段),
+    '别送质检：判官取材靠 fm.变更文件，只读单没有改动可给它看，送过去只会被判不过');
+});
+
+t('reviewer 子任务不再被造成「产出物类型: 文档」', () => {
+  // 源头改对了：plan.js 一边禁止 reviewer 声明 writeScope，一边给它标一份要落盘的产出，
+  // 那是平台自己制造矛盾。reviewer 的产出是判定，类型跟着改成不落盘的。
+  const 源 = fs.readFileSync(path.join(平台根, 'lib', 'orchestration', 'plan.js'), 'utf8');
+  assert.ok(!/reviewer' \? '文档'/.test(源), 'plan.js 不该再给 reviewer 标「文档」');
+  assert.match(源, /reviewer' \? '评审意见'/);
+  const 类型 = (源.match(/reviewer' \? '([^']+)'/) || [])[1];
+  assert.equal(派单.只读产出(单({ 产出物类型: 类型 })), true,
+    'plan.js 造出来的 reviewer 单，必须被只读产出认得——否则它照样永远做不完');
+});
+
 console.log('全部通过：' + passed + ' 项');

@@ -638,6 +638,99 @@ const 服务 = http.createServer((req, res) => {
     } catch (e) { return 发JSON(res, 500, { ok: false, error: `预算闸不可用：${e.message}` }); }
   }
 
+  // ——— 欠你几笔（协-019）：全系统唯一的「现在等我落笔的是哪些」———
+  //
+  // 定义域是**闸**不是工单状态（形制取自 studio 的 gatereg，理由见 lib/闸注册表.js 头部）。
+  // 三条纪律：只读权威状态（绝不拿呼叫信箱当账本）、gateKey 幂等、发起型不进清单。
+  if (url路径 === '/api/attn' && req.method === 'GET') {
+    const 闸表 = require('./lib/闸注册表');
+    if (!工单根.ok) {
+      // 连工单库都没配时不硬凑一份空清单——空清单会被读成「一笔都不欠」，
+      // 而真相是「根本没查」。这两件事必须分得开。
+      return 发JSON(res, 503, { ok: false, error: 工单根.错误, 说明: '工单库没配，欠账无从谈起——这不是「零欠账」' });
+    }
+    const 工单表 = 工单库.list(工单根.根);
+    const 冻 = 派单.冻结情况(公用件, 配置, 账本根);
+    const 池数 = Object.keys(配置.providers || {}).length;
+    const 态 = 读JSON(path.join(账本根, 'journal', '执行器态.json'), {});
+    const 逾期阈值小时 = Number((配置.执行 && 配置.执行.逾期升格小时) || 24);
+    const r = 闸表.等我({
+      工单表,
+      现在: Date.now(),
+      卡死阈值: Number((配置.巡检 && 配置.巡检.在途超时毫秒) || 30 * 60 * 1000),
+      依赖就绪: (t) => 派单.依赖就绪(工单库, 工单根.根, 工单库.find(工单根.根, t.id) || t).ok,
+      // 自动派发开着时「待投」不算欠人——有人接管了。取执行器落下的运行态，
+      // 不取 config：人可以在界面上开关它，config 里那个只是开机默认。
+      自动派发开: !!(态.自动派发 && 态.自动派发.开),
+      可用池数: Math.max(0, 池数 - Object.keys(冻.挡 || {}).length),
+      耗尽: 闸表.读耗尽(账本根),
+      账本根,
+    });
+    return 发JSON(res, 200, {
+      ok: true, ...r,
+      逾期阈值小时,
+      逾期: r.债.filter((x) => x.停摆小时 != null && x.停摆小时 >= 逾期阈值小时),
+      执行器态: 态.自动派发 ? { 自动派发: 态.自动派发, 起于: 态.起于 || null } : null,
+      说明: '按停摆时长降序（催办的天然序）。发起型闸不进这份清单——没有队列的动作不可能「欠着」，'
+        + '硬塞进来只会造出永远为空或永远为满的假账。注册表里能看到它们全部。',
+    });
+  }
+
+  // ——— 就绪探针（协-019）：**存活 ≠ 就绪** ———
+  //
+  // /api/health 回答「这个进程还活着吗」（瞭望塔探它，免令牌）；
+  // 本端点回答「它现在真的能干活吗」——工单库读不读得到、公用件载不载得动、
+  // 另外两个进程在不在。无人值守时这两件事必须分开：进程活着但工单库那块盘掉了，
+  // health 照样绿，而产线一张单也走不动。
+  if (url路径 === '/api/ready' && req.method === 'GET') {
+    const 项 = [];
+    项.push({ 项: '工单库', 就绪: !!工单根.ok, 详: 工单根.ok ? 工单根.根 : 工单根.错误 });
+    for (const 包 of ['providers', 'budget', 'quota']) {
+      try { 公用件.载入(包, `${包 === 'providers' ? 'registry' : 包}.js`); 项.push({ 项: `公用件/${包}`, 就绪: true }); }
+      catch (e) { 项.push({ 项: `公用件/${包}`, 就绪: false, 详: String(e.message).split('\n')[0] }); }
+    }
+    // 自检的「级别」进来当一条只读旁证，**不当闸**：能干到哪一步（干跑可用 / 全链路就绪）
+    // 是产品形态问题，不是「服务坏了」。把「没开真跑」判成未就绪，会让探针在
+    // 一台**故意只跑干跑**的机器上永远红着，红久了就没人看了。
+    const 自检结论 = 自检.结论(自检.查(仓根, 配置, 工单根));
+    const 探 = (口, 名) => new Promise((定) => {
+      const q = http.request({ host: '127.0.0.1', port: 口, method: 'GET', path: '/health', timeout: 1500,
+        headers: { Authorization: `Bearer ${令牌}` } }, (上) => {
+        let s = ''; 上.on('data', (d) => s += d);
+        上.on('end', () => 定({ 项: 名, 就绪: 上.statusCode === 200, 详: 上.statusCode === 200 ? undefined : `HTTP ${上.statusCode}` }));
+      });
+      q.on('timeout', () => { q.destroy(); 定({ 项: 名, 就绪: false, 详: '1.5s 无应答' }); });
+      q.on('error', (e) => 定({ 项: 名, 就绪: false, 详: `${e.code || e.message}——没起来或已崩` }));
+      q.end();
+    });
+    return Promise.all([探(工作区端口, '工作区服务'), 探(执行器端口, '执行器')]).then((远) => {
+      const 全 = [...项, ...远];
+      const 就绪 = 全.every((x) => x.就绪);
+      发JSON(res, 就绪 ? 200 : 503, {
+        ok: 就绪, 就绪, 检查: 全, 能力级别: 自检结论.级别, 能力一句话: 自检结论.一句话,
+        未就绪: 全.filter((x) => !x.就绪).map((x) => `${x.项}：${x.详 || '不可用'}`),
+        说明: '就绪 = 现在能干活。存活探针是 /api/health（免令牌，瞭望塔用），它不看这些。',
+      });
+    });
+  }
+
+  // ——— 呼叫信箱（协-019）：无人值守时的唯一出口 ———
+  if (url路径 === '/api/inbox' && req.method === 'GET') {
+    const 呼叫 = require('./lib/呼叫');
+    const 上限 = Math.min(500, Number(请求URL.searchParams.get('limit')) || 100);
+    const 全 = 呼叫.列(账本根, 上限);
+    const 未 = 呼叫.未读(账本根, 500);
+    return 发JSON(res, 200, {
+      ok: true, 条数: 全.length, 未读: 未.length, 急未读: 未.filter((x) => x.级别 === '急').length,
+      呼叫: 全.slice().reverse(),
+      说明: '同因告警在静默窗内只落一笔（同因压制 字段记着被压了多少次）——'
+        + '一条报了 265 次的告警和一条只报过一次的，在信箱里必须长得不一样。',
+    });
+  }
+  if (url路径 === '/api/inbox/read' && req.method === 'POST') {
+    return 发JSON(res, 200, { ok: true, ...require('./lib/呼叫').标记已读(账本根) });
+  }
+
   // ——— 额度（协-018）：订阅窗口的当下读数 + 这道闸此刻挡了谁 ———
   //
   // 取数不在这个进程（要拉起 codex app-server，本进程闭包里不许有 child_process）：
@@ -885,4 +978,32 @@ const 服务 = http.createServer((req, res) => {
     + `（浏览器打开首页无需手工填；curl 需带 Authorization: Bearer <令牌>；`
     + `/api/health 免令牌，供瞭望塔心跳探测）\n`);
   if (registry错误) process.stderr.write(`[${平台名}] 警告：${registry错误}\n`);
+
+  // 开机自检进呼叫信箱（协-019）。无人值守时**没有人会去点自检页**——
+  // 配置坏了的表现是「界面开着、看板空着」，而那跟「今天没建单」长得一模一样。
+  // 只报致命项：一台故意只跑干跑的机器不该每次开机都往信箱里塞一条。
+  try {
+    const 呼叫 = require('./lib/呼叫');
+    const 结 = 自检.结论(自检.查(仓根, 配置, 工单根));
+    if (结.级别 === '未就绪') {
+      呼叫.急(账本根, '开机未就绪', `${平台名} v${版本} 起来了，但${结.一句话}`, { 静默秒: 3600 });
+    }
+    if (registry错误) 呼叫.急(账本根, '公用件失效', `providers 注册表加载失败：${registry错误}`, { 静默秒: 3600 });
+  } catch (e) { process.stderr.write(`[${平台名}] 开机自检写信箱失败：${e.message}\n`); }
 });
+
+// 优雅停机（协-019）：先停接新请求，再放已建立的连接走完。
+// 直接 process.exit 的话，正在传输的响应会断在半路——调用方看到的是
+// 「连接被重置」，跟服务从来没起过长得一样。
+let 停机中 = false;
+function 停机(信号) {
+  if (停机中) return;
+  停机中 = true;
+  process.stdout.write(`[${平台名}] 收到 ${信号}，停止接新请求…\n`);
+  服务.close(() => process.exit(0));
+  // 兜底：有长连接赖着不走时也得走。3 秒足够放走正常请求。
+  setTimeout(() => process.exit(0), 3000).unref();
+}
+for (const 信号 of ['SIGINT', 'SIGTERM']) process.on(信号, () => 停机(信号));
+// IPC：Windows 上信号是无条件终止，handler 收不到。监工收摊时走这条请我们自己收工。
+process.on('message', (m) => { if (m && m.停机) 停机(`IPC:${m.停机}`); });
