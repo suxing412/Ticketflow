@@ -1403,7 +1403,7 @@ app.get('/api/decisions', (req, res) => {
   // 前端（G 组）切完新键即可删旧键，别让改版窗口里旧页面直接白屏。
   const accept = store.list(ROOT, '完成').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 验收方式: t.fm.验收方式, QA: t.fm.QA, 项目: t.fm.项目, 挂起: t.fm.挂起 || null, 父单类型: t.fm.父单类型 || null }));
   const escal = store.list(ROOT, '待处理').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 自修次数: t.fm.自修次数 || 0, 项目: t.fm.项目, 挂起: t.fm.挂起 || null, 父单类型: t.fm.父单类型 || null }));
-  res.json({ 完成: accept, 待处理: escal, 待验收: accept, 待定夺: escal, 积压闸: (cfg.闸值 || {}).待验收积压闸, 积压: accept.length });
+  res.json({ 完成: accept, 待处理: escal, 积压闸: (cfg.闸值 || {}).待验收积压闸, 积压: accept.length }); // H108 双键过渡结束：待验收/待定夺 别名已删，前端读 完成/待处理
 });
 
 // ---- 等我（施工令-061 二·2）：全系统唯一的「欠人几笔」谓词 ----
@@ -1782,7 +1782,7 @@ app.get('/api/attention', (req, res) => {
   const stalled = ['在途', '初检', '待处理'].reduce((n, s) => n + store.list(ROOT, s).filter((t) => t.fm.滞留告警).length, 0);
   res.json({
     待验收: store.list(ROOT, '完成').length,
-    待定夺: store.list(ROOT, '待处理').length,
+    待处理: store.list(ROOT, '待处理').length,
     执行失败: 0,
     滞留告警: stalled,
   });

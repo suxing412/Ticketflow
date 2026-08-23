@@ -1193,8 +1193,8 @@ async function viewDecisions() {
   const d = await api('/api/decisions');
   // D42：决策台按当前项目过滤（积压计数是全局闸，保持全局读数）
   const p = projActive();
-  if (p) { await loadCfg(); d.待验收 = d.待验收.filter((t) => projOf(t) === p); d.待定夺 = d.待定夺.filter((t) => projOf(t) === p); }
-  const cur = dTab === 'accept' ? (d.待验收[0] || null) : (d.待定夺[0] || null);
+  if (p) { await loadCfg(); d.完成 = d.完成.filter((t) => projOf(t) === p); d.待处理 = d.待处理.filter((t) => projOf(t) === p); }
+  const cur = dTab === 'accept' ? (d.完成[0] || null) : (d.待处理[0] || null);
   let main = `<div class="dmain card r16"><p class="dim">没有待你处理的签字项——一切安好。</p>
     <p class="subnote" style="margin-top:8px">要开新活：<a class="glink" href="#/relay">项管页想法在池拍板</a> · 要放行：<a class="glink" href="#/board">看板待派列</a> · 要验收 Unity：先关上面的编辑器锁</p></div>`;
   if (cur) {
@@ -1227,7 +1227,7 @@ async function viewDecisions() {
         <button class="btn h36" onclick="dAct('定夺','${esc(cur.id)}',null,'给方向')">给方向</button>
         <button class="btn danger-o h36" onclick="dAct('定夺','${esc(cur.id)}',null,'打回')">打回</button>${dJudgeBtns(cur, 有子)}</div></div>`}</div>`;
   }
-  const q1 = d.待验收.map((t) => `<div class="qitem${suspCls(t)}" onclick="dTab='accept';route()"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}><span class="qi mono">${snowB(t)}${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · ${esc(t.验收方式 || '保留')}</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>';
+  const q1 = d.完成.map((t) => `<div class="qitem${suspCls(t)}" onclick="dTab='accept';route()"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}><span class="qi mono">${snowB(t)}${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · ${esc(t.验收方式 || '保留')}</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>';
   // H64 编辑器锁（2026-08-05 制作人指正：锁属验收流程，落决策台不落首页）——数据后到原地填
   setTimeout(async () => { try {
     const run = await api('/api/runner');
@@ -1240,11 +1240,11 @@ async function viewDecisions() {
       <span class="subnote">开 Unity 验收的第一步和最后一步都在这</span></div>
     <div class="dtabs">
       <span class="tab ${dTab === 'accept' ? 'active' : ''}" onclick="dTab='accept';route()">验收签字</span>
-      <span class="tab ${dTab === 'escal' ? 'active' : ''}" onclick="dTab='escal';route()">待处理 ${d.待定夺.length ? `<span class="badge">${d.待定夺.length}</span>` : ''}</span>
+      <span class="tab ${dTab === 'escal' ? 'active' : ''}" onclick="dTab='escal';route()">待处理 ${d.待处理.length ? `<span class="badge">${d.待处理.length}</span>` : ''}</span>
       <span class="backlog2">验收积压 ${d.积压} / ${d.积压闸}</span></div>
     <div class="dgrid">${main}<div><div class="dside card r16"><h3>完成候验队列</h3>${q1}</div>
-      <div class="dside card r16"><h3 class="${d.待定夺.length ? 'err' : ''}">待处理 · ${d.待定夺.length}</h3>
-        ${d.待定夺.map((t) => `<div class="qitem${suspCls(t)}" onclick="dTab='escal';route()"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}><span class="qi mono">${snowB(t)}${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · QA 未过</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>'}</div></div></div>`;
+      <div class="dside card r16"><h3 class="${d.待处理.length ? 'err' : ''}">待处理 · ${d.待处理.length}</h3>
+        ${d.待处理.map((t) => `<div class="qitem${suspCls(t)}" onclick="dTab='escal';route()"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}><span class="qi mono">${snowB(t)}${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · QA 未过</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>'}</div></div></div>`;
 }
 window.dAct = async (name, id, 通过, 决定) => { const r = await post('/api/act/' + name, { id, 通过, 决定 }); toast(r.ok ? '已处理' : (r.error || '失败')); route(); };
 window.dReject = async (id) => { if (await ask('打回将归档旧单，需另开新单重走流程。确认？')) dAct('验收', id, false); };
