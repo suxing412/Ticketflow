@@ -244,6 +244,11 @@ t('每条向外发的请求都得把 body 送到（少一手就静默丢 body）
   assert.ok(转发块.length >= 2, '应有工作区与执行器两条转发');
   for (const 块 of 转发块) {
     const 片 = 块.slice(0, 1400);
+    // GET 探针没有 body 可送（协-019 的 /api/ready 要探另外两个进程的 /health）。
+    // 要守的是「**该送的 body 送到没有**」，不是「每个 http.request 都得写一次 write」——
+    // 把一个天生无体的 GET 判成漏 body，会逼人为了过测试去发一个空 body，那才是坏事。
+    // 判据收得很紧：显式 method:'GET' 且整块里根本没有组装过 body。
+    if (/method:\s*'GET'/.test(片) && !/Content-Length|JSON\.stringify\(体/.test(片)) continue;
     assert.ok(/req\.pipe\(代理\)/.test(片) || /代理\.write\(/.test(片),
       '向外发请求必须把 body 送过去（透传用 req.pipe，自组装用 代理.write）；'
       + '裸的 代理.end() 会静默丢掉请求体：\n' + 片.slice(0, 260));
