@@ -224,7 +224,9 @@ function 聚合(root, f, opts = {}) {
   const 直挂 = 直挂单(root, 特.id, snap);
   let 单表 = [...直挂];
   for (const s of 专项们) 单表 = 单表.concat(specials.子单(root, s, snap));
-  const 终态 = ['完成', '已归档'];
+  // H108 落袋口径与 specials.落袋态 同判：完成（做完等关账）+ 归档（已验收落袋）。
+  // 废弃不算落袋——出基线的单不该把特性的完成度撑好看（分母里照旧留着）。
+  const 终态 = ['完成', '归档'];
   const 落袋 = 单表.filter((t) => 终态.includes(t.state)).length;
   return {
     id: 特.id, ...特.fm,
@@ -335,7 +337,7 @@ function 迁移(root, 计划, opts = {}) {
   for (const c of (计划.容器单 || [])) {
     const t = store.find(root, c.id);
     if (!t) { 跳过.push({ 单: c.id, 因: '不在库' }); continue; }
-    if (t.state === '已归档') {
+    if (t.state === '归档') {
       if (t.fm.容器退役) { 跳过.push({ 单: c.id, 因: '已标退役' }); continue; }
       动作.push({ 步: '容器标退役', 单: c.id, 态: t.state, 因: c.因 });
       if (!演练) store.update(root, c.id, (fm) => { fm.容器退役 = true; fm.容器退役因 = c.因; });
@@ -343,7 +345,7 @@ function 迁移(root, 计划, opts = {}) {
     }
     动作.push({ 步: '容器归档', 单: c.id, 从: t.state, 因: c.因 });
     if (!演练) {
-      const r = store.move(root, c.id, t.state, '已归档', (fm) => {
+      const r = store.move(root, c.id, t.state, '归档', (fm) => {
         fm.归档原因 = `四层归位：容器单退役——${c.因}`; fm.容器退役 = true; fm.容器退役因 = c.因;
       }, new Date().toISOString());
       if (!r.ok) 错.push(`容器 ${c.id} 归档失败：${r.error}`);

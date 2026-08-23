@@ -107,9 +107,9 @@ const 捕获挂载点 = () => {
 };
 
 const 板夹具 = {
-  states: ['待投', '完成'],
+  states: ['待派', '完成'],
   board: {
-    待投: [{ id: 'TF-1', 项目: 'Ticketflow', 专项: null, title: '条文编址与引用化', 职能: '程序' }],
+    待派: [{ id: 'TF-1', 项目: 'Ticketflow', 专项: null, title: '条文编址与引用化', 职能: '程序' }],
     完成: [{ id: 'TK-25', 项目: 'Ticketflow', 专项: null, title: '已落袋的散单', 职能: '程序' },
       { id: 'TF-7', 项目: 'Ticketflow', 专项: 'S-4', title: '挂在专项底下的', 职能: '程序' },
       { id: 'TK-9', 项目: 'TK', 专项: null, title: '别人家的单', 职能: '策划' }],

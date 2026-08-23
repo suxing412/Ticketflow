@@ -1,10 +1,11 @@
-// runner.js — 执行器（D30/D31/D32）：内嵌 exe 的拉取循环，监制台版"监听器"。
+// runner.js — 执行器（D30/D31/D32 · H108 三大态状态机 2026-08-24 改道）：内嵌 exe 的拉取循环。
 // 每轮 tick 三种工作：
-//   ① 自动领单：空闲在岗 agent 从池拉单（双闸/额度锁/依赖/一人一张全在 claim 路径）
+//   ① 自动领单：空闲在岗 agent 从 待派（fm.放行===true）拉单（双闸/额度锁/依赖/一人一张全在 claim 路径）
 //   ② 执行：在途单起执行（真调 codex/claude 无头 CLI；H81 常开单闸制：运行即实弹，无解锁开关）
-//   ③ 质检执行：编制里有 QA 这一行就起「QA」会话复核 → 走 D10 QA 裁定（QA 只裁不开单）
-// 失败路径（D31）：CLI 崩溃/超时/非零退出 → lifecycle.执行失败（纯本地目录改名，零网络依赖），
-// 由 Claude 会话分诊（重投/上呈/废弃）。停止=不领新单，执行中跑完（同 D26 暂停语义）。
+//   ③ 审检链目录化（H108）：质检会话跑「初检」目录 → 两检初检/核查会话跑「核查」目录 →
+//      争议送「仲裁」目录由代裁会话裁。判官全过落「完成」（在途大态出口驻留位，等专项级验收）。
+// 失败路径（D31/H108）：CLI 崩溃/超时/非零退出 → lifecycle.执行失败（纯本地目录改名 → 待处理），
+// 由总监分诊（待重派/返修/废弃）。停止=不领新单，执行中跑完（同 D26 暂停语义）。
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -412,6 +413,8 @@ function buildPrecheckPrompt(root, t, receiptPath) {
   ].join(String.fromCharCode(10));
 }
 
+// 会话种类名与目录态名分家（2026-08-24 H108 后）：kind='质检' 是判官会话类型与模型档配置键
+// （cfg.模型.质检），**不是目录态**——目录态已改 初检/核查/仲裁。键名不动是为了不碰生产 config。
 const JUDGE_KINDS = new Set(['质检', '代核', '代裁', '初检']);
 function settleClose(kind, code, out, errout, ticketId, finishOk, failLocal) {
   const text = String(out).trim();
@@ -509,7 +512,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     try { require('./quota').eagerRefresh(cfg); } catch { /* 急刷失败不影响交单 */ } // 完工=额度变化时刻，作废节流窗口让读数跟上
     const cur = store.find(root, t.id);
     if (kind === '质检') {
-      if (!cur || cur.state !== '质检') return;
+      if (!cur || cur.state !== '初检') return; // H108：质检会话跑在「初检」目录（原 质检 目录改名）
       store.update(root, t.id, (fm) => { fm.质检人 = agentId; delete fm.质检失败次数; });
       { // H69 线②：质检席质量分
         const mq = String(note).match(/质量分[:：]\s*([1-5])/);
@@ -518,9 +521,11 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       const r = lifecycle.QA裁定(root, cfg, t.id, verdict); // 曾硬编码 true——QA 写"不过"也放行，自修/待定夺全成死代码（TK-31/33 空壳两连过的真凶）
       if (r.ok) journal.append(root, `质检执行完成 ${t.id}（${agentId} · ${note}）`);
     } else if (kind === '代裁') {
-      // D43③：解析裁判档结论。给方向→定夺给方向（方向文本进正文，主办重执行能读到）；
-      // 其余（上呈/解析不出）→ 盖代裁章留在待定夺等用户——保守缺省，绝不误放行
-      if (!cur || cur.state !== '待定夺') return;
+      // D43③ / H108：仲裁会话跑在「仲裁」目录（原 待定夺）。解析裁判档结论：
+      // 给方向→仲裁定「给方向」回在途（方向文本进正文，主办重执行能读到）；
+      // 其余（上呈/解析不出）→ 仲裁定「上呈」送 待处理（总监分诊台）——保守缺省，绝不误放行。
+      // 仲裁定 由 lifecycle（A 组）提供：给方向清自修计数+方向入正文，上呈写上呈原因。
+      if (!cur || cur.state !== '仲裁') return;
       const text = String(note);
       const rp = path.join(root, '回执', `${t.id}.md`);
       try { fs.appendFileSync(rp, `\n\n## 仲裁\n${text.slice(0, 6000)}\n`, 'utf8'); } catch { /* 无回执不阻塞 */ }
@@ -528,13 +533,17 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       const dir = give ? (text.match(/方向[:：]\s*([\s\S]{1,2000})/) || [])[1] : null;
       store.update(root, t.id, (fm) => { fm.代裁 = { 结论: give ? '给方向' : '上呈', 时间: new Date().toISOString() }; delete fm.代裁失败次数; });
       if (give && dir) {
-        const r = lifecycle.定夺(root, t.id, '给方向', dir.trim(), '代裁·裁判档');
+        // 给方向 = 仲裁定「打回」回在途重做。方向文本先入正文（主办重执行能读到）；
+        // 自修次数清零同 TK-97 案口径：回炉是裁决给的新起点，不清则回来一次不过即再三振，死循环。
+        store.update(root, t.id, (fm, t2) => { fm.自修次数 = 0; return { body: (t2.body || '') + `\n\n## 定夺方向（代裁·裁判档 · ${new Date().toISOString().slice(0, 10)}）\n${dir.trim().slice(0, 2000)}\n` }; });
+        const r = lifecycle.仲裁定(root, t.id, '打回', '给方向（方向已写入正文）');
         if (r.ok) journal.append(root, `仲裁 ${t.id} → 给方向回在途（D43③，方向已写入正文）`);
       } else {
-        journal.append(root, `仲裁 ${t.id} → 上呈：留待定夺等你裁（${give ? '方向缺失' : '裁判判断需制作人裁量'}）`);
+        const r = lifecycle.仲裁定(root, t.id, '上呈', give ? '方向缺失' : '裁判判断需制作人裁量');
+        if (r.ok) journal.append(root, `仲裁 ${t.id} → 上呈待处理（${give ? '方向缺失' : '裁判判断需制作人裁量'}，H108）`);
       }
-    } else if (kind === '初检') { // H67 两检制第一道：格式与规范
-      if (!cur || cur.state !== '待验收') return;
+    } else if (kind === '初检') { // H67 两检制第一道：格式与规范（H108 起随深检同驻「核查」目录）
+      if (!cur || cur.state !== '核查') return;
       let v = {}; try { v = JSON.parse(note); } catch { /* finishOk 已保证可解析 */ }
       const 缺 = (v.缺项 || []).slice(0, 10);
       // 判源（施工令-031）：机判 = 进程内 precheck.js；否则是二线 LLM 的模型名。
@@ -549,12 +558,13 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       store.update(root, t.id, (fm) => { fm.初检 = { 结论: v.初检, ...(v.备注 ? { 备注: v.备注 } : {}), ...(缺.length ? { 缺项: 缺 } : {}), 判源, 时间: new Date().toISOString() }; delete fm.初检失败次数; });
       if (verdict) journal.append(root, `两检初检过 ${t.id}${机判 ? '（机判）' : ''} → 进深检（opus 内容质量）`);
       else {
-        journal.append(root, `两检初检不过 ${t.id}${机判 ? '（机判）' : ''}：${缺.join('；').slice(0, 120)}——留待验收（返修或人工裁），未烧深检`);
+        journal.append(root, `两检初检不过 ${t.id}${机判 ? '（机判）' : ''}：${缺.join('；').slice(0, 120)}——留核查（返修或人工裁），未烧深检`);
         inbox.post(root, '常', '初检不过', `${t.id} 格式规范缺项：${缺.join('；').slice(0, 150)}`, { 单号: t.id });
       }
     } else if (kind === '代核') {
-      if (!cur || cur.state !== '待验收') return;
-      // 核验报告追加进回执；通过→自动验收完成（D11 委托代劳），不过→留在待验收等用户裁
+      if (!cur || cur.state !== '核查') return; // H108：核查会话跑在「核查」目录（原 待验收）
+      // 核验报告追加进回执；通过→核查过落「完成」（在途出口驻留位，等专项级验收），
+      // 不过→送仲裁（H108 审检链：核查争议由仲裁席裁，判官全为 AI、项管全权）
       const rp = path.join(root, '回执', `${t.id}.md`);
       try { fs.appendFileSync(rp, `\n\n## 核查\n${String(note).slice(0, 6000)}\n`, 'utf8'); } catch { /* 无回执文件也不阻塞 */ }
       store.update(root, t.id, (fm) => { fm.核查 = fm.代核 = { 结论: verdict ? '通过' : '不过', 时间: new Date().toISOString() }; delete fm.代核失败次数; }); // H68 双写：新章 核查 + 旧章 代核
@@ -564,32 +574,33 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       }
       if (verdict) {
         // 施工令-032②（H97）引擎门禁停闸：验收标准点名 enginectl/unity-test 这类引擎实测的单，
-        // 判官读的只是回执文字——引擎到底跑没跑它看不出来。核查过了也只盖候检印停在待验收，
-        // 等总监确认实测证据真入回执后走「实证放行」。非门禁单一个字不变，照旧直转完成。
+        // 判官读的只是回执文字——引擎到底跑没跑它看不出来。核查过了也只盖候检印停在核查目录，
+        // 等总监确认实测证据真入回执后走「实证放行」。非门禁单一个字不变，照旧直落完成。
         const 门 = lifecycle.引擎门禁命中(cfg, cur);
         if (门) lifecycle.候引擎实证(root, t.id, 门, '核查');
         else {
-          const r = lifecycle.验收(root, t.id, true);
-          if (r.ok) journal.append(root, `核查通过 ${t.id} → 验收完成（Claude 代劳，D11/D34）`);
+          const r = lifecycle.核查过(root, t.id); // H108 推进边（A 组 lifecycle 提供）：核查→完成
+          if (r.ok) journal.append(root, `核查通过 ${t.id} → 完成（Claude 代劳，D11/D34/H108 出口驻留位候专项验收）`);
         }
       } else {
-        journal.append(root, `核查不过 ${t.id}：留在待验收，附核验报告等你裁（不自动打回）`);
-        inbox.post(root, '急', '代核不过', `${t.id} 核验报告待裁（点返修同号改写）`, { 单号: t.id });
-        // H65 同活同号：不再另开返工草稿（判官建议已在回执「核查」章，制作人点「返修」同号改写即可）
+        const r = lifecycle.送仲裁(root, t.id, '核查不过'); // H108 推进边（A 组 lifecycle 提供）：核查→仲裁
+        if (r.ok) journal.append(root, `核查不过 ${t.id} → 送仲裁（核验报告已入回执，H108 审检链）`);
+        // H65 同活同号語义保留：仲裁裁「上呈」后落 待处理，制作人点「返修」同号改写
       }
     } else {
       if (!cur || cur.state !== '在途') return; // 期间被收回/废弃，不硬交
-      if (/##\s*评估回呈/.test(String(note))) { // H61：领单评估判做不了——不算失败，回池待项管裁决；三轮上呈总监
+      if (/##\s*评估回呈/.test(String(note))) { // H61：领单评估判做不了——不算失败，回待派候项管裁决；三轮上呈总监
         const rp0 = path.join(root, '回执', `${t.id}.md`);
         try { fs.writeFileSync(rp0, String(note), 'utf8'); } catch { /* 尽力 */ }
         const 轮 = (cur.fm.评估回呈轮 || 0) + 1;
-        // 施工令-012：回呈原因同样落库（优化-D 通则）——本轮回池，若后续再走三振/失败分诊进待定夺，
+        // 施工令-012：回呈原因同样落库（优化-D 通则）——本轮回队，若后续再走三振/失败分诊进待处理，
         // 那两处会用各自的原因覆盖；在此之前详情页读到的就是这条真原因，不用 grep 流水猜。
-        store.move(root, t.id, '在途', '池', (fm) => {
+        // H108：原 在途→池 改 在途→待派；撤放行=原地 fm.放行=false（放行已降为标记，项管重放行才可再派）。
+        store.move(root, t.id, '在途', '待派', (fm) => {
           delete fm.主办; delete fm.领单时间; fm.放行 = false; fm.评估回呈轮 = 轮;
-          fm.上呈原因 = `评估回呈第 ${轮} 轮：执行会话领单评估判定做不了，回池待项管裁决（H61）`;
+          fm.上呈原因 = `评估回呈第 ${轮} 轮：执行会话领单评估判定做不了，回待派候项管裁决（H61）`;
         }, new Date().toISOString());
-        journal.append(root, `评估回呈 ${t.id}（第 ${轮} 轮）：执行会话判定做不了，回池待项管裁决（H61）`);
+        journal.append(root, `评估回呈 ${t.id}（第 ${轮} 轮）：执行会话判定做不了，回待派候项管裁决（H61）`);
         try { require('./pm/ledger').event(root, '评估回呈', { 单: t.id, 轮 }); } catch { /* 不阻塞 */ }
         if (轮 >= 3) {
           inbox.post(root, '急', '三轮裁决不过', `${t.id} 评估回呈已 ${轮} 轮，按 H61 上呈总监查单`, { 单号: t.id });
@@ -619,7 +630,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     if (kind === '代核' || kind === '代裁' || kind === '初检') {
       // 判官失败不动单不盖章（TK-21：空输出/网络抖动都走这里）：计失败次数，
       // 封顶前 tick 下轮自动重试，封顶后停拉等人工（清计数字段即可重启重审）
-      const 场 = kind === '代裁' ? '待定夺' : '待验收';
+      const 场 = kind === '代裁' ? '仲裁' : '核查'; // H108：代裁驻仲裁目录，初检/代核驻核查目录
       const field = kind === '代核' ? '代核失败次数' : kind === '初检' ? '初检失败次数' : '代裁失败次数';
       const cur0 = store.find(root, t.id);
       if (cur0 && cur0.state === 场) {
@@ -632,20 +643,20 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       return;
     }
     if (kind === '质检') {
-      // 判官阶段失败（多为网络抖动）不打整单：留在质检原地重试，封顶再入执行失败
+      // 判官阶段失败（多为网络抖动）不打整单：留在初检原地重试，封顶再入执行失败（→待处理）
       // ——整单失败后重投会连"执行"一起重跑，白烧一遍额度
       const cur0 = store.find(root, t.id);
-      if (!cur0 || cur0.state !== '质检') return;
+      if (!cur0 || cur0.state !== '初检') return; // H108：质检会话驻初检目录
       const n = (Number(cur0.fm.质检失败次数) || 0) + 1;
       if (n < cap) {
         store.update(root, t.id, (fm) => { fm.质检失败次数 = n; });
-        journal.append(root, `质检执行失败 ${t.id} 第 ${n}/${cap} 次（${String(why).slice(0, 60)}）——留质检下轮重试`);
+        journal.append(root, `质检执行失败 ${t.id} 第 ${n}/${cap} 次（${String(why).slice(0, 60)}）——留初检下轮重试`);
         return;
       }
       journal.append(root, `质检执行连败 ${cap} 次 ${t.id} → 执行失败分诊`);
     }
     const cur = store.find(root, t.id);
-    if (cur && (cur.state === '在途' || cur.state === '质检')) lifecycle.执行失败(root, t.id, why);
+    if (cur && (cur.state === '在途' || cur.state === '初检')) lifecycle.执行失败(root, t.id, why); // H108：入位落 待处理
   };
 
   if (opts.failWith) { failLocal(opts.failWith); return true; } // 测试注入
@@ -666,14 +677,17 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     return true;
   }
 
-  if (isSim(opts)) { // 测试内部钩子：模拟收线，零 CLI 调用
+  if (isSim(opts)) { // 测试内部钩子：模拟收线，零 CLI 调用。
+    // H108 追加 simVerdict/simNote：判官链目录流转判据要能驱动「不过/上呈」分支
+    // （三振 初检→待处理、核查不过→送仲裁、仲裁上呈→待处理），缺省行为与旧样逐位一致（通过/给方向）。
     const durMs = opts.durMs;
     const sec = Math.round(durMs / 1000);
     const receipt = `# 完工报告 ${t.id}（模拟）\n工单编号：${t.id}\n## 做了什么\n模拟${kind}（测试钩子，零额度）\n## QA 章节\n${kind === '质检' ? '模拟复核通过' : '（模拟占位）'}\n## 实际消耗\n模拟 ${sec}s · 0 token\n## 异议\n无\n`;
-    const fin = () => finishOk(kind === '质检' ? `模拟复核 ${sec}s`
+    const fin = () => finishOk(opts.simNote != null ? String(opts.simNote)
+      : kind === '质检' ? `模拟复核 ${sec}s`
       : kind === '代核' ? `（模拟）逐条对照验收标准：全部通过\n结论：通过`
       : kind === '代裁' ? `（模拟）失败原因明确，可修复。\n结论：给方向\n方向：按验收标准逐条补齐缺失项（模拟演示）`
-      : receipt, true);
+      : receipt, opts.simVerdict !== false);
     if (durMs <= 0) fin(); else { entry.timer = setTimeout(fin, durMs); if (entry.timer.unref) entry.timer.unref(); }
     return true;
   }
@@ -863,13 +877,11 @@ async function tick(root, cfg, opts = {}) {
   }
 
   if (dispatchMode) {
-    // ②′ 派发制（H49）：迁移旧池 → 就绪盘点 → 护城河/并发闸 → 拉起一次性 agent
+    // ②′ 派发制（H49/H108）：就绪盘点 → 护城河/并发闸 → 拉起一次性 agent。
+    // 原「池目录归位」迁移环（池→待投）随 H108 退役：池/待投并入 待派，放行是 fm 标记不再是目录跳变，
+    // 「撤回放行」= 原地 fm.放行=false（见 评估回呈/收回 路径），存量目录迁移由总控 manifest 一次做完。
     const dispatch = require('./pm/dispatch');
     const pmLedger = require('./pm/ledger');
-    for (const t of store.list(root, '池')) { // 池目录归位：只搬家不改旗——放行意图由动作定（收回撤旗/重投带旗，2026-08-05 语义分家）
-      const r = store.move(root, t.id, '池', '待投', (fm) => { fm.放行 = fm.放行 === true; }, opts.nowIso || new Date().toISOString());
-      if (r.ok) { journal.append(root, `归位：${t.id} 池→待投（放行旗保持 ${t.fm.放行 === true ? '有' : '无'}）`); pmLedger.event(root, '迁移', { id: t.id }); }
-    }
     if (!st.paused) { // H81：唯一总闸，合上才停派发
       const locks = await require('./gates').allLocks(cfg).catch(() => null);
       const gatesInfo = {};
@@ -894,9 +906,10 @@ async function tick(root, cfg, opts = {}) {
       const picks = dispatch.pickNext(cfg, ready, runningByPool, gatesInfo2, ledger.并发上限);
       for (const p of picks) {
         const t0 = store.find(root, p.id);
-        if (!t0 || t0.state !== '待投') continue;
+        if (!t0 || !['待派', '待重派'].includes(t0.state)) continue; // H108：待投/池并入 待派；待重派=重投/复活回队（readySet 同盘）
         const 主办 = `${t0.fm.职能}·${p.id}`; // 一次性 agent：一人一单一生命周期
-        const mv = store.move(root, p.id, '待投', '在途', (fm) => {
+        const 源态 = t0.state;
+        const mv = store.move(root, p.id, 源态, '在途', (fm) => {
           fm.主办 = 主办; fm.执行池 = p.池; fm.领单时间 = opts.nowIso || new Date().toISOString();
           // H85 死局自愈留痕：工单上看得见它为什么不在本职池跑。
           // **写对象不写字符串**（2026-08-21 体检）：原样是模板字符串，而追溯链
@@ -907,7 +920,7 @@ async function tick(root, cfg, opts = {}) {
           if (p.降级) fm.计费降级 = `${p.降级.原池}(订阅)→${p.池}(按量)`; // 工单自己也要写明这单是花钱跑的
         }, opts.nowIso || new Date().toISOString());
         if (!mv.ok) continue;
-        journal.append(root, `派发 ${p.id}（待投→在途 · ${主办} · ${p.池} · H49 派发制）`);
+        journal.append(root, `派发 ${p.id}（${源态}→在途 · ${主办} · ${p.池} · H49 派发制）`);
         pmLedger.event(root, '派发', { id: p.id, 池: p.池 });
         // 排程台账挂钩（施工令-040 第 6 条）：定稿放行后真正"成单"的时刻就是这里——
         // 粒 起草中→已成单 并回填单号。**只加一个钩子调用**，派发结构一字不改；
@@ -948,7 +961,7 @@ async function tick(root, cfg, opts = {}) {
       if (running.has(a.id)) continue;
       const r = await pool.claim(root, cfg, a.id, opts.nowIso);
       if (r.ok) {
-        journal.append(root, `领单 ${r.id}（池→在途 · ${a.id} · 执行器自动拉取）`);
+        journal.append(root, `领单 ${r.id}（${r.自 || '待派'}→在途 · ${a.id} · 执行器自动拉取）`);
         result.领单.push(r.id);
         const t = store.find(root, r.id);
         if (t && await startWork(root, cfg, t, a.id, '执行', opts)) result.执行.push(r.id);
@@ -965,9 +978,9 @@ async function tick(root, cfg, opts = {}) {
   // 判据改为「编制表里有没有 QA 这一行」，会话标签就用职能名（与判官三席 核查/两检初检/代裁 同款），
   // 一轮一张保守推进（判官会话都是单例，避免同一把裁判尺并发漂移）。
   if (roster.has(cfg, 'QA') && !running.has('QA')) {
-    for (const t of store.list(root, '质检')) {
+    for (const t of store.list(root, '初检')) { // H108：质检会话跑「初检」目录
       if (busyTickets().has(t.id)) continue;
-      if (t.fm.挂起) continue; // 施工令-021③：挂起单不开质检会话
+      if (t.fm.挂起) continue; // 施工令-021③：挂起单不开质检会话（H108 后挂起=目录态，fm 旗留作迁移期兜底）
       if (await startWork(root, cfg, t, 'QA', '质检', opts)) { result.质检.push(t.id); break; }
     }
   }
@@ -1006,22 +1019,24 @@ async function tick(root, cfg, opts = {}) {
   // 只有回落二线 LLM（config.执行器.两检.初检.二线LLM=true）时才仍要求池在册。
   const 二线 = require('./precheck').用二线LLM(cfg);
   const 两检开 = 两检.开 !== false && (!二线 || (cfg.执行池 || {})[两检.池 || 'deepseek']);
+  // H108 注：核查目录不再按 验收方式 挑单——QA关的保留单也走核查（简检）→完成，
+  // 「保留」的例外移到了验收闸（完成→归档 由制作人亲验，H110）；免检双钥匙单压根不进核查。
   if (两检开) {
-    await 开审检('初检', '两检初检', '初检', () => store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !['战役', '专项'].includes(x.fm.父单类型) && !x.fm.初检 && !x.fm.代核
-      && !x.fm.挂起 // 施工令-021④a
+    await 开审检('初检', '两检初检', '初检', () => store.list(root, '核查').find((x) => !['战役', '专项'].includes(x.fm.父单类型) && !x.fm.初检 && !x.fm.代核
+      && !x.fm.挂起 // 施工令-021④a（fm 旗=迁移期兜底；新制挂起是目录态）
       && (Number(x.fm.初检失败次数) || 0) < 判官上限 && !busyTickets().has(x.id)));
   }
 
-  // ④b 核查（D34 / H67 深检）：初检过（或两检关）的委托单，opus 核内容质量（配额内逐张）
-  await 开审检('代核', '核查', '代核', () => store.list(root, '待验收').find((x) => x.fm.验收方式 === '委托' && !x.fm.代核
+  // ④b 核查（D34 / H67 深检 / H108）：核查目录里 初检过（或两检关）的单，opus 核内容质量（配额内逐张）
+  await 开审检('代核', '核查', '代核', () => store.list(root, '核查').find((x) => !['战役', '专项'].includes(x.fm.父单类型) && !x.fm.代核
     && !x.fm.挂起 // 施工令-021④b
     && (!两检开 || (x.fm.初检 && x.fm.初检.结论 === '过'))
     && (Number(x.fm.代核失败次数) || 0) < 判官上限 && !busyTickets().has(x.id)));
 
-  // ⑤ 仲裁（D43③）：待定夺且未裁过的单，裁判档裁「给方向/上呈」（配额内逐张）；
-  // 打回级判断永远留给用户；执行器.代裁=false 可整体关闭
+  // ⑤ 仲裁（D43③ / H108）：仲裁目录里未裁过的单（核查争议送入），裁判档裁「给方向/上呈」（配额内逐张）；
+  // 打回级判断永远留给制作人（上呈落 待处理）；执行器.代裁=false 可整体关闭
   if ((cfg.执行器 || {}).代裁 !== false) {
-    await 开审检('代裁', '仲裁', '代裁', () => store.list(root, '待定夺').find((x) => !x.fm.代裁 && !x.fm.挂起 // 施工令-021⑤
+    await 开审检('代裁', '仲裁', '代裁', () => store.list(root, '仲裁').find((x) => !x.fm.代裁 && !x.fm.挂起 // 施工令-021⑤
       && (Number(x.fm.代裁失败次数) || 0) < 判官上限 && !busyTickets().has(x.id)));
   }
 
@@ -1076,7 +1091,7 @@ function status(root, cfg) {
     运行: !!st.运行,
     间隔秒: (cfg.执行器 || {}).间隔秒 ?? 15,
     执行中: [...running.entries()].map(([agent, e]) => ({ agent, id: e.id, kind: e.kind, startedAt: e.startedAt, tail: e.tail || null, tail3: e.tail3 || null })),
-    执行失败数: store.list(root, '执行失败').length,
+    执行失败数: store.list(root, '待处理').length, // H108：执行失败/待定夺并入 待处理（键名沿用，UI 改名另行走前端组）
     编辑器占用: [...manualLockedProjects(root)], // H64：口径=手动锁（自动探测不再作挂起依据）
     编辑器锁: (() => { try { return require('./core/state').read(root).编辑器锁 || {}; } catch { return {}; } })(),
     引擎作业: engineJobs(cfg), // 项目名 → 引擎作业状态（无锁的项目不出键）

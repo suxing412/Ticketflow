@@ -156,7 +156,84 @@ function 关账(root, id, 签字人, 说明) {
       error: `${id} 还没有完成定义——关账签的是「这句话达成了」，不是「没活在跑了」。`
         + `机器只判得出全子单落袋，判不出这批活的目的达没达成（S-1/S-3 两次误催签字即此）。请先补一句可判定的完成定义。` };
   }
-  return 转移(root, id, '关账', { 操作者: 人, 因: String(说明 || `制作人关账签字（对照完成定义：${String(s.fm.完成定义).slice(0, 60)}）`) });
+  const r = 转移(root, id, '关账', { 操作者: 人, 因: String(说明 || `制作人关账签字（对照完成定义：${String(s.fm.完成定义).slice(0, 60)}）`) });
+  if (!r.ok) return r;
+  return { ...r, 级联: 级联归档(root, id, 人) };
+}
+
+/**
+ * 关账级联归档（H110 · 外审 CX-2）：专项验收（关账签字）即子单的专项级验收——
+ * 名下「完成」态子单在这一刻批量 完成→归档。执行点只此一处：关账成功之后、同一调用内。
+ *
+ * 三条纪律：
+ *   ① 只动**本专项名下**的「完成」态子单（归属判据 = 子单()：专项章 + 别名兜底）。
+ *      散单/保留单/别家专项的单一张不碰——级联的射程由归属判据圈死，不靠调用方自觉。
+ *   ② 逐张 journal 留痕：归档是「落袋」这一账目口径的落笔时刻，每一笔都要能在流水里指认。
+ *   ③ 任一张失败**不回滚已移的**：已归档的子单是既成事实（验收确实过了），
+ *      回滚只会造出「签了字却没落袋」的假账。失败清单如实回报，由人补刀。
+ *   注意：级联归档**不写 归档原因**——带因归档在全库口径里是「撤销/出基线」（ledger-sync 同判），
+ *   验收过的正常落袋必须是无因归档；追溯走 fm.归档来源 + journal。
+ */
+function 级联归档(root, id, 签字人) {
+  const store = require('./core/store');
+  const 完成子单 = 子单(root, id).filter((k) => k.state === '完成');
+  const now = new Date().toISOString();
+  const 归档 = []; const 失败 = [];
+  for (const k of 完成子单) {
+    const mv = store.move(root, k.id, '完成', '归档', (fm) => {
+      fm.归档来源 = `专项关账级联（${id}，签字：${签字人}）`;
+    }, now);
+    if (mv && mv.ok) {
+      归档.push(k.id);
+      try { require('./journal').append(root, `级联归档 ${k.id}：专项 ${id} 关账（签字：${签字人}，H110）`); } catch { /* 留痕失败不阻塞 */ }
+    } else {
+      失败.push({ 单号: k.id, error: (mv && mv.error) || '未知' });
+      try { require('./journal').append(root, `级联归档失败 ${k.id}：专项 ${id} 关账（${(mv && mv.error) || '未知'}）——不回滚已移的，候人补刀`); } catch { /* 同上 */ }
+    }
+  }
+  return { 应归档: 完成子单.map((k) => k.id), 归档, 失败 };
+}
+
+/**
+ * 验收打回（DS-1 补边）：专项级验收**不过**的返回边——关账签字的反面。
+ * 专项回「进行」，点名子单 完成→待重派（带返修因）。
+ *
+ * 约束：
+ *   · 只从「收口」出发（验收发生在收口候签阶段；关账已签的没有回头路，转移表里就没这条边）。
+ *   · 必须点名子单：不点名的打回等于全盘否定，那是废弃/重立项的事，不是这条边。
+ *   · 点名单必须是本专项名下的「完成」态子单——点错名整单拒、一张不动（打回不做半截）：
+ *     级联半途失败尚可由人补刀（既成事实不可逆），打回半途停下则会留下一个「说不清打回没打回」的专项。
+ *   · 子单计数不丢：打回的子单还挂在专项链上（专项章一字不动），聚合总数不变。
+ */
+function 验收打回(root, sid, { 子单清单, 因, 操作者 } = {}) {
+  const 人 = String(操作者 || '制作人').trim();
+  const 单们 = [].concat(子单清单 || []).map(String).filter(Boolean);
+  if (!单们.length) return { ok: false, error: '验收打回必须点名子单——不点名的打回是全盘否定，走废弃不走这条边' };
+  const s = find(root, sid);
+  if (!s) return { ok: false, error: '专项不存在：' + sid };
+  if (s.fm.状态 !== '收口') return { ok: false, error: `只有「收口」态可验收打回（当前 ${s.fm.状态 || '立项'}）——关账已签的没有回头路` };
+  const store = require('./core/store');
+  const 名下 = new Map(子单(root, s).map((k) => [k.id, k]));
+  for (const id of 单们) {
+    const k = 名下.get(id);
+    if (!k) return { ok: false, error: `${id} 不是 ${sid} 名下子单——打回的射程由归属判据圈死，不误伤别家单` };
+    if (k.state !== '完成') return { ok: false, error: `${id} 现处「${k.state}」，验收打回只回「完成」态子单` };
+  }
+  const 打回因 = String(因 || `专项 ${sid} 验收打回`).trim();
+  const now = new Date().toISOString();
+  // 容器先回「进行」（人闸动作，操作者=人：收口自检的人手复工闸因此生效，
+  // 机器不会在打回的下一拍就把它推回收口——打回子单重派领单后 领单时间 变新，届时自然放行）。
+  const 回 = 转移(root, sid, '进行', { 因: `验收打回：${打回因}（点名 ${单们.join('、')}）`, 操作者: 人, 现在: now });
+  if (!回.ok) return 回;
+  const 打回 = []; const 失败 = [];
+  for (const id of 单们) {
+    const mv = store.move(root, id, '完成', '待重派', (fm) => { fm.返修因 = 打回因; }, now);
+    if (mv && mv.ok) {
+      打回.push(id);
+      try { require('./journal').append(root, `验收打回 ${id}：专项 ${sid} 验收不过 → 待重派（${打回因}，操作者：${人}）`); } catch { /* 留痕失败不阻塞 */ }
+    } else 失败.push({ 单号: id, error: (mv && mv.error) || '未知' });
+  }
+  return { ok: true, 专项: sid, 状态: '进行', 打回, 失败 };
 }
 
 /* ================= 子单反向聚合 ================= */
@@ -191,9 +268,16 @@ function 子单(root, id, 快照) {
   return out.sort((a, b) => 序号(a.id) - 序号(b.id) || String(a.id).localeCompare(String(b.id)));
 }
 
-const 落袋态 = new Set(['完成']);
-const 终结态 = new Set(['完成', '已归档']);
-const 未起态 = new Set(['草稿', '待投']);
+// 三大态状态机（H108，2026-08-24）下的专项内部口径：
+//   落袋态：完成 + 归档。专项内部「做完等关账」（完成）与「已验收归档」（归档）都算落袋——
+//           全局口径是「归档=落袋」，但专项级验收正是关账那一签，签之前子单只能停在 完成，
+//           不把 完成 算进来，专项进度会永远停在 0% 直到关账那一秒跳 100%，那是说假话。
+//   终结态：落袋态 + 废弃。收口判据用它：全子单 ∈ {完成,归档,废弃} 才可收口。
+//           **挂起不在此列**——挂起的子单算未完，专项不能带着挂起单收口（要么先复活要么先废弃）。
+//   未起态：待审 / 待派（原 草稿 / 待投）。待处理/待重派 是回炉活，算在办不算未起。
+const 落袋态 = new Set(['完成', '归档']);
+const 终结态 = new Set(['完成', '归档', '废弃']);
+const 未起态 = new Set(['待审', '待派']);
 const h = (a, b) => {
   const x = Date.parse(a || ''); const y = Date.parse(b || '');
   return (Number.isFinite(x) && Number.isFinite(y) && y > x) ? (y - x) / 3600000 : null;
@@ -210,8 +294,10 @@ function 聚合(root, id, opts = {}) {
   if (!s) return null;
   const kids = opts.子单 || 子单(root, s, opts.快照);
   const 落袋 = kids.filter((k) => 落袋态.has(k.state));
-  const 归档 = kids.filter((k) => k.state === '已归档');
+  const 归档 = kids.filter((k) => k.state === '归档');   // 落袋的子集（信息位，不是第五段）
+  const 废弃 = kids.filter((k) => k.state === '废弃');   // 出基线的那一段（原「归档原因:废弃」的独立态）
   const 未起 = kids.filter((k) => 未起态.has(k.state));
+  // 在办 = 其余全部，含 挂起：挂起单算未完（挡收口），进度上不许把它藏进「做完了」那一侧
   const 在办 = kids.filter((k) => !终结态.has(k.state) && !未起态.has(k.state));
   const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
   const 报表 = opts.报表 || require('./report');
@@ -229,7 +315,9 @@ function 聚合(root, id, opts = {}) {
       优先级: fm.优先级 || null, 管线: fm.管线 || null, 依赖: fm.依赖 || null,
       预计时间: fm.预计时间 || null, 预计token: fm.预计token || null,
       实耗h: 实 != null ? Math.round(实 * 100) / 100 : null, 实耗token: tok,
-      落袋: 落袋态.has(k.state), 挂起: fm.挂起 || null,
+      // 挂起已从 fm 标记升级为目录态（H108）：新形态认 state；fm.挂起 是旧标记的读口，
+      // 存量数据迁移（总控）落完即可拆——写口在本文件已一处不剩。
+      落袋: 落袋态.has(k.state), 挂起: k.state === '挂起' ? true : (fm.挂起 || null),
       返工自: fm.返工自 || null, 推翻自: fm.推翻自 || null, 归档原因: fm.归档原因 || null,
     };
   });
@@ -243,8 +331,9 @@ function 聚合(root, id, opts = {}) {
     关账时间: s.fm.关账时间 || null, 关账签字: s.fm.关账签字 || null,
     子单: 明细,
     进度: {
-      总数: kids.length, 落袋: 落袋.length, 归档: 归档.length, 在办: 在办.length, 未起: 未起.length,
-      // 百分比 = 落袋 ÷ 总数。归档单**留在分母里**：一张被废的子单不该让整条专项的完成度凭空变好看。
+      // 归档 是 落袋 的子集（新口径：完成+归档 都算落袋）；分段渲染请用互斥四段 落袋/在办/未起/废弃。
+      总数: kids.length, 落袋: 落袋.length, 归档: 归档.length, 废弃: 废弃.length, 在办: 在办.length, 未起: 未起.length,
+      // 百分比 = 落袋 ÷ 总数。废弃单**留在分母里**：一张被废的子单不该让整条专项的完成度凭空变好看。
       // 零子单 = 0%，不是 100%——切单还没出结果的专项不许显示「做完了」（诚实纪律，同 progress.js）。
       百分比: kids.length ? Math.round(落袋.length / kids.length * 100) : 0,
     },
@@ -293,7 +382,18 @@ function 收口自检(root, 专项号, opts = {}) {
   const s = find(root, 专项号);
   if (!s) return { ok: false, error: '专项不存在：' + 专项号 };
   const kids = 子单(root, s, opts.快照);
-  const 全落 = kids.length > 0 && kids.every((k) => 终结态.has(k.state)) && kids.some((k) => k.state === '完成');
+  // 收口判据（H108 新态）：全子单 ∈ {完成,归档,废弃}，且至少一张真落袋（完成/归档）——
+  // 全是废弃的专项没有「做完」可言，轮不到收口。
+  const 全落 = kids.length > 0 && kids.every((k) => 终结态.has(k.state)) && kids.some((k) => 落袋态.has(k.state));
+  // 挂起挡收口：挂起的子单算未完——专项不能带着挂起单收口，要么先复活（挂起→待重派）要么先废弃。
+  // 单独指认出来（而不是让它默默落进「有活没干完」）：不指认的话，人只会看到专项迟迟不收口，
+  // 查不出是哪张单以挂起身份把闸门顶住了。
+  const 挂起单 = kids.filter((k) => k.state === '挂起').map((k) => k.id);
+  if (s.fm.状态 === '进行' && kids.length > 0 && 挂起单.length
+      && kids.every((k) => 终结态.has(k.state) || k.state === '挂起')) {
+    return { ok: true, 动作: null, 子单数: kids.length, 挂起单,
+      挂起挡收口: `挂起子单算未完：${挂起单.join('、')}——复活或废弃之前不收口` };
+  }
   // 人闸复工优先于机器自检（2026-08-21 实测：S-3 复工后 **10 秒**就被自检推回收口，
   // 因由「全部子单落袋（2 张）」——那两张正是复工时判定「不够」的那两张）。
   // 病根：自检的判据是「子单有没有活」，而**复工是人说「这事没完」**。两者说的不是一件事，
@@ -413,14 +513,14 @@ function 迁移(root, 计划, opts = {}) {
       动作.push({ 动作: '状态已到位', 专项: s.id, 状态: 现态 });
     }
 
-    // ④ 伪单归档不删
-    if (t && t.state !== '已归档') {
-      const 可 = store.isLegal(t.state, '已归档');
-      if (!可) 跳过.push({ 单号, 因: `伪单现处「${t.state}」，到已归档不是合法转移——原位留着，请人裁` });
+    // ④ 伪单归档不删（H108 后目录态叫「归档」；历史注释里的「已归档」即今「归档」）
+    if (t && t.state !== '归档') {
+      const 可 = store.isLegal(t.state, '归档');
+      if (!可) 跳过.push({ 单号, 因: `伪单现处「${t.state}」，到归档不是合法转移——原位留着，请人裁` });
       else {
         动作.push({ 动作: '伪单归档', 单号, 从: t.state, 专项: s.id });
         if (!演练) {
-          store.move(root, 单号, t.state, '已归档', (fm) => {
+          store.move(root, 单号, t.state, '归档', (fm) => {
             fm.归档原因 = `专项实体化迁移 → ${s.id}（施工令-058）`;
             fm.迁移至专项 = s.id;   // 工单板据此认出伪单并不再渲染（要件5）
             fm.专项 = s.id;         // 追溯链：从纸面这一张也点得回容器
@@ -467,7 +567,7 @@ function 专项of(fm, 专项们) {
 
 module.exports = {
   DIR, STATES, 转移表, 终态, 是专项号, ensure,
-  list, find, 立项, update, 转移, 关账, 定完成定义, TYPES,
+  list, find, 立项, update, 转移, 关账, 定完成定义, 验收打回, TYPES,
   属于, 子单, 聚合, 基线变迁, 专项of,
   首派, 收口自检,
   迁移, 默认迁移计划, 收口报告路径,

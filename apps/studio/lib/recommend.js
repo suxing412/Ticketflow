@@ -49,7 +49,8 @@ function recommend(root, cfg, locks, nowMs) {
   const agents = 编制; // 下文口径沿用（长度=行数）
   const 原因 = [];
   const paused = state.read(root).paused;
-  const inFlight = [...store.list(root, '在途'), ...store.list(root, '质检'), ...store.list(root, '待定夺')];
+  // H108 换轨：质检→初检（判官链首站；核查/仲裁一并算在途面），待定夺→待处理
+  const inFlight = [...store.list(root, '在途'), ...store.list(root, '初检'), ...store.list(root, '核查'), ...store.list(root, '仲裁'), ...store.list(root, '待处理')];
   const 当前 = inFlight.length;
   const mk = (v, avail) => ({ 推荐: v, 当前, 上限, 在岗: agents.length, 可用: avail, 精力档, 原因 });
 
@@ -65,7 +66,8 @@ function recommend(root, cfg, locks, nowMs) {
   });
   const 池注 = lockedPools.size ? `，${[...lockedPools].join('/')} 池不可用，可用 ${avail.length}/${agents.length}` : `，可用 ${avail.length}/${agents.length}`;
 
-  const backlog = store.list(root, '待验收').length;
+  // H108 换轨：待验收→完成（出口驻留位：判官全过等制作人验收，正是这里的「积压」）；闸值键名不动
+  const backlog = store.list(root, '完成').length;
   const 闸 = (cfg.闸值 || {}).待验收积压闸 ?? 8;
 
   if (精力档 === '低') {
@@ -82,8 +84,8 @@ function recommend(root, cfg, locks, nowMs) {
   if (backlog >= 闸) { base = 0; 原因.push(`待验收积压 ${backlog}/${闸} 已满：先验收再投`); }
   else if (backlog >= Math.ceil(闸 * 0.75)) { base -= 1; 原因.push(`待验收积压 ${backlog}/${闸} 接近闸值 −1`); }
 
-  const escal = store.list(root, '待定夺').length;
-  if (escal > 0) { base -= 1; 原因.push(`待定夺 ${escal} 张等你裁 −1`); }
+  const escal = store.list(root, '待处理').length;
+  if (escal > 0) { base -= 1; 原因.push(`待处理 ${escal} 张等你裁 −1`); }
 
   const stalled = inFlight.filter((t) => t.fm.滞留告警).length;
   if (stalled > 0) { base -= 1; 原因.push(`滞留告警 ${stalled} 张 −1`); }

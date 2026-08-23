@@ -112,7 +112,7 @@ const 开总览 = async (债) => {
   ctx.fetch = async (u) => {
     const p = String(u); let b = {};
     if (p.startsWith('/api/attn')) b = { 逾期阈值小时: 24, 债 };
-    else if (p.startsWith('/api/board')) b = { states: ['待验收', '待定夺', '在途', '质检', '池', '待投'], board: {}, 隐藏数: 0 };
+    else if (p.startsWith('/api/board')) b = { states: ['完成', '待处理', '在途', '初检', '核查', '仲裁', '待派'], board: {}, 隐藏数: 0 };
     else if (p.startsWith('/api/journal')) b = { lines: [] };
     else if (p.startsWith('/api/agents')) b = { 在跑: [] };
     else if (p.startsWith('/api/config')) b = { 项目: { 注册: {}, 默认: 'TK' }, 闸值: {} };

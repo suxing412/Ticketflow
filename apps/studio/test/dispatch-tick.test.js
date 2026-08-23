@@ -1,86 +1,104 @@
-// dispatch-tick.test.js — 派发制 tick 集成：迁移/派发/一次性主办/模拟续流
-// 同步执行靠测试内部钩子 opts.durMs（H81 起替代旧「试跑」语义；生产路径不传 durMs）
+// dispatch-tick.test.js — 派发决策层（H108 三大态 + CX-11 语义反转，2026-08-24 改造）
+// 原样是走 runner.tick 的集成套；H108 改造期 runner 归执行器组独占，本套下沉到 dispatch 决策层
+// （readySet/depsDone/pickNext/routePool 全是纯决策，seed 铺盘即可验行为）——runner 侧的
+// 端到端由 runner.test.js（执行器组名下）接续。
 // 外呼绊线必须排在任何 lib/ 之前：lib/quota.js 在加载那一刻就把 child_process 解构走了（体检 #71）
 const 绊线 = require('./外呼绊线'); 绊线.装绊线();
 const assert = require('node:assert');
-const { makeRoot, seed } = require('./helper');
+const fs = require('fs');
+const path = require('path');
+const { makeRoot, seed, 收尾 } = require('./helper');
 const store = require('../lib/core/store');
-const runner = require('../lib/runner');
-const state = require('../lib/core/state');
+const dispatch = require('../lib/pm/dispatch');
 const quota = require('../lib/quota');
-// 测试隔离（同 runner.test 2026-08-05 案：额度闸查真实订阅用量，codex 爬过 70% 时本套件假失败）
+// 测试隔离（同 runner.test 2026-08-05 案：额度闸查真实订阅用量会假失败）
 quota.getRateLimits = async () => null; quota.getClaudeUsage = async () => null;
 
-let passed = 0; const t = async (n, f) => { await f(); passed++; console.log('  ✓ ' + n); };
-console.log('dispatch-tick 派发制集成测试');
+let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
+console.log('dispatch 派发决策层测试（H108 + CX-11）');
 
 const CFG = {
   执行器: { 派发制: true },
   执行池: { codex: { 职能: ['程序'] }, claude: { 职能: ['策划', 'QA', '装配'] } },
-  编制: [{ 职能: 'QA', 池序: [{ 池: 'claude', 档: '' }] }], // H85 补章：每职能一行 + 池序
-
+  编制: [{ 职能: '程序', 池序: [{ 池: 'codex', 档: '' }] }],
   闸值: {},
 };
 
-(async () => {
-  await t('存量池单自动迁移待投并放行', async () => {
-    const root = makeRoot();
-    state.update(root, (s) => { s.执行器 = { 运行: true }; });
-    seed(root, '池', { id: 'M-1', 职能: '程序' });
-    await runner.tick(root, CFG, { durMs: 0 });
-    const m = store.find(root, 'M-1');
-    assert.ok(['待投', '在途', '质检', '待验收', '完成'].includes(m.state), '已迁移并可能已被派发（当前 ' + m.state + '）');
-    assert.ok(store.list(root, '池').length === 0, '池已清空');
-  });
+// 当月 journal 文件（同 sentinel.test 的取法）
+const 流水 = (root) => {
+  const f = path.join(root, 'journal',
+    `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}.log`);
+  try { return fs.readFileSync(f, 'utf8'); } catch { return ''; }
+};
 
-  await t('派发：放行+依赖就绪 → 一次性主办拉起（模拟同步完成走到待验收）', async () => {
-    const root = makeRoot();
-    state.update(root, (s) => { s.执行器 = { 运行: true }; });
-    seed(root, '待投', { id: 'D-1', 职能: '程序', 放行: true, QA: '关' });
-    seed(root, '待投', { id: 'D-2', 职能: '程序' }); // 未放行不动
-    await runner.tick(root, CFG, { durMs: 0 });
-    const d1 = store.find(root, 'D-1');
-    assert.equal(d1.state, '待验收', 'QA关模拟同步直达待验收（当前 ' + d1.state + '）');
-    assert.equal(d1.fm.主办, '程序·D-1', '一次性主办=职能·单号');
-    assert.equal(store.find(root, 'D-2').state, '待投', '未放行不派');
-  });
+t('readySet 从 待派 取放行单：放行旗在的进队列，没旗的不进', () => {
+  const root = makeRoot();
+  seed(root, '待派', { id: 'D-1', 职能: '程序', 放行: true });
+  seed(root, '待派', { id: 'D-2', 职能: '程序' }); // 未放行不动
+  const r = dispatch.readySet(root, new Set());
+  assert.deepEqual(r.map((x) => x.id), ['D-1']);
+  assert.equal(r[0].态, '待派');
+});
 
-  await t('并发闸：单池上限内逐张放行', async () => {
-    const root = makeRoot();
-    state.update(root, (s) => { s.执行器 = { 运行: true }; });
-    for (let i = 1; i <= 4; i++) seed(root, '待投', { id: 'C-' + i, 职能: '程序', 放行: true, QA: '关' });
-    // durMs 大：让首轮拉起的悬在执行中占并发
-    await runner.tick(root, CFG, { durMs: 60000 });
-    const 在途 = store.list(root, '在途').length;
-    assert.equal(在途, 1, 'codex 默认并发 1（实际 ' + 在途 + '）');
-    assert.equal(store.list(root, '待投').length, 3, '其余排队');
-  });
+t('readySet 兼收 待重派（重投带旗）：回队单同一条就绪路，态字段如实标来处', () => {
+  const root = makeRoot();
+  seed(root, '待重派', { id: 'R-1', 职能: '程序', 放行: true });
+  seed(root, '待重派', { id: 'R-2', 职能: '程序' }); // 没旗的重派单同样不进
+  const r = dispatch.readySet(root, new Set());
+  assert.deepEqual(r.map((x) => [x.id, x.态]), [['R-1', '待重派']]);
+});
 
-  await t('H85 死局自愈接线：本职池冻结 → 改挂可用池，工单落 临时改池 + 台账记账', async () => {
-    const gates = require('../lib/gates');
-    const 原 = gates.allLocks;
-    gates.allLocks = async () => ({ codex: { fivePct: 99, locked: true }, claude: { fivePct: 10, locked: false } });
-    try {
-      const root = makeRoot();
-      state.update(root, (s) => { s.执行器 = { 运行: true }; });
-      const cfg = { ...CFG, 编制: [{ 职能: '程序', 池序: [{ 池: 'codex', 档: '' }] }] };
-      seed(root, '待投', { id: 'H-1', 职能: '程序', 放行: true, QA: '关' });
-      await runner.tick(root, cfg, { durMs: 0 });
-      const h = store.find(root, 'H-1');
-      assert.equal(h.fm.执行池, 'claude', 'codex 冻结应改挂 claude（当前 ' + h.fm.执行池 + '）');
-      // 2026-08-21 体检：本字段由模板字符串改为**对象**——追溯链（chain.fm行）按对象取
-      // .原池/.新池/.因/.时间，写成字符串则那一行永远是「临时改池 ? → xxx」且无时间无原因。
-      // 断言随之改成逐格校验，比原来的 startsWith 更严：光有字符串形状不算留痕，得读得出来。
-      const 改 = h.fm.临时改池;
-      assert.ok(改 && typeof 改 === 'object', '临时改池 必须是对象（读侧按对象取）：' + JSON.stringify(改));
-      assert.equal(改.原池, 'codex');
-      assert.equal(改.新池, 'claude');
-      assert.ok(改.因, '因不许空——「为什么这单没在本职池跑」正是这一格要答的');
-      assert.ok(改.时间 && !Number.isNaN(Date.parse(改.时间)), '时间要是可解析的时刻');
-      const evs = require('../lib/pm/ledger').events(root, 200);
-      assert.ok(evs.some((e) => e.类型 === '临时改池' && e.id === 'H-1' && e.原池 === 'codex' && e.新池 === 'claude'), '台账须有 临时改池 记账');
-    } finally { gates.allLocks = 原; }
-  });
+t('CX-11 语义反转：依赖 ref 全库查无此单 → 不放行（原样 continue 是当已满足放走）', () => {
+  const root = makeRoot();
+  seed(root, '待派', { id: 'X-1', 职能: '程序', 放行: true, 依赖: 'NO-SUCH-99' });
+  const t1 = store.find(root, 'X-1');
+  assert.equal(dispatch.depsDone(root, t1), false, '坏 ref 必须判未就绪');
+  assert.deepEqual(dispatch.readySet(root, new Set()), [], '坏 ref 单不得进就绪队列');
+});
 
-  console.log(`全部通过：${passed} 项`);
-})();
+t('CX-11 留痕：坏 ref 落 journal（单号+ref 都点名），且 15 秒一拍反复判不刷屏', () => {
+  const root = makeRoot();
+  seed(root, '待派', { id: 'X-2', 职能: '程序', 放行: true, 依赖: 'GHOST-7' });
+  const t2 = store.find(root, 'X-2');
+  dispatch.depsDone(root, t2);
+  dispatch.depsDone(root, t2);
+  dispatch.depsDone(root, t2);
+  const log = 流水(root);
+  const 痕 = log.split(/\r?\n/).filter((l) => l.includes('依赖解析失败') && l.includes('X-2') && l.includes('GHOST-7'));
+  assert.equal(痕.length, 1, `坏 ref 留痕应恰一条（实测 ${痕.length}）：${JSON.stringify(痕)}`);
+});
+
+t('依赖做完口径（H108 逐个按语义判）：完成/无因归档=就绪；带因归档/废弃/在途=未就绪', () => {
+  const root = makeRoot();
+  seed(root, '完成', { id: 'A-1' });
+  seed(root, '归档', { id: 'A-2' });                    // 无因归档=落袋
+  seed(root, '归档', { id: 'A-3', 归档原因: '废弃' });   // 历史废弃留在归档（不改史）
+  seed(root, '废弃', { id: 'A-4' });                    // 新废弃是目录态
+  seed(root, '在途', { id: 'A-5', 主办: '程序' });
+  const 判 = (依赖) => {
+    const id = seed(root, '待派', { 职能: '程序', 放行: true, 依赖 });
+    return dispatch.depsDone(root, store.find(root, id));
+  };
+  assert.equal(判('A-1'), true, '依赖在 完成（做完等关账）应就绪');
+  assert.equal(判('A-2'), true, '依赖无因归档（落袋）应就绪');
+  assert.equal(判('A-3'), false, '带 归档原因 的归档不算落袋');
+  assert.equal(判('A-4'), false, '废弃目录态的依赖永不就绪');
+  assert.equal(判('A-5'), false, '依赖还在途不得放行');
+  assert.equal(判('A-1，A-2'), true, '多依赖全就绪才放行');
+  assert.equal(判('A-1，A-5'), false, '多依赖有一条未就绪即拦');
+});
+
+t('并发闸（pickNext 纯决策）：单池上限内逐张放行，其余排队', () => {
+  const ready = [1, 2, 3, 4].map((i) => ({ id: 'C-' + i, 职能: '程序', 优先级: 'P1', 执行池: null, 红链: false, 创建时间: '2026-07-0' + i }));
+  const picks = dispatch.pickNext(CFG, ready, {}, { codex: { locked: false }, claude: { locked: false } }, { codex: 1 });
+  assert.deepEqual(picks.map((p) => [p.id, p.池]), [['C-1', 'codex']], 'codex 并发 1 只放一张');
+});
+
+t('H85 死局自愈（routePool 纯决策）：本职池序全冻 → 借调可用池并打 改挂 标记', () => {
+  const gatesInfo = { codex: { locked: true }, claude: { locked: false } };
+  const r = dispatch.routePool(CFG, { id: 'H-1', 职能: '程序' }, gatesInfo);
+  assert.equal(r.池, 'claude', 'codex 冻结应借调 claude');
+  assert.ok(r.改挂 && r.改挂.原池 === 'codex', '借调必须带 改挂 留痕：' + JSON.stringify(r));
+});
+
+收尾('', passed);

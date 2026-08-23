@@ -283,11 +283,13 @@ app.get('/api/board', (req, res) => {
     //   归档原因 = 沉淀抽屉四分类的判据（废弃 / 返工替代 / 推翻替代）——没有它，已归档区里
     //              「主动废掉的」和「被新单顶替的」在页面上长一个样，制作人分不出哪些是自己拍的板。
     更新时间: t.fm.更新时间 || null, 归档原因: t.fm.归档原因 || null,
-    // 施工令-038：候引擎实证印（施工令-032② / H97）是 待验收 之下的**停人闸**子态，
+    // 施工令-038：候引擎实证印（施工令-032② / H97）是 完成（原 待验收）之下的**停人闸**子态，
     // 流程页「等你签字」绿框判据要它才分得清「等你直收」与「等判官接手」——只下发有无，不下发印文。
     待引擎实证: !!t.fm.待引擎实证,
   }));
-  res.json({ states: store.STATES, board: out, 隐藏数 });
+  // H108 三大态：大态分组表直下发（store.大态 是唯一权威源），前端看板按 待办/在途/结束 三组画列，
+  // 不许自己再抄一份分组——两份表一分叉，同一张单在看板与统计里就会属于两个大态。
+  res.json({ states: store.STATES, 大态: store.大态, board: out, 隐藏数 });
 });
 
 // ---- 管线（H51/H52，0.19）：独立实体，开线/封存=人闸（仅本机） ----
@@ -350,14 +352,14 @@ app.post('/api/pm/draft', (req, res) => {
   // 它没落盘，起草站就只能显示「项管单张起草」这句套话，制作人问的「为什么起这张单」永远没答案。
   记事件('派单委托', { 需求: 需求.slice(0, 200), ...(粒ID ? { 粒ID } : {}) });
   require('./lib/pm/brain').draftTicket(ROOT, cfg, 需求, projPath, (r) => {
-    journal.append(ROOT, r.ok ? '项管起草完成：' + r.单 + '（草稿待审）' : '项管起草失败：' + (r.error || ''));
+    journal.append(ROOT, r.ok ? '项管起草完成：' + r.单 + '（入待审）' : '项管起草失败：' + (r.error || ''));
     // 丙-4 补留痕：成功那半有 brain 的「待审」事件兜着，**失败这半此前只进 journal**——
     // 台账里根本没有 起草失败 这个类型，于是「项管起草失败 N 次」在流水与分桶里一条都查不到，
     // 而 journal 是给人读的长文流水，机器对不了账。不新增写盘链路，就借既有 记事件 出口补齐；
     // 成功不补记（会与 待审 双计，把起草次数报高）。
     if (!r.ok) 记事件('起草失败', { 阶段: '起草', 需求: 需求.slice(0, 120), error: String(r.error || '').slice(0, 200), ...(粒ID ? { 粒ID } : {}) });
   }, { 粒ID: 粒ID || null, 项目: name || null, 依赖: 依赖串 || null }); // P0-7：依赖单号串直落 fm
-  res.json({ ok: true, 状态: '项管起草中，完成后草稿区+信道可见', 项目: name, ...(粒ID ? { 粒ID } : {}) });
+  res.json({ ok: true, 状态: '项管起草中，完成后待审区+信道可见', 项目: name, ...(粒ID ? { 粒ID } : {}) });
 });
 
 // ---- Wiki（0.20，H52 第三类实体）：设计事实源浏览 + 待审人闸 + 关系图 ----
@@ -624,7 +626,7 @@ function 均时表() {
   if (now - 均时缓存.t < 60000) return 均时缓存.表;
   let 表 = 均时缓存.表;
   try {
-    const 完结 = [...store.list(ROOT, '完成'), ...store.list(ROOT, '已归档')];
+    const 完结 = [...store.list(ROOT, '完成'), ...store.list(ROOT, '归档')]; // H108：已归档→归档（均时样本口径不变：做完的单都算）
     表 = progress.滚动均时(progress.阶段样本(完结), { N: (cfg.进度 && cfg.进度.均时样本数) || 8 });
   } catch { /* 读盘失败：沿用上次的表，不炸接口 */ }
   均时缓存 = { t: now, 表 };
@@ -785,7 +787,9 @@ app.post('/api/config/project', (req, res) => {
   if (动作 === '删除') {
     if (!cfg.项目.注册[名称]) return res.status(400).json({ error: '项目未注册：' + 名称 });
     // 有未完成单引用该项目 → 拒删（防止执行 agent 领到无处落脚的单）
-    const active = ['草稿', '待投', '池', '在途', '质检', '待验收', '待定夺', '执行失败'];
+    // H108 语义：未完成 = 非真终态（归档/废弃之外全算）——完成 未经专项验收可能回 待重派，
+    // 挂起 可复活到 待重派，都还要项目在；不许无脑照抄旧八态清单。
+    const active = store.STATES.filter((s) => !store.TERMINAL.includes(s));
     const refs = [];
     for (const s of active) for (const t of store.list(ROOT, s)) if (t.fm.项目 === 名称) refs.push(t.id);
     if (refs.length) return res.status(400).json({ error: `有 ${refs.length} 张未完成单引用该项目（${refs.slice(0, 5).join('、')}${refs.length > 5 ? '…' : ''}），先处理再删` });
@@ -986,11 +990,11 @@ app.get('/api/agents', (req, res) => {
     const runStatus = require('./lib/runner').status(ROOT, cfg);
     const liveByTicket = Object.fromEntries((runStatus.执行中 || []).map((e) => [e.id, e]));
     const isParent = (t) => ['战役','专项'].includes(t.fm.父单类型) || ['战役','专项'].includes(t.fm.主办); // H53：组织容器不是执行者
-    // 判官会话在跑的单（初检/核查落在待验收）也是在跑执行者——设计稿-004 状态 B：
+    // 判官会话在跑的单（H108 起 初检/核查/仲裁 是目录态）也是在跑执行者——设计稿-004 状态 B：
     // 核查中的卡就该出现在在途页，阶段名如实显示「核查中 · 深检」，不冒充执行也不消失
     const 审中 = (runStatus.执行中 || []).filter((e) => e.kind !== '执行' && !fl.some((t) => t.id === e.id))
       .map((e) => { try { return store.find(ROOT, e.id); } catch { return null; } }).filter(Boolean);
-    const 在跑 = [...fl.filter((t) => ['在途', '质检'].includes(t.state) || liveByTicket[t.id]), ...审中].filter((t) => !isParent(t)).map((t) => ({
+    const 在跑 = [...fl.filter((t) => ['在途', '初检'].includes(t.state) || liveByTicket[t.id]), ...审中].filter((t) => !isParent(t)).map((t) => ({
       主办: t.fm.主办 || '（衔接中）', id: t.id, title: t.fm.title, state: t.state,
       职能: t.fm.职能, 池: t.fm.执行池 || '', 领单时间: t.fm.领单时间 || null, 项目: t.fm.项目 || '',
       // 建设性①（施工令-012）：有没有执行会话直接下发，前端不再靠「进度.阶段==='领单'」猜。
@@ -1002,7 +1006,7 @@ app.get('/api/agents', (req, res) => {
     }));
     // 判官席（H85 补章去岗位化）：不再列人头，编制有 QA 这一行就有一席，会话标签即职能名
     const 判官 = roster.has(cfg, 'QA') ? [(() => {
-      // 判官单多在「待验收」，不在 inFlight 口径内——按单是否还在库判在岗（原 fl 口径漏判成待命）
+      // 判官单多在 核查/仲裁/完成（原「待验收」），不在 inFlight 口径内——按单是否还在库判在岗（原 fl 口径漏判成待命）
       const busy = (runStatus.执行中 || []).find((e) => e.kind !== '执行' && e.id && (() => { try { return !!store.find(ROOT, e.id); } catch { return false; } })());
       return { id: 'QA', 忙: !!busy, 当前: busy ? busy.id : null, 环节: busy ? busy.kind : null };
     })()] : [];
@@ -1192,7 +1196,7 @@ app.post('/api/pm/roster', (req, res) => {
 });
 
 // ---- 并发调配（施工令-010，制作人 2026-08-06 23:59 批准）----
-// 并发调配权随编制权一并归项管（H85 同规格下放）：项管按待验收/待定夺积压动态调审检并发与池并发。
+// 并发调配权随编制权一并归项管（H85 同规格下放）：项管按 完成/待处理 积压动态调审检并发与池并发。
 // 硬顶＝成本保险丝，仅制作人可改（config.并发.硬顶 / dispatch.HARD_CAP），越顶一律 400。
 // GET = 聚合快照（审检+零输出在 config、池并发在台账，一处看得全）；
 // POST = {审检?,零输出分钟?,池?:{codex,claude,deepseek},理由}，整批校验通过才落，记账口径同编制调整。
@@ -1310,18 +1314,19 @@ const 排程读 = {
   // 流程页：管线行 + 「监制台维护队列」（批无管线的 Q 队列粒）
   流程: () => scheduleView.流程页(schedule.现态(ROOT)),
   // 总览横幅：在做 + 排程待办 + 决策台待签，一行话三问。
-  // 「在做」与流程页现在区同一口径：目录态 在途/质检 ∪ 有活跃会话（判官会话也算在做）——
+  // 「在做」与流程页现在区同一口径：目录态 在途/初检 ∪ 有活跃会话（判官会话也算在做）——
   // 只数 runner.执行中 的话，一张已领单但会话还没起的单会让横幅报「现在无在做」，
-  // 而同一时刻流程页那条橙区里明明躺着它。挂起的原位冻结单两处都不算在做。
+  // 而同一时刻流程页那条橙区里明明躺着它。挂起单（H108 目录态；过渡期兼认旧 fm.挂起 标记）两处都不算在做。
+  // 统计口径（H108）：完成 不占执行槽，不算「在做」。
   摘要: () => {
     const 在跑 = []; const 见 = new Set();
     const 收 = (id, title) => { if (id && !见.has(id)) { 见.add(id); 在跑.push({ id, title: title || '' }); } };
-    for (const t of pool.inFlight(ROOT)) if (['在途', '质检'].includes(t.state) && !t.fm.挂起) 收(t.id, t.fm.title);
+    for (const t of pool.inFlight(ROOT)) if (['在途', '初检'].includes(t.state) && !t.fm.挂起) 收(t.id, t.fm.title);
     for (const e of (runnerStatus().执行中 || [])) {
       let t = null; try { t = store.find(ROOT, e.id); } catch { /* 单已挪走：只报单号 */ }
-      if (!t || !t.fm.挂起) 收(e.id, t && t.fm ? t.fm.title : '');
+      if (!t || !(t.fm.挂起 || t.state === '挂起')) 收(e.id, t && t.fm ? t.fm.title : '');
     }
-    const 待签 = store.list(ROOT, '待验收').length + store.list(ROOT, '待定夺').length;
+    const 待签 = store.list(ROOT, '完成').length + store.list(ROOT, '待处理').length;
     return scheduleView.摘要({ 在跑, 粒们: schedule.现态(ROOT), 待签 });
   },
   // 晨晚报组稿：当日状态变更过的 + 计划中的前 N 条
@@ -1389,18 +1394,20 @@ app.post('/api/open', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- 决策台（P4）：待验收 + 待定夺 ----
+// ---- 决策台（P4）：完成（原 待验收+完成 合并）+ 待处理（原 待定夺+执行失败 合并）----
 app.get('/api/decisions', (req, res) => {
   if (!ready(res)) return;
   // 挂起字段随行（施工令-021）：决策台要据此置灰并给出解挂按钮——不带这一栏，制作人在签字位上
   // 看到的就是一张「看着能签、点下去被拦」的单。
-  const accept = store.list(ROOT, '待验收').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 验收方式: t.fm.验收方式, QA: t.fm.QA, 项目: t.fm.项目, 挂起: t.fm.挂起 || null, 父单类型: t.fm.父单类型 || null }));
-  const escal = store.list(ROOT, '待定夺').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 自修次数: t.fm.自修次数 || 0, 项目: t.fm.项目, 挂起: t.fm.挂起 || null, 父单类型: t.fm.父单类型 || null }));
-  res.json({ 待验收: accept, 待定夺: escal, 积压闸: (cfg.闸值 || {}).待验收积压闸, 积压: accept.length });
+  // H108 过渡期双键下发：新键 完成/待处理 是正名，旧键 待验收/待定夺 指向同一份数组——
+  // 前端（G 组）切完新键即可删旧键，别让改版窗口里旧页面直接白屏。
+  const accept = store.list(ROOT, '完成').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 验收方式: t.fm.验收方式, QA: t.fm.QA, 项目: t.fm.项目, 挂起: t.fm.挂起 || null, 父单类型: t.fm.父单类型 || null }));
+  const escal = store.list(ROOT, '待处理').map((t) => ({ id: t.id, title: t.fm.title, 职能: t.fm.职能, 自修次数: t.fm.自修次数 || 0, 项目: t.fm.项目, 挂起: t.fm.挂起 || null, 父单类型: t.fm.父单类型 || null }));
+  res.json({ 完成: accept, 待处理: escal, 待验收: accept, 待定夺: escal, 积压闸: (cfg.闸值 || {}).待验收积压闸, 积压: accept.length });
 });
 
 // ---- 等我（施工令-061 二·2）：全系统唯一的「欠人几笔」谓词 ----
-// 与上面 /api/decisions 的关键差别：那条按**工单状态**取（待验收∪待定夺），故专项关账这类
+// 与上面 /api/decisions 的关键差别：那条按**工单状态**取（完成∪待处理，H108 前是 待验收∪待定夺），故专项关账这类
 // 非工单实体的闸结构上取不到——08-20 实测欠 3 笔而决策台报 1 笔，页顶还写「积压 1/8」。
 // 本条按**闸**取，逐闸查各自的权威源。/api/decisions 在次序闸走完（详情页补齐通过入库钮 +
 // 三个孤儿闸安家）之前不动，两条并行一个周期供对拍——先建后删是硬前置，不是保守。
@@ -1495,9 +1502,9 @@ const ACTIONS = {
   验收: (b) => life.验收(ROOT, b.id, !!b.通过),
   失败分诊: (b) => life.失败分诊(ROOT, b.id, b.决定), // D31：重投/上呈（废弃走通用废弃）
   解除复核: (b) => life.解除待复核(ROOT, b.id, b.说明), // D36：核对新版后解除
-  返修: (b) => life.返修(ROOT, b.id, b.说明), // H65：同活同号——执行失败/待验收回草稿改写，计数保留（掐在飞审检会话已内置在 life.返修，施工令-032①，别在这层重复掐）
+  返修: (b) => life.返修(ROOT, b.id, b.说明), // H65：同活同号——完成→待审 回炉改写（原 执行失败/待验收→草稿），计数保留（掐在飞审检会话已内置在 life.返修，施工令-032①，别在这层重复掐）
   实证放行: (b) => life.实证放行(ROOT, b.id, b.操作者, b.说明), // 施工令-032② H97：门禁单核查过后候检，总监确认引擎证据入回执 → 转完成
-  推翻: (b) => life.推翻(ROOT, b.id, b.理由), // 制作人翻案：完成/已归档 → 自动编号返工草稿
+  推翻: (b) => life.推翻(ROOT, b.id, b.理由), // 制作人翻案：完成/归档 → 自动编号返工单（落 待审）
   隐藏: (b) => life.隐藏(ROOT, b.id, b.值), // 隐藏归档：默认视图湮灭，纸面可考
   // 施工令-021 制作人裁决权：挂起=原位冻结（单不挪窝，全链路跳过），解挂=原位复活。
   // 掐会话与废弃/收回同款——在途单被冻结时进程还在跑，等于没冻。
@@ -1510,12 +1517,13 @@ const ACTIONS = {
     return life.挂起树(ROOT, b.id, b.操作者, b.理由);
   },
   解挂: (b) => (b.全树 ? life.解挂树(ROOT, b.id, b.操作者) : life.解挂(ROOT, b.id, b.操作者)),
-  放行: (b) => { // H49 派发制：待投单标放行（依赖就绪即被派发引擎拉起）
-    const t = store.find(ROOT, b.id);
-    if (!t) return { ok: false, error: '不存在' };
-    if (t.state !== '待投') return { ok: false, error: `只有待投单可放行（当前 ${t.state}）` };
-    const r = store.update(ROOT, b.id, (fm) => { fm.放行 = true; });
-    if (r.ok) journal.append(ROOT, `放行 ${b.id}（H49：入就绪队列，依赖就绪即派发）`);
+  放行: (b) => { // H108 项管闸：待派单标 fm.放行（不再是目录跳变——原 待投→池 语义收成标记写口）
+    // 操作域=项管/总监：放行是派发授权，制作人层的需求走 /api/pm/draft 委托，不直接开闸。
+    // 写口唯一在 life.放行（态校验/重复放行拒绝都在那儿），这里只加操作域闸并把操作者记账。
+    const 人 = String(b.操作者 || '').trim();
+    if (!['项管', '总监'].includes(人)) return { ok: false, error: `放行是项管闸，操作者须为 项管/总监（收到「${人 || '空'}」）` };
+    const r = life.放行(ROOT, b.id);
+    if (r.ok) journal.append(ROOT, `放行操作者：${人}（${b.id} · H108 项管闸）`);
     return r;
   },
 };
@@ -1595,7 +1603,7 @@ app.post('/api/draft', (req, res) => {
   if (b.依据) fm.依据 = b.依据;
   const exist = store.find(ROOT, b.id);
   if (exist) {
-    if (exist.state !== '草稿') return res.status(400).json({ error: `只有草稿可编辑（当前 ${exist.state}）` });
+    if (exist.state !== '待审') return res.status(400).json({ error: `只有待审单可编辑（当前 ${exist.state}）` });
     const r = store.update(ROOT, b.id, (f) => { Object.assign(f, fm); return { body: b.body != null ? b.body : undefined }; });
     return res.json({ ...r, edited: true });
   }
@@ -1665,7 +1673,8 @@ app.post('/api/stylelib/axiom', (req, res) => {
   if (源单) {
     const t = store.find(ROOT, 源单);
     if (!t) return res.status(400).json({ error: '源单不存在：' + 源单 });
-    if (t.state !== '完成') return res.status(400).json({ error: `只有完成单可入标杆（${源单} 当前 ${t.state}）` });
+    // H108 语义：完成=做完等关账、归档=落袋，两者都够格入标杆；带 归档原因（废弃/打回/替代）的归档不算
+    if (!(t.state === '完成' || (t.state === '归档' && !t.fm.归档原因))) return res.status(400).json({ error: `只有完成/归档（无因）单可入标杆（${源单} 当前 ${t.state}${t.fm.归档原因 ? '·' + t.fm.归档原因 : ''}）` });
     axProj = t.fm.项目 || (cfg.项目 && cfg.项目.默认) || axProj; // 归属跟源单走（多项目视界）
   }
   const r = stylelib.addAxiom(ROOT, { 标题, 正文, 源单, 项目: axProj });
@@ -1686,7 +1695,8 @@ app.post('/api/stylelib/art', (req, res) => {
   const { 源单, 源路径, 说明 } = req.body || {};
   const t = 源单 ? store.find(ROOT, 源单) : null;
   if (源单 && !t) return res.status(400).json({ error: '源单不存在：' + 源单 });
-  if (t && t.state !== '完成') return res.status(400).json({ error: `只有完成单可入库（${源单} 当前 ${t.state}）` });
+  // H108 同上：完成/无因归档都算做完，可入美术库
+  if (t && !(t.state === '完成' || (t.state === '归档' && !t.fm.归档原因))) return res.status(400).json({ error: `只有完成/归档（无因）单可入库（${源单} 当前 ${t.state}${t.fm.归档原因 ? '·' + t.fm.归档原因 : ''}）` });
   const projName = (t && t.fm.项目) || (cfg.项目 && cfg.项目.默认);
   const proj = cfg.项目 && cfg.项目.注册 && cfg.项目.注册[projName];
   const r = stylelib.addArt(ROOT, { 源路径, 项目路径: proj && proj.路径, 说明, 源单, 项目: projName });
@@ -1767,11 +1777,13 @@ app.post('/api/review-flag', (req, res) => {
 // 判据：全库零调用方 —— grep -rn "api/attention" apps packages | grep -v "^apps/studio/server.js" | grep -v "// " → 应为空。
 app.get('/api/attention', (req, res) => {
   if (!ready(res)) return;
-  const stalled = ['在途', '质检', '待定夺'].reduce((n, s) => n + store.list(ROOT, s).filter((t) => t.fm.滞留告警).length, 0);
+  // H108 改造后旧目录不复存在，本端点按对照换源保持老客户端不 404：
+  // 待验收→完成、待定夺+执行失败→待处理（合并；执行失败 一栏恒 0，避免老客户端把同一批单双计）。
+  const stalled = ['在途', '初检', '待处理'].reduce((n, s) => n + store.list(ROOT, s).filter((t) => t.fm.滞留告警).length, 0);
   res.json({
-    待验收: store.list(ROOT, '待验收').length,
-    待定夺: store.list(ROOT, '待定夺').length,
-    执行失败: store.list(ROOT, '执行失败').length,
+    待验收: store.list(ROOT, '完成').length,
+    待定夺: store.list(ROOT, '待处理').length,
+    执行失败: 0,
     滞留告警: stalled,
   });
 });

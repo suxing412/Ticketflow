@@ -11,8 +11,16 @@ const FN = { 策划: 'var(--fn-plan)', 技术策划: 'var(--fn-tplan)', 程序: 
 // 职能色走 CSS 变量：主题切换（暖纸/玻璃）时内联色自动跟随令牌，不写死 hex
 const FNHEX = { 策划: 'var(--fn-plan)', 技术策划: 'var(--fn-tplan)', 程序: 'var(--fn-code)', 美术: 'var(--fn-art)', QA: 'var(--fn-qa)', 装配: 'var(--fn-asm)' };
 const FNCLS = { 策划: 'fn-plan', 技术策划: 'fn-tplan', 程序: 'fn-code', 美术: 'fn-art', QA: 'fn-qa', 装配: 'fn-asm' };
-const STCLS = { 在途: 'st-doing', 质检: 'st-review', 待验收: 'st-accept', 完成: 'st-done', 待定夺: 'st-escal', 执行失败: 'st-escal', 草稿: 'mut', 已归档: 'mut', 待投: '', 池: '' };
-const STPCT = { 草稿: 0, 待投: 0, 池: 0, 在途: 60, 质检: 85, 待定夺: 70, 执行失败: 60, 待验收: 90, 完成: 100, 已归档: 0 };
+// 三大态状态机（H108，2026-08-24）：12 目录态。权威表在 lib/core/store.js，
+// /api/board 随行下发 大态 分组；下面这份兜底表只在服务端没给时用（口径抄 store，不许自创）。
+const STCLS = { 在途: 'st-doing', 初检: 'st-review', 核查: 'st-review', 仲裁: 'st-review', 完成: 'st-done',
+  待处理: 'st-escal', 待重派: 'st-escal', 待审: 'mut', 待派: '', 归档: 'mut', 挂起: 'mut', 废弃: 'mut' };
+const STPCT = { 待审: 0, 待派: 0, 待重派: 0, 待处理: 60, 在途: 60, 初检: 75, 核查: 85, 仲裁: 85, 完成: 100, 归档: 0, 挂起: 0, 废弃: 0 };
+const 大态兜底 = {
+  待办: ['待审', '待派', '待处理', '待重派'],
+  在途: ['在途', '初检', '核查', '仲裁', '完成'],
+  结束: ['归档', '挂起', '废弃'],
+};
 // 施工令-015：wiki 升格唯一知识入口（施工令-020 起五分区），风格库导航退役——美术标杆并入 Wiki 页签
 // NAV（2026-08-20 四层架构改版）：工单页＝归属结构面（管线→特性→专项→工单三级钻取），
 // 看板＝流转面（谁在哪一态）。制作人定的分工原话：「工单页管归属，看板页管流转」。
@@ -73,8 +81,9 @@ const stPill = (st) => `<span class="pill ${STCLS[st] || ''}">${esc(st)}</span>`
    三处渲染（工单池卡 / 流程节点 / 在途时间轴段）共用同一组：置灰靠 .susp 类，
    ❄ 徽标靠 snowB()，鼠标悬停的解释靠 suspTip()。新视图挂上同样三件即自动同款——
    各视图各画一套是「同一个事实在五个地方长得不一样」的开端。
-   取值一律 t.挂起（/api/board 与 /api/decisions 已随行透出），缺字段=未挂（老单零迁移）。 */
-const suspOf = (t) => (t && t.挂起) || null;
+   取值一律 t.挂起（/api/board 与 /api/decisions 已随行透出），缺字段=未挂（老单零迁移）。
+   H108 后挂起升目录态：state=挂起 也算挂（fm.挂起 是老标记形态的存量，迁移由总控做，两种都认）。 */
+const suspOf = (t) => (t && (t.挂起 || (t.state === '挂起' ? { 操作者: '制作人' } : null))) || null;
 const suspCls = (t) => (suspOf(t) ? ' susp' : '');
 const suspTip = (t) => { const s = suspOf(t); return s ? `已挂起 · ${s.操作者 || '制作人'} · ${String(s.时间 || '').slice(0, 16).replace('T', ' ')}${s.理由 ? '\n' + s.理由 : ''}${s.连带自 ? '\n（随父单 ' + s.连带自 + ' 全树挂起）' : ''}` : ''; };
 const snowB = (t) => (suspOf(t) ? `<span class="snowb" title="${esc(suspTip(t))}">❄</span>` : '');
@@ -124,10 +133,12 @@ async function loadBoard() {
   window._hiddenCnt = d.隐藏数 || 0;
   for (const s of d.states) d.board[s] = (d.board[s] || []).filter((t) => !是专项伪单(t));
   const raw = []; for (const s of d.states) for (const t of d.board[s]) raw.push({ ...t, state: s });
+  // 大态分组表：服务端（/api/board）下发为准，读不到回落前端兜底（三大态改造 2026-08-24）
+  const 大态 = d.大态 && Object.keys(d.大态).length ? d.大态 : 大态兜底;
   const p = projActive();
-  if (!p) return { states: d.states, board: d.board, all: raw, raw };
+  if (!p) return { states: d.states, board: d.board, all: raw, raw, 大态 };
   const board = {}; for (const s of d.states) board[s] = (d.board[s] || []).filter((t) => projOf(t) === p);
-  return { states: d.states, board, all: raw.filter((t) => projOf(t) === p), raw };
+  return { states: d.states, board, all: raw.filter((t) => projOf(t) === p), raw, 大态 };
 }
 function buildTree(all) {
   const byId = Object.fromEntries(all.map((t) => [t.id, t]));
@@ -166,10 +177,10 @@ async function viewHub() {
     const need = 本项目债 ? 本项目债.length : null;
     const 逾 = 本项目债 && attn.逾期阈值小时 != null
       ? 本项目债.filter((x) => x.停摆小时 != null && x.停摆小时 >= attn.逾期阈值小时).length : 0;
-    // 待投这一栏 2026-08-22 补：G1「投池放行」的落点就是它，卡上没有这个数，
-    // 「需处理 N」里那笔投池债在项目卡上就找不到对应的去处。
-    const counts = [['在途', cnt(a, '在途', '质检'), ''], ['在池', cnt(a, '池'), ''], ['待投', cnt(a, '待投'), ''], ['待验收', cnt(a, '待验收'), ''],
-      ['待定夺', cnt(a, '待定夺'), 'err'], ['失败', cnt(a, '执行失败'), 'err']];
+    // 待派这一栏 2026-08-22 补（原「待投」，三大态改造改名）：G1「项管闸放行」的落点就是它，
+    // 卡上没有这个数，「需处理 N」里那笔放行债在项目卡上就找不到对应的去处。
+    const counts = [['在途', cnt(a, '在途', '初检', '核查', '仲裁'), ''], ['待派', cnt(a, '待派'), ''], ['待重派', cnt(a, '待重派'), ''],
+      ['完成', cnt(a, '完成'), ''], ['待处理', cnt(a, '待处理'), 'err']];
     const eng = reg[n] && reg[n].引擎;
     // H-2 零值灰显 / H-3 键盘可达（2026-08-06 UI 评审 hub 页）
     return `<div class="hubcard card r16" onclick="enterProj('${esc(n)}')" tabindex="0" role="button" aria-label="进入项目 ${esc(n)}"
@@ -316,7 +327,7 @@ function ovRunHtml(ag) {
 async function viewOverview() {
   const [{ all, board }, jn, ag, attn] = await Promise.all([loadBoard(), api('/api/journal').catch(() => null), api('/api/agents').catch(() => ({})), api('/api/attn').catch(() => null)]);
   const n = (s) => (board[s] || []).length;
-  const groups = [['在途', n('在途') + n('质检'), ''], ['待验收', n('待验收'), ''], ['待定夺', n('待定夺'), n('待定夺') ? 'err' : ''], ['在池', n('池'), ''], ['待投', n('待投'), '']];
+  const groups = [['在途', n('在途') + n('初检') + n('核查') + n('仲裁'), ''], ['完成', n('完成'), ''], ['待处理', n('待处理'), n('待处理') ? 'err' : ''], ['待派', n('待派'), ''], ['待重派', n('待重派'), '']];
   const strip = groups.map(([l, v, c], i) => `${i ? '<div class="vdiv"></div>' : ''}<div class="grp"><span class="lbl">${l}</span><span class="num ${c}">${v}</span></div>`).join('');
   // 收件箱换轴（2026-08-20，施工令-061 二·4）：原先是「待验收 ∪ 待定夺」两态拼接——
   // 判据轴是**工单状态**，于是「专项关账」这类非工单实体的人闸结构上就看不见
@@ -336,8 +347,8 @@ async function viewOverview() {
         到: x.路由 || (/^[A-Z]+-\d+$/.test(String(x.id)) ? `#/t/${x.id}` : '#/'),
       }))
     : [
-      ...(board['待验收'] || []).map((t) => ({ ...t, k: '待验收', note: t.验收方式 === '保留' ? '保留 · 待品味终审' : '委托 · 核查可代签', 到: `#/t/${t.id}` })),
-      ...(board['待定夺'] || []).map((t) => ({ ...t, k: '待定夺', note: 'QA 未过，四件套已备', 到: `#/t/${t.id}` })),
+      ...(board['完成'] || []).map((t) => ({ ...t, k: '完成', note: t.验收方式 === '保留' ? '保留 · 待品味终审' : '判官已过 · 候专项级验收', 到: `#/t/${t.id}` })),
+      ...(board['待处理'] || []).map((t) => ({ ...t, k: '待处理', note: '执行失败/判官上呈，候分诊', 到: `#/t/${t.id}` })),
     ];
   // 值守区（2026-08-22 体检 #9/#31）：闸注册表 G13/G14/G15/G16/G17 五条的落点都写着「总览 · 值守」，
   // 而总览从来没有这块区，这几笔又被上面那道「归属 !== 总监」滤掉——**注册表指着一个不存在的门牌**。
@@ -361,7 +372,7 @@ async function viewOverview() {
       onkeydown="if(event.key==='Enter'){location.hash='${esc(r.到)}'}">
       <span class="rid">${esc(r.id)}</span><span class="rt clamp2" title="${esc(r.title)}">${esc(r.title)}</span><span class="rnote">${esc(r.note)}</span>
       ${stPill(r.k)}</div>`).join('')
-    || `<p class="dim">你不欠任何签字——改造后这句话第一次是可证的（服务端逐闸扫过）${n('待投') ? `；<a href="#/board" style="color:var(--accent-ink)">待投区还有 ${n('待投')} 张可放行 →</a>` : ''}</p>`;
+    || `<p class="dim">你不欠任何签字——改造后这句话第一次是可证的（服务端逐闸扫过）${n('待派') ? `；<a href="#/board" style="color:var(--accent-ink)">待派列还有 ${n('待派')} 张候放行 →</a>` : ''}</p>`;
   // 池首投放建议已随拉取制退役（0.24.7 视图清仓）
   // 判**正形**不判 null（2026-08-22 体检 #66）：api() 不看 res.ok，ready() 的 500 也带合法 JSON 体，
   // catch 压根不触发——只把兜底换成 null 会落成一个跑绿却漏一半的假修。
@@ -449,9 +460,9 @@ async function viewOverview() {
       ${值守Html}
       <div class="sec-h" style="margin-top:28px"><span class="subnote" style="font-weight:500">派发窗（H49）</span></div>
       ${ovRunHtml(ag)}
-      <div class="suggest card">${n('待投') ? `<div style="font-size:13px">待投区 <b>${n('待投')}</b> 单——依赖就绪且已放行的会被自动派发</div>
-        <div class="subnote" style="margin:6px 0 12px">未放行的在工单池逐张放行；合闸时全部原地待命</div>
-        <a class="btn accent h32" href="#/board">去工单池</a>` : '<span class="dim">待投区空——想法拍板或派单委托产生新单</span>'}</div>
+      <div class="suggest card">${n('待派') ? `<div style="font-size:13px">待派列 <b>${n('待派')}</b> 单——依赖就绪且项管放行的会被自动派发</div>
+        <div class="subnote" style="margin:6px 0 12px">未放行的在看板逐张放行（项管闸）；合闸时全部原地待命</div>
+        <a class="btn accent h32" href="#/board">去看板</a>` : '<span class="dim">待派列空——想法拍板或派单委托产生新单</span>'}</div>
     </div><div>
       <div class="sec-h"><h3 class="h17">动态日志</h3>${projActive() ? '<span class="subnote">全局动态（journal 不分项目）</span>' : ''}</div>${logHtml}
       <div class="quota-card card r14"><b style="font-size:13px">额度双池</b>
@@ -474,7 +485,7 @@ function gatebarHtml(g) {
     <div class="vdiv"></div>
     <div class="gsec"><span class="glbl">额度锁</span><span class="gv"><span class="mono" style="font-size:11px;color:var(--ink2)">codex</span> ${mini(g && g.locks.codex)}
       <span class="mono" style="font-size:11px;color:var(--ink2);margin-left:10px">claude</span> ${mini(g && g.locks.claude)} ${lockNote}</span></div>
-    <div class="backlog" style="margin-left:24px"><span class="glbl">待验收积压</span><br/><b id="backlogN">— / —</b></div></div>`; // 推荐在途已随拉取制退役（0.24.7 视图清仓）
+    <div class="backlog" style="margin-left:24px"><span class="glbl">验收积压（完成候验）</span><br/><b id="backlogN">— / —</b></div></div>`; // 推荐在途已随拉取制退役（0.24.7 视图清仓）
 }
 // H81 常开单闸制：唯一总闸，一个停/开按钮
 window.togglePause = async (v) => { await post('/api/gate/pause', { value: v }); gateCache = null; route(); };
@@ -495,76 +506,69 @@ function paintGate(paused, oauth) {
       <span class="subnote">跑是常态、停是例外（H81）——不是有意停工就立刻开闸</span>
       <button class="btn h32 primary" style="margin-left:auto" onclick="togglePause(false)">开闸</button></div>` : '') + oa;
 }
-// D43 批量投池：当前项目语境的待投整批释放（人闸=这一次确认）
+// D43 批量放行：当前项目语境的待派整批放行（项管闸 H109；fm.放行 标记，不再是目录跳变）
 window.releaseAll = async () => {
   const { board } = await loadBoard();
-  const items = board['待投'] || [];
-  if (!items.length) return toast('待投区空');
-  if (!await ask(`整批放行 ${items.length} 张待投单？放行后按依赖+优先级自动派发。`)) return;
+  const items = board['待派'] || [];
+  if (!items.length) return toast('待派列空');
+  if (!await ask(`整批放行 ${items.length} 张待派单？放行后按依赖+优先级自动派发。`)) return;
   let ok = 0, fail = 0;
-  for (const t of items) { const r = await post('/api/act/投池', { id: t.id }); r.ok ? ok++ : fail++; }
-  toast(`已投池 ${ok} 张${fail ? ` · 失败 ${fail} 张（看 journal）` : ''}`);
+  for (const t of items) { const r = await post('/api/act/放行', { id: t.id }); r.ok ? ok++ : fail++; }
+  toast(`已放行 ${ok} 张${fail ? ` · 失败 ${fail} 张（看 journal）` : ''}`);
   route();
 };
-/* 工单页长列折叠（施工令-044 F5）：只对「完成」列生效——它是唯一只增不减的列。
-   最近＝交付时间倒序（缺交付时间的回落更新时间/创建时间，一律不参与「最近」的前排）。
-   展开态落 localStorage：制作人把它展开过一次，回来还是展开的。 */
-const BOARD_FOLD_N = 10;
-const FOLD_STATES = new Set(['完成']);
-const foldKey = (s) => 'studio-board-open-' + s;
-const boardOpen = (s) => { try { return localStorage.getItem(foldKey(s)) === '1'; } catch { return false; } };
-const boardRecent = (arr) => [...arr].sort((a, b) =>
-  String(b.交付时间 || b.更新时间 || b.创建时间 || '').localeCompare(String(a.交付时间 || a.更新时间 || a.创建时间 || ''))
-  || String(b.id).localeCompare(String(a.id)));
-window.boardFold = (s) => {
-  try { localStorage.setItem(foldKey(s), boardOpen(s) ? '0' : '1'); } catch { /* 隐私模式：本次会话内不记忆 */ }
-  route();
-};
-// 看板 = **流转面**（谁在哪一态）。2026-08-20 制作人裁定：完成/已归档两列整体移出——
-// 「看板页非常麻烦，有很多竖列……并且已完成堆了一百多单，真的找起来也很麻烦」。
-// 落袋即离开看板，故这一页永不堆积；要找做完的去报表页。
-// （原写「可搜可筛可按耗时排序」——报表页那三样一样都没有，2026-08-21 体检查实后改口。）
+// 看板 = **流转面**（谁在哪一态）。三大态改造（2026-08-24）：12 态按 大态 分三段呈现——
+// 待办｜在途｜结束。「完成/归档」列照旧不进看板（2026-08-20 制作人裁定的落袋离场纪律：
+// 「已完成堆了一百多单，真的找起来也很麻烦」——完成是在途大态的出口驻留位，只增不减，
+// 铺卡就是堆积），结束段整段只给计数入口。分组表读 /api/board 下发的 大态，读不到回落本地兜底。
 // 归属结构去工单页看（管线→特性→专项→工单），两页分工不重叠。
-const BOARD_OUT = new Set(['完成', '已归档']);
+const BOARD_OUT = new Set(['完成', '归档']);
 async function viewBoard() {
-  const { states: 全态, board, raw } = await loadBoard();
-  const states = 全态.filter((s) => !BOARD_OUT.has(s));
+  const { states: 全态, board, raw, 大态 } = await loadBoard();
   const conf = await api('/api/config').catch(() => ({ 闸值: {} }));
-  const widths = { 池: 'w168', 在途: 'w168', 待验收: 'w168', 执行失败: 'w128', 完成: 'w128', 已归档: 'w128' };
-  const cols = states.map((s) => {
-    // 完成列折叠（施工令-044 F5 · 巡礼）：落袋单只增不减，百来张平铺下去，工单页一开就是一屏
-    // 「已经做完的事」——找在办的单反而要滚很久。默认只留最近 10 张（交付时间倒序，最近的在最上），
-    // 其余收进一个「展开全部 N 条」钮里。总数不藏：列头 .cnt 永远报全量。展开态记本地（换页/重启都记得）。
-    const 折 = FOLD_STATES.has(s);
-    const items = 折 ? boardRecent(board[s] || []) : (board[s] || []);
-    const 收 = 折 && items.length > BOARD_FOLD_N && !boardOpen(s);
-    const 可见 = 收 ? items.slice(0, BOARD_FOLD_N) : items;
-    const hot = s === '待验收' || s === '待定夺' || s === '执行失败';
-    const head = s === '草稿'
-      ? `<h4>${s}<a class="newdraft" href="#/draft">＋ 起草</a></h4>`
-      : s === '待投' && items.length
-        ? `<h4>${s}<button class="newdraft" title="整批放行（H49 派发制：放行后依赖就绪即自动派发；人闸就是这一下）" onclick="releaseAll()">⇧ 全放行 ${items.length}</button></h4>`
-        : s === '已归档' && (window._hiddenCnt || window._showHidden)
-          ? `<h4>${s}<span class="cnt">${items.length}</span><button class="newdraft" title="隐藏归档：制作人湮灭的废案，默认不渲染" onclick="window._showHidden=!window._showHidden;route()">${window._showHidden ? '藏起' : `显隐藏 ${window._hiddenCnt}`}</button></h4>`
-          : `<h4>${s}<span class="cnt">${items.length}</span></h4>`;
-    const cards = 可见.map((t) => `<div class="bcard2${suspCls(t)}" data-tid="${esc(t.id)}" onclick="location.hash='#/t/${t.id}'"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}>
+  const widths = { 在途: 'w168', 核查: 'w128', 仲裁: 'w128' };
+  const 列 = (s) => {
+    const items = board[s] || [];
+    const hot = s === '待处理' || s === '待重派';
+    const head = s === '待审'
+      ? `<h4>${s}<span class="cnt">${items.length}</span><a class="newdraft" href="#/draft">＋ 起草</a></h4>`
+      : s === '待派' && items.length
+        ? `<h4>${s}<button class="newdraft" title="整批放行（H109 项管闸：放行落 fm.放行 标记，依赖就绪即自动派发；闸就是这一下）" onclick="releaseAll()">⇧ 全放行 ${items.length}</button></h4>`
+        : `<h4>${s}<span class="cnt">${items.length}</span></h4>`;
+    const cards = items.map((t) => `<div class="bcard2${suspCls(t)}" data-tid="${esc(t.id)}" onclick="location.hash='#/t/${t.id}'"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}>
         <span class="cid">${snowB(t)}${esc(t.id)}</span>
         <span class="cpri ${t.优先级 === 'P0' ? 'p0' : ''}">${esc(t.优先级 || '')}</span>
         <div class="ct clamp2" title="${esc(t.title)}">${esc(t.title)}</div>${fnPill(t.职能)}</div>`).join('');
-    const 折钮 = 折 && items.length > BOARD_FOLD_N
-      ? `<button class="bmore" onclick="boardFold('${qesc(s)}')" title="${收 ? `这一列共 ${items.length} 张，当前只铺了最近 ${BOARD_FOLD_N} 张（按交付时间倒序）` : `收回只看最近 ${BOARD_FOLD_N} 张`}">${收 ? `展开全部 ${items.length} 条` : `收起 · 只看最近 ${BOARD_FOLD_N} 条`}</button>`
-      : '';
-    return `<div class="bcol2 ${widths[s] || ''} ${hot ? 'hot' : ''}">${head}${cards}${折钮}</div>`;
-  }).join('');
+    return `<div class="bcol2 ${widths[s] || ''} ${hot ? 'hot' : ''}">${head}${cards}</div>`;
+  };
+  // 待办/在途 两段铺列（列序照 大态 分组表，完成 摘出）；结束段只给计数入口，不铺一张卡。
+  const 段 = (g) => {
+    const ss = (大态[g] || []).filter((s) => 全态.includes(s) && !BOARD_OUT.has(s));
+    const n = ss.reduce((a, s) => a + (board[s] || []).length, 0);
+    return `<div class="bgroup" data-bg="${esc(g)}"><div class="bghead"><b>${esc(g)}</b><span class="cnt">${n}</span></div>
+      <div class="bgcols">${ss.map(列).join('')}</div></div>`;
+  };
+  const cols = ['待办', '在途'].map(段).join('');
+  // 结束段计数入口（含被摘出的 完成）：落袋离场，这一页永不堆积；明细去报表/详情。
+  const 终数 = (s) => (board[s] || []).length;
+  const 隐藏钮 = (window._hiddenCnt || window._showHidden)
+    ? `<button class="newdraft" title="隐藏归档：制作人湮灭的废案，默认不计入" onclick="window._showHidden=!window._showHidden;route()">${window._showHidden ? '藏起' : `显隐藏 ${window._hiddenCnt}`}</button>` : '';
+  const endCols = `<div class="bgroup bend" data-bg="结束"><div class="bghead"><b>结束</b><span class="cnt">${(大态['结束'] || []).reduce((a, s) => a + 终数(s), 0)}</span></div>
+      <div class="bendbody">
+        <div class="berow"><span class="bek">完成</span><b class="mono">${终数('完成')}</b><span class="subnote">判官已过 · 候专项级验收（在途大态出口驻留位，不占执行槽）</span></div>
+        ${(大态['结束'] || []).filter((s) => 全态.includes(s)).map((s) => `<div class="berow"><span class="bek">${esc(s)}</span><b class="mono">${终数(s)}</b><span class="subnote">${s === '归档' ? '落袋=归档' : s === '挂起' ? '原位冻结 · 解挂回待重派' : '留档不删（R2）'}</span></div>`).join('')}
+        <div class="berow"><a href="#/report">明细去报表 →</a>${隐藏钮}</div>
+      </div></div>`;
   const fillBar = async () => {
     const g = await api('/api/gates'); gateCache = g;
     const gb = $('gatebar-slot');
     if (gb) { const key = JSON.stringify([g.paused, g.locks.codex, g.locks.claude]); // 推荐 已随 D28 退役，服务端不再下发
       if (gb.dataset.k !== key) { gb.dataset.k = key; gb.innerHTML = gatebarHtml(g); } }
-    // 分子分母同尺（2026-08-22 体检 #65）：闸在 lib/recommend.js 按**全局** store.list('待验收') 数，
-    // 这里原先拿项目过滤后的 board 去比它——TK 显 3/8 而实况 7/8，读数系统性低估离闸距离。
+    // 分子分母同尺（2026-08-22 体检 #65）：闸按**全局**数（lib/recommend），这里不许拿项目过滤后的
+    // board 去比它——TK 显 3/8 而实况 7/8，读数系统性低估离闸距离。
     // 不改成「都按项目」：config 没有 per-project 闸值，UI 项目化会与真正生效的闸彻底两套尺。
-    const bn = $('backlogN'); if (bn) bn.textContent = `${raw.filter((t) => t.state === '待验收').length} / ${conf.闸值?.待验收积压闸 ?? 8}`;
+    // 三大态改造：积压态=完成（原 待验收 并入完成；判官已过、候验收的都停这儿）。闸值键沿用配置现名。
+    const bn = $('backlogN'); if (bn) bn.textContent = `${raw.filter((t) => t.state === '完成').length} / ${conf.闸值?.待验收积压闸 ?? 8}`;
   };
   setTimeout(() => { fillBar().catch(() => { const gb = $('gatebar-slot'); if (gb && gateCache) gb.innerHTML = gatebarHtml(gateCache); }); }, 0);
   pollLoop('gatebar-slot', 5000, fillBar); // 额度/闸门读数活体刷新（变了才重画）
@@ -591,12 +595,11 @@ async function viewBoard() {
       if (hs.scrollLeft !== b.scrollLeft) b.scrollLeft = hs.scrollLeft;
     }, 300);
   }, 0);
-  // 落袋去向条：完成/已归档移出后，单一收工就从这一页消失——不写清去哪找，就是把人晾在原地。
-  const 落 = (board['完成'] || []).length; const 档 = (board['已归档'] || []).length;
-  return `<div id="gatebar-slot">${gatebarHtml(gateCache)}</div><div class="board2" id="board2">${cols}</div>
+  // 落袋去向条：完成/归档不铺卡后，单一收工就从卡面消失——不写清去哪找，就是把人晾在原地。
+  return `<div id="gatebar-slot">${gatebarHtml(gateCache)}</div><div class="board2" id="board2">${cols}${endCols}</div>
     <div class="hsync" id="hsync"><div id="hsync-w" style="height:1px"></div></div>
-    <div class="bdone subnote">看板只留活态——落袋即离开，这一页永不堆积。
-      已完成 ${落} · 已归档 ${档} 去 <a href="#/report">报表</a> 查明细与消耗；
+    <div class="bdone subnote">看板只留活态——完成即出列、归档即落袋，这一页永不堆积。
+      完成 ${(board['完成'] || []).length} · 归档 ${(board['归档'] || []).length} 去 <a href="#/report">报表</a> 查明细与消耗；
       要看归属结构（管线→特性→专项）去 <a href="#/tickets">工单</a>。</div>`;
 }
 
@@ -618,22 +621,24 @@ async function viewBoard() {
    D43 的阶段横轴 / 泳道甘特 / 关键路径 / 显示历史机制整体退役；施工令-006 的签字位常驻语义并入本结构。
    进度口径不另立一套：吃服务端随 /api/agents 下发的 进度 字段（lib/progress.js 算好，与 /api/runner 同源），
    15s 活体刷新复用在途页那条 pollLoop。挂起（施工令-021）不进现在/接下来两段，直接落沉淀抽屉的 ❄ 类。 */
-const FG_DOING = new Set(['在途', '质检']);       // 现在区：实心条 + 实时百分比
-const FG_STUCK = new Set(['待定夺', '执行失败']); // 现在区：卡住的也算「现在」（三问之一就是「卡在哪」）
-const FG_QUEUE = new Set(['待投', '池', '草稿']); // 接下来区：按依赖拓扑排
-const FG_DONE = new Set(['完成', '已归档']);
-const FG_SIGN = new Set(['待验收', '待定夺']);    // 等制作人落笔的两态（006 签字位）
+const FG_DOING = new Set(['在途', '初检', '核查', '仲裁']); // 现在区：实心条 + 实时百分比（审检链目录化后判官态也是「现在」）
+const FG_STUCK = new Set(['待处理']);             // 现在区：卡住的也算「现在」（三问之一就是「卡在哪」）
+const FG_QUEUE = new Set(['待派', '待重派', '待审']); // 接下来区：按依赖拓扑排
+const FG_DONE = new Set(['完成', '归档']);        // 依赖口径：完成=做完等关账（专项内部口径），归档=落袋
+const FG_SIGN = new Set(['完成', '待处理']);      // 等制作人落笔（006 签字位；完成=候专项级验收）
 // 沉淀四分类（制作人追加重点）：完成 / ❄挂起 / 废弃 / 推翻——计数分开列，点哪类只展哪类
 const FG_CATS = [['done', '完成'], ['susp', '❄挂起'], ['drop', '废弃'], ['over', '推翻']];
-// 分类判据：挂起优先（原位冻结，状态还停在原处，不是终态）；已归档按 归档原因 分流。
-// 归档原因缺失的老单归「废弃」——已归档且没有成功记录，按丢弃计比冒充完成诚实。
+// 分类判据：挂起优先（原位冻结，目录态化后 state=挂起 也算）；归档按 归档原因 分流；
+// 废弃 目录态直接归「废弃」类。归档原因缺失的老单归「废弃」——归档且没有成功记录，按丢弃计比冒充完成诚实。
 const fgCat = (t) => {
   if (suspOf(t)) return 'susp';
   if (t.state === '完成') return 'done';
-  if (t.state !== '已归档') return null;
+  if (t.state === '废弃') return 'drop';
+  if (t.state !== '归档') return null;
   const why = String(t.归档原因 || '');
   if (why.includes('推翻') || why.includes('返工')) return 'over';
-  return 'drop';
+  if (why.includes('废弃')) return 'drop'; // 历史「归档原因:废弃」留在归档不重分类（不改史）
+  return 'done'; // 归档=落袋：正常走完链条的归档单是成品
 };
 let fgOpen = {}; // 沉淀抽屉展开态：laneKey -> 类别 key。空 = 全折——**默认全折叠，页面上只活人说话**
 async function viewFlow() {
@@ -670,8 +675,8 @@ async function viewFlow() {
     return 深[id];
   };
   all.forEach((t) => deep(t.id, 0));
-  // 死结：依赖挂在一张被冻结/已归档的单上——这就是「卡在哪」的答案，红字直说
-  const 死结 = (t) => depsOf(t).filter((d) => suspOf(byId[d]) || byId[d].state === '已归档');
+  // 死结：依赖挂在一张被冻结/废弃的单上——这就是「卡在哪」的答案，红字直说
+  const 死结 = (t) => depsOf(t).filter((d) => suspOf(byId[d]) || byId[d].state === '废弃');
 
   // ---- 分行：注册管线 + 散单特殊行 ----
   const MISC = '_misc';
@@ -695,16 +700,15 @@ async function viewFlow() {
   }
 
   // ---- 分段判据（施工令-038）：现在区认**现场**，不认目录状态 ----
-  // 案源：TK-117 挂着核查会话（在途页 82% · 核查中·深检），流程页却按「状态=待验收」把它塞进
-  // 「接下来·等你签字」绿框——旧判据 FG_DOING 只收 在途/质检 两态，审检/质检/仲裁这类判官会话
-  // 一律漏判。凡 /api/agents 报了活跃会话（执行/初检/核查（深检）/质检（QA）/仲裁 任一 kind），
-  // 这单就是**现在正在被处理**，一律入现在区，阶段标签走既有进度口径（含 kind，如「核查中 · 深检」）。
+  // 案源：TK-117 挂着核查会话（在途页 82% · 核查中·深检），流程页却按目录态把它塞进
+  // 「接下来·等你签字」绿框。三大态改造后审检链目录化（初检/核查/仲裁），FG_DOING 已收全；
+  // 凡 /api/agents 报了活跃会话（执行/初检/核查/仲裁 任一 kind），这单就是**现在正在被处理**，
+  // 一律入现在区，阶段标签走既有进度口径（含 kind，如「核查中 · 深检」）。
   const liveOf = (t) => { const r = 进度By[t.id]; return (r && r.有会话) ? r : null; };
   // 真停人闸的三种（绿框唯一出场条件，且必须**无任何活跃会话**）：
-  //   待定夺 = 等你拍板；待验收·保留 = 你亲验；待验收·候引擎实证 = H97 门禁停闸（等实证或你直收）。
-  // 委托待验收而判官会话没起 → 是「判官还没接手」，不是「等你签字」——给它绿框等于把判官的活挂你名下。
-  const 人闸 = (t) => t.state === '待定夺'
-    || (t.state === '待验收' && (t.验收方式 === '保留' || !!t.待引擎实证));
+  //   待处理 = 等你分诊；完成·保留 = 你亲验；完成·候引擎实证 = H97 门禁停闸（等实证或你直收）。
+  const 人闸 = (t) => t.state === '待处理'
+    || (t.state === '完成' && (t.验收方式 === '保留' || !!t.待引擎实证));
 
   // ---- 单条渲染：五型（doing 实心带百分比 / sign 绿框 / stuck 红 / queue 虚框 / wait 待判官接手）----
   const go = (id) => `location.hash='#/t/${encodeURIComponent(id)}'`;
@@ -734,17 +738,17 @@ async function viewFlow() {
   const signBar = (t) => {
     const 保留 = t.验收方式 === '保留';
     const 里程碑 = isBox(t); // 专项/战役终审 = 里程碑旗
-    const 词 = t.state === '待定夺' ? '待你拍板' : (t.待引擎实证 ? '候引擎实证' : (保留 ? '你（保留）' : '你'));
+    const 词 = t.state === '待处理' ? '待你分诊' : (t.待引擎实证 ? '候引擎实证' : (保留 ? '你（保留）' : '你'));
     return bar(t, 'sign', `<span class="st">✍ ${esc(词)}</span>${里程碑 ? '<span class="mile">⚑ 里程碑</span>' : ''}`);
   };
-  // 委托待验收、判官会话还没起：如实说「待判官接手」——不冒充等你签字，也不假装在做。
+  // 委托单停在审检链、判官会话还没起：如实说「待判官接手」——不冒充等你签字，也不假装在做。
   // 用闸门色的 .st（与 doing.nosess 同源语义：会话没起来），虚框表明它在排队等判官。
   const waitBar = (t) => bar(t, 'queue wait', '<span class="st">待判官接手</span>');
   const stuckBar = (t) => bar(t, 'stuck', `<span class="st">${esc(t.state)}${t.自修次数 ? ' ×' + t.自修次数 : ''}</span>`);
   const queueBar = (t) => {
     const ds = depsOf(t);
     const 断 = 死结(t);
-    const 就绪 = !断.length && ds.every((d) => FG_DONE.has(byId[d].state)) && t.state !== '草稿';
+    const 就绪 = !断.length && ds.every((d) => FG_DONE.has(byId[d].state)) && t.state !== '待审';
     const depTag = ds.length ? `<span class="deps" title="${esc('依赖：' + ds.join('、'))}">←${ds.map((d) => esc(idShort(d, t.id))).join('·')}</span>` : '';
     const st = 断.length ? `依赖冻结 ←${esc(idShort(断[0], t.id))}` : (就绪 ? '就绪' : t.state);
     const cls = 'queue' + (断.length ? ' blocked' : (就绪 ? ' ready' : ''));
@@ -773,14 +777,14 @@ async function viewFlow() {
     const 可见 = (t) => !isBox(t) || FG_SIGN.has(t.state);
     // 现在区：有活跃会话（任一 kind）一律入；目录态在做/卡住的照旧入（会话没起也要看得见「卡在哪」）
     const now = 活.filter((t) => 可见(t) && (liveOf(t) || FG_DOING.has(t.state) || FG_STUCK.has(t.state)));
-    // 接下来·签字位：会话在跑的已被现在区收走，这里只剩没会话的待验收（排序口径不动）
-    const nextSign = 活.filter((t) => 可见(t) && !liveOf(t) && t.state === '待验收')
+    // 接下来·签字位：会话在跑的已被现在区收走，这里只剩没会话的完成（候专项级验收，排序口径不动）
+    const nextSign = L.items.filter((t) => !suspOf(t) && 可见(t) && !liveOf(t) && t.state === '完成')
       .sort((a, b) => (b.验收方式 === '保留') - (a.验收方式 === '保留') || String(a.id).localeCompare(String(b.id)));
     const nextQ = 活.filter((t) => 可见(t) && FG_QUEUE.has(t.state))
       .sort((a, b) => (深[a.id] - 深[b.id]) || String(a.id).localeCompare(String(b.id)));
     总在做 += now.filter((t) => liveOf(t) || FG_DOING.has(t.state)).length;
-    // 「等你签字」只数真停人闸的（待验收·保留/候引擎实证 + 无会话的待定夺）——委托待验收在等判官，不算你的活
-    总签字 += nextSign.filter(人闸).length + now.filter((t) => !liveOf(t) && t.state === '待定夺').length;
+    // 「等你签字」只数真停人闸的（完成·保留/候引擎实证 + 无会话的待处理）
+    总签字 += nextSign.filter(人闸).length + now.filter((t) => !liveOf(t) && t.state === '待处理').length;
     总接下来 += nextQ.length;
     // 本管线的计划粒（施工令-041 §一）：续在已建单队列之后，同一条「接下来」里排到底
     const plans = 计划行[k] || [];
@@ -793,7 +797,7 @@ async function viewFlow() {
     const 沉淀数 = Object.values(cats).reduce((a, x) => a + x.length, 0);
     // 管线头：落袋读数（容器单不计——它是组织单位，不是活）
     const 叶 = L.items.filter((t) => !isBox(t));
-    const 落袋 = 叶.filter((t) => t.state === '完成').length;
+    const 落袋 = 叶.filter((t) => FG_DONE.has(t.state)).length; // 完成=做完等关账（专项内部口径）+ 归档=落袋
     const 专项数 = L.items.filter((t) => isBox(t)).length;
     // 闲置直书：现在区空 → 取本管线最近一次事件时间差
     const 最近 = L.items.reduce((m, t) => {
@@ -824,7 +828,7 @@ async function viewFlow() {
       <div class="fgdrawer" id="fgd-${esc(k)}"></div></div>`;
     }
     const nowInner = now.length
-      ? now.map((t) => ((liveOf(t) || FG_DOING.has(t.state)) ? doingBar(t) : t.state === '待定夺' ? signBar(t) : stuckBar(t))).join('')
+      ? now.map((t) => ((liveOf(t) || FG_DOING.has(t.state)) ? doingBar(t) : t.state === '待处理' ? signBar(t) : stuckBar(t))).join('')
       : `<div class="fgidle">— 本管线现在无在做（${最近 ? `闲置 ${闲置天} 天` : '暂无活动记录'}）—</div>`;
     const nextInner = (nextSign.map((t) => (人闸(t) ? signBar(t) : waitBar(t))).join('') + nextQ.map(queueBar).join('')
       + plans.map(planBar).join(''))
@@ -879,7 +883,7 @@ async function viewFlow() {
       <span><i class="lg-doing"></i>实心=在做（有活跃会话即在做，含判官环节；百分比接执行进度卡口径）</span>
       <span><i class="lg-queue"></i>虚框=排队（依赖序，←标依赖）· 待判官接手=判官会话还没起</span>
       <span><i class="lg-sign"></i>绿框=等你签字/拍板（无会话且真停人闸）</span>
-      <span><i class="lg-stuck"></i>红=卡住（待定夺/执行失败）</span>
+      <span><i class="lg-stuck"></i>红=卡住（待处理）</span>
       <span><i class="lg-plan"></i>淡虚框+「计划」=排程台账里还没成单的计划粒（点看来源与预估）</span>
       <span class="nowh">◉ 橙区=现在（管线闲置直书「闲置 N 天」）</span>
       <span>⚑=里程碑 · ❄=挂起 · 沉淀默认全折</span></div>`;
@@ -959,7 +963,7 @@ function timelineHtml(agents, all, opts) {
   const segs = {}; let any = false;
   for (const t of withSegs) {
     const s = Date.parse(t.领单时间); if (Number.isNaN(s)) continue;
-    const inflight = ['在途', '质检', '待定夺'].includes(t.state);
+    const inflight = ['在途', '初检', '核查', '仲裁', '待处理'].includes(t.state);
     const e = t.交付时间 ? Date.parse(t.交付时间) : (inflight ? now : null);
     if (e == null || e < t0) continue;
     any = true;
@@ -1138,7 +1142,7 @@ function viewAgentsDispatch(d, all) {
   return busyBanner + lockCard + `<div class="sec-h" style="margin-top:26px"><h3 class="h17">在跑执行者</h3>
       <span class="subnote">派发制 · 因单而生、完成即销毁 · 并发 codex ≤${lim.codex != null ? lim.codex : '—'} / claude ≤${lim.claude != null ? lim.claude : '—'}（项管调配 · 代码硬顶 3）</span></div>
     <div id="ag-cards">${cards}</div>
-    <div class="sec-h" style="margin-top:26px"><h3 class="h17">审检三席</h3><span class="subnote">质检 / 核查 / 仲裁 · 唯一常驻岗（H68）</span></div>
+    <div class="sec-h" style="margin-top:26px"><h3 class="h17">审检三席</h3><span class="subnote">初检 / 核查 / 仲裁 · 唯一常驻岗（H68）</span></div>
     <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${judges}</div>
     <div class="sec-h" style="margin-top:26px"><h3 class="h17">就绪队列</h3><span class="subnote">依赖已齐、等槽位或额度（项管台账）</span></div>
     <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${ready}</div>
@@ -1174,7 +1178,7 @@ let dTab = 'accept';
    专项/父单一视同仁：有子单就给全树选项，不因为它是容器就少一排按钮。 */
 const dJudgeBtns = (cur, 有子) => `
   <button class="btn h36" onclick="suspAsk('${esc(cur.id)}',${cur.挂起 ? 'false' : 'true'},${有子 ? 'true' : 'false'})" title="${cur.挂起 ? '原位复活，重新进入调度' : '原位冻结：单不挪窝，全链路跳过'}">${cur.挂起 ? '❄ 解挂' : '❄ 挂起'}</button>
-  <button class="btn danger-o h36" onclick="askAct2('废弃','${esc(cur.id)}','废弃并归档 ${esc(cur.id)}？此单进已归档不可逆，返工需另开新单。')" title="终态判决：进已归档不可逆">废弃</button>`;
+  <button class="btn danger-o h36" onclick="askAct2('废弃','${esc(cur.id)}','废弃 ${esc(cur.id)}？此单进废弃态不可逆（留档不删），返工需另开新单。')" title="终态判决：进废弃不可逆">废弃</button>`;
 // 【已退役 2026-08-21】决策台撤除（异厂对抗审查裁决 + 制作人 08-20 02:34 拍板「看着这张单子的
 // 详情签这张单子」）。撤它不是因为这活不该干，是因为「页面」这个容器装错了：
 // 它按**工单状态**取队列（待验收∪待定夺），于是专项关账这类非工单闸结构上看不见——
@@ -1192,7 +1196,7 @@ async function viewDecisions() {
   if (p) { await loadCfg(); d.待验收 = d.待验收.filter((t) => projOf(t) === p); d.待定夺 = d.待定夺.filter((t) => projOf(t) === p); }
   const cur = dTab === 'accept' ? (d.待验收[0] || null) : (d.待定夺[0] || null);
   let main = `<div class="dmain card r16"><p class="dim">没有待你处理的签字项——一切安好。</p>
-    <p class="subnote" style="margin-top:8px">要开新活：<a class="glink" href="#/relay">项管页想法在池拍板</a> · 要放行：<a class="glink" href="#/board">工单池待投区</a> · 要验收 Unity：先关上面的编辑器锁</p></div>`;
+    <p class="subnote" style="margin-top:8px">要开新活：<a class="glink" href="#/relay">项管页想法在池拍板</a> · 要放行：<a class="glink" href="#/board">看板待派列</a> · 要验收 Unity：先关上面的编辑器锁</p></div>`;
   if (cur) {
     const tk = await api('/api/ticket?id=' + encodeURIComponent(cur.id));
     const preview = tk.回执 ? tk.回执.raw : tk.body || '';
@@ -1236,10 +1240,10 @@ async function viewDecisions() {
       <span class="subnote">开 Unity 验收的第一步和最后一步都在这</span></div>
     <div class="dtabs">
       <span class="tab ${dTab === 'accept' ? 'active' : ''}" onclick="dTab='accept';route()">验收签字</span>
-      <span class="tab ${dTab === 'escal' ? 'active' : ''}" onclick="dTab='escal';route()">待定夺 ${d.待定夺.length ? `<span class="badge">${d.待定夺.length}</span>` : ''}</span>
-      <span class="backlog2">待验收积压 ${d.积压} / ${d.积压闸}</span></div>
-    <div class="dgrid">${main}<div><div class="dside card r16"><h3>待验收队列</h3>${q1}</div>
-      <div class="dside card r16"><h3 class="${d.待定夺.length ? 'err' : ''}">待定夺 · ${d.待定夺.length}</h3>
+      <span class="tab ${dTab === 'escal' ? 'active' : ''}" onclick="dTab='escal';route()">待处理 ${d.待定夺.length ? `<span class="badge">${d.待定夺.length}</span>` : ''}</span>
+      <span class="backlog2">验收积压 ${d.积压} / ${d.积压闸}</span></div>
+    <div class="dgrid">${main}<div><div class="dside card r16"><h3>完成候验队列</h3>${q1}</div>
+      <div class="dside card r16"><h3 class="${d.待定夺.length ? 'err' : ''}">待处理 · ${d.待定夺.length}</h3>
         ${d.待定夺.map((t) => `<div class="qitem${suspCls(t)}" onclick="dTab='escal';route()"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}><span class="qi mono">${snowB(t)}${esc(t.id)}</span><div class="qn2 clamp2" title="${esc(t.title)}">${esc(t.title)} · QA 未过</div></div>`).join('') || '<p class="dim" style="margin-top:12px">无</p>'}</div></div></div>`;
 }
 window.dAct = async (name, id, 通过, 决定) => { const r = await post('/api/act/' + name, { id, 通过, 决定 }); toast(r.ok ? '已处理' : (r.error || '失败')); route(); };
@@ -1845,7 +1849,7 @@ async function viewDraft(editId, parent) {
       <div class="f-sec"><div class="sh">不要做</div><textarea id="d-s2" rows="2">${esc(sec.不要做)}</textarea></div>
       <div class="f-sec"><div class="sh">验收标准 · 要点清单</div><textarea id="d-s3" rows="3" placeholder="□ 要点一　□ 要点二">${esc(sec.验收标准)}</textarea></div>
       <div class="f-sec"><div class="sh">完工要求</div><textarea id="d-s4" rows="2">${esc(sec.完工要求)}</textarea></div>
-      <div class="p7foot"><button class="btn h44" onclick="dSave(false)">存为待投</button>
+      <div class="p7foot"><button class="btn h44" onclick="dSave(false)">存为待派</button>
         <button class="btn accent h44" onclick="dSave(true)">定稿并放行</button></div></div></div>`;
 }
 // D43：选阶段时，验收标准为空则自动带入 阶段标准.md 里该职能该阶段的口径
@@ -1863,10 +1867,10 @@ window.dSave = async (release) => {
   const r = await post('/api/draft', payload);
   if (!r.ok) return toast(r.error || '失败');
   const r2 = await post('/api/act/定稿', { id: payload.id });
-  if (!r2.ok && !/待投/.test(r2.error || '')) return toast('已建草稿，但定稿失败：' + (r2.error || ''));
+  if (!r2.ok && !/待派|待投/.test(r2.error || '')) return toast('已建待审稿，但定稿失败：' + (r2.error || ''));
   const w = r2.警示 ? ' · 警示：' + r2.警示[0] : ''; // H83 短题制预检警示，不拦截只提醒
-  if (release) { const r3 = await post('/api/act/投池', { id: payload.id }); if (!r3.ok) return toast('已入待投，投池失败：' + (r3.error || '')); toast('已投池' + w); }
-  else toast('已存为待投' + w);
+  if (release) { const r3 = await post('/api/act/放行', { id: payload.id }); if (!r3.ok) return toast('已入待派，放行失败：' + (r3.error || '')); toast('已放行' + w); }
+  else toast('已存为待派' + w);
   location.hash = '#/board';
 };
 
@@ -1905,7 +1909,7 @@ function 回执分轮(raw) {
 // 正文/回执中最后一个 QA 章的结论摘要（≤10 行）：优先结论/不过项行，无则取章首几行
 function 最新QA摘要(raw, body) {
   const pick = (src) => {
-    const secs = String(src || '').split(/^##+\s*/m).filter((p) => /^(QA|质检|核验|QA\s*核验)/i.test(p.trim()));
+    const secs = String(src || '').split(/^##+\s*/m).filter((p) => /^(QA|质检|初检|核验|QA\s*核验)/i.test(p.trim()));
     if (!secs.length) return '';
     const 章 = secs[secs.length - 1];
     const lines = 章.split('\n').slice(1).map((l) => l.trim()).filter(Boolean);
@@ -1914,22 +1918,22 @@ function 最新QA摘要(raw, body) {
   };
   return pick(raw) || pick(body) || '';
 }
-/* 待定夺卷宗「上呈原因」取数（施工令-012 / 巡礼 P2-3）。
-   ① fm.上呈原因 是事实源——lifecycle 在流转进待定夺时就落库（优化-D 通则）。
+/* 待处理卷宗「上呈原因」取数（施工令-012 / 巡礼 P2-3；原「待定夺」，三大态改造并入 待处理）。
+   ① fm.上呈原因 是事实源——lifecycle 在流转进待处理时就落库（优化-D 通则）。
    ② 只有没有该字段的老单才退回 grep 流水，且先剔噪声行：滞留检查每 30 分钟给滞留单追加一条
-      「滞留告警 X（待定夺 停留 7h…）」，旧的二级正则 /上呈|待定夺/ 正好命中它，把卷宗最重要的
-      一栏顶成误导信息；「待定夺裁决」是裁决结果不是上呈原因，同样排除。
-   ③ 二级兜底收紧为「上呈」或明确的「→ 待定夺」转移行，不再见「待定夺」三字就收。
+      「滞留告警 X（待处理 停留 7h…）」，旧的二级正则宽匹配正好命中它，把卷宗最重要的
+      一栏顶成误导信息；「裁决」行是裁决结果不是上呈原因，同样排除。
+   ③ 二级兜底收紧为「上呈」或明确的「→ 待处理/待定夺」转移行（旧词兼容历史流水），不再见字就收。
    纯函数，无 DOM 依赖——test/escalation.test.js 按下面的标记原样抽出来跑。 */
 // @testable-begin escalReason
 function escalReason(fm, lines, id) {
   const f = fm || {};
   const 字段 = String(f.上呈原因 || '').trim();
   if (字段) return 字段;
-  const 噪声 = /滞留告警|滞留检查|巡检|待定夺裁决|心跳/;
+  const 噪声 = /滞留告警|滞留检查|巡检|待定夺裁决|待处理裁决|心跳/;
   const rev = (lines || []).filter((l) => String(l).includes(id) && !噪声.test(l)).reverse();
   const 上呈行 = rev.find((l) => /修不好|失败分诊|评估回呈|仲裁/.test(l))
-    || rev.find((l) => /上呈|→\s*待定夺/.test(l)) || '';
+    || rev.find((l) => /上呈|→\s*(待定夺|待处理)/.test(l)) || '';
   return 上呈行
     || (f.自修次数 ? `QA 自修 ${f.自修次数} 轮未过 → 三振上呈` : '')
     || (f.失败原因 ? `执行失败上呈：${String(f.失败原因).slice(0, 120)}` : '')
@@ -1965,16 +1969,23 @@ async function viewDetail(id) {
   const fm = d.fm, c = d.链 || { 父子: { 父: null, 子: [] }, 依赖: [] };
   // ---- 在途细粒度进度（用户定稿：详情页最上层=进度条+步骤详情+秒级走表）----
   let liveHtml = '';
-  if (['在途', '质检', '待验收', '待定夺'].includes(d.state)) {
+  if (['在途', '初检', '核查', '仲裁', '完成', '待处理'].includes(d.state)) {
     const run = await api('/api/runner').catch(() => ({}));
     const live = (run.执行中 || []).find((x) => x.id === id) || null;
-    if (live || d.state === '在途' || d.state === '质检') {
+    if (live || ['在途', '初检', '核查', '仲裁'].includes(d.state)) {
+      // 审检链目录化（H108）：执行完 QA开→初检→核查→(争议)仲裁→完成；QA关→核查（简检）→完成；
+      // 免检保留单→直接完成。阶段序列以 lib/progress.js 随会话下发的 进度.段 为准，
+      // 下面这套按状态硬排的段名只当无会话时的兜底，两处不许各画各的（施工令-049 同源纪律）。
       const qaOn = fm.QA !== '关';
-      const judge = fm.验收方式 === '委托' ? '核查' : '你验收';
-      const names = ['领单', '执行'].concat(qaOn ? ['质检'] : []).concat([judge, '落袋']);
-      const doneUpto = { 在途: '领单', 质检: '执行', 待验收: qaOn ? '质检' : '执行', 待定夺: qaOn ? '质检' : '执行' }[d.state];
-      const curName = live ? (live.kind === '执行' ? '执行' : live.kind === '质检' ? '质检' : judge)
-        : (d.state === '在途' ? '执行' : d.state === '质检' ? '质检' : null);
+      const 免检 = fm.验收方式 === '保留'; // 免检保留单：不走审检链，执行完直接完成
+      const KIND名 = { 执行: '执行', 质检: '初检', 初检: '初检', 代核: '核查', 核查: '核查', 代裁: '仲裁', 仲裁: '仲裁' };
+      const 有争议 = d.state === '仲裁' || !!(live && KIND名[live.kind] === '仲裁');
+      const names = ['领单', '执行']
+        .concat(免检 ? [] : [...(qaOn ? ['初检'] : []), '核查', ...(有争议 ? ['仲裁'] : [])])
+        .concat(['完成']);
+      const doneUpto = { 在途: '领单', 初检: '执行', 核查: (qaOn && !免检) ? '初检' : '执行', 仲裁: '核查' }[d.state] || '领单';
+      const curName = live ? (KIND名[live.kind] || live.kind)
+        : ({ 在途: '执行', 初检: '初检', 核查: '核查', 仲裁: '仲裁' }[d.state] || null);
       const di = names.indexOf(doneUpto);
       // 段与填充口径同源（施工令-049）：有会话时直接吃 /api/runner 随行下发的 进度.段——
       // 详情页自己那套按状态硬排的段名只当无会话时的兜底，两处不许各画各的。
@@ -2012,9 +2023,9 @@ async function viewDetail(id) {
       el.innerHTML = `<b style="font-size:13px">引擎作业</b>${engJobHtml(j)}<span class="subnote">项目 ${esc(fm.项目 || '—')} · 锁 .enginectl-lock</span>`;
     });
   }
-  // ---- 待定夺卷宗（TK-97 案：待定夺时详情页看不到发生了什么）----
+  // ---- 待处理卷宗（TK-97 案：上呈时详情页看不到发生了什么；原「待定夺」并入 待处理）----
   let escalHtml = '';
-  if (d.state === '待定夺') {
+  if (d.state === '待处理') {
     const jl = await api('/api/journal').catch(() => ({ lines: [] }));
     const 原因 = escalReason(fm, jl.lines || [], id);
     const qa = 最新QA摘要(d.回执 ? d.回执.raw : '', d.body);
@@ -2026,7 +2037,7 @@ async function viewDetail(id) {
         <div class="rv" style="white-space:pre-line">${esc((nl < 0 ? '' : p.slice(nl + 1)).trim().split('\n').slice(0, 12).join('\n'))}</div></div>`;
     }).join('') : '<div class="rsec"><div class="rl">历史定夺方向</div><div class="rv dim">（尚未给过方向——这是第一次上呈）</div></div>';
     escalHtml = `<div class="p8main card r16" style="border-color:var(--gateln)">
-      <b style="font-size:13px">待定夺卷宗</b>
+      <b style="font-size:13px">待处理卷宗</b>
       <span class="subnote" style="margin-left:8px">为什么呈到你手上 · 判官说了什么 · 之前给过什么方向</span>
       ${fm.自修次数 ? `<span class="pill sm red" style="margin-left:8px">自修 ${esc(fm.自修次数)} 轮</span>` : ''}${arb}
       <div class="rsec"><div class="rl">上呈原因</div><div class="rv" style="white-space:pre-line">${esc(原因)}</div></div>
@@ -2038,9 +2049,11 @@ async function viewDetail(id) {
   // ---- 子单层级一览（施工令-028：树形退役，这张表是它唯一不可替代的那半）----
   // 进度列由 lib/trace 服务端算，口径与退役前树形逐字同一把尺（叶子取状态完成度、父单取子单均值）。
   const 子单 = c.父子.子 || [];
-  const 待验收数 = (c.父子.待验收 || []).length;
+  // 候验清单：lib/trace 下发（三大态改造后该键该指「完成候验」的子单；旧键名兼容读，收口对齐见 need_coord）
+  const 候验单 = c.父子.候验 || c.父子.完成候验 || c.父子.待验收 || [];
+  const 候验数 = 候验单.length;
   const kidsTable = 子单.length ? `<div class="p8main card r16"><b style="font-size:13px">子单 ${子单.length}</b>
-      <span class="subnote" style="margin-left:8px">点行进详情 · 进度=叶子按状态、父单按子单均值${待验收数 ? ` · ${待验收数} 张等你签` : ''}</span>
+      <span class="subnote" style="margin-left:8px">点行进详情 · 进度=叶子按状态、父单按子单均值${候验数 ? ` · ${候验数} 张候验收` : ''}</span>
       <div class="kidtbl-wrap"><table class="kidtbl"><thead><tr>
         <th>子单号</th><th>标题</th><th>状态</th><th>进度</th><th>池</th></tr></thead><tbody>
         ${子单.map((x) => `<tr onclick="location.hash='#/t/${encodeURIComponent(x.id)}'" title="${esc(x.title || '')}">
@@ -2088,64 +2101,56 @@ async function viewDetail(id) {
   // 放在 engHtml/liveHtml 之前——制作人打开一张冻结单，第一眼要看到的是「它被你按停了」，
   // 而不是一条还在走表的进度条。
   let suspHtml = '';
-  if (fm.挂起) {
-    const s = fm.挂起;
+  const 已挂 = d.state === '挂起' || !!fm.挂起; // 挂起已升目录态；fm.挂起 是老标记形态的存量（迁移由总控做），两种都认
+  if (已挂) {
+    const s = fm.挂起 || {};
     const 子挂 = (c.父子.子 || []).length; // 有子单的父单：解挂时问一句要不要连子单一起放
     suspHtml = `<div class="suspbar" id="suspbar">
-      <span class="snowb" style="font-size:16px">❄</span><b>已挂起 · 原位冻结</b>
+      <span class="snowb" style="font-size:16px">❄</span><b>已挂起 · 冻结</b>
       <span class="sbwho">${esc(s.操作者 || '制作人')} · ${esc(String(s.时间 || '').slice(0, 16).replace('T', ' '))}${s.挂起时状态 ? ' · 挂起于「' + esc(s.挂起时状态) + '」' : ''}${s.连带自 ? ' · 随父单 ' + esc(s.连带自) + ' 全树挂起' : ''}</span>
       <span class="sp"></span>
-      <button class="btn accent h32" onclick="suspAsk('${esc(id)}',false,${子挂 ? 'true' : 'false'})">解挂 · 原位复活</button>
-      <span class="sbwhy">派发 / 领单 / 质检 / 初检 / 核查 / 仲裁 / 巡检告警全部跳过本单；解挂后回到「${esc(d.state)}」原位继续被调度。${s.理由 ? '<br>理由：' + esc(s.理由) : ''}</span></div>`;
+      <button class="btn accent h32" onclick="suspAsk('${esc(id)}',false,${子挂 ? 'true' : 'false'})">解挂 · 回待重派</button>
+      <span class="sbwhy">派发 / 领单 / 初检 / 核查 / 仲裁 / 巡检告警全部跳过本单；挂起是唯一可逆终态（H108），解挂后转「待重派」重新排队。${s.理由 ? '<br>理由：' + esc(s.理由) : ''}</span></div>`;
   }
   const ops = [];
-  // 挂起/解挂（施工令-021）：非终态皆可挂，**专项/父单同样渲染**——案源正是父单详情页无按钮可用。
+  // 挂起/解挂（施工令-021 → H108 目录态化）：挂起入口只在状态机允许的边上出
+  //（TRANSITIONS：待派/待重派/在途 → 挂起；挂起 → 待重派 唯一可逆）。
   // 位置放在操作栏最前：这是「先停下」的闸，它比任何往前推的动作都优先。
-  if (!['完成', '已归档'].includes(d.state)) {
-    const 有子 = (c.父子.子 || []).length;
-    if (fm.挂起) ops.push(['解挂', `原位复活回「${esc(d.state)}」，重新可被调度${有子 ? '（可连带子单）' : ''}`, `suspAsk('${id}',false,${有子 ? 'true' : 'false'})`]);
-    else ops.push(['挂起', `原位冻结：单不挪窝，全链路跳过${有子 ? `（可连带 ${有子} 张子单全树挂起）` : ''}`, `suspAsk('${id}',true,${有子 ? 'true' : 'false'})`]);
-  }
-  if (['池', '待投'].includes(d.state)) ops.push(['撤回', '回草稿（仅在池 / 待投）', `act2('撤回','${id}')`]);
+  const 有子 = (c.父子.子 || []).length;
+  if (已挂) ops.push(['解挂', `转「待重派」重新排队（挂起是唯一可逆终态，H108）${有子 ? '（可连带子单）' : ''}`, `suspAsk('${id}',false,${有子 ? 'true' : 'false'})`]);
+  else if (['待派', '待重派', '在途'].includes(d.state)) ops.push(['挂起', `冻结进「挂起」目录态：全链路跳过${有子 ? `（可连带 ${有子} 张子单全树挂起）` : ''}`, `suspAsk('${id}',true,${有子 ? 'true' : 'false'})`]);
+  if (d.state === '待派') ops.push(['撤回', '回待审（撤下排队）', `act2('撤回','${id}')`]);
   if (d.state === '在途') ops.push(['收回', '从执行方取回在途单', `act2('收回','${id}')`]);
   if (fm.待复核) ops.push(['解除复核', `上游 ${esc(fm.待复核.锚号 || '')} 已核对新版`, `act2('解除复核','${id}')`]); // D36
-  if (d.state === '执行失败') { // D31 分诊三出路（废弃在下方通用项）+ H65 返修
-    ops.push(['重投', `清执行痕迹回池重领${fm.失败原因 ? '（' + esc(String(fm.失败原因).slice(0, 24)) + '）' : ''}`, `act3('失败分诊','${id}','重投')`]);
-    ops.push(['返修', `同号回草稿改写（第 ${(fm.返修轮 || 0) + 1} 轮，计数保留，H65）`, `act2('返修','${id}')`]);
-    ops.push(['上呈', '转待定夺，由你拍板', `act3('失败分诊','${id}','上呈')`]);
+  if (d.state === '待处理') { // 分诊三出路（原 执行失败/待定夺 两态并入 待处理；废弃在下方通用项）+ H65 返修
+    ops.push(['重投', `清执行痕迹转待重派重领${fm.失败原因 ? '（' + esc(String(fm.失败原因).slice(0, 24)) + '）' : ''}`, `act3('失败分诊','${id}','重投')`]);
+    ops.push(['返修', `同号回待审改写（第 ${(fm.返修轮 || 0) + 1} 轮，计数保留，H65）`, `act2('返修','${id}')`]);
+    ops.push(['给方向', '写清怎么改 → 回炉重做（自修计数清零）', `dirModal('${id}')`]);
   }
-  if (d.state === '待定夺') { // D10 裁决三出路，与决策台等价（走同一 /api/act/定夺）
-    ops.push(['接受', 'QA 说不过但你认了 → 待验收', `act3('定夺','${id}','接受')`]);
-    ops.push(['给方向', '写清怎么改 → 回在途重做（自修计数清零）', `dirModal('${id}')`]);
-    ops.push(['打回', '这活不成立 → 归档（返工另开新单）', `askDecide('${id}','打回','打回将归档本单，需另开新单重走流程。确认？')`]);
+  if (d.state === '完成') { // 三大态改造：完成=判官已过、候验收的驻留位。散单/保留单单独走验收闸（H110）
+    ops.push(['验收归档', '验收通过 → 归档落袋（保留单品味终审不可代签，H11；成批的等专项关账级联归档）', `askAccept('${id}',true)`]);
+    ops.push(['返修', `不过关但同一件活：同号回待审改写（第 ${(fm.返修轮 || 0) + 1} 轮，H65）`, `act2('返修','${id}')`]);
   }
-  if (d.state === '待验收') { // 审批点③ 保留单品味终审（A-治理 二③ / H11，不可代签）
-    // 「通过入库」补进详情页（2026-08-20，施工令-061 四·2）：此前这颗钮**全站只在决策台**，
-    // 而决策台按定案要撤——先建后删的次序闸就卡在这一颗上。补它的另一层意义是动线：
-    // 总览收件箱点进来是详情页，在这儿能看全回执与验收标准逐条，签字该就地发生，
-    // 而不是「看完再切一页去签」（决策台还只签得动队首，点侧栏第 5 条主卡不动）。
-    ops.push(['通过入库', '验收通过 → 完成（人闸：品味终审不可代签）', `askAccept('${id}',true)`]);
-    ops.push(['返修', `不过关但同一件活：同号回草稿改写（第 ${(fm.返修轮 || 0) + 1} 轮，H65）`, `act2('返修','${id}')`]);
-    ops.push(['打回', '这活不成立 → 归档（返工另开新单）', `askAccept('${id}',false)`]);
-  }
-  if (d.state === '草稿') ops.push(['定稿', '草稿 → 待投', `act2('定稿','${id}')`]);
-  if (d.state === '待投') ops.push(['投池', '释放进池（人闸）', `act2('投池','${id}')`]);
-  if (!['完成', '已归档'].includes(d.state)) ops.push(['废弃', '归档（非终态皆可）', `askAct2('废弃','${id}','废弃并归档？')`]);
-  if (d.state === '草稿') ops.push(['编辑', '打开起草页修改', `location.hash='#/draft?edit=${id}'`]);
-  if (d.state === '完成') { // 审批点④：入库（D12 精选制，唯一写者=制作人层）
+  if (d.state === '待审') ops.push(['定稿', '审过 → 待派（总监审核闸）', `act2('定稿','${id}')`]);
+  if (d.state === '待派') ops.push(['放行', '项管闸放行（落 fm.放行 标记，依赖就绪即自动派发，H109）', `act2('放行','${id}')`]);
+  // 废弃（带因）：按状态机允许的边出（终态与 完成/挂起 不可废弃；历史废弃单留在归档不改史）
+  if (['待审', '待派', '待处理', '待重派', '在途', '初检', '核查', '仲裁'].includes(d.state))
+    ops.push(['废弃', '进废弃态（留档不删，R2；返工另开新单）', `dropModal('${id}')`]);
+  if (d.state === '待审') ops.push(['编辑', '打开起草页修改', `location.hash='#/draft?edit=${id}'`]);
+  if (['完成', '归档'].includes(d.state)) { // 审批点④：入库（D12 精选制，唯一写者=制作人层）
     if (fm.职能 === '策划') ops.push(['入标杆', '提炼进设计公理（审批点④）', `axModal('${id}')`]);
     if (fm.职能 === '美术' || fm.职能 === '装配') ops.push(['入美术库', '产出精选进风格库（审批点④）', `artModal('${id}')`]);
   }
-  // 批量验收子单（施工令-028 从树形迁入）：只在真有待验收子单时出按钮——与退役前
+  // 批量验收子单（施工令-028 从树形迁入）：只在真有候验子单时出按钮——与退役前
   // 「acceptN ? 出按钮 : 不出」同款条件，不给一个点了没反应的钮。带确认门，行为不扩权。
-  if (待验收数) ops.push([`✓ 批量验收子单 ×${待验收数}`, `该父单下 ${待验收数} 张待验收子单一次性通过（只动待验收态，孙单不连带）`, `acceptKids('${id}')`]);
-  if (['完成', '已归档'].includes(d.state)) ops.push(['推翻重做', '翻案：归档旧单+自动开返工草稿（须写理由）', `overturnModal('${id}')`]);
-  if (d.state === '已归档') ops.push([fm.隐藏 ? '取消隐藏' : '隐藏归档', fm.隐藏 ? '重新出现在归档列表' : '从一切默认视图湮灭（纸面仍可考）', `toggleHide('${id}',${fm.隐藏 ? 'false' : 'true'})`]);
+  if (候验数) ops.push([`✓ 批量验收子单 ×${候验数}`, `该父单下 ${候验数} 张完成候验子单一次性验收归档（只动完成态，孙单不连带）`, `acceptKids('${id}')`]);
+  if (['完成', '归档'].includes(d.state)) ops.push(['推翻重做', '翻案：旧单落档+自动开返工新单（落待审，须写理由）', `overturnModal('${id}')`]);
+  if (d.state === '归档') ops.push([fm.隐藏 ? '取消隐藏' : '隐藏归档', fm.隐藏 ? '重新出现在归档列表' : '从一切默认视图湮灭（纸面仍可考）', `toggleHide('${id}',${fm.隐藏 ? 'false' : 'true'})`]);
   return `${suspHtml}${engHtml}${liveHtml}<div class="p8grid"><div>
       <div class="p8main card r16"><h2>${esc(id)} · ${esc(fm.title)}</h2>
         <div class="chipsrow">${fnPill(fm.职能)}<span class="pill mut">${esc(fm.产出物类型 || '')}</span>
           <span class="pill ${fm.验收方式 === '委托' ? 'mut' : 'ok'}">${esc(fm.验收方式 || '保留')}</span><span class="pill mut">${esc(fm.规模 || '')}</span>
-          ${fm.挂起 ? `<span class="pill susp-p" title="${esc(suspTip({ 挂起: fm.挂起 }))}">❄ 已挂起</span>` : ''}
+          ${已挂 ? `<span class="pill susp-p" title="${esc(suspTip({ 挂起: fm.挂起 || { 操作者: '制作人' } }))}">❄ 已挂起</span>` : ''}
           ${fm.待复核 ? `<span class="pill red" title="${esc(fm.待复核.说明 || '')}">待复核 · ${esc(fm.待复核.锚号 || '')}</span>` : ''}
           ${fm.代核 ? `<span class="pill ${fm.代核.结论 === '通过' ? 'ok' : 'red'}">核查${esc(fm.代核.结论)}</span>` : ''}</div>
         <div class="chain"><div class="clbl">追溯链</div>
@@ -2180,15 +2185,16 @@ window.rcvRound = (btn, i) => {
 window.act2 = async (name, id) => { const r = await post('/api/act/' + name, { id }); toast(r.ok ? (r.警示 ? '完成 · 警示：' + r.警示[0] : '完成') : (r.error || '失败')); route(); };
 // 批量验收子单（施工令-028：原树形 tAcceptAll 迁入父单详情页）。
 // 与原实现的差别只有两处，都是为了更稳，不是为了更强：
-//   ① 射程清单**开火前重取**（/api/ticket 的 链.父子.待验收，规则在 lib/trace 一处定义）——
+//   ① 射程清单**开火前重取**（/api/ticket 的 链.父子 候验清单，规则在 lib/trace 一处定义）——
 //      详情页可能开着好一会儿，拿渲染时的旧名单去批量改状态是在赌；
 //   ② 重取后为空时只吐一句提示、一个请求都不发（原实现会弹一个「批量验收 0 张？」的确认门）。
-// 过滤条件本身一字未动：只动该父单**直系**子单里状态为「待验收」的那些，孙单不连带。
+// 过滤条件本身一字未动：只动该父单**直系**子单里停在「完成」候验的那些，孙单不连带。
 window.acceptKids = async (pid) => {
   const d = await api('/api/ticket?id=' + encodeURIComponent(pid)).catch(() => null);
-  const ids = (d && d.链 && d.链.父子 && d.链.父子.待验收) || [];
-  if (!ids.length) return toast('没有待验收子单（可能刚被验收过）');
-  if (!await ask(`批量验收 ${pid} 下 ${ids.length} 张待验收子单？`)) return;
+  const fz = (d && d.链 && d.链.父子) || {};
+  const ids = fz.候验 || fz.完成候验 || fz.待验收 || []; // 旧键名兼容读（trace 收口对齐见 need_coord）
+  if (!ids.length) return toast('没有完成候验的子单（可能刚被验收过）');
+  if (!await ask(`批量验收 ${pid} 下 ${ids.length} 张完成候验子单？`)) return;
   let ok = 0; const 失败 = [];
   for (const cid of ids) {
     const r = await post('/api/act/验收', { id: cid, 通过: true });
@@ -2198,10 +2204,10 @@ window.acceptKids = async (pid) => {
   route();
 };
 window.overturnModal = (id) => showModal(`<h3>推翻重做 ${esc(id)}</h3>
-  <p class="subnote" style="margin-top:6px">归档旧单 + 自动编号开返工草稿（带返工链），下游依赖自动接续。理由必填，进新单正文与流水。</p>
+  <p class="subnote" style="margin-top:6px">旧单落档 + 自动编号开返工新单（落待审，带返工链），下游依赖自动接续。理由必填，进新单正文与流水。</p>
   <textarea id="ov-r" style="width:100%;height:90px;margin-top:12px" placeholder="为什么翻案：哪里完全不行、新的要求方向是什么"></textarea>
   <div class="p7foot" style="margin-top:14px"><button class="btn h32" onclick="this.closest('.mwrap').remove()">取消</button>
-  <button class="btn accent h32" onclick="doOverturn('${esc(id)}',this)">推翻并开草稿</button></div>`);
+  <button class="btn accent h32" onclick="doOverturn('${esc(id)}',this)">推翻并开返工单</button></div>`);
 window.doOverturn = async (id, btn) => {
   const 理由 = $('ov-r').value.trim();
   if (!理由) return toast('理由必填');
@@ -2297,21 +2303,35 @@ window.artSubmit = async (id, btn) => {
 };
 window.act3 = async (name, id, 决定) => { const r = await post('/api/act/' + name, { id, 决定 }); toast(r.ok ? `${决定} 完成` : (r.error || '失败')); route(); };
 window.askDecide = async (id, 决定, msg) => { if (await ask(msg)) act3('定夺', id, 决定); };
-// 验收（审批点③，2026-08-20 补进详情页）：走 /api/act/验收，与决策台同一条后端路径。
-// 通过与打回分开确认文案——打回是**销毁性判断**（单会进归档、要另开新单），
-// 跟「通过」用同一句轻飘飘的确认语是把两件不同量级的事按成一件。
+// 验收（审批点③ · H110 验收闸）：走 /api/act/验收。三大态改造后 通过=完成→归档（落袋），
+// 打回一路已并入 废弃（带因，dropModal）——两件事量级不同，确认语分开。
 window.askAccept = async (id, 通过) => {
-  const msg = 通过
-    ? `通过入库 ${id}？
+  if (!通过) return dropModal(id); // 旧调用点兼容：不通过=废弃（带因）
+  const msg = `验收归档 ${id}？
 
-这是保留单的品味终审（H11 不可代签），签完即落袋。`
-    : `打回 ${id}？
-
-打回将归档本单，需另开新单重走流程——这是销毁性判断，不可撤回。`;
+这是验收闸（保留单品味终审 H11 不可代签），签完即归档落袋。`;
   if (!await ask(msg)) return;
-  const r = await post('/api/act/验收', { id, 通过: !!通过 });
+  const r = await post('/api/act/验收', { id, 通过: true });
   if (!r.ok) return toast(r.error || '验收失败');
-  toast(`${id} ${通过 ? '已入库' : '已打回归档'}`); route();
+  toast(`${id} 已归档落袋`); route();
+};
+// 废弃（带因，H108：废弃=独立目录终态，留档不删 R2）。
+// 新写口形状 POST /api/tickets/废弃 {id, 理由, 操作者}——A 组 lifecycle 落成后收口对齐（need_coord）。
+window.dropModal = (id) => showModal(`<h3>废弃 ${esc(id)}</h3>
+  <p class="subnote" style="margin-top:6px">进「废弃」目录态：不可逆（留档不删，R2）；返工需另开新单。理由进 frontmatter 与流水。</p>
+  <textarea id="drop-r" style="width:100%;height:80px;margin-top:12px" placeholder="为什么废弃（选填但强烈建议：事后回答得出「当时为什么不要了」）"></textarea>
+  <div class="p7foot" style="margin-top:14px"><button class="btn h32" onclick="this.closest('.mwrap').remove()">取消</button>
+  <button class="btn danger-o h32" onclick="doDrop('${esc(id)}',this)">确认废弃</button></div>`);
+window.doDrop = async (id, btn) => {
+  const body = { id, 操作者: '制作人' };
+  const r0 = $('drop-r'); if (r0 && r0.value.trim()) body.理由 = r0.value.trim();
+  btn.disabled = true;
+  // 先走新写口；旧服务端没有这条路由时回落 /api/act/废弃（并行期兼容，收口后删兜底）
+  let r = await post('/api/tickets/' + encodeURIComponent('废弃'), body).catch(() => null);
+  if (!r || r.ok !== true) { const r2 = await post('/api/act/' + encodeURIComponent('废弃'), body); r = r2; }
+  if (!r.ok) { btn.disabled = false; return toast(r.error || '废弃失败'); }
+  btn.closest('.mwrap').remove();
+  toast(`${id} 已废弃（留档）`); route();
 };
 // 给方向弹框（D43③）：方向文本随裁决落进工单正文，重执行的会话能读到；自修计数由 lifecycle 清零
 window.dirModal = (id) => showModal(`<h3>给方向 ${esc(id)}</h3>
@@ -2330,9 +2350,11 @@ window.doGiveDir = async (id, btn) => {
   route();
 };
 
-/* ===== 挂起 / 解挂弹窗（施工令-021 · 制作人裁决权）=====
+/* ===== 挂起 / 解挂弹窗（施工令-021 · 制作人裁决权 → H108 目录态化）=====
    带确认是硬要求：挂起会让一张单从全链路里消失，无声按下去和无声跑起来一样危险。
-   父单（有子单的单）额外给「仅父单 / 全树」两选——只冻父单而子单照跑，是把专项冻了个寂寞。 */
+   父单（有子单的单）额外给「仅父单 / 全树」两选——只冻父单而子单照跑，是把专项冻了个寂寞。
+   写口走 lifecycle 新形状 POST /api/tickets/挂起｜解挂（A 组落成后收口对齐，need_coord）；
+   并行期旧服务端没有该路由时回落 /api/act/*。 */
 window.suspAsk = (id, 挂, 有子) => {
   const 动 = 挂 ? '挂起' : '解挂';
   const 树注 = 挂
@@ -2340,8 +2362,8 @@ window.suspAsk = (id, 挂, 有子) => {
     : '全树解挂 = 连带「随本单全树挂起」的子孙一起放行；单独挂过的子单保持挂起，不代你改主意。';
   showModal(`<h3>${动} ${esc(id)}</h3>
     <p class="subnote" style="margin-top:6px">${挂
-    ? '挂起 = <b>原位冻结</b>：单一步不挪，仍在当前状态目录里，但派发 / 领单 / 质检 / 初检 / 核查 / 仲裁 / 巡检告警全部跳过它，在途会话会被掐掉。这不是废弃——随时可解挂原位复活。'
-    : '解挂 = <b>原位复活</b>：回到它挂起时所在的状态继续被正常调度。'}</p>
+    ? '挂起 = <b>冻结进「挂起」目录态</b>（H108 唯一可逆终态）：派发 / 领单 / 初检 / 核查 / 仲裁 / 巡检告警全部跳过它，在途会话会被掐掉。这不是废弃——随时可解挂，解挂后转「待重派」重新排队。'
+    : '解挂 = <b>转「待重派」</b>：重新进入排队，等派发引擎按依赖与优先级拉起。'}</p>
     ${挂 ? `<textarea id="susp-r" style="width:100%;height:80px;margin-top:12px" placeholder="为什么冻它（选填，进 frontmatter 与流水，事后回答得出「当时为什么停」）"></textarea>` : ''}
     ${有子 ? `<label class="subnote" style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
       <input type="checkbox" id="susp-tree" checked> 全树${动}（连带子单）</label>
@@ -2354,11 +2376,13 @@ window.doSusp = async (id, 挂, btn) => {
   const body = { id, 操作者: '制作人', 全树: !!(box && box.checked) };
   if (挂) { const r0 = $('susp-r'); if (r0 && r0.value.trim()) body.理由 = r0.value.trim(); }
   btn.disabled = true;
-  const r = await post('/api/act/' + (挂 ? '挂起' : '解挂'), body);
+  // 先走 lifecycle 新写口；旧服务端 404/无 ok 时回落 /api/act/*（并行期兼容，收口后删兜底）
+  let r = await post('/api/tickets/' + encodeURIComponent(挂 ? '挂起' : '解挂'), body).catch(() => null);
+  if (!r || r.ok !== true) r = await post('/api/act/' + (挂 ? '挂起' : '解挂'), body);
   if (!r.ok) { btn.disabled = false; return toast(r.error || '失败'); }
   btn.closest('.mwrap').remove();
   const n = ((挂 ? r.挂起 : r.解挂) || []).length;
-  toast(挂 ? `已挂起${n > 1 ? ` · 连带 ${n - 1} 张子单` : ''}` : `已解挂${n > 1 ? ` · 连带 ${n - 1} 张子单` : ''}`);
+  toast(挂 ? `已挂起${n > 1 ? ` · 连带 ${n - 1} 张子单` : ''}` : `已解挂 · 转待重派${n > 1 ? ` · 连带 ${n - 1} 张子单` : ''}`);
   route();
 };
 
@@ -2971,7 +2995,7 @@ async function tkTFDirect() {
   if (!d || !$('tk-direct')) return;
   const 单 = (d.all || []).filter((t) => t.项目 === 'Ticketflow' && !t.专项);
   if (!单.length) { el.innerHTML = `<div class="emptycard"><h5>没有散单</h5><p>本项目的活此刻都在专项里。</p></div>`; return; }
-  const 终 = new Set(['完成', '已归档']);
+  const 终 = new Set(['完成', '归档']); // 完成=做完等关账（专项内部口径）· 归档=落袋
   const 落 = 单.filter((t) => 终.has(t.state)).length;
   const 行 = 单.map((t) => `<a class="sprow${终.has(t.state) ? ' done' : ''}" href="#/t/${esc(t.id)}" title="${esc(t.title || '')}">
       <span class="mono spid">${esc(t.id)}</span><span class="spt">${esc(t.title || '')}</span>
@@ -3053,7 +3077,7 @@ async function tkFillDirect(ft) {
   if (!d || !$('tk-direct')) return;
   const 单 = d.直挂 || [];
   if (!单.length) { el.innerHTML = ''; return; }
-  const 终 = new Set(['完成', '已归档']);
+  const 终 = new Set(['完成', '归档']); // 完成=做完等关账（专项内部口径）· 归档=落袋
   const 落 = 单.filter((t) => 终.has(t.state)).length;
   const 行 = 单.map((t) => `<a class="sprow${终.has(t.state) ? ' done' : ''}" href="#/t/${esc(t.id)}" title="${esc(t.fm && t.fm.title || '')}">
       <span class="mono spid">${esc(t.id)}</span><span class="spt">${esc((t.fm && t.fm.title) || '')}</span>
@@ -3087,7 +3111,7 @@ async function viewSpecials() {
   const all = (d.专项 || []).filter((s) => !p || (s.项目 || projDefault()) === p);
   if (!all.length) {
     return `<div class="emptycard" style="margin-top:30px"><h5>还没有专项</h5>
-      <p>专项是<b>容器</b>不是工单（H103）：它装的是一批活，自己不执行、不进质检、不被派发。
+      <p>专项是<b>容器</b>不是工单（H103）：它装的是一批活，自己不执行、不进审检链、不被派发。
       开一个的路子只有一条——去 <a href="#/relay" style="color:var(--accent-ink)">项管页的想法在池</a> 拍板，
       拍板那一刻落的就是这里的一条容器；立项后项管自动切单，子单才进
       <a href="#/board" style="color:var(--accent-ink)">工单板</a>。</p></div>`;
@@ -3230,7 +3254,7 @@ function locHM(iso) {
 }
 function pmEventLine(e) {
   const t = locHM(e.t);
-  if (e.类型 === '待审') return { t, txt: e.单 ? `受托起草：${e.单}（草稿待总监审）` : `拆单完成：${e.父单} → ${(e.子单 || []).join('、')}，简报呈 Claude 审批`, hot: true };
+  if (e.类型 === '待审') return { t, txt: e.单 ? `受托起草：${e.单}（待审稿候总监审核）` : `拆单完成：${e.父单} → ${(e.子单 || []).join('、')}，简报呈 Claude 审批`, hot: true };
   if (e.类型 === '切单启动') return { t, txt: `开始拆单：${e.父单}（仓况盘点中）`, hot: true };
   // 施工令-054：拒切候期是合法出口，渲染上要与「切单失败」分得开——通用分支只画得出
   // 「切单候期：P-1」，而这条事件的信息全在理由与复切时机里，摊不开等于判语又被吞一次。
@@ -3602,7 +3626,7 @@ function 待办队列Html(q, 粒表, now) {
       写账署名 ${esc(排期署名)}（调整/重排 操作域＝项管/总监；放行走 转移 计划→起草中，逐边操作域＝总监/制作人）。</span></div>
     <div class="qboard" id="q-board">${批Html}</div>
     <div class="fglegend" style="margin-top:10px">
-      <span><i class="lg-plan"></i>计划＝还没起草的活 · 起草中＝草稿在台上 · 已成单→点单号进详情</span>
+      <span><i class="lg-plan"></i>计划＝还没起草的活 · 起草中＝待审稿在台上 · 已成单→点单号进详情</span>
       <span><i class="lg-stuck"></i>置灰＋「候：X」＝依赖未满足，这条现在开不了</span>
       <span>已了的批默认折叠 · 预估合计只数未完的活</span></div>
   </div>`;
@@ -3960,10 +3984,10 @@ const markIn = (key) => { if (window._lastViewKey !== key) { const v = $('view')
 async function 详情徽章(id, state) {
   if (state == null) { const d = await api('/api/ticket?id=' + encodeURIComponent(id)).catch(() => ({})); state = d.state; }
   if (!state) return '';
-  if (['待验收', '待定夺'].includes(state)) {
+  if (['初检', '核查', '仲裁', '完成', '待处理'].includes(state)) {
     const run = await api('/api/runner').catch(() => ({}));
     const live = (run.执行中 || []).find((x) => x.id === id);
-    if (live) return `<span class="pill st-review">${esc(({ 初检: '初检中', 代核: '核查中', 核查: '核查中', 仲裁: '仲裁中' })[live.kind] || live.kind + '中')}</span>`;
+    if (live) return `<span class="pill st-review">${esc(({ 质检: '初检中', 初检: '初检中', 代核: '核查中', 核查: '核查中', 代裁: '仲裁中', 仲裁: '仲裁中' })[live.kind] || live.kind + '中')}</span>`;
   }
   return stPill(state);
 }

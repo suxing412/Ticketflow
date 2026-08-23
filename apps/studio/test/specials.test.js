@@ -85,8 +85,8 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     seed(root, '完成', { id: 'TK-1', 专项: 'S-1' });
     SP.转移(root, 'S-1', '进行');
     assert.equal(SP.收口自检(root, 'S-1').动作, '收口');
-    // H65 返修：同号回草稿
-    fs.renameSync(store.ticketPath(root, '完成', 'TK-1'), store.ticketPath(root, '草稿', 'TK-1'));
+    // H65 返修：同号回待审（原「同号回草稿」，H108 改名 草稿→待审；完成→待审 是状态机在册边）
+    fs.renameSync(store.ticketPath(root, '完成', 'TK-1'), store.ticketPath(root, '待审', 'TK-1'));
     const r = SP.收口自检(root, 'S-1');
     assert.equal(r.动作, '复工');
     assert.deepEqual(r.活单, ['TK-1']);
@@ -138,38 +138,53 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     立(root, { 别名: ['TK-150'] });
     seed(root, '完成', { id: 'TK-151', 专项: 'S-1' });
     seed(root, '在途', { id: 'TK-152', 父单: 'TK-150' });          // 漏补专项章：别名认回来
-    seed(root, '草稿', { id: 'TK-153', 父单: 'TK-999' });          // 别人家的活
-    seed(root, '已归档', { id: 'TK-150', 专项: 'S-1', 迁移至专项: 'S-1' }); // 迁移后的容器伪单
+    seed(root, '待审', { id: 'TK-153', 父单: 'TK-999' });          // 别人家的活
+    seed(root, '归档', { id: 'TK-150', 专项: 'S-1', 迁移至专项: 'S-1' }); // 迁移后的容器伪单
     const kids = SP.子单(root, 'S-1');
     assert.deepEqual(kids.map((k) => k.id), ['TK-151', 'TK-152'], '容器伪单自己不算子单');
   });
 
-  await t('聚合：进度四段 · 预算实耗 · 零子单不编进度', async () => {
+  await t('聚合：进度分段 · 落袋=完成+归档（H108 新口径）· 预算实耗 · 零子单不编进度', async () => {
     const root = makeRoot();
     立(root, { 名称: '编辑器专项', 管线: 'P-3' });
-    assert.deepEqual(SP.聚合(root, 'S-1').进度, { 总数: 0, 落袋: 0, 归档: 0, 在办: 0, 未起: 0, 百分比: 0 },
+    assert.deepEqual(SP.聚合(root, 'S-1').进度, { 总数: 0, 落袋: 0, 归档: 0, 废弃: 0, 在办: 0, 未起: 0, 百分比: 0 },
       '零子单 = 0%，不是 100%——切单没出结果的专项不许显示「做完了」');
     seed(root, '完成', { id: 'TK-1', 预计时间: '1', 领单时间: '2026-08-10T00:00:00Z', 交付时间: '2026-08-10T02:00:00Z', 专项: 'S-1' });
     seed(root, '在途', { id: 'TK-2', 预计时间: '0.5', 专项: 'S-1' });
-    seed(root, '草稿', { id: 'TK-3', 预计时间: '0.5', 专项: 'S-1' });
-    seed(root, '已归档', { id: 'TK-4', 归档原因: '废弃', 专项: 'S-1' });
+    seed(root, '待审', { id: 'TK-3', 预计时间: '0.5', 专项: 'S-1' });
+    seed(root, '废弃', { id: 'TK-4', 归档原因: '废弃', 专项: 'S-1' });
+    seed(root, '归档', { id: 'TK-5', 专项: 'S-1' });
     const v = SP.聚合(root, 'S-1');
-    assert.deepEqual(v.进度, { 总数: 4, 落袋: 1, 归档: 1, 在办: 1, 未起: 1, 百分比: 25 },
-      '归档单留在分母里——废掉一张不该让完成度凭空变好看');
+    assert.deepEqual(v.进度, { 总数: 5, 落袋: 2, 归档: 1, 废弃: 1, 在办: 1, 未起: 1, 百分比: 40 },
+      '落袋=完成+归档（专项内部「做完等关账」与「已归档」都算落袋）；废弃留在分母——废掉一张不该让完成度凭空变好看');
     assert.equal(v.预算.预计h, 2);
     assert.equal(v.预算.实耗h, 2, '实耗走 领单→交付，与 report.aggregate 的 实际h 同源');
     assert.equal(v.预算.偏差pct, 100, '踩点');
     assert.equal(v.名称, '编辑器专项'); assert.equal(v.管线, 'P-3');
-    assert.equal(v.子单.length, 4);
+    assert.equal(v.子单.length, 5);
     assert.equal(v.子单[0].id, 'TK-1', '子单按号定序');
+    assert.equal(v.子单.find((k) => k.id === 'TK-5').落袋, true, '归档态子单在明细上也标落袋');
+  });
+
+  await t('挂起是目录态：明细认 state=挂起 · 挂起单算在办不算落袋（H108）', async () => {
+    const root = makeRoot();
+    立(root);
+    seed(root, '完成', { id: 'TK-1', 专项: 'S-1' });
+    seed(root, '挂起', { id: 'TK-2', 专项: 'S-1' });
+    const v = SP.聚合(root, 'S-1');
+    assert.deepEqual(v.进度, { 总数: 2, 落袋: 1, 归档: 0, 废弃: 0, 在办: 1, 未起: 0, 百分比: 50 },
+      '挂起单算在办（未完）——不许藏进「做完了」那一侧');
+    const 挂 = v.子单.find((k) => k.id === 'TK-2');
+    assert.equal(挂.挂起, true, '挂起从 fm 标记升级为目录态：明细认 state，不再只认 fm.挂起');
+    assert.equal(挂.落袋, false);
   });
 
   await t('基线变迁：容器履历 + 子单增删（返工/推翻/撤销）', async () => {
     const root = makeRoot();
     立(root);
     SP.转移(root, 'S-1', '进行', { 因: '首子单派发' });
-    seed(root, '草稿', { id: 'TK-2', 返工自: 'TK-1', 专项: 'S-1' });
-    seed(root, '已归档', { id: 'TK-1', 归档原因: '返工替代', 专项: 'S-1' });
+    seed(root, '待审', { id: 'TK-2', 返工自: 'TK-1', 专项: 'S-1' });
+    seed(root, '废弃', { id: 'TK-1', 归档原因: '返工替代', 专项: 'S-1' });
     const 基 = SP.聚合(root, 'S-1').基线;
     assert.equal(基.filter((b) => b.类型 === '容器').length, 2, '立项 + 进行两笔');
     assert.ok(基.some((b) => b.类型 === '返工' && b.单号 === 'TK-2'));
@@ -179,7 +194,8 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
   /* ================= ③ 迁移 ================= */
 
   const 铺伪单 = (root) => {
-    seed(root, '待验收', { id: 'TK-150', title: '编辑器专项', 父单类型: '专项', 管线: 'P-3', 项目: 'SLG', 验收方式: '保留', body: '## 专项目标\n把编辑器做出来\n' });
+    // 伪单当年住 待验收；H108 改名对照 待验收→完成（合并），存量数据迁移后即此形
+    seed(root, '完成', { id: 'TK-150', title: '编辑器专项', 父单类型: '专项', 管线: 'P-3', 项目: 'SLG', 验收方式: '保留', body: '## 专项目标\n把编辑器做出来\n' });
     seed(root, '完成', { id: 'TK-156', title: '大纲树拖拽', 父单: 'TK-150' });
     seed(root, '完成', { id: 'TK-157', title: '属性面板', 父单: 'TK-150' });
   };
@@ -206,7 +222,7 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     }
     // 伪单归档不删
     const 伪 = store.find(root, 'TK-150');
-    assert.equal(伪.state, '已归档', '待验收文件归档，不删');
+    assert.equal(伪.state, '归档', '伪单文件归档，不删');
     assert.ok(fs.existsSync(伪.file));
     assert.match(伪.fm.归档原因, /专项实体化迁移 → S-1/);
     assert.equal(伪.fm.迁移至专项, 'S-1', '工单板据此摘掉伪单（要件5）');
@@ -239,7 +255,7 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     assert.equal(r.演练, true);
     assert.ok(r.动作.length >= 4, '动作清单照出，让人先看');
     assert.equal(SP.list(root).length, 0, '演练不建容器');
-    assert.equal(store.find(root, 'TK-150').state, '待验收', '演练不动伪单');
+    assert.equal(store.find(root, 'TK-150').state, '完成', '演练不动伪单');
     assert.equal(store.find(root, 'TK-156').fm.专项, undefined, '演练不挂链');
   });
 
@@ -255,7 +271,7 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
 
   await t('迁移：令面点名的两张一起跑 → S-1/S-2 各自成容器', async () => {
     const root = makeRoot();
-    seed(root, '待验收', { id: 'TK-146', title: '海岸线专项', 父单类型: '专项', body: '## 目标\n海岸线\n' });
+    seed(root, '完成', { id: 'TK-146', title: '海岸线专项', 父单类型: '专项', body: '## 目标\n海岸线\n' });
     seed(root, '完成', { id: 'TK-147', title: '钉零', 父单: 'TK-146' });
     铺伪单(root);
     const r = SP.迁移(root, SP.默认迁移计划);
@@ -289,7 +305,7 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     assert.deepEqual(c1.挂链, { 专项: 'S-1' });
     assert.equal(c1.前缀, 'TK', '专项号是 S-1，子单绝不能跟着叫 S-2——那会跟下一个专项号撞车');
     assert.equal(c1.fm.项目, 'SLG'); assert.equal(c1.fm.管线, 'P-3');
-    seed(root, '待投', { id: 'TK-90', 父单类型: '战役', 项目: 'SLG' });
+    seed(root, '待派', { id: 'TK-90', 父单类型: '战役', 项目: 'SLG' });
     const c2 = brain.容器(root, 'TK-90');
     assert.equal(c2.专项, false);
     assert.deepEqual(c2.挂链, { 父单: 'TK-90' });
@@ -342,7 +358,7 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     for (const k of ['QA', '验收方式', '预计时间', '预计token', '规模', '职能', '父单类型']) {
       assert.equal(s.fm[k], undefined, `容器不该有 ${k} 字段`);
     }
-    assert.equal(store.snapshot(root).草稿.length, 0, '拍板不再往工单目录里塞东西');
+    assert.equal(store.snapshot(root).待审.length, 0, '拍板不再往工单目录里塞东西');
     assert.equal(ideas.list(root)[0].专项, 'S-1', '想法回链指专项');
   });
 
@@ -351,7 +367,7 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
   await t('052 适配：专项批名=专项名 · 子单挂粒规则不变', async () => {
     const root = makeRoot();
     立(root, { 名称: '编辑器专项' });
-    seed(root, '草稿', { id: 'TK-156', title: '大纲树拖拽', 专项: 'S-1', 职能: '程序', 依赖: ['TK-151'] });
+    seed(root, '待审', { id: 'TK-156', title: '大纲树拖拽', 专项: 'S-1', 职能: '程序', 依赖: ['TK-151'] });
     const { 动作 } = LS.差量(store.snapshot(root), S.现态(root), SP.list(root));
     assert.equal(动作.length, 1);
     const a = 动作[0];
@@ -367,9 +383,9 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     const root = makeRoot();
     铺伪单(root);
     SP.迁移(root, [{ 单号: 'TK-150' }]);
-    seed(root, '草稿', { id: 'TK-200', title: '散单' });                            // 无归属
-    seed(root, '待投', { id: 'TK-90', title: '存量战役', 父单类型: '战役' });
-    seed(root, '草稿', { id: 'TK-91', title: '战役子单', 父单: 'TK-90' });
+    seed(root, '待审', { id: 'TK-200', title: '散单' });                            // 无归属
+    seed(root, '待派', { id: 'TK-90', title: '存量战役', 父单类型: '战役' });
+    seed(root, '待审', { id: 'TK-91', title: '战役子单', 父单: 'TK-90' });
     const { 动作 } = LS.差量(store.snapshot(root), S.现态(root), SP.list(root));
     const 号 = 动作.filter((a) => a.动作 === '登粒').map((a) => a.单号);
     assert.ok(!号.includes('TK-150'), '迁移后的伪单是纸面留档，不是活粒');
@@ -383,7 +399,7 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
   await t('052 适配：不传专项表 → 退回战役老路（读盘失败不该把整拍带崩）', async () => {
     const root = makeRoot();
     立(root, { 名称: '编辑器专项' });
-    seed(root, '草稿', { id: 'TK-156', title: '子单', 专项: 'S-1' });
+    seed(root, '待审', { id: 'TK-156', title: '子单', 专项: 'S-1' });
     const { 动作 } = LS.差量(store.snapshot(root), S.现态(root)); // 第三参缺省
     assert.equal(动作.length, 0, '认不出容器就不登粒——少登几粒好过登错批');
   });
@@ -391,7 +407,7 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
   await t('052 接线实拍：同步() 自己去读注册表（不靠调用方喂）', async () => {
     const root = makeRoot();
     立(root, { 名称: '编辑器专项' });
-    seed(root, '草稿', { id: 'TK-156', title: '大纲树拖拽', 专项: 'S-1' });
+    seed(root, '待审', { id: 'TK-156', title: '大纲树拖拽', 专项: 'S-1' });
     const r = LS.同步(root, { 触发: '首跑' });
     assert.equal(r.成.length, 1);
     const 粒 = S.现态(root);
@@ -424,11 +440,11 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     seed(root, '完成', { id: 'TK-1', 专项: 'S-1' });
     wake.check专项收口(root, CFG, { test: true });
     assert.equal(pmLedger.read(root).已收口['S-1'], true);
-    fs.renameSync(store.ticketPath(root, '完成', 'TK-1'), store.ticketPath(root, '草稿', 'TK-1'));
+    fs.renameSync(store.ticketPath(root, '完成', 'TK-1'), store.ticketPath(root, '待审', 'TK-1'));
     wake.check专项收口(root, CFG, { test: true });               // 这一拍走复工
     assert.equal(SP.find(root, 'S-1').fm.状态, '进行');
     assert.equal((pmLedger.read(root).已收口 || {})['S-1'], undefined, '收口旗已撤');
-    fs.renameSync(store.ticketPath(root, '草稿', 'TK-1'), store.ticketPath(root, '完成', 'TK-1'));
+    fs.renameSync(store.ticketPath(root, '待审', 'TK-1'), store.ticketPath(root, '完成', 'TK-1'));
     assert.deepEqual(wake.check专项收口(root, CFG, { test: true }), ['S-1'], '再落袋重出收口');
   });
 
@@ -449,11 +465,12 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     const snap = store.snapshot(root);
     assert.equal(Object.values(snap).flat().length, 0);
     assert.equal(store.find(root, 'S-1'), null);
-    // 派发候选：待投里没有它 → 派发引擎连看都看不到
-    const 待投 = store.list(root, '待投');
-    assert.equal(待投.length, 0);
-    // 初检候选（runner 的两检初检取的就是 待验收 列表）：同理为空
-    assert.equal(store.list(root, '待验收').length, 0);
+    // 派发候选：待派里没有它 → 派发引擎连看都看不到
+    const 待派 = store.list(root, '待派');
+    assert.equal(待派.length, 0);
+    // 审检候选（初检/核查目录）：同理为空
+    assert.equal(store.list(root, '初检').length, 0);
+    assert.equal(store.list(root, '核查').length, 0);
     // 预检不吃容器：它压根不是 store 认得的单
     const preflight = require('../lib/preflight');
     assert.deepEqual(preflight.preflight(root, null, CFG), [], '容器不进预检');
@@ -471,9 +488,9 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     };
     state.update(root, (s) => { s.执行器 = { 运行: true }; });
     立(root, { 名称: '编辑器专项' });
-    seed(root, '待投', { id: 'TK-1', 专项: 'S-1', 职能: '程序', 放行: true, QA: '关' });
+    seed(root, '待派', { id: 'TK-1', 专项: 'S-1', 职能: '程序', 放行: true, QA: '关' });
     await runner.tick(root, cfg, { durMs: 0, noBrain: true });
-    assert.notEqual(store.find(root, 'TK-1').state, '待投', '子单确实被派出去了（接线前提）');
+    assert.notEqual(store.find(root, 'TK-1').state, '待派', '子单确实被派出去了（接线前提）');
     assert.equal(SP.find(root, 'S-1').fm.状态, '进行', 'H53 状态诚实映射：首子单派发 → 容器开工');
   });
 
@@ -488,6 +505,134 @@ const 立 = (root, o = {}) => SP.立项(root, { 名称: '编辑器专项', 单�
     assert.deepEqual(c, { id: 'S-1', 名称: '编辑器专项', 状态: '立项', 在册: true });
     assert.equal(trace.chains(root, 'TK-900').专项.在册, false, '查无此号要如实说，不能装作挂对了');
     assert.equal(trace.chains(root, 'TK-901').专项, null, '散单没有这一格');
+  });
+
+  /* ========== ⑧ H110 关账级联 · DS-1 验收打回 · 挂起挡收口（2026-08-24 三大态改造 C 组）========== */
+
+  // journal 流水全文（级联留痕的取证口）
+  const 流水 = (root) => {
+    const dir = path.join(root, 'journal');
+    if (!fs.existsSync(dir)) return '';
+    return fs.readdirSync(dir).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+  };
+
+  await t('H110 关账级联：关账成功 → 名下「完成」子单批量 完成→归档 · 逐张 journal 留痕 · 散单不误伤', async () => {
+    const root = makeRoot();
+    立(root);
+    SP.转移(root, 'S-1', '进行'); SP.转移(root, 'S-1', '收口');
+    SP.定完成定义(root, 'S-1', '两张子单交付且验收', '制作人');
+    seed(root, '完成', { id: 'TK-1', 专项: 'S-1' });
+    seed(root, '完成', { id: 'TK-2', 专项: 'S-1' });
+    seed(root, '完成', { id: 'TK-9' });                       // 散单：不在专项链里，一根手指都不许碰
+    seed(root, '在途', { id: 'TK-3', 专项: 'S-1' });          // 未完成的子单：级联只动「完成」态
+    const r = SP.关账(root, 'S-1', '制作人', '验收通过');
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.级联.归档, ['TK-1', 'TK-2'], '级联归档清单要如实回报');
+    assert.deepEqual(r.级联.失败, []);
+    assert.equal(store.find(root, 'TK-1').state, '归档', '专项验收过 → 子单落袋（完成→归档）');
+    assert.equal(store.find(root, 'TK-2').state, '归档');
+    assert.equal(store.find(root, 'TK-9').state, '完成', '散单不误伤——级联射程由归属判据圈死');
+    assert.equal(store.find(root, 'TK-3').state, '在途', '非完成态子单不动');
+    const fm1 = store.find(root, 'TK-1').fm;
+    assert.match(String(fm1.归档来源 || ''), /S-1/, '归档来源要点得回专项');
+    assert.equal(fm1.归档原因, undefined, '级联归档是无因归档（带因归档=撤销，ledger-sync 同判）');
+    const j = 流水(root);
+    assert.match(j, /级联归档 TK-1/, 'journal 逐张留痕：TK-1');
+    assert.match(j, /级联归档 TK-2/, 'journal 逐张留痕：TK-2');
+    assert.ok(!/级联归档 TK-9/.test(j), '散单不该出现在级联流水里');
+  });
+
+  await t('H110 级联半途失败：不回滚已移的 · 失败清单如实回报 · 关账本身不吐回去', async () => {
+    const root = makeRoot();
+    立(root);
+    SP.转移(root, 'S-1', '进行'); SP.转移(root, 'S-1', '收口');
+    SP.定完成定义(root, 'S-1', '一句可判定的话', '制作人');
+    seed(root, '完成', { id: 'TK-1', 专项: 'S-1' });
+    seed(root, '完成', { id: 'TK-2', 专项: 'S-1' });
+    seed(root, '归档', { id: 'TK-2', 专项: 'S-1' });          // 目标位被占（双态脏数据）→ TK-2 的 move 必败
+    const r = SP.关账(root, 'S-1', '制作人');
+    assert.equal(r.ok, true, '关账签字是既成事实，级联失败不吐签字');
+    assert.deepEqual(r.级联.归档, ['TK-1'], '移得动的照移——不因一张失败回滚全部');
+    assert.equal(r.级联.失败.length, 1);
+    assert.equal(r.级联.失败[0].单号, 'TK-2');
+    assert.ok(r.级联.失败[0].error, '失败要带因，让人知道补哪一刀');
+    assert.equal(SP.find(root, 'S-1').fm.状态, '关账');
+    assert.match(流水(root), /级联归档失败 TK-2/, '失败也留痕——静默吞掉就没人来补刀');
+  });
+
+  await t('DS-1 验收打回：专项回「进行」· 点名子单 完成→待重派（带返修因）· 计数不丢', async () => {
+    const root = makeRoot();
+    立(root);
+    SP.转移(root, 'S-1', '进行'); SP.转移(root, 'S-1', '收口');
+    seed(root, '完成', { id: 'TK-1', 专项: 'S-1' });
+    seed(root, '完成', { id: 'TK-2', 专项: 'S-1' });
+    const r = SP.验收打回(root, 'S-1', { 子单清单: ['TK-1'], 因: '手感不过', 操作者: '制作人' });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.打回, ['TK-1']); assert.deepEqual(r.失败, []);
+    assert.equal(SP.find(root, 'S-1').fm.状态, '进行', '验收不过 → 专项回进行');
+    const k = store.find(root, 'TK-1');
+    assert.equal(k.state, '待重派', '点名子单走 完成→待重派（DS-1 补边）');
+    assert.equal(k.fm.返修因, '手感不过', '返修因要落在子单身上');
+    assert.equal(store.find(root, 'TK-2').state, '完成', '没点名的子单一张不动');
+    const v = SP.聚合(root, 'S-1');
+    assert.equal(v.进度.总数, 2, '打回的子单还在专项链上——计数不丢');
+    assert.equal(v.进度.落袋, 1);
+    const h = SP.find(root, 'S-1').fm.履历;
+    assert.match(h[h.length - 1].因, /验收打回.*TK-1/, '打回点名要进容器履历');
+    assert.match(流水(root), /验收打回 TK-1/, 'journal 留痕');
+    // 人手复工闸顺带成立：打回后的下一拍，机器不得把它推回收口
+    assert.equal(SP.收口自检(root, 'S-1').动作, null, '打回后子单未修完，机器不许再宣布收口');
+  });
+
+  await t('DS-1 验收打回的闸：必须点名 · 只认名下「完成」子单 · 点错名整单拒一张不动 · 只从收口出发', async () => {
+    const root = makeRoot();
+    立(root);
+    SP.转移(root, 'S-1', '进行'); SP.转移(root, 'S-1', '收口');
+    seed(root, '完成', { id: 'TK-1', 专项: 'S-1' });
+    seed(root, '在途', { id: 'TK-2', 专项: 'S-1' });
+    seed(root, '完成', { id: 'TK-9' });                       // 散单
+    assert.equal(SP.验收打回(root, 'S-1', { 因: 'x' }).ok, false, '不点名不收——全盘否定走废弃不走这条边');
+    const 外 = SP.验收打回(root, 'S-1', { 子单清单: ['TK-9'], 因: 'x' });
+    assert.equal(外.ok, false, '散单不在专项链里，点了也不认');
+    assert.equal(store.find(root, 'TK-9').state, '完成', '拒单时散单一动不动');
+    const 半 = SP.验收打回(root, 'S-1', { 子单清单: ['TK-1', 'TK-2'], 因: 'x' });
+    assert.equal(半.ok, false, 'TK-2 不是完成态：点错名整单拒，不做半截打回');
+    assert.equal(store.find(root, 'TK-1').state, '完成', '整单拒时一张都不动');
+    assert.equal(SP.find(root, 'S-1').fm.状态, '收口', '整单拒时容器也不动');
+    assert.equal(SP.验收打回(root, 'S-9', { 子单清单: ['TK-1'] }).ok, false, '查无此专项');
+    SP.验收打回(root, 'S-1', { 子单清单: ['TK-1'], 因: 'ok', 操作者: '制作人' });
+    assert.equal(SP.验收打回(root, 'S-1', { 子单清单: ['TK-1'], 因: 'x' }).ok, false, '已回进行（非收口态）不再收打回');
+  });
+
+  await t('挂起挡收口：其余全落袋但有挂起子单 → 不收口且指名道姓；废弃/复活后闸门放行', async () => {
+    const root = makeRoot();
+    立(root);
+    SP.转移(root, 'S-1', '进行');
+    seed(root, '完成', { id: 'TK-1', 专项: 'S-1' });
+    seed(root, '挂起', { id: 'TK-2', 专项: 'S-1' });
+    const r = SP.收口自检(root, 'S-1');
+    assert.equal(r.动作, null, '挂起的子单算未完——专项不能带着挂起单收口');
+    assert.match(String(r.挂起挡收口 || ''), /TK-2/, '挡收口要指名道姓，让人知道去复活还是废弃哪张');
+    assert.deepEqual(r.挂起单, ['TK-2']);
+    assert.equal(SP.find(root, 'S-1').fm.状态, '进行');
+    // 出路一：废弃（挂起单不打算做了）→ 收口放行
+    fs.renameSync(store.ticketPath(root, '挂起', 'TK-2'), store.ticketPath(root, '废弃', 'TK-2'));
+    assert.equal(SP.收口自检(root, 'S-1').动作, '收口', '挂起单废弃后，全子单 ∈ {完成,归档,废弃} → 可收口');
+  });
+
+  await t('收口判据（H108）：全子单 ∈ {完成,归档,废弃} 才收口 · 全废弃不算「做完」不收口', async () => {
+    const root = makeRoot();
+    立(root);
+    SP.转移(root, 'S-1', '进行');
+    seed(root, '废弃', { id: 'TK-1', 专项: 'S-1' });
+    assert.equal(SP.收口自检(root, 'S-1').动作, null, '全是废弃的专项没有「做完」可言，轮不到收口');
+    seed(root, '归档', { id: 'TK-2', 专项: 'S-1' });
+    assert.equal(SP.收口自检(root, 'S-1').动作, '收口', '归档也是落袋——{归档,废弃} 组合可收口');
+    // 出路二（复活）在此顺带验：挂起→待重派 是回炉，收口态下出现回炉单 → 复工
+    seed(root, '待重派', { id: 'TK-3', 专项: 'S-1' });
+    const r = SP.收口自检(root, 'S-1');
+    assert.equal(r.动作, '复工', '收口后子单又活了（待重派）→ 自动复工回进行');
+    assert.deepEqual(r.活单, ['TK-3']);
   });
 
   /* ================= ⑦ 前端：聚合条口径（从 public/app.js 原样抽出）================= */

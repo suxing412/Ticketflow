@@ -64,7 +64,7 @@ function 起(root, port, 打法, 前置 = '') {
 // ── #51：T<=0 = 关闭升格，阈值那一格必须下发 null ────────────────────────────
 t('#51 关闭升格后 /api/attn 的 逾期阈值小时 下发 null、逾期 下发空表（不是留个 0 让前端自己重算成全红）', () => {
   const root = makeRoot();
-  seed(root, '待验收', { id: 'P-51a', 验收方式: '保留' }); // 更新时间 2026-07-08，停摆远超 24h
+  seed(root, '完成', { id: 'P-51a', 验收方式: '保留' }); // H108：原 待验收→完成（G3 完成候终审）；更新时间 2026-07-08，停摆远超 24h
   const o = 起(root, 4971, `
     const 开 = await G('/api/attn');
     const 改 = await P('/api/config/gate', { key: '人闸超时小时', value: 0 });
@@ -137,7 +137,7 @@ t('#68② /api/watchtower 三态：无塔=null 不假红 / 新戳=在岗 / 陈�
 // ── #25：升格环与执行器开关解耦，挂在开机处 ─────────────────────────────────
 t('#25 产线整条空转（桩台把 runner.start/stop/startLoop/tick 全哑掉）时，人闸升格照样落账', () => {
   const root = makeRoot();
-  seed(root, '待验收', { id: 'P-25a', 验收方式: '保留' }); // 停摆远超 24h 的一笔真债
+  seed(root, '完成', { id: 'P-25a', 验收方式: '保留' }); // H108：原 待验收→完成；停摆远超 24h 的一笔真债
   const o = 起(root, 4974, `
     const 拦 = await G('/api/runner');
     let st = {};

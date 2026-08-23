@@ -5,7 +5,10 @@ const store = require('../core/store');
 const ledger = require('./ledger');
 const journal = require('../journal');
 
-const DONE = new Set(['完成', '已归档']);
+// H108 终态集合按语义逐个判：收口问的是「子单还欠不欠工」。专项内部子单到「完成」即算
+// 做完等关账（在途大态出口驻留位）；归档=落袋；废弃=判死不欠工（旧制废弃走 已归档 也算 DONE，
+// 目录独立后要显式列入，否则一张废弃子单会把整个专项的收口卡死）。挂起可逆、仍欠工，不算。
+const DONE = new Set(['完成', '归档', '废弃']);
 
 function isCampaign(t) { return t && t.fm && ['战役','专项'].includes(t.fm.父单类型); }
 
@@ -85,15 +88,15 @@ function on专项立项(root, cfg, s, projPath, opts = {}) {
 }
 
 // ② 战役全落袋 → 收口报告（每 tick 巡一遍，台账标记去重）
-// 父单状态诚实映射（H53 案：父单不该躺在待投/草稿装「待投」）：
-// 首个子单派发 → 父单 在途（战役开打）；全落袋+收口 → 父单 待验收（战役签字位）。
+// 父单状态诚实映射（H53 案 · H108 改道）：首个子单派发 → 父单 在途（战役开打）；
+// 全部子单做完+收口 → 父单 完成（出口驻留位=战役签字位，验收过再归档）。
 function onChildDispatched(root, parentId, 专项号) {
   // 施工令-058：专项子单的容器不在工单目录里，走注册表那条推手（立项 → 进行）。
   if (专项号) { try { require('../specials').首派(root, 专项号); } catch { /* 注册表读写失败不阻塞派发 */ } }
   if (!parentId) return;
   const p = store.find(root, parentId);
-  if (!p || !isCampaign(p) || p.state !== '待投') return;
-  const r = store.move(root, parentId, '待投', '在途', (fm) => { fm.主办 = '专项'; fm.领单时间 = fm.领单时间 || new Date().toISOString(); }, new Date().toISOString());
+  if (!p || !isCampaign(p) || p.state !== '待派') return; // H108：待投/池并入 待派
+  const r = store.move(root, parentId, '待派', '在途', (fm) => { fm.主办 = '专项'; fm.领单时间 = fm.领单时间 || new Date().toISOString(); }, new Date().toISOString());
   if (r.ok) journal.append(root, `专项启动 ${parentId}（首子单派发 → 父单在途，H53 状态诚实映射）`);
 }
 
@@ -101,13 +104,13 @@ function checkCloseouts(root, cfg, opts = {}) {
   const woke = [];
   const l = ledger.read(root);
   l.已收口 = l.已收口 || {};
-  for (const s of ['在途', '待投', '草稿']) {
+  for (const s of ['在途', '待派', '待审']) { // H108：待投→待派、草稿→待审
     for (const p of store.list(root, s)) {
       if (!isCampaign(p) || l.已收口[p.id]) continue;
       const kids = childrenOf(root, p.id);
       if (!kids.length) continue;
       if (!kids.every((k) => DONE.has(k.state))) continue;
-      if (!kids.some((k) => k.state === '完成')) continue;
+      if (!kids.some((k) => k.state === '完成' || k.state === '归档')) continue; // 至少一张真做成（完成=等关账/归档=落袋），全废弃不叫收口
       // 定点更新防丢账（2026-08-05）：不整写外层旧快照——长窗口内 billFee 等并发写会被覆盖
       let 首标 = false;
       ledger.update(root, (f) => { f.已收口 = f.已收口 || {}; if (!f.已收口[p.id]) { f.已收口[p.id] = true; 首标 = true; } });
@@ -115,11 +118,14 @@ function checkCloseouts(root, cfg, opts = {}) {
       ledger.event(root, '收口待验', { 父单: p.id, 子单数: kids.length });
       journal.append(root, `项管唤醒：${p.id} 专项全部完成 → 收口报告生成中`);
       woke.push(p.id);
-      const lift = () => { // 收口后父单上待验收：战役唯一签字位（保留签字上移，H53）
+      const lift = () => { // 收口后父单上「完成」：H108 出口驻留位=战役唯一签字位（保留签字上移，H53）
         const cur = store.find(root, p.id);
-        if (cur && ['在途', '待投'].includes(cur.state)) {
-          const mv = store.move(root, p.id, cur.state, '待验收', (fm) => { fm.交付时间 = new Date().toISOString(); }, new Date().toISOString());
-          if (mv.ok) { journal.append(root, `专项收口 ${p.id} → 待验收（父单=唯一签字位，H53）`); require('../inbox').post(root, '急', '专项待签', `${p.id} 收口完毕，待制作人签字`, { 单号: p.id }); }
+        if (cur && ['在途', '待派'].includes(cur.state)) {
+          const iso = new Date().toISOString();
+          // 待派没有直达完成的边（边表封闭性）：先过 在途 再落 完成，两步都走状态机不抄近路
+          if (cur.state === '待派') store.move(root, p.id, '待派', '在途', (fm) => { fm.主办 = fm.主办 || '专项'; }, iso);
+          const mv = store.move(root, p.id, '在途', '完成', (fm) => { fm.交付时间 = iso; }, iso);
+          if (mv.ok) { journal.append(root, `专项收口 ${p.id} → 完成（父单=唯一签字位，H53/H108 验收闸前驻留）`); require('../inbox').post(root, '急', '专项待签', `${p.id} 收口完毕，待制作人签字`, { 单号: p.id }); }
         }
       };
       if (!opts.test) {
@@ -186,7 +192,7 @@ function checkChainFailures(root, opts = {}) {
   const l = ledger.read(root);
   l.已上呈连环 = l.已上呈连环 || {};
   const byParent = {};
-  for (const s of ['执行失败', '待定夺']) {
+  for (const s of ['待处理']) { // H108：执行失败/待定夺（三振落点）都并入 待处理，一处扫全
     for (const t of store.list(root, s)) {
       const p = t.fm.父单 || '（无父单）';
       (byParent[p] = byParent[p] || []).push(t.id);

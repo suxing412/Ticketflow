@@ -1,4 +1,4 @@
-// wake.test.js — 项管唤醒接线：定稿切单事件/收口去重/连环上呈
+// wake.test.js — 项管唤醒接线（H108 改道）：定稿切单事件 / 收口去重与签字位上移「完成」/ 连环上呈（待处理口径）
 const assert = require('node:assert');
 const { makeRoot, seed } = require('./helper');
 const store = require('../lib/core/store');
@@ -6,37 +6,67 @@ const wake = require('../lib/pm/wake');
 const ledger = require('../lib/pm/ledger');
 
 let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
-console.log('wake 项管唤醒测试');
+console.log('wake 项管唤醒测试（H108）');
 
 t('战役父单定稿触发切单事件；普通单不触发', () => {
   const root = makeRoot();
-  seed(root, '待投', { id: 'P-1', 父单类型: '战役', 项目: 'X' });
+  seed(root, '待派', { id: 'P-1', 父单类型: '战役', 项目: 'X' });
   const p = store.find(root, 'P-1');
   assert.equal(wake.onCampaignFinalized(root, {}, p, null, { test: true }).woke, true);
   assert.ok(ledger.events(root).some((e) => e.类型 === '切单启动' && e.父单 === 'P-1'));
-  seed(root, '待投', { id: 'N-1' });
+  seed(root, '待派', { id: 'N-1' });
   assert.equal(wake.onCampaignFinalized(root, {}, store.find(root, 'N-1'), null, { test: true }).woke, false);
 });
 
-t('收口检测：全落袋才唤醒且只唤醒一次；有未完子单不唤醒', () => {
+t('首子单派发推手：父单 待派→在途（H53 状态诚实映射，H108 边改道）', () => {
   const root = makeRoot();
-  seed(root, '待投', { id: 'C-1', 父单类型: '战役' });
+  seed(root, '待派', { id: 'B-1', 父单类型: '战役' });
+  wake.onChildDispatched(root, 'B-1');
+  assert.equal(store.find(root, 'B-1').state, '在途', '战役开打，父单入在途');
+  assert.equal(store.find(root, 'B-1').fm.主办, '专项');
+  wake.onChildDispatched(root, 'B-1'); // 已在途：幂等不再动
+  assert.equal(store.find(root, 'B-1').state, '在途');
+});
+
+t('收口检测（H108 口径）：子单全到 完成/归档/废弃 才唤醒且只唤醒一次；签字位上移「完成」', () => {
+  const root = makeRoot();
+  seed(root, '在途', { id: 'C-1', 父单类型: '战役', 主办: '专项' });
   seed(root, '完成', { id: 'C-2', 父单: 'C-1' });
   seed(root, '在途', { id: 'C-3', 父单: 'C-1', 主办: 'x', 领单时间: new Date().toISOString() });
   assert.deepEqual(wake.checkCloseouts(root, {}, { test: true }), [], '有在途不收口');
-  store.move(root, 'C-3', '在途', '质检');
-  store.move(root, 'C-3', '质检', '待验收');
-  store.move(root, 'C-3', '待验收', '完成');
-  assert.deepEqual(wake.checkCloseouts(root, {}, { test: true }), ['C-1'], '全落袋唤醒');
+  store.move(root, 'C-3', '在途', '完成'); // H108：免检直达边（在途→完成 在边表上）
+  assert.deepEqual(wake.checkCloseouts(root, {}, { test: true }), ['C-1'], '全部做完唤醒');
+  assert.equal(store.find(root, 'C-1').state, '完成', '父单上「完成」＝唯一签字位（原 待验收，H108 驻留位）');
   assert.deepEqual(wake.checkCloseouts(root, {}, { test: true }), [], '台账去重不重复唤醒');
   assert.ok(ledger.events(root).some((e) => e.类型 === '收口待验'));
 });
 
-t('连环失败：同战役 ≥2 异常单上呈一次', () => {
+t('收口 · 待派父单两步上位（待派→在途→完成，不抄状态机近路）', () => {
   const root = makeRoot();
-  seed(root, '执行失败', { id: 'F-1', 父单: 'P-9' });
+  seed(root, '待派', { id: 'C-10', 父单类型: '战役' });
+  seed(root, '完成', { id: 'C-11', 父单: 'C-10' });
+  assert.deepEqual(wake.checkCloseouts(root, {}, { test: true }), ['C-10']);
+  assert.equal(store.find(root, 'C-10').state, '完成', '待派父单也能走到签字位（两步合法转移）');
+});
+
+t('收口 · 废弃子单算「不欠工」但不算「做成」：混编可收口，全废弃不收口', () => {
+  const root = makeRoot();
+  seed(root, '在途', { id: 'C-20', 父单类型: '战役', 主办: '专项' });
+  seed(root, '完成', { id: 'C-21', 父单: 'C-20' });
+  seed(root, '废弃', { id: 'C-22', 父单: 'C-20', 废弃因: '方向废止' });
+  assert.deepEqual(wake.checkCloseouts(root, {}, { test: true }), ['C-20'], '完成+废弃混编：不被废弃单卡死');
+  // 全废弃：没有任何一张做成的单，收不了口（收口报告没有可签的产出）
+  const root2 = makeRoot();
+  seed(root2, '在途', { id: 'C-30', 父单类型: '战役', 主办: '专项' });
+  seed(root2, '废弃', { id: 'C-31', 父单: 'C-30' });
+  assert.deepEqual(wake.checkCloseouts(root2, {}, { test: true }), [], '全废弃不叫收口');
+});
+
+t('连环失败（H108）：同战役 ≥2 张待处理（原 执行失败+待定夺 合并口径）上呈一次', () => {
+  const root = makeRoot();
+  seed(root, '待处理', { id: 'F-1', 父单: 'P-9', 失败原因: 'CLI 崩溃' });
   assert.deepEqual(wake.checkChainFailures(root), [], '单发不上呈');
-  seed(root, '待定夺', { id: 'F-2', 父单: 'P-9' });
+  seed(root, '待处理', { id: 'F-2', 父单: 'P-9', 上呈原因: 'QA 三振' });
   assert.deepEqual(wake.checkChainFailures(root), ['P-9'], '两发上呈');
   assert.deepEqual(wake.checkChainFailures(root), [], '去重');
   assert.ok(ledger.events(root).some((e) => e.类型 === '上呈' && e.父单 === 'P-9'));
@@ -55,7 +85,7 @@ const 候期结果 = {
 
 t('切单出口·拒切候期：记「切单候期」存判语全文，不记失败，父单原位不动', () => {
   const root = makeRoot();
-  seed(root, '待投', { id: 'P-54', 父单类型: '战役', 项目: 'X' });
+  seed(root, '待派', { id: 'P-54', 父单类型: '战役', 项目: 'X' });
   const r = wake.onCutResult(root, 'P-54', 候期结果);
   assert.equal(r.出口, '候期');
   const evs = ledger.events(root);
@@ -66,7 +96,7 @@ t('切单出口·拒切候期：记「切单候期」存判语全文，不记失
   assert.equal(e.复切时机, 'TK-200 落袋并定案后');
   assert.ok(/整批返修/.test(e.判语), '判语全文存档——TK-146 丢的正是这一段');
   assert.ok(!evs.some((x) => x.类型 === '切单失败'), '候期不是失败，不许双记');
-  assert.equal(store.find(root, 'P-54').state, '待投', '父单原位不动，等条件齐了复切');
+  assert.equal(store.find(root, 'P-54').state, '待派', '父单原位不动，等条件齐了复切');
   assert.ok(relay.list(root).some((m) => m.from === '项管' && /拒切候期：P-54/.test(m.text) && /整批返修/.test(m.text)),
     '判语同时呈信道——只存档不呈报等于换个地方吞');
 });

@@ -72,19 +72,19 @@ t('claude 池锁：速度档 3 也被可用 1 人封顶', () => {
   assert.ok(r.原因.some((x) => x.includes('claude')));
 });
 
-t('待验收积压满（8/8）→ 0，低/高档同拦', () => {
+t('完成积压满（8/8，原待验收闸）→ 0，低/高档同拦', () => {
   const root = makeRoot();
-  for (let i = 1; i <= 8; i++) seed(root, '待验收', { id: 'A' + i });
+  for (let i = 1; i <= 8; i++) seed(root, '完成', { id: 'A' + i });
   for (let i = 0; i < 4; i++) decide(root, 10 + i);
   assert.equal(recommend(root, R('高'), UNLOCKED, NOW).推荐, 0);
   assert.equal(recommend(root, R('低'), UNLOCKED, NOW).推荐, 0);
 });
 
-t('高档扣分叠加：速度档 3 − 积压近闸 − 待定夺 − 滞留 = 0', () => {
+t('高档扣分叠加：速度档 3 − 积压近闸 − 待处理 − 滞留 = 0', () => {
   const root = makeRoot();
   for (let i = 0; i < 4; i++) decide(root, 10 + i); // 速度档 3
-  for (let i = 1; i <= 6; i++) seed(root, '待验收', { id: 'A' + i }); // 6/8 ≥75% −1
-  seed(root, '待定夺', { id: 'E1' }); // −1
+  for (let i = 1; i <= 6; i++) seed(root, '完成', { id: 'A' + i }); // 6/8 ≥75% −1
+  seed(root, '待处理', { id: 'E1' }); // −1
   seed(root, '在途', { id: 'S1', 主办: 'x', 领单时间: new Date(NOW).toISOString() });
   require('../lib/core/store').update(root, 'S1', (fm) => { fm.滞留告警 = true; }); // −1
   const r = recommend(root, R('高'), UNLOCKED, NOW);

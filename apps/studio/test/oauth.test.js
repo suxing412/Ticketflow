@@ -216,7 +216,7 @@ console.log('oauth × runner 派发接线（要件 2）');
 
 await ta('claude 判官会话遇过期凭据 → 拒派（返回 false、零会话、不计判官失败次数、台账留痕）', async () => {
   const root = makeRoot(); oauth.重置(root);
-  seed(root, '质检', { id: 'O-01', 职能: '策划', 主办: '策划·O-01' });
+  seed(root, '初检', { id: 'O-01', 职能: '策划', 主办: '策划·O-01' }); // H108：质检会话驻初检目录
   const t1 = store.find(root, 'O-01');
   const ok = await runner.startWork(root, CFG, t1, 'QA', '质检', { oauth: { now: T0, 文件: 凭据(root, -20) } });
   assert.equal(ok, false, '拒派：本轮不开会话');
@@ -225,7 +225,7 @@ await ta('claude 判官会话遇过期凭据 → 拒派（返回 false、零会�
   assert.equal(ev.length, 1);
   assert.equal(ev[0].单, 'O-01'); assert.equal(ev[0].kind, '质检'); assert.equal(ev[0].池, 'claude'); assert.equal(ev[0].态, '过期');
   const cur = store.find(root, 'O-01');
-  assert.equal(cur.state, '质检', '单原地不动');
+  assert.equal(cur.state, '初检', '单原地不动');
   assert.equal(cur.fm.质检失败次数, undefined, '拒派不是失败——三振计数一次都不能加（08-12 空烧案的根）');
 });
 
@@ -237,7 +237,7 @@ await ta('codex 执行会话不受影响：凭据缺失也越过预检（后续�
   const ok = await runner.startWork(root, CFG, t2, '程序·O-02', '执行', { oauth: { now: T0, 文件: path.join(root, '没有.json') } });
   assert.equal(ok, true, 'codex 会话照常进入派发流程');
   assert.equal(ledger.events(root, 50).filter((e) => e.类型 === 'OAuth拒派').length, 0, 'codex 池零 OAuth 拒派');
-  assert.equal(store.find(root, 'O-02').state, '执行失败', '倒在项目定位（原有行为），不是倒在 OAuth');
+  assert.equal(store.find(root, 'O-02').state, '待处理', '倒在项目定位（原有行为，H108 失败入位落待处理），不是倒在 OAuth');
 });
 
 await ta('claude 会话凭据健康 → 不拦（越过预检走原有路径）', async () => {
@@ -286,7 +286,7 @@ t('未被拦过的单放行时不记恢复条（正常派发一个字都不多�
 
 await ta('runner 实拍：同单同因连拒三拍 → journal 只落一条；恢复后一条附「期间拒派 3 次」', async () => {
   const root = makeRoot(); oauth.重置(root);
-  seed(root, '质检', { id: 'O-04', 职能: '策划', 主办: '策划·O-04' });
+  seed(root, '初检', { id: 'O-04', 职能: '策划', 主办: '策划·O-04' });
   const 死 = { oauth: { now: T0, 文件: 凭据(root, -20) } };
   for (let i = 0; i < 3; i++) {
     const ok = await runner.startWork(root, CFG, store.find(root, 'O-04'), 'QA', '质检', 死);
@@ -310,7 +310,7 @@ await ta('runner 实拍：同单同因连拒三拍 → journal 只落一条；�
 
 await ta('runner 实拍：拒因升级（剩余不足 → 过期）另起一条，不被同单静默期吞掉', async () => {
   const root = makeRoot(); oauth.重置(root);
-  seed(root, '质检', { id: 'O-05', 职能: '策划', 主办: '策划·O-05' });
+  seed(root, '初检', { id: 'O-05', 职能: '策划', 主办: '策划·O-05' });
   await runner.startWork(root, CFG, store.find(root, 'O-05'), 'QA', '质检', { oauth: { now: T0, 文件: 凭据(root, 2) } });   // 态=临期
   await runner.startWork(root, CFG, store.find(root, 'O-05'), 'QA', '质检', { oauth: { now: T0, 文件: 凭据(root, 2) } });   // 同因静默
   await runner.startWork(root, CFG, store.find(root, 'O-05'), 'QA', '质检', { oauth: { now: T0, 文件: 凭据(root, -1) } });  // 态=过期，换因

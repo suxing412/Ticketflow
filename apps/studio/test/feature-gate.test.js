@@ -295,6 +295,25 @@ await t('#70 白名单一旦随 /api/config 下发，页面闸门就该改认它
   assert.ok(!回落.键.includes('全局在途上限'), '已退役的键早该从说明表里清掉（#70 一段）');
 });
 
+/* ====== ⑤ 特性聚合落袋口径（H108 三大态：完成+归档 算落袋，废弃留分母；2026-08-24 C 组）====== */
+
+await t('特性聚合：落袋 = 完成+归档 · 废弃留在分母不进分子（与 specials.落袋态 同判）', () => {
+  const FT = require('../lib/features');
+  const { seed } = require('./helper');
+  const root = makeRoot();
+  const f = FT.提请(root, { 名称: '水体', 管线: 'P-1', 边界: '管水', 挂载: { 工单: ['TK-1'] } });
+  assert.ok(f.ok, '夹具：提请要成');
+  FT.审核(root, f.id, { 通过: true, 审核人: '总监' });
+  seed(root, '完成', { id: 'TK-1', 特性: f.id });   // 做完等关账——新口径算落袋
+  seed(root, '归档', { id: 'TK-2', 特性: f.id });   // 已验收落袋
+  seed(root, '废弃', { id: 'TK-3', 特性: f.id });   // 出基线：分母留、分子不进
+  seed(root, '在途', { id: 'TK-4', 特性: f.id });
+  const v = FT.聚合(root, f.id);
+  assert.equal(v.单数, 4);
+  assert.equal(v.落袋, 2, '完成+归档 都算落袋（H108 口径）；原「已归档」字面已不存在，认的是新目录态「归档」');
+  assert.equal(v.百分比, 50, '废弃留在分母——废掉一张不该让特性完成度凭空变好看');
+});
+
 回收临时根();
 收尾('闸族界面入口', passed);
 })().catch((e) => { console.error('  ✗ ' + (e && e.stack || e)); try { 回收临时根(); } catch { /* 尽力 */ } process.exit(1); });

@@ -84,9 +84,9 @@ await t('① 甘特真按服务端判定画出红条与徽标，且每个记号�
 
 await t('② 启动页债数吃 /api/attn，逾期出数，取不到就说「读数中」', async () => {
   const 项目 = { 项目: { 注册: { TK: { 单号前缀: 'TK' }, Ticketflow: { 单号前缀: 'TF' } }, 默认: 'TK' } };
-  const 板 = { states: ['待投', '待验收', '待定夺'],
-    board: { 待投: [{ id: 'TF-1', 项目: 'Ticketflow' }, { id: 'TK-182', 项目: 'TK' }],
-      待验收: [{ id: 'TK-9', 项目: 'TK' }], 待定夺: [{ id: 'TK-10', 项目: 'TK' }] }, 隐藏数: 0 };
+  const 板 = { states: ['待派', '完成', '待处理'],
+    board: { 待派: [{ id: 'TF-1', 项目: 'Ticketflow' }, { id: 'TK-182', 项目: 'TK' }],
+      完成: [{ id: 'TK-9', 项目: 'TK' }], 待处理: [{ id: 'TK-10', 项目: 'TK' }] }, 隐藏数: 0 };
   const 跑 = async (attn) => {
     const ctx = 装载前端();
     桩(ctx, { '/api/config': 项目, '/api/board': 板, '/api/attn': attn, '/api/journal': { lines: [] },
@@ -100,8 +100,8 @@ await t('② 启动页债数吃 /api/attn，逾期出数，取不到就说「读
   const h = await 跑({ 逾期阈值小时: 24, 债: [{ id: 'TF-1', 停摆小时: 9.9 }, { id: 'TK-182', 停摆小时: 47.9 }] });
   assert.match(h, /需处理 1 · 逾期 1/, 'TK 有一笔债且停 47.9h > 阈值 24h——逾期要出数');
   assert.ok(!/安好/.test(h), '同一时刻 attn 明明报着债，卡上不许写「安好」（本条的原病）');
-  assert.ok(!/需处理 2/.test(h), 'TK 板上有 待验收+待定夺 各一张，若回到旧轴这里会变 2——旧轴不许复活');
-  assert.match(h.replace(/\s+/g, ''), /"">1<\/i>待投/, 'G1 投池放行债的落点就是「待投」这一栏，卡上必须有这个数');
+  assert.ok(!/需处理 2/.test(h), 'TK 板上有 完成+待处理 各一张，若回到旧轴这里会变 2——旧轴不许复活');
+  assert.match(h.replace(/\s+/g, ''), /"">1<\/i>待派/, 'G1 项管闸放行债的落点就是「待派」这一栏，卡上必须有这个数');
 
   // (b) 无债：安好这条路还在（证明上面不是把「安好」整块删了了事）
   const h0 = await 跑({ 逾期阈值小时: 24, 债: [] });
@@ -187,7 +187,7 @@ await t('④ 截断如实说出来；看板指路句不许承诺报表页没有�
 
   // 指路句：以报表页**真有的能力**为准绳，逐词核对看板那句话（挡住「换个措辞继续吹」）
   const ctxB = 装载前端();
-  桩(ctxB, { '/api/config': 配, '/api/board': { states: ['池', '在途'], board: { 池: [], 在途: [] }, 隐藏数: 0 } });
+  桩(ctxB, { '/api/config': 配, '/api/board': { states: ['待派', '在途'], board: { 待派: [], 在途: [] }, 隐藏数: 0 } });
   await ctxB.loadCfg(true);
   const 板 = await ctxB.viewBoard();
   const i = 板.indexOf('bdone');
@@ -200,6 +200,89 @@ await t('④ 截断如实说出来；看板指路句不许承诺报表页没有�
   }
   assert.ok(能力.some(([, 有]) => !有), '三样能力若全都有了，本条判据就失去意义——那时该改的是这条判据本身');
   assert.match(指路, /报表/, '指路本身要留着：看板不留完成列，做完的单总得告诉人去哪找');
+});
+
+/* ═══ ⑤/⑥ 三大态改造（H108，2026-08-24）的前端行为判据 ═══
+   真装 app.js、真跑 viewBoard()/viewDetail()、断言真吐出来的 HTML——不 grep 源码文本。 */
+
+await t('⑤ 看板三大组：12 态分 待办｜在途｜结束 三段，完成/归档不进列，结束段只计数', async () => {
+  const store = require('../lib/core/store');
+  const 造板 = (带大态) => {
+    const board = {}; for (const s of store.STATES) board[s] = [];
+    board['待审'].push({ id: 'TK-1', title: '甲', 职能: '策划' });
+    board['在途'].push({ id: 'TK-2', title: '乙', 职能: '程序' });
+    board['完成'].push({ id: 'TK-3', title: '丙', 职能: '程序' });
+    board['归档'].push({ id: 'TK-4', title: '丁', 职能: '程序' });
+    board['挂起'].push({ id: 'TK-5', title: '戊', 职能: '程序' });
+    board['废弃'].push({ id: 'TK-6', title: '己', 职能: '程序' });
+    return { states: store.STATES, board, 隐藏数: 0, ...(带大态 ? { 大态: 带大态 } : {}) };
+  };
+  const 跑板 = async (板) => {
+    const ctx = 装载前端();
+    桩(ctx, { '/api/config': { 项目: { 注册: { TK: {} }, 默认: 'TK' }, 闸值: {} }, '/api/board': 板,
+      '/api/gates': { paused: false, locks: { codex: {}, claude: {} } } });
+    await ctx.loadCfg(true);
+    return ctx.viewBoard();
+  };
+  const h = await 跑板(造板(store.大态));
+  // 三段都在且按 待办→在途→结束 排（用 data-bg 锁，不按字面搜——页面别处也有这些词）
+  const at = (g) => h.indexOf(`data-bg="${g}"`);
+  assert.ok(at('待办') >= 0 && at('在途') > at('待办') && at('结束') > at('在途'),
+    `三段结构缺或乱序：待办@${at('待办')} 在途@${at('在途')} 结束@${at('结束')}`);
+  // 段内细分列：列头 <h4> 逐态点名，且列落在自己的段里
+  const 段区 = (g) => { const 起 = at(g); const 序 = ['待办', '在途', '结束'];
+    const 后 = 序[序.indexOf(g) + 1]; return h.slice(起, 后 ? at(后) : h.length); };
+  for (const s of store.大态.待办) assert.ok(段区('待办').includes(`<h4>${s}`), `待办段缺「${s}」列`);
+  for (const s of store.大态.在途.filter((x) => x !== '完成')) assert.ok(段区('在途').includes(`<h4>${s}`), `在途段缺「${s}」列`);
+  // 完成/归档 照旧不进看板列（落袋离场纪律）；结束段一张卡都不铺
+  assert.ok(!h.includes('<h4>完成') && !h.includes('<h4>归档'), '完成/归档 不许成列');
+  for (const id of ['TK-3', 'TK-4', 'TK-5', 'TK-6'])
+    assert.ok(!h.includes(`data-tid="${id}"`), `${id} 是完成/结束段的单，不许铺成卡`);
+  assert.ok(h.includes('data-tid="TK-1"') && h.includes('data-tid="TK-2"'), '活态卡照常铺');
+  // 结束段计数入口：逐态报数（完成 也在这儿计数——它被摘出列，总得有处看见）
+  for (const [k, n] of [['完成', 1], ['归档', 1], ['挂起', 1], ['废弃', 1]])
+    assert.match(段区('结束'), new RegExp(`<span class="bek">${k}</span><b class="mono">${n}</b>`),
+      `结束段缺「${k}」计数`);
+  // 服务端分组表优先：服务端把 核查 挪进待办，前端要照画（读的是下发表，不是前端私货）
+  const h2 = await 跑板(造板({ 待办: ['待审', '待派', '待处理', '待重派', '核查'],
+    在途: ['在途', '初检', '仲裁', '完成'], 结束: ['归档', '挂起', '废弃'] }));
+  assert.ok(/data-bg="待办"[\s\S]*?<h4>核查[\s\S]*?data-bg="在途"/.test(h2),
+    '服务端下发的分组表没被采信——前端自创分组就是两把尺');
+  // 服务端不下发时回落兜底，且兜底必须与 store.大态 同表（防前端私抄一份走散）
+  const h3 = await 跑板(造板(null));
+  const 段区3 = (g) => { const 序 = ['待办', '在途', '结束']; const 起 = h3.indexOf(`data-bg="${g}"`);
+    const 后 = 序[序.indexOf(g) + 1]; return h3.slice(起, 后 ? h3.indexOf(`data-bg="${后}"`) : h3.length); };
+  assert.ok(h3.indexOf('data-bg="待办"') >= 0 && h3.indexOf('data-bg="结束"') > 0, '兜底也要有三段');
+  for (const s of store.大态.待办) assert.ok(段区3('待办').includes(`<h4>${s}`), `兜底分组缺「${s}」列`);
+  for (const s of store.大态.在途.filter((x) => x !== '完成')) assert.ok(段区3('在途').includes(`<h4>${s}`), `兜底在途段缺「${s}」列`);
+});
+
+await t('⑥ 详情页进度条：审检链新阶段序列（QA开→初检→核查→完成；QA关无初检；保留免检直达；仲裁只在争议时出）', async () => {
+  const ctx = 装载前端();
+  const 段名 = async (fmExtra, state) => {
+    ctx.fetch = async (u) => {
+      const url = decodeURIComponent(String(u)).split('?')[0];
+      if (url === '/api/ticket') return { ok: true, json: async () => ({ id: 'TK-1', state: state || '在途',
+        fm: { id: 'TK-1', title: '活', 职能: '程序', ...fmExtra }, 链: { 父子: { 父: null, 子: [] }, 依赖: [] }, body: '' }) };
+      if (url === '/api/runner') return { ok: true, json: async () => ({ 执行中: [], 间隔秒: 15 }) };
+      return { ok: true, json: async () => ({}) };
+    };
+    const h = await ctx.viewDetail('TK-1');
+    return [...h.matchAll(/class="lv-seg [^"]*">[\s\S]*?<span>([^<]*)<\/span>/g)].map((m) => m[1]);
+  };
+  assert.deepEqual(await 段名({ QA: '开', 验收方式: '委托' }), ['领单', '执行', '初检', '核查', '完成'],
+    'QA 开的委托单：执行完走 初检→核查→完成（H108 审检链目录化）');
+  assert.deepEqual(await 段名({ QA: '关', 验收方式: '委托' }), ['领单', '执行', '核查', '完成'],
+    'QA 关：核查（简检）→完成，不出初检段');
+  assert.deepEqual(await 段名({ QA: '开', 验收方式: '保留' }), ['领单', '执行', '完成'],
+    '免检保留单：执行完直接完成，不走审检链');
+  const 争议 = await 段名({ QA: '开', 验收方式: '委托' }, '仲裁');
+  assert.deepEqual(争议, ['领单', '执行', '初检', '核查', '仲裁', '完成'],
+    '争议单：仲裁段插在 核查 与 完成 之间，只在争议时出');
+  // 旧阶段词在进度条上退役——「质检」「落袋」「待验收」不许再当段名出现
+  for (const names of [await 段名({ QA: '开', 验收方式: '委托' }), 争议])
+    for (const 旧 of ['质检', '落袋', '待验收', '你验收'])
+      assert.ok(!names.includes(旧), `旧阶段词「${旧}」还在进度条上：` + names.join('/'));
 });
 
 console.log('全部通过：' + passed + ' 项');

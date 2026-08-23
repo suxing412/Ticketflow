@@ -11,16 +11,27 @@ console.log('dispatch 派发引擎测试');
 
 const CFG = { 执行池: { codex: { 职能: ['程序'] }, claude: { 职能: ['策划', '装配'] } } };
 
-t('就绪盘点：只收已放行+依赖落袋的待投单', () => {
+t('就绪盘点：只收已放行+依赖就绪的待派单（H108：完成/无因归档=就绪）', () => {
   const root = makeRoot();
-  seed(root, '待投', { id: 'A-1', 职能: '程序', 放行: true });
-  seed(root, '待投', { id: 'A-2', 职能: '程序' }); // 未放行
-  seed(root, '待投', { id: 'A-3', 职能: '程序', 放行: true, 依赖: 'A-9' });
-  seed(root, '在途', { id: 'A-9', 职能: '程序', 主办: 'x', 领单时间: new Date().toISOString() }); // 依赖未落袋
-  seed(root, '待投', { id: 'A-4', 职能: '程序', 放行: true, 依赖: 'A-8' });
+  seed(root, '待派', { id: 'A-1', 职能: '程序', 放行: true });
+  seed(root, '待派', { id: 'A-2', 职能: '程序' }); // 未放行
+  seed(root, '待派', { id: 'A-3', 职能: '程序', 放行: true, 依赖: 'A-9' });
+  seed(root, '在途', { id: 'A-9', 职能: '程序', 主办: 'x', 领单时间: new Date().toISOString() }); // 依赖未就绪
+  seed(root, '待派', { id: 'A-4', 职能: '程序', 放行: true, 依赖: 'A-8' });
   seed(root, '完成', { id: 'A-8', 职能: '程序' });
+  seed(root, '待派', { id: 'A-5', 职能: '程序', 放行: true, 依赖: 'A-7' });
+  seed(root, '归档', { id: 'A-7', 职能: '程序' }); // 无因归档=落袋，解除依赖
+  seed(root, '待派', { id: 'A-6', 职能: '程序', 放行: true, 依赖: 'A-0' });
+  seed(root, '归档', { id: 'A-0', 职能: '程序', 归档原因: '废弃' }); // 带因归档不解除
+  seed(root, '待重派', { id: 'B-1', 职能: '程序', 放行: true }); // 待重派同盘
   const r = D.readySet(root, new Set());
-  assert.deepEqual(r.map((x) => x.id).sort(), ['A-1', 'A-4']);
+  assert.deepEqual(r.map((x) => x.id).sort(), ['A-1', 'A-4', 'A-5', 'B-1']);
+});
+
+t('依赖闸 CX-11：解析不出的 ref 不放行（查无此单≠已满足）', () => {
+  const root = makeRoot();
+  seed(root, '待派', { id: 'C-1', 职能: '程序', 放行: true, 依赖: '不存在的单号' });
+  assert.deepEqual(D.readySet(root, new Set()), []);
 });
 
 t('排序：P0 > 红链 > 创建时间', () => {

@@ -1,4 +1,8 @@
-// runner.test.js — 执行器 D30/D31/D32：领单执行/QA质检执行/执行失败入位与分诊/闸门/断点恢复/实弹门
+// runner.test.js — 执行器 D30/D31/D32 · H108 三大态状态机（2026-08-24 改道）：
+// 领单执行 / 审检链目录流转（在途→初检→核查→完成）/ 三振 / 送仲裁 / 执行失败入位 / 闸门 / 断点恢复。
+// 判官链判据口径（外审 CX-6 明令）：不拿 STUDIO_STUB 当链路判据（stub 把 tick 换成空函数）；
+// 本套件走 escalate.test 模式——mock quota/brain、装外呼绊线，链路用 durMs 模拟收线钩子**真跑**
+// runner.tick/startWork → lifecycle → store.move，断言的是工单文件真实的目录流转。
 // 外呼绊线必须排在任何 lib/ 之前：lib/quota.js 在加载那一刻就把 child_process 解构走了（体检 #71）
 const 绊线 = require('./外呼绊线'); 绊线.装绊线();
 const assert = require('node:assert');
@@ -13,153 +17,264 @@ const { makeRoot, seed, CFG, 等到 } = require('./helper');
 const quota = require('../lib/quota');
 // 测试隔离（2026-08-05 案：额度闸曾查真实订阅用量——codex 实际用量爬过 70% 时本套件假失败数版无人察觉）
 quota.getRateLimits = async () => null; quota.getClaudeUsage = async () => null;
+// 评估回呈路径会拉项管裁决 LLM（H61）——判据只看目录流转，裁决会话一律打桩不真拉
+require('../lib/pm/brain').adjudicateReferral = () => { /* 桩：判据不烧会话 */ };
 
 let passed = 0; const t = async (n, f) => { await f(); passed++; console.log('  ✓ ' + n); };
-console.log('runner 执行器测试（D30/D31/D32）');
+console.log('runner 执行器测试（D30/D31/D32 · H108）');
 const UN = { durMs: 0 }; // 测试内部钩子：durMs 存在＝模拟执行（0＝同步完成），生产路径不传
-const on = (root) => state.update(root, (s) => { s.执行器 = { 运行: true }; });
+const on = (root) => state.update(root, (s) => { s.执行器 = { 运行: true } });
 const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
+const 流水 = (root) => {
+  const dir = path.join(root, 'journal');
+  try { return fs.readdirSync(dir).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join(''); } catch { return ''; }
+};
 
 (async () => {
   await t('未启动 → tick 跳过，不领单', async () => {
     const root = makeRoot();
-    seed(root, '池', { id: 'P-01', 职能: '策划' });
+    seed(root, '待派', { id: 'P-01', 职能: '策划', 放行: true });
     const r = await runner.tick(root, CFG, UN);
     assert.ok(r.skipped);
-    assert.equal(store.find(root, 'P-01').state, '池');
+    assert.equal(store.find(root, 'P-01').state, '待派');
   });
 
-  await t('QA 关：自动领单 → 执行 → 直达待验收 + 回执落盘', async () => {
+  /* ===== H108 判官链目录流转（本轮改造的正身判据）=====
+     逐跳版：每一跳单独断言目录真的挪了；集成版：一把 tick 从待派一路走到完成。 */
+
+  await t('H108 链·逐跳（QA开）：执行完→初检 → QA过→核查 → 核查过→完成', async () => {
     const root = makeRoot(); on(root);
-    seed(root, '池', { id: 'P-01', 职能: '策划', QA: '关' });
-    const r = await runner.tick(root, CFG, UN);
-    assert.deepEqual(r.领单, ['P-01']);
-    const cur = store.find(root, 'P-01');
-    assert.equal(cur.state, '待验收');
-    assert.equal(cur.fm.主办, '策划-A');
-    assert.ok(cur.fm.交付时间);
-    assert.ok(fs.existsSync(path.join(root, '回执', 'P-01.md')));
+    seed(root, '在途', { id: 'C-QA1', 职能: '程序', QA: '开', 验收方式: '委托', 主办: '程序-A', 领单时间: new Date().toISOString() });
+    // 跳 1：执行完 → 初检（原 质检 目录改名；lifecycle.交产出 路由）
+    assert.ok(await runner.startWork(root, CFG, store.find(root, 'C-QA1'), '程序-A', '执行', UN));
+    assert.equal(store.find(root, 'C-QA1').state, '初检', '执行完落初检目录');
+    assert.ok(fs.existsSync(path.join(root, '回执', 'C-QA1.md')), '回执照旧落盘');
+    // 跳 2：质检会话跑在初检目录，QA 过 → 核查
+    assert.ok(await runner.startWork(root, CFG, store.find(root, 'C-QA1'), 'QA', '质检', UN));
+    const c2 = store.find(root, 'C-QA1');
+    assert.equal(c2.state, '核查', 'QA 通过落核查目录');
+    assert.equal(c2.fm.质检人, 'QA');
+    // 跳 3：核查会话跑在核查目录，判过 → lifecycle.核查过 → 完成（出口驻留位，不是落袋）
+    assert.ok(await runner.startWork(root, CFG, store.find(root, 'C-QA1'), '核查', '代核', UN));
+    const c3 = store.find(root, 'C-QA1');
+    assert.equal(c3.state, '完成', '核查过落完成');
+    assert.equal(c3.fm.核查.结论, '通过');
+    assert.match(流水(root), /核查通过 C-QA1 → 完成/);
   });
 
-  await t('QA 开 + 编制有 QA：同轮走完 执行→质检→QA复核→待验收，质检人=职能名', async () => {
+  await t('H108 链·逐跳（QA关）：执行完→核查（简检，跳过初检）→ 完成', async () => {
     const root = makeRoot(); on(root);
-    seed(root, '池', { id: 'P-02', 职能: '程序', QA: '开' });
+    seed(root, '在途', { id: 'C-QA0', 职能: '策划', QA: '关', 验收方式: '委托', 主办: '策划-A', 领单时间: new Date().toISOString() });
+    await runner.startWork(root, CFG, store.find(root, 'C-QA0'), '策划-A', '执行', UN);
+    assert.equal(store.find(root, 'C-QA0').state, '核查', 'QA 关直达核查（简检），不经初检');
+    await runner.startWork(root, CFG, store.find(root, 'C-QA0'), '核查', '代核', UN);
+    assert.equal(store.find(root, 'C-QA0').state, '完成');
+  });
+
+  await t('H108 链·免检双钥匙（fm.免检 且 验收方式=保留）：执行完直落完成；只有保留没免检照走核查', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '在途', { id: 'C-EX1', 职能: '策划', QA: '关', 验收方式: '保留', 免检: true, 主办: '策划-A', 领单时间: new Date().toISOString() });
+    await runner.startWork(root, CFG, store.find(root, 'C-EX1'), '策划-A', '执行', UN);
+    assert.equal(store.find(root, 'C-EX1').state, '完成', '免检保留单直达完成');
+    const root2 = makeRoot(); on(root2);
+    seed(root2, '在途', { id: 'C-EX2', 职能: '策划', QA: '关', 验收方式: '保留', 主办: '策划-A', 领单时间: new Date().toISOString() });
+    await runner.startWork(root2, CFG, store.find(root2, 'C-EX2'), '策划-A', '执行', UN);
+    assert.equal(store.find(root2, 'C-EX2').state, '核查', '仅保留不免检 → 照走核查简检（保留的例外在验收闸，H110）');
+  });
+
+  await t('H108 链·集成（拉取制一把 tick）：待派(放行)→在途→初检→核查→完成 同轮走通', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '待派', { id: 'P-02', 职能: '程序', QA: '开', 验收方式: '委托', 放行: true });
     const r = await runner.tick(root, CFG, UN);
-    assert.ok(r.质检.includes('P-02'), '质检执行被派发');
+    assert.deepEqual(r.领单, ['P-02']);
+    assert.ok(r.质检.includes('P-02'), '质检会话被派发（初检目录）');
+    assert.ok((r.代核 || []).includes('P-02'), '核查会话被派发（核查目录）');
     const cur = store.find(root, 'P-02');
-    assert.equal(cur.state, '待验收');
-    // H85 补章去岗位化：质检会话不再冒充「QA-A」这个人头，标签就是职能名（判官三席同款单例会话）
-    assert.equal(cur.fm.质检人, 'QA');
+    assert.equal(cur.state, '完成');
+    assert.equal(cur.fm.质检人, 'QA'); // H85 去岗位化：判官会话标签=职能名
+    assert.equal(cur.fm.核查.结论, '通过');
+    const j = 流水(root);
+    assert.match(j, /领单 P-02（待派→在途/, '领单边改道 待派→在途');
+    assert.match(j, /交产出 P-02（在途→初检/, '执行完改道 在途→初检');
+    assert.match(j, /QA 通过 P-02（初检→核查）/);
+    assert.match(j, /核查过 P-02（核查→完成/);
   });
 
-  await t('QA 开 + 编制无 QA 这一行：停在质检等复核（不越权）', async () => {
+  await t('H108 三振：初检 QA 不过超自修上限 → 待处理（原 质检→待定夺）；未超限自修回在途', async () => {
     const root = makeRoot(); on(root);
-    seed(root, '池', { id: 'P-03', 职能: '程序', QA: '开' });
+    seed(root, '初检', { id: 'S-01', 职能: '程序', 主办: '程序-A', 自修次数: 2 }); // CFG 上限=2，这一振是第 3 振
+    await runner.startWork(root, CFG, store.find(root, 'S-01'), 'QA', '质检', { ...UN, simVerdict: false });
+    const cur = store.find(root, 'S-01');
+    assert.equal(cur.state, '待处理', '三振落总监分诊台');
+    assert.ok(String(cur.fm.上呈原因).includes('三振'), '上呈原因落 frontmatter：' + cur.fm.上呈原因);
+    // 对照：未超限的不过 → 自修回在途
+    seed(root, '初检', { id: 'S-02', 职能: '程序', 主办: '程序-A' });
+    await runner.startWork(root, CFG, store.find(root, 'S-02'), 'QA', '质检', { ...UN, simVerdict: false });
+    const c2 = store.find(root, 'S-02');
+    assert.equal(c2.state, '在途', '第 1 振自修回在途');
+    assert.equal(c2.fm.自修次数, 1);
+  });
+
+  await t('H108 核查不过 → 送仲裁（核查→仲裁），核验报告入回执、争议因落 fm', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'S-10.md'), '# 完工报告 S-10\n', 'utf8');
+    seed(root, '核查', { id: 'S-10', 职能: '程序', 验收方式: '委托' });
+    await runner.startWork(root, CFG, store.find(root, 'S-10'), '核查', '代核', { ...UN, simVerdict: false });
+    const cur = store.find(root, 'S-10');
+    assert.equal(cur.state, '仲裁', '核查争议送仲裁目录');
+    assert.equal(cur.fm.代核.结论, '不过');
+    assert.ok(cur.fm.仲裁因, '争议因落 frontmatter');
+    assert.ok(fs.readFileSync(path.join(root, '回执', 'S-10.md'), 'utf8').includes('## 核查'), '核验报告照旧入回执');
+    assert.match(流水(root), /核查不过 S-10 → 送仲裁/);
+  });
+
+  await t('H108 仲裁给方向：仲裁→在途 + 方向进正文 + 自修计数清零（TK-97 死循环防）', async () => {
+    const root = makeRoot(); on(root);
+    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
+    fs.writeFileSync(path.join(root, '回执', 'S-20.md'), '# 完工报告 S-20\n## QA 章节\n不过\n', 'utf8');
+    seed(root, '仲裁', { id: 'S-20', 职能: '程序', 主办: '程序-A', 自修次数: 3 });
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok((r.代裁 || []).includes('S-20'));
+    const cur = store.find(root, 'S-20');
+    assert.equal(cur.state, '在途', '给方向回在途');
+    assert.equal(cur.fm.代裁.结论, '给方向');
+    assert.equal(cur.fm.自修次数, 0, '回炉是新起点，计数清零（TK-97）');
+    assert.ok(cur.body.includes('## 定夺方向'), '方向写入正文');
+    assert.ok(fs.readFileSync(path.join(root, '回执', 'S-20.md'), 'utf8').includes('## 仲裁'));
+    // 已盖代裁章的单不再重裁
+    const root2 = makeRoot(); on(root2);
+    seed(root2, '仲裁', { id: 'S-21', 职能: '程序', 主办: '程序-A', 代裁: { 结论: '上呈', 时间: 'x' } });
+    const r2 = await runner.tick(root2, CFG, UN);
+    assert.ok(!(r2.代裁 || []).length, '已裁过不重复');
+    assert.equal(store.find(root2, 'S-21').state, '仲裁');
+  });
+
+  await t('H108 仲裁上呈：仲裁→待处理（原「留待定夺」改为真挪到分诊台），上呈原因落 fm', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '仲裁', { id: 'S-22', 职能: '程序', 主办: '程序-A', 仲裁因: '核查不过' });
+    await runner.startWork(root, CFG, store.find(root, 'S-22'), '仲裁', '代裁',
+      { ...UN, simNote: '（模拟）需求含糊，该不该推倒重来需制作人裁量。\n结论：上呈' });
+    const cur = store.find(root, 'S-22');
+    assert.equal(cur.state, '待处理', '上呈落总监分诊台');
+    assert.equal(cur.fm.代裁.结论, '上呈');
+    assert.ok(String(cur.fm.上呈原因).includes('仲裁'), '上呈原因落 fm：' + cur.fm.上呈原因);
+  });
+
+  await t('H61 评估回呈：在途→待派（原 在途→池），原地撤放行 fm.放行=false', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '在途', { id: 'S-30', 职能: '策划', 主办: '策划-A', 领单时间: new Date().toISOString() });
+    await runner.startWork(root, CFG, store.find(root, 'S-30'), '策划-A', '执行',
+      { ...UN, simNote: '## 评估回呈\n环境不齐，判定做不了（H61）' });
+    const cur = store.find(root, 'S-30');
+    assert.equal(cur.state, '待派', '回呈落待派（不是失败）');
+    assert.equal(cur.fm.放行, false, '撤放行=原地落旗，不换目录');
+    assert.equal(cur.fm.评估回呈轮, 1);
+    assert.ok(!cur.fm.主办, '清主办');
+    assert.match(流水(root), /评估回呈 S-30（第 1 轮）/);
+  });
+
+  await t('QA 开 + 编制无 QA 这一行：停在初检等复核（不越权）', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '待派', { id: 'P-03', 职能: '程序', QA: '开', 放行: true });
     await runner.tick(root, NO_QA, UN);
-    assert.equal(store.find(root, 'P-03').state, '质检');
+    assert.equal(store.find(root, 'P-03').state, '初检');
   });
 
   // ---- 施工令-008 去岗位化：新形态 config.编制（每职能一行 + 池序）驱动同一条流水 ----
-  await t('新形态编制：领单/质检照常走通，QA 挑人只看编制存在性不看人头', async () => {
+  await t('新形态编制：领单/审检链照常走通，QA 挑人只看编制存在性不看人头', async () => {
     const 新 = { ...CFG, agents: undefined, 编制: [
       { 职能: '程序', 池序: [{ 池: 'codex', 档: '' }, { 池: 'claude', 档: '' }] },
       { 职能: 'QA', 池序: [{ 池: 'claude', 档: '' }] },
     ] };
     const root = makeRoot(); on(root);
-    seed(root, '池', { id: 'P-90', 职能: '程序', QA: '开' });
+    seed(root, '待派', { id: 'P-90', 职能: '程序', QA: '开', 放行: true });
     const r = await runner.tick(root, 新, UN);
     assert.deepEqual(r.领单, ['P-90'], '编制去岗位化后拉取制按职能领单（id 即职能名）');
     const cur = store.find(root, 'P-90');
     assert.equal(cur.fm.主办, '程序', '主办=职能名，不再有 -A 岗位号');
     assert.equal(cur.fm.执行池, 'codex', '池序首位即默认落点');
     assert.equal(cur.fm.质检人, 'QA');
-    assert.equal(cur.state, '待验收');
-    // 编制里抽掉 QA 这一行 → 质检无人可派，停在质检等复核
+    assert.equal(cur.state, '完成', '同轮走完 初检→核查→完成');
+    // 编制里抽掉 QA 这一行 → 质检无人可派，停在初检等复核
     const 无QA = { ...新, 编制: 新.编制.filter((x) => x.职能 !== 'QA') };
     const root2 = makeRoot(); on(root2);
-    seed(root2, '池', { id: 'P-91', 职能: '程序', QA: '开' });
+    seed(root2, '待派', { id: 'P-91', 职能: '程序', QA: '开', 放行: true });
     await runner.tick(root2, 无QA, UN);
-    assert.equal(store.find(root2, 'P-91').state, '质检');
+    assert.equal(store.find(root2, 'P-91').state, '初检');
   });
 
   await t('一个 QA 一轮只审一张，下一轮接着审（一人一张同源约束）', async () => {
     const root = makeRoot(); on(root);
-    seed(root, '质检', { id: 'P-04', 职能: '策划', 主办: '策划-A', 领单时间: new Date().toISOString() });
-    seed(root, '质检', { id: 'P-05', 职能: '程序', 主办: '程序-A', 领单时间: new Date().toISOString() });
+    seed(root, '初检', { id: 'P-04', 职能: '策划', 主办: '策划-A', 领单时间: new Date().toISOString() });
+    seed(root, '初检', { id: 'P-05', 职能: '程序', 主办: '程序-A', 领单时间: new Date().toISOString() });
     await runner.tick(root, CFG, UN);
     const states1 = ['P-04', 'P-05'].map((id) => store.find(root, id).state).sort();
-    assert.deepEqual(states1, ['待验收', '质检'].sort(), '第一轮只过一张');
+    assert.deepEqual(states1, ['初检', '完成'].sort(), '第一轮只过一张（QA过→核查→同轮代核→完成）');
     await runner.tick(root, CFG, UN);
-    assert.ok(['P-04', 'P-05'].every((id) => store.find(root, id).state === '待验收'), '第二轮补完');
+    assert.ok(['P-04', 'P-05'].every((id) => store.find(root, id).state === '完成'), '第二轮补完');
   });
 
-  await t('执行失败注入（D31）：本地入位 + 失败元数据 + agent 空出', async () => {
+  await t('执行失败注入（D31/H108）：本地入位 待处理 + 失败元数据 + agent 空出', async () => {
     const root = makeRoot(); on(root);
     seed(root, '在途', { id: 'P-06', 职能: '策划', 主办: '策划-A', 领单时间: new Date().toISOString() });
     await runner.tick(root, CFG, { ...UN, failWith: 'CLI 退出码 1：模拟崩溃' });
     const cur = store.find(root, 'P-06');
-    assert.equal(cur.state, '执行失败');
+    assert.equal(cur.state, '待处理', '执行失败并入待处理（原 执行失败 目录）');
     assert.equal(cur.fm.失败次数, 1);
     assert.ok(cur.fm.失败原因.includes('模拟崩溃'));
     assert.equal(cur.fm.主办, '策划-A', '主办保留作诊断线索');
     assert.equal(runner.running.size, 0, 'agent 空出');
-    // 执行失败不占在途口径：同 agent 可继续领新单
-    seed(root, '池', { id: 'P-07', 职能: '策划', QA: '关' });
+    // 待处理不占在途口径：同 agent 可继续领新单
+    seed(root, '待派', { id: 'P-07', 职能: '策划', QA: '关', 放行: true });
     const r2 = await runner.tick(root, CFG, UN);
     assert.ok(r2.领单.includes('P-07'));
   });
 
-  await t('判官失败不打整单：质检失败原地重试（<3 留质检），3 次封顶入执行失败', async () => {
+  await t('判官失败不打整单：质检失败原地重试（<3 留初检），3 次封顶入待处理', async () => {
     const root = makeRoot(); on(root);
-    seed(root, '质检', { id: 'P-30', 职能: '策划', 主办: '策划-A', 领单时间: new Date().toISOString() });
+    seed(root, '初检', { id: 'P-30', 职能: '策划', 主办: '策划-A', 领单时间: new Date().toISOString() });
     await runner.tick(root, CFG, { ...UN, failWith: '网络抖动' });
     let cur = store.find(root, 'P-30');
-    assert.equal(cur.state, '质检', '第 1 次失败留质检');
+    assert.equal(cur.state, '初检', '第 1 次失败留初检');
     assert.equal(cur.fm.质检失败次数, 1);
     await runner.tick(root, CFG, { ...UN, failWith: '网络抖动' });
     await runner.tick(root, CFG, { ...UN, failWith: '网络抖动' });
-    assert.equal(store.find(root, 'P-30').state, '执行失败', '3 次封顶入分诊');
+    assert.equal(store.find(root, 'P-30').state, '待处理', '3 次封顶入分诊（待处理）');
     // 成功路径清计数
     const root2 = makeRoot(); on(root2);
-    seed(root2, '质检', { id: 'P-31', 职能: '策划', 主办: '策划-A', 领单时间: new Date().toISOString() });
+    seed(root2, '初检', { id: 'P-31', 职能: '策划', 主办: '策划-A', 领单时间: new Date().toISOString() });
     await runner.tick(root2, CFG, { ...UN, failWith: 'x' });
     await runner.tick(root2, CFG, UN);
     const ok = store.find(root2, 'P-31');
-    assert.equal(ok.state, '待验收');
+    assert.equal(ok.state, '完成', 'QA过→核查→代核→完成');
     assert.ok(!ok.fm.质检失败次数, '成功后计数清除');
-  });
-
-  await t('失败分诊（D31）：重投清主办回池 / 上呈进待定夺', async () => {
-    const root = makeRoot();
-    seed(root, '执行失败', { id: 'P-08', 职能: '程序', 主办: '程序-A' });
-    const r1 = life.失败分诊(root, 'P-08', '重投');
-    assert.ok(r1.ok);
-    const cur = store.find(root, 'P-08');
-    assert.equal(cur.state, '池');
-    assert.ok(!cur.fm.主办, '重投清主办');
-    store.move(root, 'P-08', '池', '在途', (fm) => { fm.主办 = 'x'; }, new Date().toISOString());
-    life.执行失败(root, 'P-08', '再次失败');
-    assert.equal(store.find(root, 'P-08').fm.失败次数, 1); // 分诊后重新计（此环境 fm 已清? 保守断言 ≥1）
-    const r2 = life.失败分诊(root, 'P-08', '上呈');
-    assert.ok(r2.ok);
-    assert.equal(store.find(root, 'P-08').state, '待定夺');
   });
 
   await t('自动续单（D29）：完成一张后下一轮同 agent 领下一张', async () => {
     const root = makeRoot(); on(root);
-    seed(root, '池', { id: 'P-09', 职能: '美术', QA: '关', 优先级: 'P0' });
-    seed(root, '池', { id: 'P-10', 职能: '美术', QA: '关', 优先级: 'P1' });
+    seed(root, '待派', { id: 'P-09', 职能: '美术', QA: '关', 优先级: 'P0', 放行: true });
+    seed(root, '待派', { id: 'P-10', 职能: '美术', QA: '关', 优先级: 'P1', 放行: true });
     const cfg4 = { ...CFG, agents: [...CFG.agents, { id: '美术-A', 职能: '美术', 执行池: 'claude' }] };
     await runner.tick(root, cfg4, UN);
-    assert.equal(store.find(root, 'P-09').state, '待验收');
+    assert.equal(store.find(root, 'P-09').state, '完成');
     await runner.tick(root, cfg4, UN);
-    assert.equal(store.find(root, 'P-10').state, '待验收');
+    assert.equal(store.find(root, 'P-10').state, '完成');
+  });
+
+  await t('H113 待重派同盘：重投回队的单（待重派+放行）照常被领单执行', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '待重派', { id: 'P-RD1', 职能: '策划', QA: '关', 放行: true, 重投次数: 1 });
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok(r.领单.includes('P-RD1'), '待重派单可领');
+    assert.equal(store.find(root, 'P-RD1').state, '完成');
+    assert.match(流水(root), /领单 P-RD1（待重派→在途/, '流水如实记来路');
   });
 
   await t('暂停总闸合上 → 不领单', async () => {
     const root = makeRoot(); on(root);
     gates.setPaused(root, true);
-    seed(root, '池', { id: 'P-11', 职能: '策划' });
+    seed(root, '待派', { id: 'P-11', 职能: '策划', 放行: true });
     const r = await runner.tick(root, CFG, UN);
     assert.equal(r.领单.length, 0);
   });
@@ -169,12 +284,12 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     seed(root, '在途', { id: 'P-12', 职能: '程序', QA: '关', 主办: '程序-A', 领单时间: new Date().toISOString() });
     const r = await runner.tick(root, CFG, UN);
     assert.ok(r.执行.includes('P-12'));
-    assert.equal(store.find(root, 'P-12').state, '待验收');
+    assert.equal(store.find(root, 'P-12').state, '完成', '执行→核查简检→完成同轮走完');
   });
 
   await t('常开单闸制（H81）：运行即实弹，无解锁/模式开关拦路；对外状态无历史字段', async () => {
     const root = makeRoot(); on(root);
-    seed(root, '池', { id: 'P-13', 职能: '策划', QA: '关' });
+    seed(root, '待派', { id: 'P-13', 职能: '策划', QA: '关', 放行: true });
     const r = await runner.tick(root, CFG, UN);
     assert.ok(!r.拒因.some((x) => /解锁|试跑/.test(x)), '不再有「实弹未解锁」这类拒因');
     assert.ok(r.领单.includes('P-13'), '照常领单执行');
@@ -183,27 +298,46 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.ok(!('试跑' in st) && !('实弹解锁' in st), '/api/runner 对外状态无历史开关字段');
   });
 
-  await t('委托代核（D34）：委托待验收单自动核验通过 → 验收完成 + 回执追加 + 代核戳', async () => {
+  await t('派发制（H49/H108）：待派/待重派两路都能派，流水记真实来路', async () => {
+    const root = makeRoot(); on(root);
+    const cfg = { ...CFG, 执行器: { ...CFG.执行器, 派发制: true } }; // 保留 helper 的 两检:关，别让机判初检混进本判据
+    seed(root, '待派', { id: 'D-01', 职能: '策划', QA: '关', 放行: true });
+    seed(root, '待重派', { id: 'D-02', 职能: '程序', QA: '关', 放行: true, 重投次数: 1 });
+    const r = await runner.tick(root, cfg, { ...UN, noBrain: true });
+    assert.ok(r.领单.includes('D-01') && r.领单.includes('D-02'), '两路都进派发（实际 ' + JSON.stringify(r.领单) + '）');
+    await runner.tick(root, cfg, { ...UN, noBrain: true }); // 审检配额 1：第二张核查等下一轮
+    assert.ok(['D-01', 'D-02'].every((id) => store.find(root, id).state === '完成'), '派发后两轮内跑完链');
+    const j = 流水(root);
+    assert.match(j, /派发 D-01（待派→在途/);
+    assert.match(j, /派发 D-02（待重派→在途/);
+    assert.ok(!/归位：/.test(j), 'H108：池目录归位迁移环已退役，不再产生归位流水');
+  });
+
+  await t('核查会话（原 待验收 现 核查 目录）：通过 → 完成 + 回执追加 + 代核戳；保留单同样走简检', async () => {
     const root = makeRoot(); on(root);
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
     fs.writeFileSync(path.join(root, '回执', 'P-20.md'), '# 完工报告 P-20\n', 'utf8');
-    seed(root, '待验收', { id: 'P-20', 职能: '程序', 验收方式: '委托' });
-    seed(root, '待验收', { id: 'P-21', 职能: '美术', 验收方式: '保留' }); // 保留单不代核
+    seed(root, '核查', { id: 'P-20', 职能: '程序', 验收方式: '委托' });
     const r = await runner.tick(root, CFG, UN);
     assert.ok((r.代核 || []).includes('P-20'));
     assert.equal(store.find(root, 'P-20').state, '完成');
     assert.equal(store.find(root, 'P-20').fm.代核.结论, '通过');
     assert.ok(fs.readFileSync(path.join(root, '回执', 'P-20.md'), 'utf8').includes('## 核查'));
-    assert.equal(store.find(root, 'P-21').state, '待验收', '保留单碰都不碰');
+    // H108/H110：QA关的保留单也进核查简检（保留的例外在验收闸），不再有「保留单不代核」
+    const root2 = makeRoot(); on(root2);
+    seed(root2, '核查', { id: 'P-21', 职能: '美术', 验收方式: '保留' });
+    const r2 = await runner.tick(root2, CFG, UN);
+    assert.ok((r2.代核 || []).includes('P-21'), '保留单照走简检');
+    assert.equal(store.find(root2, 'P-21').state, '完成', '简检过落完成，由验收闸（完成→归档）走制作人亲验');
   });
 
   // ---- 施工令-010 第 1 条：审检并发去写死（判官槽数读 config.并发.审检，默认 1＝旧单槽） ----
-  await t('审检并发默认 1：两张委托待验收一轮只核一张（与旧 running.has 单槽逐位一致）', async () => {
+  await t('审检并发默认 1：两张核查单一轮只核一张（与旧 running.has 单槽逐位一致）', async () => {
     const root = makeRoot(); on(root);
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
     for (const id of ['C-01', 'C-02']) {
       fs.writeFileSync(path.join(root, '回执', `${id}.md`), `# 完工报告 ${id}\n`, 'utf8');
-      seed(root, '待验收', { id, 职能: '程序', 验收方式: '委托' });
+      seed(root, '核查', { id, 职能: '程序', 验收方式: '委托' });
     }
     const r = await runner.tick(root, CFG, UN);
     assert.equal((r.代核 || []).length, 1, '默认配额 1 → 一轮一张（实际 ' + JSON.stringify(r.代核) + '）');
@@ -212,18 +346,18 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.ok(['C-01', 'C-02'].every((id) => store.find(root, id).state === '完成'));
   });
 
-  await t('审检并发=2：同一轮两张待验收并行核查，席位号 核查 / 核查·2', async () => {
+  await t('审检并发=2：同一轮两张核查单并行，席位号 核查 / 核查·2', async () => {
     const root = makeRoot(); on(root);
     const cfg2 = { ...CFG, 并发: { 审检: 2 } };
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
     for (const id of ['C-11', 'C-12', 'C-13']) {
       fs.writeFileSync(path.join(root, '回执', `${id}.md`), `# 完工报告 ${id}\n`, 'utf8');
-      seed(root, '待验收', { id, 职能: '程序', 验收方式: '委托' });
+      seed(root, '核查', { id, 职能: '程序', 验收方式: '委托' });
     }
     const r = await runner.tick(root, cfg2, UN);
     assert.equal((r.代核 || []).length, 2, '配额 2 → 一轮开两槽（实际 ' + JSON.stringify(r.代核) + '）');
     assert.equal((r.代核 || []).length, new Set(r.代核).size, '两槽拿的是不同的单');
-    assert.equal(store.find(root, 'C-13').state, '待验收', '第三张等下一轮，不越配额');
+    assert.equal(store.find(root, 'C-13').state, '核查', '第三张等下一轮，不越配额');
     // 席位号：并发席真开出来了（durMs=0 当场收线，改用悬挂会话验席位占用）
     const t3 = store.find(root, 'C-13');
     await runner.startWork(root, cfg2, t3, '核查', '代核', { durMs: 60000 });
@@ -239,7 +373,7 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
     for (const id of ['C-21', 'C-22']) {
       fs.writeFileSync(path.join(root, '回执', `${id}.md`), `# 完工报告 ${id}\n`, 'utf8');
-      seed(root, '待验收', { id, 职能: '程序', 验收方式: '委托' });
+      seed(root, '核查', { id, 职能: '程序', 验收方式: '委托' });
     }
     await runner.startWork(root, cfg2, store.find(root, 'C-21'), '核查', '代核', { durMs: 60000 }); // 悬挂占首席
     await runner.tick(root, cfg2, { durMs: 0 });
@@ -255,7 +389,7 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
     for (const id of ['C-31', 'C-32', 'C-33', 'C-34']) {
       fs.writeFileSync(path.join(root, '回执', `${id}.md`), `# 完工报告 ${id}\n`, 'utf8');
-      seed(root, '待验收', { id, 职能: '程序', 验收方式: '委托' });
+      seed(root, '核查', { id, 职能: '程序', 验收方式: '委托' });
     }
     const r = await runner.tick(root, cfg9, UN);
     assert.equal((r.代核 || []).length, 2, '硬顶 2 封死（实际 ' + JSON.stringify(r.代核) + '）');
@@ -264,37 +398,17 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
   await t('审检并发=2 对仲裁同样生效（同类判官各算各的配额）', async () => {
     const root = makeRoot(); on(root);
     const cfg2 = { ...CFG, 并发: { 审检: 2 } };
-    for (const id of ['C-41', 'C-42']) seed(root, '待定夺', { id, 职能: '程序', 主办: '程序-A', 自修次数: 3 });
+    for (const id of ['C-41', 'C-42']) seed(root, '仲裁', { id, 职能: '程序', 主办: '程序-A', 自修次数: 3 });
     const r = await runner.tick(root, cfg2, UN);
-    assert.equal((r.代裁 || []).length, 2, '两张待定夺同轮裁完');
+    assert.equal((r.代裁 || []).length, 2, '两张仲裁单同轮裁完');
   });
 
-  await t('委托代裁（D43③）：待定夺自动裁给方向 → 回在途 + 方向进正文 + 代裁戳；已裁过不重裁', async () => {
+  await t('委托代裁失败不动单：留仲裁（判官失败不打整单同源约束）', async () => {
     const root = makeRoot(); on(root);
-    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
-    fs.writeFileSync(path.join(root, '回执', 'P-30.md'), '# 完工报告 P-30\n## QA 章节\n不过\n', 'utf8');
-    seed(root, '待定夺', { id: 'P-30', 职能: '程序', 主办: '程序-A', 自修次数: 3 });
-    const r = await runner.tick(root, CFG, UN);
-    assert.ok((r.代裁 || []).includes('P-30'));
-    const cur = store.find(root, 'P-30');
-    assert.equal(cur.state, '在途', '给方向回在途');
-    assert.equal(cur.fm.代裁.结论, '给方向');
-    assert.ok(cur.body.includes('## 定夺方向'), '方向写入正文');
-    assert.ok(fs.readFileSync(path.join(root, '回执', 'P-30.md'), 'utf8').includes('## 仲裁'));
-    // 已盖代裁章的单不再重裁（上呈态等用户）
-    const root2 = makeRoot(); on(root2);
-    seed(root2, '待定夺', { id: 'P-31', 职能: '程序', 主办: '程序-A', 代裁: { 结论: '上呈', 时间: 'x' } });
-    const r2 = await runner.tick(root2, CFG, UN);
-    assert.ok(!(r2.代裁 || []).length, '已裁过不重复');
-    assert.equal(store.find(root2, 'P-31').state, '待定夺');
-  });
-
-  await t('委托代裁失败不动单：留待定夺（判官失败不打整单同源约束）', async () => {
-    const root = makeRoot(); on(root);
-    seed(root, '待定夺', { id: 'P-32', 职能: '程序', 主办: '程序-A' });
+    seed(root, '仲裁', { id: 'P-32', 职能: '程序', 主办: '程序-A' });
     const t2 = store.find(root, 'P-32');
     await runner.startWork(root, CFG, t2, '委托代裁', '代裁', { failWith: '网络抖动' });
-    assert.equal(store.find(root, 'P-32').state, '待定夺', '失败不动单');
+    assert.equal(store.find(root, 'P-32').state, '仲裁', '失败不动单');
     assert.ok(!store.find(root, 'P-32').fm.代裁, '失败不盖章，下轮可重试');
   });
 
@@ -329,8 +443,7 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     runner.settleClose('代核', 1, '', 'boom', 'X-1', fin, fail);
     assert.equal(calls[0].path, 'fail');
     assert.ok(calls[0].why.includes('boom'));
-    // 质检散文体结论判读（曾硬编码 true 致 QA 永放行，TK-31/33 案）：
-    // "## 结论\n**通过**"→true；"结论\n不过"→false；无结论/判读不了→判官失败重试
+    // 质检散文体结论判读（曾硬编码 true 致 QA 永放行，TK-31/33 案）
     calls.length = 0;
     runner.settleClose('质检', 0, '# QA 核验\n## 逐条核验\n1. ✓\n## 结论\n\n**通过**', '', 'X-1', fin, fail);
     assert.deepEqual([calls[0].path, calls[0].v], ['ok', true], 'QA 散文体通过');
@@ -353,14 +466,14 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.ok(!runner.resolveCli('codex', '').args.includes('stream-json'), 'codex 不受影响');
   });
 
-  await t('委托代核失败重试封顶：封顶前留待验收下轮重试且不盖章，封顶后停拉、清计数可重审', async () => {
+  await t('委托代核失败重试封顶：封顶前留核查下轮重试且不盖章，封顶后停拉、清计数可重审', async () => {
     const root = makeRoot(); on(root);
-    seed(root, '待验收', { id: 'P-40', 职能: '程序', 验收方式: '委托' });
+    seed(root, '核查', { id: 'P-40', 职能: '程序', 验收方式: '委托' });
     for (let i = 1; i <= 3; i++) {
       const r = await runner.tick(root, CFG, { ...UN, failWith: 'CLI 退出码 0 但输出为空' });
       assert.ok((r.代核 || []).includes('P-40'), `第 ${i} 次仍自动拉起`);
       const cur = store.find(root, 'P-40');
-      assert.equal(cur.state, '待验收', '失败不动单');
+      assert.equal(cur.state, '核查', '失败不动单');
       assert.ok(!cur.fm.代核, '失败不盖章');
       assert.equal(cur.fm.代核失败次数, i);
     }
@@ -376,14 +489,14 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.ok(!ok.fm.代核失败次数, '成功清计数');
   });
 
-  await t('委托代裁失败重试封顶：留待定夺不盖章，封顶后停拉；上限可配 判官重试上限', async () => {
+  await t('委托代裁失败重试封顶：留仲裁不盖章，封顶后停拉；上限可配 判官重试上限', async () => {
     const root = makeRoot(); on(root);
     const cfg2 = { ...CFG, 执行器: { 判官重试上限: 2 } };
-    seed(root, '待定夺', { id: 'P-41', 职能: '程序', 主办: '程序-A' });
+    seed(root, '仲裁', { id: 'P-41', 职能: '程序', 主办: '程序-A' });
     for (let i = 1; i <= 2; i++) {
       await runner.tick(root, cfg2, { ...UN, failWith: '空输出' });
       const cur = store.find(root, 'P-41');
-      assert.equal(cur.state, '待定夺', '失败不动单');
+      assert.equal(cur.state, '仲裁', '失败不动单');
       assert.ok(!cur.fm.代裁, '失败不盖章');
       assert.equal(cur.fm.代裁失败次数, i);
     }
@@ -396,22 +509,23 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.ok(!store.find(root, 'P-41').fm.代裁失败次数, '成功清计数');
   });
 
-  await t('待复核（D36）：标记后 池不可领/在途不起工/交产出被拒，解除后恢复', async () => {
+  await t('待复核（D36）：标记后 待派不可领/在途不起工/交产出被拒，解除后恢复', async () => {
     const root = makeRoot(); on(root);
-    seed(root, '池', { id: 'P-22', 职能: '策划', 依据: '战斗系统#战斗-03' });
+    seed(root, '待派', { id: 'P-22', 职能: '策划', 依据: '战斗系统#战斗-03', 放行: true });
     const mk = life.标记待复核(root, '战斗系统#战斗-03', '公式改版');
     assert.equal(mk.命中.length, 1);
     const r1 = await runner.tick(root, CFG, UN);
     assert.ok(!r1.领单.includes('P-22'), '待复核单不派活');
-    assert.equal(store.find(root, 'P-22').state, '池');
+    assert.equal(store.find(root, 'P-22').state, '待派');
     // 在途中的待复核单：不起执行 + 交产出被拒
-    store.move(root, 'P-22', '池', '在途', (fm) => { fm.主办 = '策划-A'; }, new Date().toISOString());
+    store.move(root, 'P-22', '待派', '在途', (fm) => { fm.主办 = '策划-A'; }, new Date().toISOString());
     const r2 = await runner.tick(root, CFG, UN);
     assert.ok(r2.拒因.some((x) => x.includes('P-22')));
     assert.ok(!life.交产出(root, 'P-22', 'x').ok);
     // 解除后正常交
     assert.ok(life.解除待复核(root, 'P-22', '已核对新公式').ok);
     assert.ok(life.交产出(root, 'P-22', '# 完工报告 P-22').ok);
+    assert.equal(store.find(root, 'P-22').state, '核查', '默认 QA关非免检 → 核查简检');
     assert.ok(store.find(root, 'P-22').fm.复核确认);
   });
 
@@ -498,10 +612,7 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     const src = `const E=String.fromCharCode(27);`
       + `process.stderr.write(E+'[32mcodex'+E+'[0m\\n');`
       + `process.stderr.write(E+'[2mtokens used: 1234'+E+'[0m\\n');`
-      // 终答由**父进程发信号**触发，不再用墙钟（2026-08-21 修）：
-      // 原样是 setTimeout(…,60)，配上父侧固定 sleep(40) 断言——两个墙钟赛跑。
-      // 实测本机连跑 10 次 10 红（观测值 "codex"＝只到了第一条 stderr）。
-      // 这一格坐在 deploy-ritual 换装闸与完工判据制的唯一机器出口上，不许靠运气。
+      // 终答由**父进程发信号**触发，不再用墙钟（2026-08-21 修）：两个墙钟赛跑实测 10 跑 10 红。
       + `process.stdin.once('data',()=>{process.stdout.write('done');process.stdin.pause();});`
       + `process.stdin.resume();`;
     const child = spawn(process.execPath, ['-e', src], { windowsHide: true });
@@ -509,12 +620,7 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     let out = '', errout = '';
     child.stdout.on('data', (d) => { out += d; entry.收字节 = (entry.收字节 || 0) + d.length; Object.assign(entry, runner.tailFrom(out, errout)); });
     child.stderr.on('data', (d) => { errout += d; entry.收字节 = (entry.收字节 || 0) + d.length; Object.assign(entry, runner.tailFrom(out, errout)); });
-    // 过程期（stdout 还空）：尾巴必须已经有内容，且看门狗不许报。
-    // **等真实事件，不等墙钟**：等到两条 stderr 都进了 entry.tail 为止。
-    // 不能改成「轮询 tokens used」了事——子进程终答一落，tailFrom 是 stdout 优先，
-    // 条件就永远不可能再成立，那样只会把偶发红变成必然的超时挂死（外部协作方 08-08 的
-    // 修法建议是两半，只抄前半就是这个坑）。故：终答改由父进程发信号触发，
-    // 在此之前 stdout 恒空，等待条件单调可达。
+    // 过程期（stdout 还空）：尾巴必须已经有内容，且看门狗不许报。等真实事件，不等墙钟。
     await 等到(() => entry.tail && entry.tail.includes('tokens used'), 5000, '过程期 stderr 尾巴');
     assert.ok(entry.tail && entry.tail.includes('tokens used'), '过程期尾巴有内容（旧样这里是空的）：' + JSON.stringify(entry.tail));
     assert.ok(entry.收字节 > 0, '活性字节 = stdout∪stderr');
@@ -522,9 +628,7 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     const root = makeRoot(); patrol.重置(root);
     const r1 = patrol.零输出(root, CFG, { 执行中: [entry] });
     assert.equal(r1.告警.length, 0, '跑了 30 分钟但一路在 stderr 吐字 → 不许误报挂死');
-    // ← 放行终答：此刻之前 stdout 必空，上面的等待条件才单调。
-    // end() 而不是 write()：只写不关，父侧这个 stdin 管道会一直挂在事件循环上，
-    // 整个套件跑到这里就再也退不出去（实测：32 个 ✓ 之后卡死，超时 124）。
+    // end() 而不是 write()：只写不关，父侧 stdin 管道挂事件循环，整个套件退不出去（实测超时 124）
     child.stdin.end('go' + String.fromCharCode(10));
     await new Promise((r) => child.on('close', r));
     assert.equal(out, 'done', '终答仍只从 stdout 取（收线裁决口径不变）');
@@ -535,95 +639,68 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     assert.equal(patrol.零输出(root, CFG, { 执行中: [死] }).告警.length, 1, '真零输出照报');
   });
 
-  /* ===== 挂起单全环节跳过（施工令-021）=====
-     一个环节一条：漏堵任何一条，制作人按下的冻结就是假的。 */
+  /* ===== 挂起（H108：目录态为正身；旧 fm.挂起 标记=迁移期兜底守卫，总控迁完可拆）===== */
 
-  await t('挂起①：在途单不起执行（断点续跑这条路最容易漏堵）', async () => {
+  await t('挂起·目录态：住挂起目录的单不进任何扫描（tick 零触碰，原地不动）', async () => {
     const root = makeRoot(); on(root);
-    seed(root, '在途', { id: 'H-01', 职能: '策划', 主办: '策划-A' });
-    life.挂起(root, 'H-01', '制作人', '方向不对');
+    seed(root, '挂起', { id: 'H-00', 职能: '策划', 挂起前态: '在途', 挂起因: '方向不对', 挂起时间: new Date().toISOString() });
+    const r = await runner.tick(root, CFG, UN);
+    assert.ok(![...(r.领单 || []), ...(r.执行 || []), ...(r.质检 || []), ...(r.代核 || []), ...(r.代裁 || [])].includes('H-00'));
+    assert.equal(store.find(root, 'H-00').state, '挂起', '目录态挂起天然隔离');
+  });
+
+  await t('挂起·迁移期 fm 旗①：在途单不起执行（断点续跑这条路最容易漏堵），撤旗即复活', async () => {
+    const root = makeRoot(); on(root);
+    seed(root, '在途', { id: 'H-01', 职能: '策划', 主办: '策划-A', 挂起: { 操作者: '制作人', 理由: '方向不对', 时间: 'x' } });
     const r = await runner.tick(root, CFG, UN);
     assert.ok(!(r.执行 || []).includes('H-01'), '不许起执行');
     assert.ok((r.拒因 || []).some((x) => x.includes('H-01') && x.includes('挂起')), '拒因要说人话');
     assert.equal(store.find(root, 'H-01').state, '在途', '原位不动');
-    // 解挂即复活：同一把 tick，什么都不改，单就该被捡起来
-    life.解挂(root, 'H-01', '制作人');
+    store.update(root, 'H-01', (fm) => { delete fm.挂起; });
     const r2 = await runner.tick(root, CFG, UN);
-    assert.ok((r2.执行 || []).includes('H-01'), '解挂后原位复活可被正常调度');
+    assert.ok((r2.执行 || []).includes('H-01'), '撤旗后原位复活可被正常调度');
   });
 
-  await t('挂起②：领单（拉取制 claim）跳过池里的挂起单', async () => {
+  await t('挂起·迁移期 fm 旗②：领单（拉取制 claim）跳过带旗的待派单', async () => {
     const root = makeRoot(); on(root);
-    seed(root, '池', { id: 'H-02', 职能: '策划' });
-    life.挂起(root, 'H-02', '制作人');
+    seed(root, '待派', { id: 'H-02', 职能: '策划', 放行: true, 挂起: { 操作者: '制作人', 时间: 'x' } });
     const r = await runner.tick(root, CFG, UN);
     assert.ok(!(r.领单 || []).includes('H-02'));
-    assert.equal(store.find(root, 'H-02').state, '池', '没被谁捞走');
-    life.解挂(root, 'H-02');
-    assert.ok(((await runner.tick(root, CFG, UN)).领单 || []).includes('H-02'), '解挂后可领');
+    assert.equal(store.find(root, 'H-02').state, '待派', '没被谁捞走');
+    store.update(root, 'H-02', (fm) => { delete fm.挂起; });
+    assert.ok(((await runner.tick(root, CFG, UN)).领单 || []).includes('H-02'), '撤旗后可领');
   });
 
-  await t('挂起②′：派发制就绪队列不含挂起单（零派发计数亦据此不误报）', async () => {
+  await t('挂起·迁移期 fm 旗③④⑤：初检/核查/仲裁三席都跳过带旗单（对照组照常被审）', async () => {
     const root = makeRoot(); on(root);
-    const cfg = { ...CFG, 执行器: { 派发制: true } };
-    seed(root, '待投', { id: 'H-03', 职能: '策划', 放行: true });
-    seed(root, '待投', { id: 'H-04', 职能: '程序', 放行: true });
-    life.挂起(root, 'H-03', '制作人');
-    const ready = require('../lib/pm/dispatch').readySet(root, new Set());
-    assert.deepEqual(ready.map((x) => x.id), ['H-04'], '就绪盘点直接过滤');
-    const r = await runner.tick(root, cfg, { ...UN, noBrain: true });
-    assert.ok(!(r.领单 || []).includes('H-03'), '不派发');
-    assert.equal(store.find(root, 'H-03').state, '待投');
-  });
-
-  await t('挂起③：质检不开会话', async () => {
-    const root = makeRoot(); on(root);
-    seed(root, '质检', { id: 'H-05', 职能: '策划' });
-    life.挂起(root, 'H-05', '制作人');
-    const r = await runner.tick(root, CFG, UN);
-    assert.ok(!(r.质检 || []).includes('H-05'));
-    assert.equal(store.find(root, 'H-05').state, '质检');
-  });
-
-  await t('挂起④a/④b：初检与核查都跳过（对照组同轮照常被核）', async () => {
-    const root = makeRoot(); on(root);
+    seed(root, '初检', { id: 'H-05', 职能: '策划', 挂起: { 操作者: '制作人', 时间: 'x' } });
+    const r0 = await runner.tick(root, CFG, UN);
+    assert.ok(!(r0.质检 || []).includes('H-05'));
+    assert.equal(store.find(root, 'H-05').state, '初检');
+    // 核查席：带旗单不核，对照组照核
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
     for (const id of ['H-06', 'H-07']) fs.writeFileSync(path.join(root, '回执', `${id}.md`), `# 完工报告 ${id}\n`, 'utf8');
-    seed(root, '待验收', { id: 'H-06', 职能: '程序', 验收方式: '委托' });
-    seed(root, '待验收', { id: 'H-07', 职能: '程序', 验收方式: '委托' });
-    life.挂起(root, 'H-06', '制作人');
+    seed(root, '核查', { id: 'H-06', 职能: '程序', 验收方式: '委托', 挂起: { 操作者: '制作人', 时间: 'x' } });
+    seed(root, '核查', { id: 'H-07', 职能: '程序', 验收方式: '委托' });
     const r = await runner.tick(root, CFG, UN); // 基础 CFG 显式关两检（helper）→ 直接走 ④b 代核
-    assert.ok(!(r.代核 || []).includes('H-06'), '挂起单不核');
-    assert.ok((r.代核 || []).includes('H-07'), '对照组照核——证明是挂起在拦，不是环节整个没跑');
-    assert.equal(store.find(root, 'H-06').state, '待验收', '原位不动');
-    // 初检：开两检后同样跳过
-    const root2 = makeRoot(); on(root2);
-    const cfg2 = { ...CFG, 执行池: { ...CFG.执行池, deepseek: { 职能: [], 阈值: 70 } }, 执行器: { 两检: { 开: true, 池: 'deepseek' } } };
-    seed(root2, '待验收', { id: 'H-08', 职能: '程序', 验收方式: '委托' });
-    life.挂起(root2, 'H-08', '制作人');
-    const r2 = await runner.tick(root2, cfg2, UN);
-    assert.ok(!(r2.初检 || []).length, '初检不挑挂起单');
-    assert.ok(!store.find(root2, 'H-08').fm.初检, '不盖初检章');
-  });
-
-  await t('挂起⑤：仲裁不裁（对照组同轮照常被裁）', async () => {
-    const root = makeRoot(); on(root);
-    seed(root, '待定夺', { id: 'H-09', 职能: '程序', 主办: '程序-A' });
-    seed(root, '待定夺', { id: 'H-10', 职能: '程序', 主办: '程序-A' });
-    life.挂起(root, 'H-09', '制作人');
-    const r = await runner.tick(root, CFG, UN);
-    assert.ok(!(r.代裁 || []).includes('H-09'), '挂起单不裁');
-    assert.ok((r.代裁 || []).includes('H-10'), '对照组照裁');
-    assert.equal(store.find(root, 'H-09').state, '待定夺');
+    assert.ok(!(r.代核 || []).includes('H-06'), '带旗单不核');
+    assert.ok((r.代核 || []).includes('H-07'), '对照组照核——证明是挂起旗在拦，不是环节整个没跑');
+    assert.equal(store.find(root, 'H-06').state, '核查', '原位不动');
+    // 仲裁席
+    seed(root, '仲裁', { id: 'H-09', 职能: '程序', 主办: '程序-A', 挂起: { 操作者: '制作人', 时间: 'x' } });
+    seed(root, '仲裁', { id: 'H-10', 职能: '程序', 主办: '程序-A' });
+    const r2 = await runner.tick(root, CFG, UN);
+    assert.ok(!(r2.代裁 || []).includes('H-09'), '带旗单不裁');
+    assert.ok((r2.代裁 || []).includes('H-10'), '对照组照裁');
+    assert.equal(store.find(root, 'H-09').state, '仲裁');
     assert.ok(!store.find(root, 'H-09').fm.代裁, '不盖代裁章');
   });
 
   await t('挂起 · 巡检告警：零派发/打点停滞/零输出三只狗全不叫', async () => {
     const patrol = require('../lib/pm/patrol');
     const root = makeRoot(); patrol.重置(root);
-    // 零派发狗：唯一的就绪单被挂起 → 队列空 → 连续零不累计（否则冻结本身会被当成故障刷屏）
-    seed(root, '待投', { id: 'H-11', 职能: '策划', 放行: true });
-    life.挂起(root, 'H-11', '制作人');
+    // 零派发狗：唯一的就绪单带挂起旗 → 队列空 → 连续零不累计（否则冻结本身会被当成故障刷屏）
+    seed(root, '待派', { id: 'H-11', 职能: '策划', 放行: true, 挂起: { 操作者: '制作人', 时间: 'x' } });
     for (let i = 0; i < 4; i++) {
       const z = patrol.零派发告警(root, CFG, { 执行中: 0, 派发累计: 0 });
       assert.deepEqual(z.就绪, [], '挂起单不进就绪');
@@ -631,8 +708,7 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
       assert.equal(z.告警, null);
     }
     // 打点停滞狗 + 零输出狗：残留会话也不该让制作人收到「它卡住了」
-    seed(root, '在途', { id: 'H-12', 职能: '策划', 主办: '策划-A' });
-    life.挂起(root, 'H-12', '制作人');
+    seed(root, '在途', { id: 'H-12', 职能: '策划', 主办: '策划-A', 挂起: { 操作者: '制作人', 时间: 'x' } });
     const 久 = Date.now() - 45 * 60000;
     const 停 = { id: 'H-12', kind: '执行', 池: 'claude', startedAt: new Date(久).toISOString(), tail: '[进度 1/3 起步]', 收字节: 10 };
     patrol.打点停滞(root, CFG, { 执行中: [停], now: 久 });
@@ -705,107 +781,78 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     还原creds();
   });
 
-  // ---- 施工令-032①（H97）：返修先掐在飞审检（竞态修补，案源 TK-113）----
-  await t('竞态：在飞审检时返修 → 会话被掐、状态迁移干净、无孤儿判词落 fm', async () => {
+  // ---- 施工令-032①（H97）：按单终止掐在飞审检（竞态守卫，案源 TK-113）----
+  // H108 后 返修 只收 完成/待处理（lifecycle 侧），在飞审检的掐线动作由 killTicket 承担——
+  // 这里直接验 killTicket 的行为面：掐会话、清在跑表、留痕、迟到收线进不了收尾。
+  await t('killTicket：在飞审检被掐 → 在跑表清净、流水带因由、迟到收线的守卫条件成立', async () => {
     const root = makeRoot(); on(root);
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
     fs.writeFileSync(path.join(root, '回执', 'K-01.md'), '# 完工报告 K-01\n', 'utf8');
-    seed(root, '待验收', { id: 'K-01', 职能: '程序', 验收方式: '委托' });
-    // 悬挂会话 = 在飞审检（durMs 大，收线遥遥无期）
-    await runner.startWork(root, CFG, store.find(root, 'K-01'), '核查', '代核', { durMs: 600000 });
+    seed(root, '核查', { id: 'K-01', 职能: '程序', 验收方式: '委托' });
+    await runner.startWork(root, CFG, store.find(root, 'K-01'), '核查', '代核', { durMs: 600000 }); // 悬挂在飞
     assert.ok(runner.running.has('核查'), '前置：核查会话确实在飞');
     assert.ok(runner.status(root, CFG).执行中.some((x) => x.id === 'K-01'));
-
-    const r = life.返修(root, 'K-01', '证据不合格，重跑');
-    assert.ok(r.ok, r.error);
-    assert.ok(!runner.running.has('核查'), '返修把在飞审检会话掐了');
+    const 掐 = runner.killTicket(root, 'K-01', '单被返修（H65 同号改写）');
+    assert.equal(掐, true);
+    assert.ok(!runner.running.has('核查'), '会话被掐，席位归还');
     assert.ok(!runner.status(root, CFG).执行中.some((x) => x.id === 'K-01'), '在跑表里不留残影');
-    const cur = store.find(root, 'K-01');
-    assert.equal(cur.state, '草稿', '状态迁移干净');
-    assert.equal(cur.fm.返修轮, 1);
-    assert.equal(cur.fm.放行, false);
-    for (const k of ['核查', '代核', '初检', '主办', '交付时间', '待引擎实证']) assert.ok(!cur.fm[k], `无孤儿判词/残留字段：${k}`);
-    const 流水 = fs.readFileSync(path.join(root, 'journal', fs.readdirSync(path.join(root, 'journal'))[0]), 'utf8');
-    assert.ok(/终止会话 K-01（核查）：单被返修/.test(流水), '掐会话留痕且因由如实（不再一律写「收回/废弃」）：' + 流水);
-    assert.ok(/返修 K-01.*已掐在飞审检会话/.test(流水), '返修流水标注已掐：' + 流水);
+    assert.match(流水(root), /终止会话 K-01（核查）：单被返修/, '掐会话留痕且因由如实（不再一律写「收回/废弃」）');
+    // 迟到收线守卫：child.on('close') 与 finishOkInner 的第一道判据就是 running 表——
+    // 席位已摘，迟到判词连 settleClose 都进不去，回执不被污染
+    assert.ok(!/##\s*核查/.test(fs.readFileSync(path.join(root, '回执', 'K-01.md'), 'utf8')), '回执不被迟到判词污染');
+    assert.equal(store.find(root, 'K-01').state, '核查', '单在原地，等下一轮重审或人工处置');
+    assert.equal(runner.killTicket(root, 'K-01', 'x'), false, '没有在飞会话时掐是无副作用的空操作');
     runner.running.clear();
   });
 
-  await t('竞态：无在飞会话时返修一切照旧（掐是无副作用的，不改流水口径）', async () => {
-    const root = makeRoot(); on(root);
-    seed(root, '执行失败', { id: 'K-02', 职能: '程序', 验收方式: '委托', 失败次数: 2 });
-    const r = life.返修(root, 'K-02', '换思路');
-    assert.ok(r.ok);
-    assert.equal(store.find(root, 'K-02').state, '草稿');
-    assert.equal(store.find(root, 'K-02').fm.失败次数, 2, 'H65 计数保留');
-    const 流水 = fs.readFileSync(path.join(root, 'journal', fs.readdirSync(path.join(root, 'journal'))[0]), 'utf8');
-    assert.ok(!/已掐在飞审检会话/.test(流水), '没掐到就不写掐（流水不撒谎）');
-  });
-
-  await t('竞态：掐在移单之前——被掐会话即便随后收线也进不了 settleClose', async () => {
-    const root = makeRoot(); on(root);
-    fs.mkdirSync(path.join(root, '回执'), { recursive: true });
-    fs.writeFileSync(path.join(root, '回执', 'K-03.md'), '# 完工报告 K-03\n', 'utf8');
-    seed(root, '待验收', { id: 'K-03', 职能: '程序', 验收方式: '委托' });
-    await runner.startWork(root, CFG, store.find(root, 'K-03'), '核查', '代核', { durMs: 600000 });
-    life.返修(root, 'K-03', 'x');
-    // 模拟迟到收线：running 里已无该席位 —— 这正是 child.on('close') 的守卫判据
-    assert.ok(!runner.running.has('核查'));
-    const 回执 = fs.readFileSync(path.join(root, '回执', 'K-03.md'), 'utf8');
-    assert.ok(!/##\s*核查/.test(回执), '回执不被迟到判词污染');
-    assert.equal(store.find(root, 'K-03').state, '草稿');
-    runner.running.clear();
-  });
-
-  // ---- 施工令-032②（H97）：引擎门禁停闸三态 ----
+  // ---- 施工令-032②（H97 · H108 闸位移到核查目录）：引擎门禁停闸三态 ----
   const 门禁正文 = '## 验收标准\n\n1. 编译零错误\n2. 四类测试全绿：`node tools/enginectl.js unity-test --project D:/GitHub/TK`\n';
   const 普通正文 = '## 验收标准\n\n1. 文档落盘\n2. 术语表齐备\n';
 
-  await t('停闸：门禁单核查通过 → 不转完成，停待验收盖候检印 + 流水记「核查过·候引擎实证」', async () => {
+  await t('停闸：门禁单核查通过 → 不转完成，停核查盖候检印 + 流水记「核查过·候引擎实证」', async () => {
     const root = makeRoot(); on(root);
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
     fs.writeFileSync(path.join(root, '回执', 'E-01.md'), '# 完工报告 E-01\n', 'utf8');
-    seed(root, '待验收', { id: 'E-01', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
+    seed(root, '核查', { id: 'E-01', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
     const r = await runner.tick(root, CFG, UN);
     assert.ok((r.代核 || []).includes('E-01'), '核查照常开会话');
     const cur = store.find(root, 'E-01');
-    assert.equal(cur.state, '待验收', '停闸：不转完成');
+    assert.equal(cur.state, '核查', '停闸：不转完成');
     assert.equal(cur.fm.核查.结论, '通过', '核查章照旧盖');
     assert.equal(cur.fm.待引擎实证.命中, 'enginectl');
     assert.ok(fs.readFileSync(path.join(root, '回执', 'E-01.md'), 'utf8').includes('## 核查'), '核验报告照旧入回执');
-    const 流水 = fs.readFileSync(path.join(root, 'journal', fs.readdirSync(path.join(root, 'journal'))[0]), 'utf8');
-    assert.ok(/核查过·候引擎实证 E-01/.test(流水), 流水);
-    assert.ok(!/验收 E-01/.test(流水), '没有偷偷验收');
+    const j = 流水(root);
+    assert.ok(/核查过·候引擎实证 E-01/.test(j), j.slice(-400));
+    assert.ok(!/核查通过 E-01 → 完成/.test(j), '没有偷偷放行');
     assert.ok(require('../lib/inbox').list(root).some((x) => x.类型 === '候引擎实证' && x.单号 === 'E-01'), '呼叫信箱有候检条目');
   });
 
-  await t('放行：候检单走「实证放行」转完成；停闸期间不被再次核查', async () => {
+  await t('放行：候检单走「实证放行」核查→完成；停闸期间不被再次核查', async () => {
     const root = makeRoot(); on(root);
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
     fs.writeFileSync(path.join(root, '回执', 'E-02.md'), '# 完工报告 E-02\n', 'utf8');
-    seed(root, '待验收', { id: 'E-02', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
+    seed(root, '核查', { id: 'E-02', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
     await runner.tick(root, CFG, UN);
     const r2 = await runner.tick(root, CFG, UN);
     assert.ok(!(r2.代核 || []).includes('E-02'), '候检期间不重复开核查会话（代核章已盖）');
-    assert.equal(store.find(root, 'E-02').state, '待验收');
+    assert.equal(store.find(root, 'E-02').state, '核查');
     const r3 = life.实证放行(root, 'E-02', '总监', '137/137 全绿已入回执');
     assert.ok(r3.ok);
     assert.equal(store.find(root, 'E-02').state, '完成');
     assert.equal(store.find(root, 'E-02').fm.实证放行.操作者, '总监');
   });
 
-  await t('直通：非门禁单核查通过 → 照旧直转完成（本补丁零影响）', async () => {
+  await t('直通：非门禁单核查通过 → 照旧直转完成（本闸零影响）', async () => {
     const root = makeRoot(); on(root);
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
     fs.writeFileSync(path.join(root, '回执', 'E-03.md'), '# 完工报告 E-03\n', 'utf8');
-    seed(root, '待验收', { id: 'E-03', 职能: '程序', 验收方式: '委托', body: 普通正文 });
+    seed(root, '核查', { id: 'E-03', 职能: '程序', 验收方式: '委托', body: 普通正文 });
     const r = await runner.tick(root, CFG, UN);
     assert.ok((r.代核 || []).includes('E-03'));
     const cur = store.find(root, 'E-03');
     assert.equal(cur.state, '完成');
     assert.ok(!cur.fm.待引擎实证);
-    const 流水 = fs.readFileSync(path.join(root, 'journal', fs.readdirSync(path.join(root, 'journal'))[0]), 'utf8');
-    assert.ok(/核查通过 E-03 → 验收完成/.test(流水), '既有文案一字不改：' + 流水);
+    assert.ok(/核查通过 E-03 → 完成/.test(流水(root)), '推进边流水如实：' + 流水(root).slice(-300));
   });
 
   await t('停闸可关：config 关掉引擎门禁后，门禁单也直转完成（回滚路）', async () => {
@@ -813,12 +860,12 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
     const cfg = { ...CFG, 执行器: { ...CFG.执行器, 引擎门禁: { 开: false } } };
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
     fs.writeFileSync(path.join(root, '回执', 'E-04.md'), '# 完工报告 E-04\n', 'utf8');
-    seed(root, '待验收', { id: 'E-04', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
+    seed(root, '核查', { id: 'E-04', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
     await runner.tick(root, cfg, UN);
     assert.equal(store.find(root, 'E-04').state, '完成');
   });
 
-  await t('031+032 串起来：门禁单机判初检过 → 同轮核查过 → 停闸候检 → 实证放行落袋', async () => {
+  await t('031+032 串起来：门禁单机判初检过 → 同轮核查过 → 停闸候检 → 实证放行落完成', async () => {
     const root = makeRoot(); on(root);
     const cfg = { ...CFG, 执行器: { 两检: { 开: true } } }; // 机判初检零池
     fs.mkdirSync(path.join(root, '回执'), { recursive: true });
@@ -837,14 +884,14 @@ const NO_QA = { ...CFG, agents: CFG.agents.filter((a) => a.职能 !== 'QA') };
 ## 异议
 无
 `, 'utf8');
-    seed(root, '待验收', { id: 'E-06', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
+    seed(root, '核查', { id: 'E-06', 职能: '程序', 验收方式: '委托', body: 门禁正文 });
     const r = await runner.tick(root, cfg, UN);
-    assert.deepEqual(r.初检, ['E-06'], '机判初检');
+    assert.deepEqual(r.初检, ['E-06'], '机判初检（两检席随深检同驻核查目录）');
     assert.ok((r.代核 || []).includes('E-06'), '同轮进深检');
     const cur = store.find(root, 'E-06');
     assert.equal(cur.fm.初检.判源, '机判');
     assert.equal(cur.fm.核查.结论, '通过');
-    assert.equal(cur.state, '待验收', '门禁停闸兜住了「初检过+核查过」的自动落袋');
+    assert.equal(cur.state, '核查', '门禁停闸兜住了「初检过+核查过」的自动落位');
     assert.equal(cur.fm.待引擎实证.命中, 'enginectl');
     assert.ok(life.实证放行(root, 'E-06', '总监').ok);
     assert.equal(store.find(root, 'E-06').state, '完成');

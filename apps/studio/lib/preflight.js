@@ -56,7 +56,7 @@ function preflight(root, t, cfg2) {
   if (!编制.includes(String(t.fm.职能 || ''))) errs.push(`职能「${t.fm.职能}」不在编制表（${编制.join('/')}）——TK-82 案`);
   if (!/^P[0-3]$/.test(String(t.fm.优先级 || ''))) errs.push(`优先级「${t.fm.优先级}」非 P0-P3——TK-82 案`);
   if (!['开', '关'].includes(String(t.fm.QA || '').trim())) errs.push(`QA「${t.fm.QA}」非 开/关（非标串会被闸门误判）——TK-84 案`);
-  if (!['委托', '保留'].includes(String(t.fm.验收方式 || '').trim())) errs.push(`验收方式「${t.fm.验收方式}」非 委托/保留（非标串两检不接手，单会滞留待验收）——TK-88/83 案`);
+  if (!['委托', '保留'].includes(String(t.fm.验收方式 || '').trim())) errs.push(`验收方式「${t.fm.验收方式}」非 委托/保留（非标串两检不接手，单会滞留审检链）——TK-88/83 案`);
   const 超时分 = ((cfg2 || {}).执行器 || {}).执行超时分钟 ?? 30;
   const 预估分 = parseFloat(t.fm.预计时间) * 60;
   if (预估分 && 预估分 * 2 > 超时分) errs.push(`预计 ${预估分} 分钟 ×2 > 超时闸 ${超时分} 分钟，会话大概率被处决——TK-80 案（调预估或调闸）`);
@@ -66,7 +66,10 @@ function preflight(root, t, cfg2) {
     for (const id of arr) {
       const d = store.find(root, id);
       if (!d) errs.push(`依赖 ${id} 不存在——悬空死锁——TK-79 案`);
-      else if (d.state === '已归档' && d.fm.归档原因) errs.push(`依赖 ${id} 已带因归档（${d.fm.归档原因}），永不落袋——TK-79 案`);
+      // 三大态改造（2026-08-24）：废弃 独立成目录态＝永不落袋；历史废弃单不改史、
+      // 仍以「归档 + 归档原因」躺在归档目录，故带因归档这条继续认。洁净归档＝落袋，依赖已兑现不拦。
+      else if (d.state === '废弃') errs.push(`依赖 ${id} 已废弃，永不落袋——TK-79 案`);
+      else if (d.state === '归档' && d.fm.归档原因) errs.push(`依赖 ${id} 已带因归档（${d.fm.归档原因}），永不落袋——TK-79 案`);
     }
   }
   const body = t.body || '';

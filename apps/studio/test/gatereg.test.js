@@ -38,13 +38,16 @@ t('注册表：文件缺失回落缺省表，不静默变空（条数由缺省�
   assert.ok(表.length >= 16, '至少 16 条：12 条法源闸 + G12 失败分诊 + G13/G14 值守 + G15 码印');
   assert.equal(new Set(表.map((g) => g.闸号)).size, 表.length, '闸号不许重——重号会让 gateKey 撞车，两笔债折成一笔');
   assert.ok(表.every((g) => g.闸号 && g.名称 && g.法源 && g.型 && g.归属), '每条闸五要素齐（含归属）');
-  assert.ok(表.some((g) => g.名称 === '专项关账'), 'H103 专项关账在册——它正是决策台看不见的那个');
+  assert.ok(表.some((g) => g.名称 === '专项验收'), 'H109 验收闸在册（原 G6 专项关账升格叙事）——它正是决策台看不见的那个');
+  assert.ok(表.some((g) => g.闸号 === 'G21' && g.判据 === '待审' && g.归属 === '总监'), 'H108 切单待审闸在册，归总监');
+  assert.equal(表.filter((g) => g.判据 === '专项候关账').length, 1,
+    '专项验收只许一条闸（曾拟 G22 另立，同判据两条闸会让同一笔债出两个 gateKey）');
 });
 
 t('注册表：文件在则以文件为准（人可增补）', () => {
   const root = makeRoot();
   fs.writeFileSync(gr.REG_FILE(root), JSON.stringify([
-    { 闸号: 'X1', 名称: '自定闸', 法源: '测试', 型: '响应', 判据: '待投', 落点: '看板', 按钮: '放行' },
+    { 闸号: 'X1', 名称: '自定闸', 法源: '测试', 型: '响应', 判据: '待派候放行', 落点: '看板', 按钮: '放行' },
   ]), 'utf8');
   const 表 = gr.注册表(root);
   assert.equal(表.length, 1);
@@ -75,19 +78,77 @@ t('换轴实证：专项关账收得到（非工单实体，旧决策台结构�
   assert.equal(r.债[0].停摆小时, 48, '停摆时长按收口时刻算');
 });
 
-t('严判据：委托待验收在等判官，不算你的活；保留待验收才算', () => {
+t('G3 完成候终审（H110/DS-5）：专项委托单等专项级验收不算债；保留单、散单、待实证单才算', () => {
+  // 新「完成」= 在途出口驻留位，判官全过但**未经验收**。专项子单停这儿等兄弟（G6 收它的债），
+  // 不是人闸；散单没有兄弟，永远等不来专项级验收——DS-5：必须单独立债。
   const root = makeRoot();
-  seed(root, '待验收', { id: 'TK-1', 验收方式: '委托' });
-  seed(root, '待验收', { id: 'TK-2', 验收方式: '保留' });
+  seed(root, '完成', { id: 'TK-1', 验收方式: '委托', 专项: 'S-1' });   // 无债：等 S-1 的专项级验收
+  seed(root, '完成', { id: 'TK-2', 验收方式: '保留', 专项: 'S-1' });   // 有债：保留单挂了专项也得制作人过目
+  seed(root, '完成', { id: 'TK-3', 验收方式: '委托' });               // 有债：散单（fm.专项 空）
+  seed(root, '完成', { id: 'TK-4', 验收方式: '委托', 专项: 'S-1', 待引擎实证: { 命中: '引擎门禁' } }); // 有债：等实测证据
   const r = gr.等我(root, { deps: 空 });
-  assert.deepEqual(r.债.map((x) => x.id), ['TK-2'], '委托单不进人闸清单（施工令-038 案源 TK-117）');
+  assert.deepEqual(r.债.map((x) => x.id).sort(), ['TK-2', 'TK-3', 'TK-4'],
+    '专项委托单不进人闸清单——它的验收债在 G6 专项层，按单立债就是双计');
+  assert.ok(r.债.every((x) => x.闸号 === 'G3' && x.归属 === '制作人'), '三笔都是 G3 制作人的债');
 });
 
-t('严判据：有活跃会话的单不算你的活（判官正在跑）', () => {
+t('G3 反向用例：全是专项委托单的完成态零债——完成 ≠ 落袋，但也不许恒真（G14 教训）', () => {
   const root = makeRoot();
-  seed(root, '待验收', { id: 'TK-3', 验收方式: '保留' });
+  seed(root, '完成', { id: 'TK-5', 验收方式: '委托', 专项: 'S-1' });
+  seed(root, '完成', { id: 'TK-6', 验收方式: '委托', 专项: 'S-2' });
+  assert.equal(gr.等我(root, { deps: 空 }).计数, 0, '整目录都在等专项级验收 → 一笔人债都不许报');
+});
+
+t('严判据：有活跃会话的单不算你的活（会话还在收尾，承 TK-117）', () => {
+  const root = makeRoot();
+  seed(root, '完成', { id: 'TK-3', 验收方式: '保留' });
   const r = gr.等我(root, { deps: { ...空, 活跃单: new Set(['TK-3']) } });
   assert.equal(r.计数, 0);
+});
+
+t('G1 项管闸（H109）：待派未放行=欠项管；放行旗竖起当场销债；脏值不当放行', () => {
+  const root = makeRoot();
+  assert.equal(gr.等我(root, { deps: 空 }).计数, 0, '空待派零债（反向：零积压不报债）');
+  seed(root, '待派', { id: 'TK-A1' });                       // 无旗 → 债
+  seed(root, '待派', { id: 'TK-A2', 放行: true });           // 已放行 → 非债
+  seed(root, '待派', { id: 'TK-A3', 放行: 'true' });         // 边界：字符串脏值 ≠ 放行，照报
+  const r = gr.等我(root, { deps: 空 });
+  assert.deepEqual(r.债.map((x) => x.id).sort(), ['TK-A1', 'TK-A3'], '严判 !==true：没批过的单一张不放');
+  assert.ok(r.债.every((x) => x.闸号 === 'G1' && x.归属 === '项管'), 'H109：放行语义移交项管，不再归双');
+  assert.deepEqual(gr.等我(root, { deps: 空, 归属: '项管' }).债.map((x) => x.id).sort(), ['TK-A1', 'TK-A3'],
+    '按归属=项管能单独收到');
+  assert.equal(gr.等我(root, { deps: 空, 归属: '制作人' }).计数, 0, '项管的债不进制作人清单');
+});
+
+t('G2/G12 待处理分水岭（H108 合并目录）：上呈原因在=制作人拍板，不在=总监分诊，恒不双计', () => {
+  const root = makeRoot();
+  assert.equal(gr.等我(root, { deps: 空 }).计数, 0, '空待处理两闸都零债');
+  seed(root, '待处理', { id: 'TK-B1', 上呈原因: '三振上呈：QA 修不好，四件套待裁' });  // 定夺类 → G2
+  seed(root, '待处理', { id: 'TK-B2', 失败原因: 'CLI 超时' });                        // 失败裸单 → G12
+  seed(root, '待处理', { id: 'TK-B3', 上呈原因: '' });                                // 边界：空串=没上呈 → G12
+  const r = gr.等我(root, { deps: 空 });
+  const g2 = r.债.filter((x) => x.闸号 === 'G2');
+  const g12 = r.债.filter((x) => x.闸号 === 'G12');
+  assert.deepEqual(g2.map((x) => x.id), ['TK-B1'], '带上呈原因（四件套）的才等制作人');
+  assert.deepEqual(g12.map((x) => x.id).sort(), ['TK-B2', 'TK-B3'], '没上呈的归总监分诊，空串不算上呈');
+  assert.equal(g2[0].归属, '制作人');
+  assert.ok(g12.every((x) => x.归属 === '总监'));
+  assert.equal(r.计数, 3, '三张单三笔债——互补拆分，一张单绝不在两个闸各出一笔');
+});
+
+t('G21 切单待审（H108）：待审整目录都是总监的债，审过出目录即销', () => {
+  const root = makeRoot();
+  assert.equal(gr.等我(root, { deps: 空 }).计数, 0, '空待审零债（反向）');
+  seed(root, '待审', { id: 'TK-C1', 交付时间: '2026-08-20T00:00:00Z' });
+  const r = gr.等我(root, { 现在: '2026-08-22T00:00:00Z', deps: 空 });
+  assert.equal(r.计数, 1);
+  assert.deepEqual([r.债[0].gateKey, r.债[0].归属, r.债[0].路由, r.债[0].停摆小时],
+    ['G21:TK-C1', '总监', '#/board', 48], '切单审核归总监，落看板待审列，停摆按 fm 时间戳算');
+  // 边界=状态机行为：同一张单挪去 待派（审过）后债自销——判据轴是目录，不是历史
+  fs.renameSync(store.ticketPath(root, '待审', 'TK-C1'), store.ticketPath(root, '待派', 'TK-C1'));
+  const r2 = gr.等我(root, { deps: 空 });
+  assert.equal(r2.债.filter((x) => x.闸号 === 'G21').length, 0, '审过出目录 → G21 债当场归零');
+  assert.deepEqual(r2.债.map((x) => x.闸号), ['G1'], '审过未放行 → 债换主到 G1 项管闸，链条接得上');
 });
 
 t('backlog 不冒充欠债：计划态待办须显式标就绪才算候放行', () => {
@@ -147,13 +208,15 @@ t('禁以通知为数据源：模块不 require inbox（硬约束①的机器判
   assert.ok(!/require\(['"].*inbox/.test(代码), '收件箱是广播不是账本——377 条未读即实证');
 });
 
-t('归属分流：总监的闸不报进制作人清单（混数就说不清欠的是谁的）', () => {
+t('归属分流：总监/项管的闸不报进制作人清单（混数就说不清欠的是谁的）', () => {
   const root = makeRoot();
-  seed(root, '执行失败', { id: 'TK-90' });
-  seed(root, '待验收', { id: 'TK-91', 验收方式: '保留' });
+  seed(root, '待处理', { id: 'TK-90', 失败原因: 'CLI 崩溃' });   // G12 总监
+  seed(root, '完成', { id: 'TK-91', 验收方式: '保留' });          // G3 制作人
+  seed(root, '待派', { id: 'TK-92' });                            // G1 项管
   assert.deepEqual(gr.等我(root, { deps: 空, 归属: '制作人' }).债.map((x) => x.id), ['TK-91']);
   assert.deepEqual(gr.等我(root, { deps: 空, 归属: '总监' }).债.map((x) => x.id), ['TK-90'], '失败分诊归总监');
-  assert.equal(gr.等我(root, { deps: 空 }).计数, 2, '不传归属即全收');
+  assert.deepEqual(gr.等我(root, { deps: 空, 归属: '项管' }).债.map((x) => x.id), ['TK-92'], '放行归项管（H109）');
+  assert.equal(gr.等我(root, { deps: 空 }).计数, 3, '不传归属即全收');
 });
 
 t('值守两闸：判据落在产出物，不落在「定时器挂没挂」（2026-08-21 案）', () => {
@@ -276,7 +339,7 @@ t('每条闸自带路由，且随债下发（2026-08-21 收件箱死链族）', 
     ideas: { list: () => [{ id: 'I-abc', 文本: '做个存档系统', t: '2026-08-20T00:00:00Z' }] },
     值守: { 班档目录: (r) => path.join(r, '__无__'), 瞭望塔目录: (r) => path.join(r, '__无__') },
     码印: { 比对: () => ({ 一致: true }), 源码改动时刻: () => null }, 配置: () => ({}) };
-  seed(root, '待验收', { id: 'TK-9', 验收方式: '保留' });
+  seed(root, '完成', { id: 'TK-9', 验收方式: '保留' });
   const 债 = gr.等我(root, { deps: 空 }).债;
   const g3 = 债.find((d) => d.闸号 === 'G3');
   const g7 = 债.find((d) => d.闸号 === 'G7');
@@ -303,11 +366,12 @@ t('注册表路由随债下发 · 全响应闸实证：每笔债的 路由 = 注
   fs.writeFileSync(path.join(塔, '心跳.txt'), '2026-08-20T23:00:00Z', 'utf8');   // G20：距「现在」1 小时 > 90s
   fs.writeFileSync(path.join(账, '台账.json.损毁-1.json'), '{}', 'utf8');          // G18：退空现场
   fs.writeFileSync(path.join(账, '台账.json.待人裁'), '{}', 'utf8');
-  // 工单四态（G1/G2/G3/G12）走真盘，不注桩——路由带 {id} 的正是这几条
-  seed(root, '待投', { id: 'TK-1' });
-  seed(root, '待定夺', { id: 'TK-2' });
-  seed(root, '待验收', { id: 'TK-3', 验收方式: '保留' });
-  seed(root, '执行失败', { id: 'TK-4' });
+  // 工单五闸（G1/G2/G3/G12/G21）走真盘，不注桩——路由带 {id} 的正是这几条
+  seed(root, '待审', { id: 'TK-21' });                                      // G21 切单待审
+  seed(root, '待派', { id: 'TK-1' });                                        // G1 未放行
+  seed(root, '待处理', { id: 'TK-2', 上呈原因: '三振上呈，四件套待裁' });     // G2 定夺类
+  seed(root, '完成', { id: 'TK-3', 验收方式: '保留' });                       // G3 保留单终审
+  seed(root, '待处理', { id: 'TK-4', 失败原因: 'CLI 超时' });                 // G12 失败裸单
   const 待办uuid = '68ad57db-9ccc-4135-b5e9-fac139b526f0';   // 待办的 id 是 uuid，怎么猜都猜不成工单号
   const 全 = {
     specials: { list: () => [{ id: 'S-1', fm: { 名称: '编辑器专项', 状态: '收口', 关账时间: null, 收口时间: '2026-08-18T00:00:00Z', 管线: 'P-1', 特性: 'F-3' } }] },
@@ -337,7 +401,7 @@ t('注册表路由随债下发 · 全响应闸实证：每笔债的 路由 = 注
   //    自己算一遍期望值，改坏模板两边一起变，判据照绿。故期望值在测试里独立写死一张表：
   //    新闸没写进来先红（逼人当场想清它该跳哪儿），改坏任何一条模板也红。
   const 期望路由 = {
-    G1: '#/board', G2: '#/t/TK-2', G3: '#/t/TK-3', G12: '#/board',
+    G1: '#/board', G2: '#/t/TK-2', G3: '#/t/TK-3', G12: '#/board', G21: '#/board',
     G6: '#/tickets/P-1/F-3',      // 专项挂 P-1/F-3 → 第三层那页，spCard 与关账签字钮都在那儿
     G7: '#/relay', G8: '#/relay', G10: '#/wiki',
     G13: '#/', G14: '#/', G15: '#/', G16: '#/', G17: '#/', G18: '#/', G20: '#/',
@@ -568,7 +632,7 @@ t('端点实跑 · 人闸超时小时=0 时 /api/attn 必须下发「关闭升�
   const cfg = JSON.parse(fs.readFileSync(path.join(root, 'studio.config.json'), 'utf8'));
   cfg.闸值 = { ...(cfg.闸值 || {}), 人闸超时小时: 0 };
   fs.writeFileSync(path.join(root, 'studio.config.json'), JSON.stringify(cfg), 'utf8');
-  seed(root, '待验收', { id: 'TK-77', 验收方式: '保留' });   // 造一笔真债（更新时间 2026-07-08，早就该逾期）
+  seed(root, '完成', { id: 'TK-77', 验收方式: '保留' });   // 造一笔真债（G3 保留单终审；更新时间 2026-07-08，早就该逾期）
   const code = `
     require(${JSON.stringify(path.join(__dirname, '..', 'server.js'))}).start().then(async ({ server: srv }) => {
       const r = await fetch('http://127.0.0.1:${port}/api/attn');

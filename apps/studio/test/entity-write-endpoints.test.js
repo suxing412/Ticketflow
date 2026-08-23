@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const { execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const { makeRoot, 收尾 } = require('./helper');
+const { makeRoot, seed, 收尾 } = require('./helper');
 
 let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
 console.log('实体写口端点测试（#14 开线 / #59 特性审核）');
@@ -83,6 +83,28 @@ t('#59 特性审核：POST /api/features/审核 真把待审推成活跃；退�
   // 真落盘
   const 盘 = fs.readFileSync(path.join(root, '特性', 'F-1.md'), 'utf8');
   assert.match(盘, /状态: 活跃/, '审核结果要真写进 特性/F-1.md');
+});
+
+t('H108 放行写口=项管闸：操作者非 项管/总监 一律 400；项管放行 fm.放行=true 真上盘；重复放行拒', () => {
+  const root = makeRoot();
+  seed(root, '待派', { id: 'TK-9' });
+  seed(root, '在途', { id: 'TK-10', 主办: '策划' });
+  const o = 起(root, 4963, `{
+    无人: await P('/api/act/放行', { id: 'TK-9' }),
+    制作人: await P('/api/act/放行', { id: 'TK-9', 操作者: '制作人' }),
+    项管: await P('/api/act/放行', { id: 'TK-9', 操作者: '项管' }),
+    重复: await P('/api/act/放行', { id: 'TK-9', 操作者: '总监' }),
+    错态: await P('/api/act/放行', { id: 'TK-10', 操作者: '项管' }),
+  }`);
+  assert.equal(o.无人[0], 400, '不带操作者必须拒——放行是项管闸不是无主按钮');
+  assert.equal(o.制作人[0], 400, '制作人不在放行操作域（需求走 /api/pm/draft 委托）：' + JSON.stringify(o.制作人[1]));
+  assert.equal(o.项管[0], 200, '项管放行必须走通：' + JSON.stringify(o.项管[1]));
+  assert.equal(o.重复[0], 400, '已放行的单不许重复放行（life.放行 拒）：' + JSON.stringify(o.重复[1]));
+  assert.equal(o.错态[0], 400, '非待派单不可放行：' + JSON.stringify(o.错态[1]));
+  // 真上盘：放行是 fm 标记不是目录跳变——单还住 待派，frontmatter 里旗已竖
+  const 盘 = fs.readFileSync(path.join(root, '待派', 'TK-9.md'), 'utf8');
+  assert.match(盘, /放行: true/, '放行旗要真写进 待派/TK-9.md 的 frontmatter');
+  assert.ok(!fs.existsSync(path.join(root, '池', 'TK-9.md')), '放行不再是目录跳变（池已并入待派）');
 });
 
 收尾('', passed);

@@ -5,22 +5,37 @@ const fs = require('fs');
 const path = require('path');
 const matter = require('gray-matter');
 
-// 状态全集与合法转移（D13 状态机 + D31 执行失败态）。目录名即状态名。
-const STATES = ['草稿', '待投', '池', '在途', '质检', '待验收', '待定夺', '执行失败', '完成', '已归档'];
-const TERMINAL = ['完成', '已归档'];
+// 状态全集与合法转移（H108 三大态状态机，2026-08-24 制作人拍板取代十态；边表逐边溯源旧边）。
+// 目录名即状态名。大态是分组视图不是目录——账上只有 12 个细分态。
+const STATES = [
+  '待审', '待派', '待处理', '待重派',        // 待办态
+  '在途', '初检', '核查', '仲裁', '完成',    // 在途态（完成=出口驻留位：判官全过，停在验收闸前等专项级验收）
+  '归档', '挂起', '废弃',                    // 结束态（挂起是唯一可逆终态；删除不存在）
+];
+const 大态 = { 待办: ['待审', '待派', '待处理', '待重派'], 在途: ['在途', '初检', '核查', '仲裁', '完成'], 结束: ['归档', '挂起', '废弃'] };
+const 大态of = (s) => (大态.待办.includes(s) ? '待办' : 大态.在途.includes(s) ? '在途' : 大态.结束.includes(s) ? '结束' : null);
+const TERMINAL = ['归档', '废弃'];   // 挂起可逆（唯一出边→待重派），不算真终态；完成不是终态
+// 边表（每条注明旧边来源；DS-1/CX-3 两轮外审后补全封闭性）：
 const TRANSITIONS = {
-  草稿: ['待投', '已归档'],                 // 定稿→待投；废弃
-  待投: ['池', '草稿', '已归档', '在途'],   // 投池释放；退回改；废弃；H49 派发（待投=待起，派发直入在途）
-  池: ['在途', '待投', '草稿', '已归档'],   // 领单；撤回；废弃
-  在途: ['质检', '待验收', '池', '执行失败', '已归档'], // 交产出；收回退池；执行失败(D31 本地入位)；废弃
-  质检: ['待验收', '在途', '待定夺', '执行失败', '已归档'], // QA过；自修；修不好上交；QA执行失败
-  待定夺: ['待验收', '在途', '已归档'],     // 接受→待验收；给方向→在途；打回→归档(+新单)
-  执行失败: ['池', '待定夺', '已归档', '草稿'], // D31 三出路 + H65 返修（同号回草稿改写）
-  待验收: ['完成', '已归档', '草稿'],       // 通过→完成；打回归档；H65 返修（同号回草稿改写）
-  完成: ['已归档'],  // 唯一入口=制作人推翻重做（翻案专权，2026-08-02 用户批准）；完成不走其它路
-  已归档: [],
+  待审: ['待派', '废弃'],                       // 总监审过→待派〔原 草稿→待投〕；废弃
+  待派: ['在途', '待审', '废弃', '挂起'],        // 项管闸派发〔原 池→在途 + 待投→在途〕；退回改〔原 待投→草稿〕；废弃；挂起
+  待处理: ['待重派', '待审', '完成', '废弃'],   // +完成：定夺「接受」出路（原 待定夺→待验收）            // 分诊回队〔原 执行失败→池〕；返修重拆〔原 H65 执行失败→草稿〕；废弃
+  待重派: ['在途', '废弃', '挂起'],              // 重派（带重投标记）；废弃；挂起
+  在途: ['初检', '核查', '完成', '待派', '待处理', '废弃', '挂起'], // QA开交产出→初检〔原 在途→质检〕；QA关简检→核查；免检保留单→完成〔原 在途→待验收〕；收回→待派〔原 在途→池〕；执行失败→待处理〔原 在途→执行失败〕；废弃；挂起
+  初检: ['核查', '在途', '待处理', '废弃'],      // 过→核查；自修→在途〔原 质检→在途〕；三振→待处理〔原 质检→待定夺〕；废弃
+  核查: ['完成', '仲裁', '在途', '待处理', '废弃'], // 过→完成〔原 质检→待验收〕；争议→仲裁；打回自修→在途；上交→待处理；废弃
+  仲裁: ['完成', '待处理', '在途', '废弃'],      // 裁过→完成；裁不了上呈→待处理〔原→待定夺〕；打回→在途；废弃
+  完成: ['归档', '待重派', '待审'],              // 专项验收过级联→归档〔原 完成→已归档〕；验收不过→待重派〔DS-1 补边〕；同号返修→待审〔原 待验收→草稿，H65〕
+  挂起: ['待重派'],                             // 复活（人闸：制作人/总监专权；重投/推迟计数不清零，挂起不算重投）
+  归档: [],
+  废弃: [],
 };
 
+// 移动后钩子（P2 触发链的底座，CX-9）：所有目录迁移的唯一中心是 move()，钩子挂在这儿
+// 保证「任何三大态切换」都有事件出口。挂接方注册回调；钩子失败绝不打断转移本身。
+const 移动钩子 = [];
+function on移动(fn) { if (typeof fn === 'function') 移动钩子.push(fn); }
+function 触移动(ev) { for (const f of 移动钩子) { try { f(ev); } catch { /* 钩子炸了不还手 */ } } }
 function stateDir(root, state) { return path.join(root, state); }
 function ticketPath(root, state, id) { return path.join(stateDir(root, state), `${id}.md`); }
 
@@ -127,6 +142,7 @@ function move(root, id, from, to, mutator, nowIso) {
   try {
     fs.writeFileSync(dst, serialize(fm, parsed.body), 'utf8');
     fs.unlinkSync(claimTmp);
+    触移动({ id, from, to, 大态from: 大态of(from), 大态to: 大态of(to), t: fm.更新时间 });
     return { ok: true, id, from, to, file: dst };
   } catch (e) {
     // 回滚抢占
@@ -147,17 +163,20 @@ function update(root, id, mutator, nowIso) {
   return { ok: true, id, state: t.state };
 }
 
-// 新建草稿单。
-function create(root, id, fm, body) {
-  const dst = ticketPath(root, '草稿', id);
+// 新建单。H108 后入口态=待审（切完单等总监审核）；opts.初始态 允许指定（返工/工具用），
+// 但只认 STATES 里的合法态——不许借这个口子造野目录。
+function create(root, id, fm, body, opts = {}) {
+  const 初 = opts.初始态 && STATES.includes(opts.初始态) ? opts.初始态 : '待审';
+  const dst = ticketPath(root, 初, id);
   if (fs.existsSync(dst) || find(root, id)) return { ok: false, error: `编号已存在：${id}` };
-  fs.mkdirSync(stateDir(root, '草稿'), { recursive: true });
+  fs.mkdirSync(stateDir(root, 初), { recursive: true });
   fs.writeFileSync(dst, serialize(fm, body || ''), 'utf8');
-  return { ok: true, id, state: '草稿', file: dst };
+  return { ok: true, id, state: 初, file: dst };
 }
 
 module.exports = {
   STATES, TERMINAL, TRANSITIONS,
   stateDir, ticketPath, ensureDirs, parse, serialize,
   find, list, snapshot, isLegal, move, update, create, 双态,
+  大态, 大态of, on移动,
 };

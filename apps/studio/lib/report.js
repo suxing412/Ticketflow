@@ -73,8 +73,13 @@ function aggregate(root, opts = {}) {
   return {
     项目: 项目 || null, // 页面据它如实标注这份数是谁的——不标就会被当成全工作室
     总览: {
+      // 落袋口径（H108 后）：报表给制作人看的「落袋」= 做完了的 = **完成 + 归档**。
+      // 与验收的区别写清：完成 = 判官全过、驻留验收闸前（未经专项级验收，H110）；
+      // 归档 = 验收过、真落袋。两个数分开报，直觉不丢、验收状态也看得见。
+      // 废弃/挂起 都不算做完（砍掉的和冻着的），不进这两格。
       总单数: 本账.length, 完成: 本账.filter((r) => r.state === '完成').length,
-      已归档: 本账.filter((r) => r.state === '已归档').length,
+      归档: 本账.filter((r) => r.state === '归档').length,
+      已归档: 本账.filter((r) => r.state === '归档').length, // 过渡别名：public/app.js 报表页仍读 o.已归档，前端切新键后删
       实际h合计: Math.round(sum(worked, (x) => x.实际h) * 10) / 10,
       预估偏差pct: 偏差, // 100=踩点，>100=实际超预计
       自修总轮: sum(本账, (x) => x.自修次数),
@@ -85,11 +90,12 @@ function aggregate(root, opts = {}) {
     按职能: group(worked, '职能'), 按主办: group(worked.filter((r) => r.主办), '主办'),
     按池: group(worked.filter((r) => r.执行池), '执行池'), 按项目: group(worked, '项目'),
     每日: days,
-    明细: 本账.filter((r) => r.实际h != null || r.state === '完成' || r.state === '已归档')
+    // 明细收「做完了的」：完成+归档（落袋直觉口径，同上）——废弃/挂起 不进明细。
+    明细: 本账.filter((r) => r.实际h != null || r.state === '完成' || r.state === '归档')
       .sort((a, b) => String(b.交付日 || '').localeCompare(String(a.交付日 || ''))).slice(0, 100),
     // 明细被上限截过没有——页面据它如实说明「更早的未取」。
     // 静默截断读起来跟「一共就这些」一模一样，那正是本次体检要治的那类。
-    明细满: 本账.filter((r) => r.实际h != null || r.state === '完成' || r.state === '已归档').length > 100,
+    明细满: 本账.filter((r) => r.实际h != null || r.state === '完成' || r.state === '归档').length > 100,
   };
 }
 

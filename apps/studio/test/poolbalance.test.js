@@ -156,7 +156,7 @@ const 找 = (list, 位) => list.find((d) => d.位 === 位);
 
   await t('要件3 品味锁在 API 层落地：项管切换被拒 4xx + 台账留痕（不依赖提示词自律）', async () => {
     const root = makeRoot(); const cfg = CFG();
-    seed(root, '待投', { id: 'TK-P1', 职能: '程序', 品味敏感: '是', 验收方式: '委托' });
+    seed(root, '待派', { id: 'TK-P1', 职能: '程序', 品味敏感: '是', 验收方式: '委托' });
     const r = PB.执行动作(root, cfg, { 动作: '切换', 位: '执行·程序', 池: 'claude', 预期版本: PB.版本(cfg), 操作者: '项管', 理由: '试图绕锁' });
     assert.equal(r.ok, false);
     assert.equal(r.码, 403);
@@ -373,7 +373,7 @@ const 找 = (list, 位) => list.find((d) => d.位 === 位);
 
   await t('要件9 人工覆盖不受品味锁拦（品味决定只属于人）；项管的同一动作被拦', async () => {
     const root = makeRoot(); const cfg = CFG();
-    seed(root, '待投', { id: 'TK-A1', 职能: '美术', 验收方式: '委托' });
+    seed(root, '待派', { id: 'TK-A1', 职能: '美术', 验收方式: '委托' });
     const 项管 = PB.执行动作(root, cfg, { 动作: '切换', 位: '执行·美术', 池: 'codex', 预期版本: PB.版本(cfg), 操作者: '项管' });
     assert.equal(项管.码, 403); assert.equal(项管.品味锁, true);
     const 人 = PB.执行动作(root, cfg, { 动作: '人工覆盖', 位: '执行·美术', 池: 'codex', 预期版本: PB.版本(cfg), 操作者: '制作人', 理由: '这批美术单只是切图，走便宜池' });
@@ -416,7 +416,7 @@ const 找 = (list, 位) => list.find((d) => d.位 === 位);
     // 验收方式显式给 委托：helper 的默认是 保留，而 保留 是品味锁的命中条之一（要件 3），
     // 不写清楚这两张单就会连带把程序位锁死，测的就不是快照了。
     seed(root, '在途', { id: 'TK-R1', 职能: '程序', 验收方式: '委托', 执行池: 'codex', 主办: '程序·TK-R1', 领单时间: '2026-08-11T19:00:00Z' });
-    seed(root, '待投', { id: 'TK-R2', 职能: '程序', 验收方式: '委托', 放行: true });
+    seed(root, '待派', { id: 'TK-R2', 职能: '程序', 验收方式: '委托', 放行: true });
     const r = PB.执行动作(root, cfg, { 动作: '切换', 位: '执行·程序', 池: 'claude', 预期版本: PB.版本(cfg), 操作者: '项管', 理由: 'codex 快满了' });
     assert.equal(r.ok, true, r.error);
     assert.equal(store.find(root, 'TK-R1').fm.执行池, 'codex', '在途会话沿用派发时快照，不中途换马');

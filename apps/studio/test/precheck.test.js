@@ -50,7 +50,7 @@ const 好回执 = `# 完工报告 X-01
 function 铺(root, id, 回执文本, opts = {}) {
   fs.mkdirSync(path.join(root, '回执'), { recursive: true });
   fs.writeFileSync(path.join(root, '回执', `${id}.md`), 回执文本, 'utf8');
-  seed(root, '待验收', { id, 职能: '程序', 验收方式: '委托', body: opts.body || 单据正文, ...(opts.fm || {}) });
+  seed(root, '核查', { id, 职能: '程序', 验收方式: '委托', body: opts.body || 单据正文, ...(opts.fm || {}) }); // H108：初检/核查会话同驻「核查」目录（原 待验收）
   return store.find(root, id);
 }
 
@@ -202,7 +202,7 @@ await t('空回执 / 缺回执：直接不过，不做后续判项', () => {
   assert.equal(ra.初检, '不过');
   assert.ok(ra.缺项[0].includes('空文件'));
 
-  seed(root, '待验收', { id: 'X-22', 职能: '程序', 验收方式: '委托', body: 单据正文 });
+  seed(root, '核查', { id: 'X-22', 职能: '程序', 验收方式: '委托', body: 单据正文 });
   const rb = precheck.run(root, store.find(root, 'X-22'), CFG);
   assert.equal(rb.初检, '不过');
   assert.ok(rb.缺项[0].includes('不存在'));
@@ -476,13 +476,13 @@ await t('接线：初检过 → 同轮直接进深检（下游核查零改动就
   assert.equal(store.find(root, 'R-02').fm.核查.结论, '通过', '核查章照旧');
 });
 
-await t('接线：机判不过 → 单留待验收、不烧深检、信道有急件', async () => {
+await t('接线：机判不过 → 单留核查、不烧深检、信道有急件', async () => {
   const root = makeRoot(); on(root);
   铺(root, 'R-03', '# 完工报告 R-03\n（还没写完）\n');
   const r = await runner.tick(root, 两检开, { durMs: 0 });
   assert.deepEqual(r.初检, ['R-03']);
   const cur = store.find(root, 'R-03');
-  assert.equal(cur.state, '待验收', '不过留原位');
+  assert.equal(cur.state, '核查', '不过留原位');
   assert.equal(cur.fm.初检.结论, '不过');
   assert.ok(cur.fm.初检.缺项.length, '缺项落库');
   assert.ok(!(r.代核 || []).includes('R-03'), '同轮不进深检');
@@ -509,7 +509,7 @@ await t('接线：机判自身抛异常 → 按判官失败计数，不盖章不
   try {
     await runner.tick(root, 两检开, { durMs: 0 });
     const cur = store.find(root, 'R-05');
-    assert.equal(cur.state, '待验收');
+    assert.equal(cur.state, '核查');
     assert.ok(!cur.fm.初检, '失败不盖章');
     assert.equal(cur.fm.初检失败次数, 1, '计失败次数，下轮重试');
   } finally { precheck.run = 原; }

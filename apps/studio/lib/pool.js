@@ -1,5 +1,6 @@
-// pool.js — 拉取制核心（D3）：在池排序 + agent 领单（原子）。
-// 领单 = store.move(池→在途)，改名的原子性保证并发同抢只有一个成功。
+// pool.js — 拉取制核心（D3）：待派队列排序 + agent 领单（原子）。
+// H108 三大态状态机（2026-08-24）：「池」目录退役并入「待派」，放行降为 fm 标记（项管闸语义）——
+// 可领集合 = 待派目录里 fm.放行===true 的单。领单 = store.move(待派→在途)，改名原子性保证并发同抢只有一个成功。
 const store = require('./core/store');
 const gates = require('./gates');
 
@@ -26,7 +27,10 @@ function poolFor(cfg, 职能) {
 // ---- 关键路径（D43⑤）：未完成工单的依赖图上，预计时间加权的最长链 ----
 // 与流程视图同一口径（红链）。环上节点不参与（波次算法同款兜底）。
 function criticalSet(root) {
-  const done = new Set(['完成', '已归档']);
+  // H108 终态集合逐处按语义判：这里问的是「这张单还欠不欠工」。完成=判官全过（活已做完，
+  // 只等专项级验收）、归档=落袋、废弃=判死——三者都不再欠工，不参与未完成依赖图。
+  // 挂起是目录态但活还欠着（可逆），照旧留在图里（与旧 fm 标记时代行为一致）。
+  const done = new Set(['完成', '归档', '废弃']);
   const all = [];
   for (const s of store.STATES) if (!done.has(s)) all.push(...store.list(root, s));
   const byId = Object.fromEntries(all.map((t) => [t.id, t]));
@@ -49,9 +53,12 @@ function criticalSet(root) {
   return cp.path.length >= 2 ? new Set(cp.path) : new Set();
 }
 
-// 在池单，可选按职能过滤。排序：优先级 > 红链（D43⑤ 同优先级内关键路径先走，可用 执行器.红链优先=false 关）> 创建时间。
+// 可领单（H108：待派目录 × 放行标记），可选按职能过滤。放行不是目录跳变而是项管闸的 fm 标记——
+// 没盖放行旗的待派单对拉取制不可见。排序：优先级 > 红链（D43⑤ 同优先级内关键路径先走，
+// 可用 执行器.红链优先=false 关）> 创建时间。
 function listPool(root, cfg, 职能) {
-  let items = store.list(root, '池');
+  // 待重派同盘（H113/lifecycle 口径注）：重投/复活回队的单落 待重派 且带放行旗，与 dispatch.readySet 同一张就绪面。
+  let items = [...store.list(root, '待派'), ...store.list(root, '待重派')].filter((t) => t.fm.放行 === true);
   if (职能) items = items.filter((t) => t.fm.职能 === 职能);
   const crit = (cfg && cfg.执行器 && cfg.执行器.红链优先 === false) ? new Set() : criticalSet(root);
   items.sort((a, b) => (PRI[a.fm.优先级] ?? 9) - (PRI[b.fm.优先级] ?? 9)
@@ -60,16 +67,21 @@ function listPool(root, cfg, 职能) {
   return items;
 }
 
-// 在途口径（占用在途上限的状态）：在途 + 质检 + 待定夺（都还没交还给你我做终态决定）。
+// 在途口径（占用在途上限/执行槽的状态）：在途 + 初检 + 核查 + 仲裁。
+// H108 统计口径：**排除完成**——完成是在途大态的出口驻留位（判官全过等专项级验收），
+// 不占执行槽；把它算进去会让并发/容量统计随积压的待验收单虚高。
 function inFlight(root) {
-  return [...store.list(root, '在途'), ...store.list(root, '质检'), ...store.list(root, '待定夺')];
+  return [...store.list(root, '在途'), ...store.list(root, '初检'), ...store.list(root, '核查'), ...store.list(root, '仲裁')];
 }
 
 function depsSatisfied(root, t) {
   const deps = t.fm.依赖;
   if (!deps) return true;
   const arr = Array.isArray(deps) ? deps : String(deps).split(/[，,\s]+/).filter(Boolean);
-  return arr.every((id) => { const d = store.find(root, id); return d && d.state === '完成'; });
+  // H108 语义（与 dispatch.depsDone 同口径，两处不许飘）：完成=判官全过做完等关账即满足；
+  // 归档且无归档原因=正常落袋满足；带归档原因（废弃/打回/推翻替代）的归档与 废弃 目录都不满足
+  // （依赖悬空要改挂，废弃() 侧有告警）。
+  return arr.every((id) => { const d = store.find(root, id); return d && (d.state === '完成' || (d.state === '归档' && !d.fm.归档原因)); });
 }
 
 // 领单：某 agent 领本职能队首可领单。校验 职能匹配 / 闸门额度锁 / 在途上限 / 一人一张 / 依赖。
@@ -98,11 +110,11 @@ async function claim(root, cfg, agentId, now) {
   for (const t of listPool(root, cfg, 职能)) {
     if (!depsSatisfied(root, t)) continue;
     if (t.fm.待复核) continue; // D36：上游改版未核对的单不派活
-    if (t.fm.挂起) continue;   // 施工令-021：挂起单不给领（拉取制这条路同样得堵，否则派发制堵了它还能从池里被捞走）
-    const r = store.move(root, t.id, '池', '在途', (fm) => {
+    if (t.fm.挂起) continue;   // H108 后挂起是目录态（待派单挂起即搬进 挂起 目录）；此处 fm 旗判据留作迁移期兜底
+    const r = store.move(root, t.id, t.state, '在途', (fm) => { // t.state ∈ 待派/待重派，两条边都在边表上
       fm.主办 = agentId; fm.执行池 = poolName; fm.领单时间 = nowIso;
     }, nowIso);
-    if (r.ok) return { ok: true, id: t.id, agent: agentId, 执行池: poolName };
+    if (r.ok) return { ok: true, id: t.id, agent: agentId, 执行池: poolName, 自: t.state };
     // r 失败多为被并发抢走 → 试队列下一张
   }
   return { ok: false, error: '无可领单（池空 / 依赖未满足 / 都被抢走）', empty: true };

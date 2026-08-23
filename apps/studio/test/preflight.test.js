@@ -14,7 +14,7 @@ t('标题 >24 字 → 警示（不进拦截项）', () => {
   const root = makeRoot();
   const 长题 = '监制台工单卡片标题短题制与工程队状态卡兜底改造施工';
   assert.ok([...长题].length > 24, '样例标题确实超 24 字');
-  seed(root, '草稿', { id: 'W-1', title: 长题, 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 管线: 'P-1', body: 正文 });
+  seed(root, '待审',{ id: 'W-1', title: 长题, 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 管线: 'P-1', body: 正文 });
   const tk = store.find(root, 'W-1');
   const w = warnings(tk);
   assert.equal(w.length, 1, '产生一条警示');
@@ -24,7 +24,7 @@ t('标题 >24 字 → 警示（不进拦截项）', () => {
 
 t('标题含 ①② 类枚举符 → 警示（不进拦截项）', () => {
   const root = makeRoot();
-  seed(root, '草稿', { id: 'W-2', title: '短题制①源头②预检', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 管线: 'P-1', body: 正文 });
+  seed(root, '待审',{ id: 'W-2', title: '短题制①源头②预检', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 管线: 'P-1', body: 正文 });
   const tk = store.find(root, 'W-2');
   const w = warnings(tk);
   assert.equal(w.length, 1);
@@ -34,7 +34,7 @@ t('标题含 ①② 类枚举符 → 警示（不进拦截项）', () => {
 
 t('两条同时命中 → 两条警示，仍不拦截', () => {
   const root = makeRoot();
-  seed(root, '草稿', { id: 'W-3', title: '监制台工单卡片标题①短题制与②工程队状态卡兜底改造', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 管线: 'P-1', body: 正文 });
+  seed(root, '待审',{ id: 'W-3', title: '监制台工单卡片标题①短题制与②工程队状态卡兜底改造', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 管线: 'P-1', body: 正文 });
   const tk = store.find(root, 'W-3');
   assert.equal(warnings(tk).length, 2);
   assert.deepEqual(preflight(root, tk, CFG), []);
@@ -48,7 +48,7 @@ t('合规短标题 → 零警示', () => {
 
 t('短题制警示适用全部单型：专项父单不预检但照样出警示', () => {
   const root = makeRoot();
-  seed(root, '草稿', { id: 'W-4', title: '监制台工单卡片标题短题制与工程队状态卡兜底改造施工', 父单类型: '专项', 职能: '无此职能', 管线: 'P-1', body: '' });
+  seed(root, '待审',{ id: 'W-4', title: '监制台工单卡片标题短题制与工程队状态卡兜底改造施工', 父单类型: '专项', 职能: '无此职能', 管线: 'P-1', body: '' });
   const tk = store.find(root, 'W-4');
   assert.deepEqual(preflight(root, tk, CFG), [], '专项父单不预检（既有行为不变）');
   assert.equal(warnings(tk).length, 1, '短题制不放过父单');
@@ -58,7 +58,7 @@ t('短题制警示适用全部单型：专项父单不预检但照样出警示',
 // 铁律同短题制：只警示不拦截；归属可从父链继承，继承到了就不该报。
 t('无管线且无父单 → 缺管线归属警示（不进拦截项）', () => {
   const root = makeRoot();
-  seed(root, '草稿', { id: 'W-10', title: '海岸线钉零', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', body: 正文 });
+  seed(root, '待审',{ id: 'W-10', title: '海岸线钉零', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', body: 正文 });
   const tk = store.find(root, 'W-10');
   const w = warnings(tk, root);
   assert.equal(w.length, 1, '只该出管线一条，实得：' + w.join('｜'));
@@ -68,21 +68,21 @@ t('无管线且无父单 → 缺管线归属警示（不进拦截项）', () => 
 
 t('本单写了管线 → 零警示', () => {
   const root = makeRoot();
-  seed(root, '草稿', { id: 'W-11', title: '海岸线钉零', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 管线: 'P-3', body: 正文 });
+  seed(root, '待审',{ id: 'W-11', title: '海岸线钉零', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 管线: 'P-3', body: 正文 });
   assert.deepEqual(warnings(store.find(root, 'W-11'), root), []);
 });
 
 t('本单没写但父单有章 → 继承算有归属，零警示', () => {
   const root = makeRoot();
-  seed(root, '草稿', { id: 'W-12', title: '地图施工专项', 父单类型: '专项', 管线: 'P-3', body: '' });
-  seed(root, '草稿', { id: 'W-13', title: '海岸线钉零', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 父单: 'W-12', body: 正文 });
+  seed(root, '待审',{ id: 'W-12', title: '地图施工专项', 父单类型: '专项', 管线: 'P-3', body: '' });
+  seed(root, '待审',{ id: 'W-13', title: '海岸线钉零', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 父单: 'W-12', body: 正文 });
   assert.deepEqual(warnings(store.find(root, 'W-13'), root), [], '父链有章就不该报');
 });
 
 t('父链整条都无章 → 照报（TK-106~116 的原样）', () => {
   const root = makeRoot();
-  seed(root, '草稿', { id: 'W-14', title: '地图施工专项', 父单类型: '专项', body: '' });
-  seed(root, '草稿', { id: 'W-15', title: '海岸线钉零', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 父单: 'W-14', body: 正文 });
+  seed(root, '待审',{ id: 'W-14', title: '地图施工专项', 父单类型: '专项', body: '' });
+  seed(root, '待审',{ id: 'W-15', title: '海岸线钉零', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 父单: 'W-14', body: 正文 });
   const w = warnings(store.find(root, 'W-15'), root);
   assert.equal(w.length, 1, '父链无章 → 一条警示，实得：' + w.join('｜'));
   assert.deepEqual(preflight(root, store.find(root, 'W-15'), CFG), [], '仍不拦截');
@@ -92,13 +92,34 @@ t('管线Warnings 单测：空单/断链兜底不炸', () => {
   assert.deepEqual(管线Warnings({ fm: { 管线: 'P-1' } }), [], '本单有章，无 root 也认');
   assert.equal(管线Warnings({ fm: {} }).length, 1, '无 root 时只查本单');
   const root = makeRoot();
-  seed(root, '草稿', { id: 'W-16', title: '悬空父链', 职能: '程序', 父单: 'W-404', body: 正文 });
+  seed(root, '待审',{ id: 'W-16', title: '悬空父链', 职能: '程序', 父单: 'W-404', body: 正文 });
   assert.equal(管线Warnings(store.find(root, 'W-16'), root).length, 1, '父单不存在 → 按无归属报，不抛');
+});
+
+// ---- 三大态改造（2026-08-24）：依赖终态判定改按新目录态 ----
+// 语义逐条判：废弃（新目录态）=永不落袋 → 拦；归档+归档原因（历史废弃单不改史）=永不落袋 → 拦；
+// 洁净归档=落袋 → 依赖已兑现，放行。完成 不拦（做完等关账，依赖可视为兑现在望——口径同旧 完成）。
+t('依赖在 废弃 → 拦；带因归档 → 拦；洁净归档=落袋 → 放行', () => {
+  const root = makeRoot();
+  seed(root, '废弃', { id: 'D-1', title: '被废弃依赖', 职能: '程序', body: 正文 });
+  seed(root, '归档', { id: 'D-2', title: '带因归档依赖', 职能: '程序', 归档原因: '废弃', body: 正文 });
+  seed(root, '归档', { id: 'D-3', title: '落袋依赖', 职能: '程序', body: 正文 });
+  const mk = (id, 依赖) => {
+    seed(root, '待审', { id, title: '短题', 职能: '程序', 优先级: 'P1', QA: '关', 验收方式: '委托', 依赖, body: 正文 });
+    return store.find(root, id);
+  };
+  const e1 = preflight(root, mk('W-20', 'D-1'), CFG);
+  assert.equal(e1.length, 1, '废弃依赖只该命中一条，实得：' + e1.join('｜'));
+  assert.ok(/已废弃/.test(e1[0]) && /永不落袋/.test(e1[0]), '报错点名废弃与后果：' + e1[0]);
+  const e2 = preflight(root, mk('W-21', 'D-2'), CFG);
+  assert.equal(e2.length, 1, '带因归档照旧拦（历史废弃单不改史），实得：' + e2.join('｜'));
+  assert.ok(/带因归档/.test(e2[0]), '报错保留可定位串：' + e2[0]);
+  assert.deepEqual(preflight(root, mk('W-22', 'D-3'), CFG), [], '洁净归档=落袋，依赖已兑现不拦');
 });
 
 t('H62 拦截项未被改动：非标字段照旧拦截', () => {
   const root = makeRoot();
-  seed(root, '草稿', { id: 'W-5', title: '短题', 职能: '产品', 优先级: 'P9', QA: '是', 验收方式: '自动', body: '## 范围\n无验收章' });
+  seed(root, '待审',{ id: 'W-5', title: '短题', 职能: '产品', 优先级: 'P9', QA: '是', 验收方式: '自动', body: '## 范围\n无验收章' });
   const errs = preflight(root, store.find(root, 'W-5'), CFG);
   assert.ok(errs.length >= 5, '职能/优先级/QA/验收方式/缺验收标准 全部命中，实得 ' + errs.length + ' 条');
 });
@@ -107,7 +128,7 @@ t('H62 拦截项未被改动：非标字段照旧拦截', () => {
 // 病灶：职能表曾是 preflight.js 里一行写死的五者，新增职能必须回来改代码才放得过。
 const 编制CFG = (职能列) => ({ 执行器: { 执行超时分钟: 30 }, 编制: 职能列.map((职能) => ({ 职能, 池序: [{ 池: 'claude', 档: '' }] })) });
 const 新职能单 = (root, id) => {
-  seed(root, '草稿', { id, title: '方案单接线', 职能: '技术策划', 优先级: 'P1', QA: '开', 验收方式: '委托', body: 正文 });
+  seed(root, '待审',{ id, title: '方案单接线', 职能: '技术策划', 优先级: 'P1', QA: '开', 验收方式: '委托', body: 正文 });
   return store.find(root, id);
 };
 

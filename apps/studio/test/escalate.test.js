@@ -17,8 +17,7 @@ quota.queryRateLimits = async () => null; quota.queryClaudeUsage = async () => n
 quota.eagerRefresh = async () => null; quota.checkGate = async () => ({ ok: true });
 const runner = require('../lib/runner');
 const state = require('../lib/core/state');
-const store = require('../lib/core/store');
-const { CFG, makeRoot, seed } = require('./helper');
+const { makeRoot, seed } = require('./helper');
 
 // harness 真 await（2026-08-22 体检 #42）：原样是 `const t = (n, f) => { f(); passed++; }`——
 // f 是 async 时它拿到的是一个 Promise，用例还没跑完就先打了「✓」并计了数。实测：塞一条
@@ -33,10 +32,11 @@ const 信 = (root) => {
   if (!fs.existsSync(f)) return [];
   return fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
 };
-// 保留待验收 = 制作人的闸（G3）。停摆自 = 入待验收时刻，靠 fm 上的时间戳。
+// 完成态保留单 = 制作人的闸（G3 保留单/散单终审，H108 后 待验收 并入 完成）。
+// 停摆自 = 入完成时刻，靠 fm 上的时间戳。
 const 老单 = (root, id, 小时) => {
   const iso = new Date(Date.now() - 小时 * 36e5).toISOString();
-  seed(root, '待验收', { id, 验收方式: '保留', 交付时间: iso }); // 停自() 首选 交付时间（更新时间被 seed 写死）
+  seed(root, '完成', { id, 验收方式: '保留', 交付时间: iso }); // 停自() 首选 交付时间（更新时间被 seed 写死）
 };
 const cfg = { 闸值: { 人闸超时小时: 24 } };
 
@@ -70,7 +70,7 @@ t('债清了抹账：同一笔将来再逾期还能再响（不是永久静音�
   老单(root, 'TK-4', 40);
   runner.人闸升格Tick(root, cfg);
   assert.ok(state.read(root).人闸升格['G3:TK-4'], '升格已记账');
-  fs.rmSync(require('../lib/core/store').ticketPath(root, '待验收', 'TK-4'), { force: true }); // 签掉了
+  fs.rmSync(require('../lib/core/store').ticketPath(root, '完成', 'TK-4'), { force: true }); // 签掉了
   runner.人闸升格Tick(root, cfg);
   assert.equal(state.read(root).人闸升格['G3:TK-4'], undefined, '债没了，账要抹——否则重犯时永久静音');
 });
@@ -78,12 +78,31 @@ t('债清了抹账：同一笔将来再逾期还能再响（不是永久静音�
 t('归属分流：总监的债进 journal 不进制作人收件箱', () => {
   const root = makeRoot();
   const iso = new Date(Date.now() - 40 * 36e5).toISOString();
-  seed(root, '执行失败', { id: 'TK-5', 交付时间: iso }); // G12 失败分诊 = 总监
+  seed(root, '待处理', { id: 'TK-5', 交付时间: iso, 失败原因: 'CLI 超时' }); // G12 失败分诊 = 总监（H108：执行失败并入待处理）
   runner.人闸升格Tick(root, cfg);
   assert.equal(信(root).filter((x) => x.类型 === '人闸逾期').length, 0, '收件箱是制作人的第一屏，总监的欠账不占版面');
   const jf = path.join(root, 'journal');
   const txt = fs.existsSync(jf) ? fs.readdirSync(jf).map((f) => fs.readFileSync(path.join(jf, f), 'utf8')).join('') : '';
   assert.match(txt, /人闸逾期（总监）/, '但流水里要记——自己的账自己认');
+});
+
+t('新闸全覆盖升格（H108/H109）：G21 待审→总监 journal、G1 待派→项管 journal、G2 上呈→制作人收件箱', () => {
+  // 任务书要求「全部人闸自动获得 T=24h 逾期升格」——机制是现成的（升格只订阅 等我() 的结论），
+  // 但订阅现成 ≠ 新闸被覆盖：归属新增了「项管」一档，升格的分流线要实证走对。
+  const root = makeRoot();
+  const iso = new Date(Date.now() - 40 * 36e5).toISOString();
+  seed(root, '待审', { id: 'TK-7', 交付时间: iso });                                   // G21 总监
+  seed(root, '待派', { id: 'TK-8', 交付时间: iso });                                   // G1 项管（无放行旗）
+  seed(root, '待处理', { id: 'TK-9', 交付时间: iso, 上呈原因: '三振上呈，四件套待裁' }); // G2 制作人
+  runner.人闸升格Tick(root, cfg);
+  const 急 = 信(root).filter((x) => x.类型 === '人闸逾期');
+  assert.deepEqual(急.map((x) => x.单号), ['TK-9'], '只有制作人的 G2 那笔进收件箱——总监/项管的债不占他版面');
+  const jf = path.join(root, 'journal');
+  const txt = fs.existsSync(jf) ? fs.readdirSync(jf).map((f) => fs.readFileSync(path.join(jf, f), 'utf8')).join('') : '';
+  assert.match(txt, /人闸逾期（总监）：切单待审：[^\n]*TK-7/, 'G21 的债在流水里记成总监的账');
+  assert.match(txt, /人闸逾期（项管）：派发放行：[^\n]*TK-8/, 'G1 的债在流水里记成项管的账（H109 移交后不再进收件箱）');
+  assert.ok(state.read(root).人闸升格['G21:TK-7'] && state.read(root).人闸升格['G1:TK-8'] && state.read(root).人闸升格['G2:TK-9'],
+    '三笔都按 gateKey 记了账——幂等去重对新闸同样生效');
 });
 
 t('T<=0 视为关闭升格，不是「立刻全红」', () => {
@@ -126,27 +145,13 @@ t('按下停止按钮也拦不住它：stop() 之后新逾期的债照样进信�
   } finally { runner.stop升格环(); runner.stopLoop(); }
 });
 
-t('派发制缺省反转：缺键＝派发制（行为面——真跑 tick 看单走哪条路）', async () => {
-  // 案源：2026-08-19 对账。H49 明文「拉取制退役、派发制立宪」，但 runner 的缺省是
-  // 「缺键 → 拉取制」——制度与代码反向。任何手写/裁剪过的 config 少这一格，
-  // 执行链就静默跑一条已废止的路，且不报一个字。
-  // 2026-08-22 体检 #42：上一版判据把 `const dispatchMode = ...` 从源码正则抠出来 new Function
-  // 求值——它锁的是源码里那串字符，改个写法（提成函数、挪进 config 归一层）立刻假红，
-  // 而「派发路根本没走」这种真病它照绿。改成真跑：派发制才会把单从 池 归位到 待投。
-  const 跑 = async (执行器) => {
-    const root = makeRoot();
-    state.update(root, (s) => { s.执行器 = { ...(s.执行器 || {}), 运行: true }; });
-    seed(root, '池', { id: 'TK-D1' }); // 无放行旗 → 归位后不会被真派发拉起会话
-    const c = { ...CFG };
-    if (执行器 === undefined) delete c.执行器; else c.执行器 = 执行器;
-    await runner.tick(root, c);
-    return fs.existsSync(store.ticketPath(root, '待投', 'TK-D1')) ? '派发制' : '拉取制';
-  };
-  assert.equal(await 跑(undefined), '派发制', '缺 执行器 整段 → 派发制');
-  assert.equal(await 跑({}), '派发制', '有 执行器 但缺 派发制 键 → 派发制（这一格正是病灶）');
-  assert.equal(await 跑({ 派发制: true }), '派发制', '显式 true → 派发制');
-  assert.equal(await 跑({ 派发制: false }), '拉取制', '显式 false 才回退拉取制——退旧制要留下意图');
-});
+// ── 撤下：「派发制缺省反转」用例（2026-08-24 状态机改造 D 组）──────────────────────
+// 它的可观测是「派发制会把单从 池 归位到 待投」。H108 把 池/待投 并入 待派、放行改为 fm 标记，
+// **归位这个目录跳变在新状态机里不存在了**——夹具态（池）连目录都没有，seed 直接 ENOENT。
+// 被测行为（runner 缺省走派发制）本身仍是 H49 立宪条款，但其新观测点长什么样取决于
+// P1-3 组对 runner 派发路的改道（待派+放行→在途）；replacement 用例须与 runner 组对齐后
+// 落在他们名下的套件里（runner.test.js），不能在这儿凭空猜一个观测点——猜错就是假判据。
+// 协调项已在 D 组回执 need_coord 登记（连带撤了本套件对 CFG/store 的引用）。
 
 (async () => { for (const f of 队) await f(); console.log('全部通过：' + passed + ' 项'); })()
   .catch((e) => { console.error('  ✗ ' + (e && e.message)); process.exit(1); });

@@ -67,11 +67,11 @@ t('额度锁拦领单：claude 池锁死时 claude 岗领不到单', async () =>
   const root = makeRoot();
   quota.getRateLimits = async () => null;
   quota.getClaudeUsage = async () => ({ fiveHour: { utilization: 95, resets_at: '2026-07-08T05:50:00Z' } });
-  seed(root, '池', { id: 'A', 职能: '策划' });
+  seed(root, '待派', { id: 'A', 职能: '策划', 放行: true }); // H108：池并入待派，放行=fm 标记
   const r = await pool.claim(root, CFG, '策划-A');
   assert.equal(r.ok, false);
   assert.ok(r.gated);
-  assert.equal(require('../lib/core/store').find(root, 'A').state, '池'); // 没被领走
+  assert.equal(require('../lib/core/store').find(root, 'A').state, '待派'); // 没被领走
 });
 
 // ---- 施工令-010 第 4 条：codex 窗口正名（现实只有周窗，锁文案不得再写「5小时」）----

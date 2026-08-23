@@ -103,7 +103,7 @@ await t('④ 反向锁：注册表里凡落点含「值守」的闸，喂进来�
 });
 
 await t('⑤ /api/attn 不可达时值守区退场，不许拿老路冒充「无债」', async () => {
-  const ctx = 备(装载前端(), '炸', { states: ['待验收'], board: { 待验收: [{ id: 'TK-77', 验收方式: '委托' }] }, 隐藏数: 0 });
+  const ctx = 备(装载前端(), '炸', { states: ['完成'], board: { 完成: [{ id: 'TK-77', 验收方式: '委托' }] }, 隐藏数: 0 });
   const h = await ctx.viewOverview();
   assert.ok(!h.includes('ovwatch'), 'attn 没到手就没有值守债这个事实，不许凭空画');
   assert.ok(h.includes('TK-77'), '收件箱降级回两态拼接的老路——开机第一屏宁可退化也不空白');

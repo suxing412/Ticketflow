@@ -57,7 +57,7 @@ function 造双态(root, id, 甲, 乙) {
 
 t('干净仓零报：一单一目录时哨兵不熔断（不许误伤产线）', () => {
   const root = makeRoot();
-  seed(root, '待投', { id: 'T-1', 放行: true });
+  seed(root, '待派', { id: 'T-1', 放行: true });
   seed(root, '在途', { id: 'T-2', 主办: '策划' });
   assert.deepEqual(store.双态(root), []);
   assert.equal(sentinel.熔断(root).熔断, false);
@@ -74,7 +74,7 @@ t('同号双态扫得出：报出单号与它同时住着的两个目录', () =>
 
 t('扫描是纯读：不建目录、不落文件（哨兵自己不许改事实源）', () => {
   const root = makeRoot();
-  造双态(root, 'T-8', '待投', '在途');
+  造双态(root, 'T-8', '待派', '在途');
   const 前 = fs.readdirSync(root).sort();
   store.双态(root);
   assert.deepEqual(fs.readdirSync(root).sort(), 前);
@@ -82,22 +82,22 @@ t('扫描是纯读：不建目录、不落文件（哨兵自己不许改事实�
 
 t('.claiming 抢占中间态不算双态：move 的原子占位不是第二份单', () => {
   const root = makeRoot();
-  seed(root, '池', { id: 'T-7' });
+  seed(root, '待派', { id: 'T-7' });
   fs.writeFileSync(store.ticketPath(root, '在途', 'T-7') + '.claiming', 'x', 'utf8');
   assert.deepEqual(store.双态(root), []);
 });
 
 t('熔断即发急件 + 落 journal（急件带单号，摘要说得清怎么恢复）', () => {
   const root = makeRoot();
-  造双态(root, 'T-6', '在途', '待验收');
+  造双态(root, 'T-6', '在途', '核查');
   const r = sentinel.熔断(root);
   assert.equal(r.熔断, true);
-  assert.equal(r.签名, 'T-6@在途+待验收');
+  assert.equal(r.签名, 'T-6@在途+核查');
   const 件 = inbox.list(root).filter((e) => e.类型 === '同号双态');
   assert.equal(件.length, 1);
   assert.equal(件[0].级别, '急');
   assert.equal(件[0].单号, 'T-6');
-  assert.ok(件[0].摘要.includes('T-6@在途+待验收'));
+  assert.ok(件[0].摘要.includes('T-6@在途+核查'));
   const log = fs.readFileSync(path.join(root, 'journal',
     `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}.log`), 'utf8');
   assert.ok(log.includes('Q20 同号双态'));
@@ -114,7 +114,7 @@ t('冲突变了要重喊：又多一张幻影单是新事实，不许被去重�
   const root = makeRoot();
   造双态(root, 'T-4a', '在途', '完成');
   sentinel.熔断(root);
-  造双态(root, 'T-4b', '待投', '池');
+  造双态(root, 'T-4b', '待派', '挂起');
   sentinel.熔断(root);
   assert.equal(inbox.list(root).filter((e) => e.类型 === '同号双态').length, 2);
 });
@@ -128,7 +128,7 @@ t('静默档只判不喊：UI/自检这类高频只读调用不该产生急件',
 
 t('熔断堵派发制：就绪队列直接清空——哪怕单子已放行、依赖已齐', () => {
   const root = makeRoot();
-  seed(root, '待投', { id: 'T-2a', 放行: true });
+  seed(root, '待派', { id: 'T-2a', 放行: true });
   assert.equal(dispatch.readySet(root, new Set()).length, 1, '前置：本来是派得出去的');
   造双态(root, 'T-2b', '在途', '完成');
   assert.deepEqual(dispatch.readySet(root, new Set()), [], '同号双态时一张都不许派');
@@ -136,7 +136,7 @@ t('熔断堵派发制：就绪队列直接清空——哪怕单子已放行、�
 
 t('熔断堵拉取制：claim 直接拒领并说明原因（派发制堵了不能让池里还能捞）', async () => {
   const root = makeRoot();
-  seed(root, '池', { id: 'T-1a', 职能: '策划' });
+  seed(root, '待派', { id: 'T-1a', 职能: '策划', 放行: true });
   造双态(root, 'T-1b', '在途', '完成');
   const r = await pool.claim(root, CFG, '策划-A');
   assert.equal(r.ok, false);
@@ -146,7 +146,7 @@ t('熔断堵拉取制：claim 直接拒领并说明原因（派发制堵了不�
 
 t('删掉多余那份即自动恢复派发（人工修完不必重启值守）', () => {
   const root = makeRoot();
-  seed(root, '待投', { id: 'R-1', 放行: true });
+  seed(root, '待派', { id: 'R-1', 放行: true });
   造双态(root, 'R-2', '在途', '完成');
   assert.deepEqual(dispatch.readySet(root, new Set()), []);
   fs.unlinkSync(store.ticketPath(root, '完成', 'R-2'));
@@ -166,7 +166,7 @@ t('哨兵扫不动不误熔断：根本不存在的仓返回不熔断，而不�
 // 桩子一撤，走的就是 execFile('curl', … api.anthropic.com) + spawn('codex') + 读真实凭据。
 t('非熔断态 claim 把额度闸走完：领得到单（这一例才是让 quota 桩真正上场的那一例）', async () => {
   const root = makeRoot();
-  seed(root, '池', { id: 'Q-1', 职能: '策划', 优先级: 'P1' });
+  seed(root, '待派', { id: 'Q-1', 职能: '策划', 优先级: 'P1', 放行: true });
   assert.equal(sentinel.熔断(root).熔断, false, '前置：这一例必须是非熔断态，否则 canPull 根本跑不到');
   const r = await pool.claim(root, CFG, '策划-A');
   assert.equal(r.ok, true, '额度桩返 null → 闸 fail-open → 该领得到：' + JSON.stringify(r));

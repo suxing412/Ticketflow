@@ -29,12 +29,12 @@ function 台(root, opts = {}) {
   const 关 = (名, 值) => { 计[名]++; if (炸.has(名)) throw new Error(名 + '故意炸'); return 值; };
   const deps = {
     journal: { append: (_r, s) => 痕.push(s) },
-    // P0-3 起 store.list 按态问三次（在途/待投/池）——桩子按态分答，计数与炸点只挂在 在途 那一问上
+    // P0-3 起 store.list 按态问多次（在途 + 队列各态）——桩子按态分答，计数与炸点只挂在 在途 那一问上。
+    // 三大态改造（2026-08-24）后队列两态=待派/待重派；opts.按态 可再铺任意目录态（如 完成），
+    // 用来验「拍体没去数不该数的态」——拍体多问一态，账就多出来，deepEqual 当场红。
     store: { list: (_r, 态) => {
       if (态 === '在途') return 关('在途扫描', opts.在途 || []);
-      if (态 === '待投') return opts.待投 || [];
-      if (态 === '池') return opts.池中 || [];
-      return [];
+      return (opts.按态 || {})[态] || [];
     } },
     runner: { running: new Map(opts.会话 || []) },
     pmLedger: { event: (_r, _t, p) => 关('巡检记账', 记账参数.push(p)) },
@@ -112,30 +112,36 @@ t('在途扫描能扫出异常并告警；告警那只炸了也不拖死后面',
   assert.equal(r.本拍全好, false);
 });
 
-t('P0-3 按池并发+队列长：2 claude + 1 codex 在途、3 张待投 → 事件账拆得开，旧格照留', () => {
+t('P0-3 按池并发+队列长（三大态口径）：2 claude + 1 codex 在途、3 张待派 → 事件账拆得开，旧格照留', () => {
   const root = makeRoot();
   const 在途 = [
     { id: 'TK-C1', fm: { 父单类型: null, 预计时间: '0.5', 执行池: 'claude' } },
     { id: 'TK-C2', fm: { 父单类型: null, 预计时间: '0.5', 执行池: 'claude' } },
     { id: 'TK-X1', fm: { 父单类型: null, 预计时间: '0.5', 执行池: 'codex' } },
   ];
-  const 待投 = [{ id: 'TK-Q1', fm: {} }, { id: 'TK-Q2', fm: {} }, { id: 'TK-Q3', fm: {} }];
-  const s = 台(root, { 在途, 待投 });
+  const 待派 = [{ id: 'TK-Q1', fm: {} }, { id: 'TK-Q2', fm: {} }, { id: 'TK-Q3', fm: {} }];
+  const s = 台(root, { 在途, 按态: { 待派 } });
   s.拍();
   const 账 = s.记账参数[0];
   assert.equal(账.在途, 3, '旧 在途 总数照留——消费方还在读旧格，新增不替换');
   assert.deepEqual(账.在途按池, { claude: 2, codex: 1 }, '并发按池拆开：claude 2 条、codex 1 条');
-  assert.equal(账.队列长, 3, '三张待投都在排队');
+  assert.equal(账.队列长, 3, '三张待派都在排队');
 
-  // 判不出池的归 未知（fm 无执行池、cfg 空 poolFor 也答不出）；池 态与待投同算队列
+  // 判不出池的归 未知（fm 无执行池、cfg 空 poolFor 也答不出）；待重派 与待派同算队列（都在排队等派）；
+  // 完成 一张也铺着——它是在途大态的出口驻留位、不占执行槽：并发账与队列长都不许数它
   const s2 = 台(root, {
     在途: [{ id: 'TK-N1', fm: { 父单类型: null, 预计时间: '0.5' } }],
-    待投: [{ id: 'TK-Q1', fm: {} }],
-    池中: [{ id: 'TK-P1', fm: {} }],
+    按态: {
+      待派: [{ id: 'TK-Q1', fm: {} }],
+      待重派: [{ id: 'TK-R1', fm: {} }],
+      完成: [{ id: 'TK-D1', fm: { 父单类型: null, 预计时间: '0.5', 执行池: 'claude' } }],
+      待审: [{ id: 'TK-S1', fm: {} }], 待处理: [{ id: 'TK-H1', fm: {} }], // 没过审/等裁决，都不算排队等派
+    },
   });
   s2.拍();
-  assert.deepEqual(s2.记账参数[0].在途按池, { 未知: 1 }, '判不出池的归 未知，不许瞎猜也不许丢');
-  assert.equal(s2.记账参数[0].队列长, 2, '待投+池 两态都算排队');
+  assert.deepEqual(s2.记账参数[0].在途按池, { 未知: 1 }, '判不出池的归 未知；完成 那张 claude 不入并发账——不占执行槽');
+  assert.equal(s2.记账参数[0].在途, 1, '在途总数同样不含 完成');
+  assert.equal(s2.记账参数[0].队列长, 2, '待派+待重派 两态算排队；完成/待审/待处理 都不算');
 });
 
 t('#28 生产端：连炸三拍才立债，第三拍发急件，且消费端 G16 真捞得到（两端接一次线）', () => {

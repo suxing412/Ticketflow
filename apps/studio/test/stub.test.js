@@ -175,6 +175,38 @@ t('③桩台起服务实测：/api/runner 报 桩台:true 运行:false，点启�
   assert.notEqual((st.执行器 || {}).运行, true, '桩台竟把执行器状态写成了运行中');
 });
 
+/* ===================== 三′、H108 三大态：/api/board 下发 12 态 + 大态分组 ===================== */
+// STUB 只验**接口形状**（前端 G 组吃这个形状画看板三组），不当派发链路判据——链路归执行器组。
+
+t("③'H108 /api/board 真起 STUB 服务打一遍：12 态齐全 + 大态:{待办/在途/结束} 分组表下发", () => {
+  const store = require('../lib/core/store');
+  const root = 桩台仓();
+  seed(root, '待派', { id: 'B-1', 放行: true });
+  seed(root, '完成', { id: 'B-2' });
+  const port = 4932;
+  const code = `
+    require(${JSON.stringify(SERVER)}).start().then(async ({ server: srv }) => {
+      const j = await (await fetch('http://127.0.0.1:${port}/api/board')).json();
+      process.stdout.write('@@' + JSON.stringify(j) + '@@');
+      srv.close();
+    });
+  `;
+  const out = execFileSync(process.execPath, ['-e', code], {
+    env: { ...process.env, STUDIO_STUB: '1', STUDIO_ROOT: root, STUDIO_PORT: String(port) },
+    encoding: 'utf8', timeout: 60000,
+  });
+  const v = JSON.parse(out.split('@@')[1]);
+  assert.deepEqual(v.states, store.STATES, 'states 必须与 store.STATES 全同（12 态）');
+  assert.equal(v.states.length, 12, '十二态一个不许少');
+  assert.deepEqual(v.大态, store.大态, '大态分组表必须原样下发 store.大态（前端不许自己抄分组）');
+  assert.deepEqual(Object.keys(v.大态), ['待办', '在途', '结束'], '三大组齐且序稳');
+  assert.deepEqual([...v.大态.待办, ...v.大态.在途, ...v.大态.结束].sort(), [...store.STATES].sort(),
+    '三组并起来恰是 12 态——漏一态就是看板上凭空消失一列');
+  assert.deepEqual(Object.keys(v.board).sort(), [...store.STATES].sort(), 'board 每态一键');
+  assert.deepEqual(v.board.待派.map((x) => x.id), ['B-1'], '待派列真下发了铺的单');
+  assert.deepEqual(v.board.完成.map((x) => x.id), ['B-2'], '完成列真下发了铺的单');
+});
+
 /* ===================== 四、台账两类事件：真落盘、读得回 ===================== */
 // 案源：两处 require 指错模块（lib/ledger 只有 commitStudio），TypeError 被空 catch 吞掉，
 // 现网 事件.jsonl 570 行零命中一个月无人发现。锁死「属主对 + 落盘 + 读回 + 不再吞异常」。

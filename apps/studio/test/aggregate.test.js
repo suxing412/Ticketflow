@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { 临时目录 } = require('./helper');
+const { 临时目录, makeRoot, seed } = require('./helper');
 
 let passed = 0;
 const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
@@ -95,6 +95,28 @@ t('真仓覆盖闸：packages 下每个带 test 的包都在链上，新增包�
     assert.ok(m, '跳过 ' + n + ' 的唯一正当理由是它指向 apps/studio/test/ 下的套件（已被 跑测试.js 收），实测：' + s);
     assert.ok(fs.existsSync(path.join(根, 'test', m[1])), '被跳过的包指向的套件 ' + m[1] + ' 不在盘上，等于这个包没人跑');
   }
+});
+
+/* ================= 报表聚合的落袋口径（H108 · 2026-08-24）=================
+   report.aggregate 是消耗报表的唯一数据口（server /api/report 直转）。三条口径真造数据验行为：
+   ① 总览分开报 完成（判官全过候验收）与 归档（验收过=落袋）——「落袋」直觉=完成+归档，
+      但两个数必须分得开，制作人才看得见「做完了但还没验」的那一截；
+   ② 过渡别名 已归档 与新键 归档 同值（public/app.js:1338 仍读 o.已归档，前端切完删）；
+   ③ 明细只收做完了的（完成/归档 或有工时的），废弃/挂起 不混进。 */
+t('报表落袋口径：完成/归档分开数、别名同值、废弃挂起不进明细', () => {
+  const root = makeRoot();
+  seed(root, '完成', { id: 'R-1' });
+  seed(root, '归档', { id: 'R-2' });
+  seed(root, '废弃', { id: 'R-3', 废弃原因: '路线切换' });
+  seed(root, '挂起', { id: 'R-4' });
+  seed(root, '在途', { id: 'R-5' });
+  const a = require('../lib/report').aggregate(root);
+  assert.equal(a.总览.总单数, 5);
+  assert.equal(a.总览.完成, 1, '完成=判官全过候专项级验收，单独一格');
+  assert.equal(a.总览.归档, 1, '归档=验收过、真落袋，单独一格');
+  assert.equal(a.总览.已归档, a.总览.归档, '过渡别名与新键同值（报表页仍读旧键，切完前不许分叉）');
+  assert.deepEqual(a.明细.map((r) => r.id).sort(), ['R-1', 'R-2'],
+    '明细只收做完了的：废弃/挂起/在途（无工时）一张都不许混进');
 });
 
 console.log('全部通过：' + passed + ' 项');

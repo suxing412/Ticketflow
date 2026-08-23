@@ -5,36 +5,53 @@ const store = require('../core/store');
 const pool = require('../pool');
 const roster = require('../roster');
 
-// 依赖全部落袋才算就绪（沿用 H15：未完成不可派）
+// 依赖全部做完才算就绪（沿用 H15：未完成不可派）
+// journal 留痕去重：坏 ref 在 15 秒一拍的派发循环里会被反复判到，同一条只落一次流水；
+// 进程重启后重落一次不算错（痕比没痕好）。
+const 坏ref已留痕 = new Set(); // `${root}|${单号}|${ref}`
 function depsDone(root, t) {
   const d = t.fm.依赖;
   if (!d) return true;
   const ids = (Array.isArray(d) ? d.map(String) : String(d).split(/[，,\s]+/)).filter(Boolean);
-  // 落袋 = 完成，或「无因归档」（正常交付后的整理性归档）。带 归档原因（废弃/验收打回/
-  // 定夺打回/推翻替代）的归档一律不算——夜班推演 #4：一刀切只认完成会把 13 张已交付
-  // 后归档的依赖判成永不就绪；H59 首案（TK-76 废弃却被旧逻辑当落袋）则是反向翻车。
+  // 做完口径（H108 逐个按语义判，不是无脑替换）：
+  //   完成 = 判官全过、做完等关账（专项内部子单到此即算落定，下游可开工）；
+  //   归档且无 归档原因 = 落袋（正常交付后的关账/整理性归档）。
+  // 带 归档原因（废弃/验收打回/定夺打回/推翻替代）的归档一律不算——夜班推演 #4：一刀切只认完成
+  // 会把 13 张已交付后归档的依赖判成永不就绪；H59 首案（TK-76 废弃却被旧逻辑当落袋）则是反向翻车。
+  // 历史废弃单留在 归档 带 归档原因:废弃（不改史），新废弃单住 废弃 目录——两种写法都判「未就绪」。
   for (const id of ids) {
     const dep = store.find(root, id);
-    if (!dep) continue;
-    const ok = dep.state === '完成' || (dep.state === '已归档' && !dep.fm.归档原因);
+    if (!dep) {
+      // CX-11 语义反转（2026-08-24）：解析不出的 ref 原样 continue＝「查无此单当已满足」，
+      // 一个错别字单号就能让依赖闸整条形同虚设。现改为**不放行**并 journal 留痕——
+      // 静默吞依赖正是本条要治的病，绝不许静默吞着放行。
+      const 键 = `${root}|${t.id}|${id}`;
+      if (!坏ref已留痕.has(键)) {
+        坏ref已留痕.add(键);
+        try { require('../journal').append(root, `依赖解析失败 ${t.id}：ref「${id}」全库查无此单——不放行（CX-11：解析不出≠已满足）`); } catch { /* 留痕失败不改判定 */ }
+      }
+      return false;
+    }
+    const ok = dep.state === '完成' || (dep.state === '归档' && !dep.fm.归档原因);
     if (!ok) return false;
   }
   return true;
 }
 
-// 就绪盘点：待投目录中 已放行 + 依赖就绪 的单（待投=九态下「待起」的物理家）
+// 就绪盘点：待派/待重派 目录中 已放行 + 依赖就绪 的单（H108：待派=待办大态「待起」的物理家，
+// 原 待投+池 合并；待重派=分诊回队/挂起复活后的重派位，重投带旗——放行旗在回队时保留，同旧「重投带旗」语义）
 function readySet(root, crit) {
   // Q20 哨兵（案源 2026-08-18 伪单事故）：同号双态 = 事实源自相矛盾 → 全线熔断，一张都不派。
   // 落在这里而不是 runner：readySet 是派发制唯一的就绪入口，堵住它就堵住整条派发路；
   // 且巡检的零派发看门狗走同一函数，熔断期它读到空队列，不会再叠一条「该派没派」的误报。
   if (require('../sentinel').熔断(root).熔断) return [];
   const out = [];
-  for (const t of store.list(root, '待投')) {
+  for (const st of ['待派', '待重派']) for (const t of store.list(root, st)) {
     if (!t.fm.放行) continue;
     if (t.fm.待复核) continue; // 挂起旗同样拦派发（2026-08-05 推演补漏：此前只拦断点续跑）
-    if (t.fm.挂起) continue;   // 施工令-021：制作人原位冻结的单不进就绪队列——零派发计数亦据此不把它算作「该派没派」
+    if (t.fm.挂起) continue;   // H108 挂起已是目录态（住 挂起 目录的单根本不在本表）；旧 fm.挂起 标记过渡期兼认
     if (!depsDone(root, t)) continue;
-    out.push({ id: t.id, 职能: t.fm.职能, 优先级: t.fm.优先级 || 'P2', 执行池: t.fm.执行池 || null, // 池章直通（0.22.2：兼容池评测单盖章曾被 poolFor 覆盖）
+    out.push({ id: t.id, 态: st, 职能: t.fm.职能, 优先级: t.fm.优先级 || 'P2', 执行池: t.fm.执行池 || null, // 池章直通（0.22.2：兼容池评测单盖章曾被 poolFor 覆盖）
       红链: crit ? crit.has(t.id) : false, 创建时间: t.fm.创建时间 || '' });
   }
   return out;

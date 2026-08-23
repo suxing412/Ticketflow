@@ -17,9 +17,9 @@ console.log('escalation 上呈原因落库测试（施工令-012）');
 
 t('QA 三振进待定夺：fm.上呈原因 写自修轮次与上限', () => {
   const root = makeRoot();
-  seed(root, '质检', { id: 'E-01', QA: '开', 主办: 'A', 自修次数: 2 });
+  seed(root, '初检', { id: 'E-01', QA: '开', 主办: 'A', 自修次数: 2 });
   assert.equal(life.QA裁定(root, CFG, 'E-01', false).ok, true);
-  assert.equal(store.find(root, 'E-01').state, '待定夺');
+  assert.equal(store.find(root, 'E-01').state, '待处理');
   const 因 = fmOf(root, 'E-01').上呈原因;
   assert.ok(因, '三振上呈没写 上呈原因');
   assert.match(因, /QA 自修 3 轮仍未过（上限 2）/);
@@ -28,7 +28,7 @@ t('QA 三振进待定夺：fm.上呈原因 写自修轮次与上限', () => {
 
 t('QA 未超上限回在途：不写 上呈原因（没上呈就别留话）', () => {
   const root = makeRoot();
-  seed(root, '质检', { id: 'E-02', QA: '开', 主办: 'A' });
+  seed(root, '初检', { id: 'E-02', QA: '开', 主办: 'A' });
   life.QA裁定(root, CFG, 'E-02', false);
   assert.equal(store.find(root, 'E-02').state, '在途');
   assert.equal(fmOf(root, 'E-02').上呈原因, undefined);
@@ -36,34 +36,34 @@ t('QA 未超上限回在途：不写 上呈原因（没上呈就别留话）', (
 
 t('QA 通过：不写 上呈原因', () => {
   const root = makeRoot();
-  seed(root, '质检', { id: 'E-03', QA: '开', 主办: 'A' });
+  seed(root, '初检', { id: 'E-03', QA: '开', 主办: 'A' });
   life.QA裁定(root, CFG, 'E-03', true);
   assert.equal(fmOf(root, 'E-03').上呈原因, undefined);
 });
 
-t('失败分诊上呈：fm.上呈原因 带上失败次数与失败原因', () => {
+t('失败上呈出路已消亡（H108）：待处理本身即分诊位，失败分诊只认重投', () => {
   const root = makeRoot();
-  seed(root, '执行失败', { id: 'E-04', 主办: 'A', 失败原因: 'CLI 非零退出 code=1', 失败次数: 2 });
-  assert.equal(life.失败分诊(root, 'E-04', '上呈').ok, true);
-  assert.equal(store.find(root, 'E-04').state, '待定夺');
-  const 因 = fmOf(root, 'E-04').上呈原因;
-  assert.match(因, /失败分诊上呈/);
-  assert.match(因, /2 次/);
-  assert.match(因, /CLI 非零退出 code=1/);
+  seed(root, '待处理', { id: 'E-04', 主办: 'A', 失败原因: 'CLI 非零退出 code=1', 失败次数: 2 });
+  const r = life.失败分诊(root, 'E-04', '上呈');
+  assert.equal(r.ok, false, '旧「上呈」出路应被拒绝');
+  assert.match(r.error, /定夺/, '拒绝话术应指路 定夺');
+  assert.equal(store.find(root, 'E-04').state, '待处理', '拒绝时单不动窝');
+  assert.equal(fmOf(root, 'E-04').上呈原因, undefined, '拒绝路径不写 上呈原因');
 });
 
-t('失败分诊重投：回池不写 上呈原因', () => {
+t('失败分诊重投：回待重派（带放行旗）不写 上呈原因', () => {
   const root = makeRoot();
-  seed(root, '执行失败', { id: 'E-05', 主办: 'A', 失败原因: 'x' });
+  seed(root, '待处理', { id: 'E-05', 主办: 'A', 失败原因: 'x' });
   life.失败分诊(root, 'E-05', '重投');
-  assert.equal(store.find(root, 'E-05').state, '池');
+  assert.equal(store.find(root, 'E-05').state, '待重派');
+  assert.equal(fmOf(root, 'E-05').放行, true, '重投=明确指令，带放行旗');
   assert.equal(fmOf(root, 'E-05').上呈原因, undefined);
 });
 
-t('原因单行且限长（多行/超长失败原因不撑爆 frontmatter）', () => {
+t('原因单行且限长（多行/超长仲裁因不撑爆 frontmatter）', () => {
   const root = makeRoot();
-  seed(root, '执行失败', { id: 'E-06', 主办: 'A', 失败原因: 'a\nb\n' + 'x'.repeat(400) });
-  life.失败分诊(root, 'E-06', '上呈');
+  seed(root, '仲裁', { id: 'E-06', 主办: 'A', 仲裁因: 'a\nb\n' + 'x'.repeat(400) });
+  life.仲裁定(root, 'E-06', '上呈');
   const 因 = fmOf(root, 'E-06').上呈原因;
   assert.ok(!因.includes('\n'), '上呈原因不得多行');
   assert.ok(因.length <= 200, '上呈原因超 200 字：' + 因.length);
@@ -71,7 +71,7 @@ t('原因单行且限长（多行/超长失败原因不撑爆 frontmatter）', (
 
 t('滞留检查只标告警，绝不改写 上呈原因（噪声不污染事实源）', () => {
   const root = makeRoot();
-  seed(root, '质检', { id: 'E-07', QA: '开', 主办: 'A', 自修次数: 2 });
+  seed(root, '初检', { id: 'E-07', QA: '开', 主办: 'A', 自修次数: 2 });
   life.QA裁定(root, CFG, 'E-07', false);
   const 原 = fmOf(root, 'E-07').上呈原因;
   life.滞留检查(root, CFG, Date.now() + 9 * 3600000);
@@ -133,7 +133,7 @@ t('流水与字段都空：退回 fm 自修次数 / 失败原因，最后才认�
 
 t('端到端：三振单的 fm 直接喂给取数函数，卷宗读到的就是落库那句', () => {
   const root = makeRoot();
-  seed(root, '质检', { id: 'E-10', QA: '开', 主办: 'A', 自修次数: 2 });
+  seed(root, '初检', { id: 'E-10', QA: '开', 主办: 'A', 自修次数: 2 });
   life.QA裁定(root, CFG, 'E-10', false);
   life.滞留检查(root, CFG, Date.now() + 9 * 3600000); // 制造噪声条件
   const r = escalReason(fmOf(root, 'E-10'), [滞留行.replace(/E-99/g, 'E-10')], 'E-10');

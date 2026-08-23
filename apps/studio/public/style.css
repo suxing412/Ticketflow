@@ -366,6 +366,24 @@ a.gear { text-decoration:none; }
 .bcol2 { flex:0 0 160px; background:var(--sect); border-radius:14px; padding:16px 10px 12px; min-height:calc(100vh - 120px);
   box-shadow:inset 0 1px 0 var(--edge-hl); } /* 纸槽上缘受光 */
 .bcol2.w168 { flex-basis:168px; } .bcol2.w128 { flex-basis:128px; }
+/* 三大态分组（H108，2026-08-24）：看板列按 待办｜在途｜结束 三段呈现。
+   段=一个纵向容器：段头（组名+计数）+ 段内列排（沿用 .bcol2 原样式，列即细分态）。
+   结束段不铺卡，只给计数入口（.bendbody 一行一态）——落袋离场纪律的延续。 */
+.bgroup { display:flex; flex-direction:column; gap:8px; flex:0 0 auto; }
+.bghead { display:flex; align-items:baseline; gap:8px; padding:2px 6px; font-size:13px; }
+.bghead b { font-size:13px; letter-spacing:.04em; }
+.bghead .cnt { font-family:var(--mono); font-size:12px; color:var(--ink3); font-weight:400; }
+.bgroup[data-bg="在途"] .bghead b { color:var(--now); }
+.bgcols { display:flex; gap:12px; align-items:flex-start; }
+.bgroup + .bgroup { margin-left:10px; padding-left:22px; border-left:1px dashed var(--line); }
+.bgroup.bend { flex:0 0 216px; }
+.bendbody { background:var(--sect); border-radius:14px; padding:14px 14px 12px; min-height:120px;
+  box-shadow:inset 0 1px 0 var(--edge-hl); display:flex; flex-direction:column; gap:10px; }
+.berow { display:flex; align-items:baseline; gap:8px; font-size:12.5px; flex-wrap:wrap; }
+.berow .bek { flex:0 0 44px; font-weight:600; }
+.berow b { font-size:15px; font-weight:500; }
+.berow .subnote { flex-basis:100%; margin-top:-4px; }
+.berow a { color:var(--accent-ink); }
 .bcol2 h4 { margin:0 6px 14px; font-size:12.5px; display:flex; justify-content:space-between; align-items:center; }
 .bcol2 h4 .cnt { font-family:var(--mono); font-size:12px; color:var(--ink3); font-weight:400; }
 .bcol2.hot h4 { color:var(--danger); }
@@ -477,7 +495,7 @@ a.gear { text-decoration:none; }
 .fgbar.queue.ready { border-style:solid; border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-glow); }
 .fgbar.queue.ready .st { color:var(--accent-ink); border-color:var(--accent-ink); }
 .fgbar.blocked .st { color:var(--danger); border-color:var(--danger); background:var(--dangerbg); }
-/* 待判官接手（施工令-038）：委托待验收但判官会话还没起——闸门色，与 .doing.nosess 同源语义
+/* 待判官接手（施工令-038）：委托单停在审检链但判官会话还没起——闸门色，与 .doing.nosess 同源语义
    （"会话没起来"），虚框表明在排队。三个令牌两主题各有一份（:root 暖纸 / html[data-theme="glass"] 玻璃），
    实测 paper #7A5A1E on #FDF3E3、glass #E8B45A on 半透明琥珀，不写死色值。 */
 .fgbar.queue.wait .st { color:var(--gatetx); border-color:var(--gateln); background:var(--gatebg); }
@@ -662,8 +680,8 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .segbar .seg i { display:block; height:5px; border-radius:99px; background:var(--chip); position:relative; overflow:hidden; }
 .segbar .seg.done i { background:var(--ok); }
 /* 活跃段流光（施工令-049 要件④）：槽底整条来回跑一道带色流光＝「这一段此刻活着」。
-   041 时代只有填充实色上的白扫光，判官段填充恒为 0 → 一整段质检期间条子纹丝不动，
-   制作人 21:13 点名的「质检中看不到进度条闪烁」正是这一格。流光挂在槽（i）上而不是填充（em）上，
+   041 时代只有填充实色上的白扫光，判官段填充恒为 0 → 一整段审检期间条子纹丝不动，
+   制作人 21:13 点名的「审检中看不到进度条闪烁」正是这一格。流光挂在槽（i）上而不是填充（em）上，
    所以填充 0% 也照样看得见活性；超预期只换色不停跑——单还在跑，停了才是说谎。 */
 .segbar .seg.cur i::before { content:''; position:absolute; inset:0;
   background:linear-gradient(90deg, transparent, var(--flow), transparent); animation:segflow 2.4s linear infinite; }
@@ -1082,7 +1100,7 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
    会把 wiki 正文的段落行距整体拉开，那就越界了）。 */
 .wk-l { color:var(--accent-ink); cursor:pointer; padding:5px 2px; }
 .wk-l:hover { text-decoration:underline; }
-/* 裸引导链（决策台空态「想法池拍板 / 工单池待投区」）：同一条地板，同一种做法 */
+/* 裸引导链（空态「想法池拍板 / 看板待派列」）：同一条地板，同一种做法 */
 .glink { color:var(--accent-ink); cursor:pointer; padding:5px 2px; }
 .glink:hover { text-decoration:underline; }
 .wk-l.ghost { opacity:.55; border-bottom:1px dashed var(--accent-ink); }
