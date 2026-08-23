@@ -5,6 +5,9 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
+// 「这张单交付的是文件还是判定」——与 lib/派单.js 共用同一份判据（协-023）。
+// 只读单没有 Git 检查点是**正常的**，下游不该等一个按设计不会出现的东西。
+const 产出 = require('../产出');
 
 const toArr = (value) => Array.isArray(value) ? value : value == null || value === '' ? [] : String(value).split(/[，,\s]+/).filter(Boolean);
 
@@ -251,7 +254,21 @@ function integrate(workspace, dependencyTickets) {
   for (const ticket of dependencyTickets || []) {
     const commit = ticket && ticket.fm && ticket.fm.workspace && ticket.fm.workspace.commit;
     if (!commit || !/^[0-9a-f]{7,64}$/i.test(String(commit))) {
-      skipped.push({ id: ticket && ticket.id || 'unknown', reason: '依赖单没有可集成的 Git 检查点' });
+      // 「没有检查点」有两种，处置完全相反（协-023，HW-4 实测撞出来）：
+      //   · 只读单（产出是判定不是文件）——**它本来就不会有检查点**，没有是正常的，
+      //     跳过它继续走。HW-3 是评审单，跑完零改动、报告落在工单里；HW-4 依赖它，
+      //     结果卡在「依赖缺少 Git 检查点：HW-3」——等一个按设计永远不会出现的东西。
+      //   · 该有却没有——那是协-016 治过的病（检查点 sha 不落盘导致 DAG 静默断链），
+      //     照旧当错误顶出去。
+      // 两者都进 skipped 留痕：只读那条**不是静默跳过**，调用方看得见它为什么被跳过。
+      const 只读 = 产出.只读产出(ticket);
+      skipped.push({
+        id: (ticket && ticket.id) || 'unknown',
+        reason: 只读
+          ? `只读单（产出物类型「${ticket.fm.产出物类型}」）没有 Git 检查点是正常的——它的产出是判定，不落盘`
+          : '依赖单没有可集成的 Git 检查点',
+        只读,
+      });
       continue;
     }
     const sha = String(commit);
@@ -337,8 +354,11 @@ function prepare(monitorRoot, cfg, ticket, project, options = {}) {
   };
   if (wc.integrateDependencies && (options.dependencies || []).length) {
     result.integration = integrate(result, options.dependencies || []);
-    if (result.integration.skipped.length && !wc.allowMissingDependencies)
-      throw new Error(`依赖缺少 Git 检查点：${result.integration.skipped.map((item) => item.id).join('、')}`);
+    // 只读依赖不算「缺检查点」——它按设计就没有。只对真该有却没有的那些顶错误
+    // （那是协-016 治过的病：检查点 sha 不落盘导致 DAG 静默断链）。
+    const 真缺 = result.integration.skipped.filter((item) => !item.只读);
+    if (真缺.length && !wc.allowMissingDependencies)
+      throw new Error(`依赖缺少 Git 检查点：${真缺.map((item) => item.id).join('、')}`);
     if (result.integration.conflicts.length && options.role !== 'integrator') {
       try { git(workPath, ['merge', '--abort']); } catch { /* 保留原始错误；失败分诊会暴露工作区 */ }
       throw new Error(`依赖合并发生冲突，需要 Integrator 处理：${result.integration.conflicts.join('、')}`);

@@ -191,4 +191,27 @@ t('api 池不受影响：token 上限守的正是钱包，那是刹车', () => {
   fs.rmSync(临, { recursive: true, force: true });
 });
 
+
+
+// ---------- 只读依赖没有检查点是正常的（协-023）----------
+t('只读依赖不算「缺检查点」，下游不该等一个按设计不会出现的东西', () => {
+  // 案源：HW-4 真跑秒失败——「建隔离工作区失败：依赖缺少 Git 检查点：HW-3」。
+  // HW-3 是评审单，跑完零改动、报告落在工单里，它**永远不会有**检查点。
+  // 而这道拦截原本是对的：协-016 治的正是「检查点 sha 不落盘导致 DAG 静默断链」。
+  // 所以不能把它整个拆掉，只能把两种「没有」分开。
+  const 源 = fs.readFileSync(path.join(平台根, 'lib', 'workspace', 'worktree.js'), 'utf8');
+  assert.match(源, /require\('\.\.\/产出'\)/, '判据要与派单共用一份，别在这儿再抄一遍');
+  assert.match(源, /const 真缺 = result\.integration\.skipped\.filter/, '只对真该有却没有的顶错误');
+  assert.match(源, /只读: 只读|只读,/, 'skipped 里要标出哪条是只读——不是静默跳过，看得见才叫留痕');
+});
+
+t('判据只有一份：派单与工作区问的是同一个函数', () => {
+  const 产出 = require('../lib/产出');
+  const 派 = require('../lib/派单');
+  assert.equal(派.只读产出, 产出.只读产出, '两处各写一遍就会漏改一遍（公用件解析那次的教训）');
+  assert.equal(产出.只读产出({ fm: { 产出物类型: '评审意见' } }), true);
+  assert.equal(产出.要落盘({ fm: { 产出物类型: '文档' } }), true);
+  assert.equal(产出.要落盘({ fm: { write_scope: ['a'] } }), true, 'write_scope 是证据，比类型更硬');
+});
+
 console.log('全部通过：' + passed + ' 项');
