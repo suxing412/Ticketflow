@@ -140,4 +140,78 @@ t('reviewer 子任务不再被造成「产出物类型: 文档」', () => {
     'plan.js 造出来的 reviewer 单，必须被只读产出认得——否则它照样永远做不完');
 });
 
+
+
+// ---------- 订阅池的 token 上限：警戒线，不是刹车（协-022）----------
+// 案源同样是实测：HW-4 派不出去，因为 codex 被冻结——「日用量 1439944 token ≥ 上限 200000」。
+// 而 codex 是订阅池，它的周窗口当时只用了 19%。拦住它的是一个跟真实风险无关的数字，
+// 而那个数字的来历是 预算.local.json 自己的注释：「配上限只是为了过第三道闸」。
+const 假公用件 = (超的池) => ({
+  载入: () => ({
+    冻结池: () => Object.fromEntries(超的池.map((池) => [池, { locked: true, reason: `${池} 池预算已用尽：日用量 999 token ≥ 上限 1`, 预算: true }])),
+    并入: (g, f) => ({ ...(g || {}), ...f }),
+    账本: () => path.join(平台根, '不存在的账本.jsonl'),
+  }),
+});
+const 订阅配置 = () => ({
+  providers: { codex: { adapter: 'codex-cli' }, 'claude-key': { adapter: 'claude-cli' } },
+  计费: { codex: { 模式: '订阅' }, 'claude-key': { 模式: 'api' } },
+  quota: { gatePercent: 80, costBufferPercent: 30 },
+});
+
+t('订阅池：额度闸有读数时，token 上限只警戒不冻结', () => {
+  const 临 = fs.mkdtempSync(path.join(require('os').tmpdir(), '协022-'));
+  fs.mkdirSync(path.join(临, 'journal'), { recursive: true });
+  fs.writeFileSync(path.join(临, 'journal', '额度快照.json'), JSON.stringify({
+    更新于: new Date().toISOString(),
+    池: { codex: { 形态: 'codex', 取于: new Date().toISOString(),
+      rl: { primary: { usedPercent: 19, windowDurationMins: 10080, resetsAt: new Date(Date.now() + 864e5).toISOString() } } } },
+  }));
+  const 冻 = 派单.冻结情况(假公用件(['codex']), 订阅配置(), 临);
+  assert.ok(!冻.挡.codex, '周窗口才 19%，不该被一个跟风险无关的 token 数拦住');
+  assert.equal((冻.警戒 || []).length, 1, '不冻结不等于不吭声——超了要进警戒');
+  assert.match(冻.警戒[0].说, /订阅池不按 token 刹车/);
+  fs.rmSync(临, { recursive: true, force: true });
+});
+
+t('订阅池：额度闸是盲区时，token 上限照旧兜底冻结（没读数时宁可误刹）', () => {
+  const 临 = fs.mkdtempSync(path.join(require('os').tmpdir(), '协022-'));
+  const 冻 = 派单.冻结情况(假公用件(['codex']), 订阅配置(), 临);   // 没有快照 = 盲区
+  assert.ok(冻.挡.codex, '读不到窗口时，唯一还剩的刹车就是它，不能一起松掉');
+  assert.match(冻.挡.codex, /兜底冻结/, '要说清这是兜底，不然人会以为 token 上限一直是刹车');
+  assert.equal((冻.警戒 || []).length, 0);
+  fs.rmSync(临, { recursive: true, force: true });
+});
+
+t('api 池不受影响：token 上限守的正是钱包，那是刹车', () => {
+  const 临 = fs.mkdtempSync(path.join(require('os').tmpdir(), '协022-'));
+  const 冻 = 派单.冻结情况(假公用件(['claude-key']), 订阅配置(), 临);
+  assert.ok(冻.挡['claude-key'], 'api 池按 token 计费，超了就是超了');
+  assert.ok(!/兜底/.test(冻.挡['claude-key']), 'api 池的冻结不是兜底，别给它贴订阅池的说辞');
+  fs.rmSync(临, { recursive: true, force: true });
+});
+
+
+
+// ---------- 只读依赖没有检查点是正常的（协-023）----------
+t('只读依赖不算「缺检查点」，下游不该等一个按设计不会出现的东西', () => {
+  // 案源：HW-4 真跑秒失败——「建隔离工作区失败：依赖缺少 Git 检查点：HW-3」。
+  // HW-3 是评审单，跑完零改动、报告落在工单里，它**永远不会有**检查点。
+  // 而这道拦截原本是对的：协-016 治的正是「检查点 sha 不落盘导致 DAG 静默断链」。
+  // 所以不能把它整个拆掉，只能把两种「没有」分开。
+  const 源 = fs.readFileSync(path.join(平台根, 'lib', 'workspace', 'worktree.js'), 'utf8');
+  assert.match(源, /require\('\.\.\/产出'\)/, '判据要与派单共用一份，别在这儿再抄一遍');
+  assert.match(源, /const 真缺 = result\.integration\.skipped\.filter/, '只对真该有却没有的顶错误');
+  assert.match(源, /只读: 只读|只读,/, 'skipped 里要标出哪条是只读——不是静默跳过，看得见才叫留痕');
+});
+
+t('判据只有一份：派单与工作区问的是同一个函数', () => {
+  const 产出 = require('../lib/产出');
+  const 派 = require('../lib/派单');
+  assert.equal(派.只读产出, 产出.只读产出, '两处各写一遍就会漏改一遍（公用件解析那次的教训）');
+  assert.equal(产出.只读产出({ fm: { 产出物类型: '评审意见' } }), true);
+  assert.equal(产出.要落盘({ fm: { 产出物类型: '文档' } }), true);
+  assert.equal(产出.要落盘({ fm: { write_scope: ['a'] } }), true, 'write_scope 是证据，比类型更硬');
+});
+
 console.log('全部通过：' + passed + ' 项');
