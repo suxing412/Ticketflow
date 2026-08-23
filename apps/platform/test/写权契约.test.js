@@ -214,4 +214,60 @@ t('判据只有一份：派单与工作区问的是同一个函数', () => {
   assert.equal(产出.要落盘({ fm: { write_scope: ['a'] } }), true, 'write_scope 是证据，比类型更硬');
 });
 
+
+
+// ---------- 失败要有归宿、失败原因要有内容（协-024）----------
+// 案源：HW-4 连挂两次（codex 22 分钟、claude 6 分钟），回执里只有一句「退出码 1」，
+// 工单原地留在「在途」等巡检误报「执行器可能已挂」。而真相就写在输出的最后一行。
+const 提 = require('../lib/输出提取');
+const 收尾行 = (o) => JSON.stringify({ type: 'result', ...o });
+
+t('CLI 自报的收尾事件要被读出来（「退出码 1」把三件事说成了一件）', () => {
+  const 收 = 提.抽收尾('噪声\n' + 收尾行({ is_error: true, subtype: 'success', stop_reason: 'stop_sequence', num_turns: 20, duration_api_ms: 360633, total_cost_usd: 0.718 }), 'claude-stream-json');
+  assert.equal(收.是错, true);
+  assert.equal(收.回合数, 20);
+  assert.equal(收.停因, 'stop_sequence');
+  assert.match(提.收尾说因(收), /回合数上限/, '截断、崩溃、限流三者处置南辕北辙，不能都叫「退出码 1」');
+});
+
+t('翻不出来就不猜——猜错原因比不说原因更坏', () => {
+  assert.equal(提.抽收尾('随便什么东西', 'claude-stream-json'), null);
+  assert.equal(提.抽收尾(收尾行({ is_error: true }), 'codex-jsonl'), null, '只认已知形状，不替别的厂商猜');
+  assert.equal(提.收尾说因(提.抽收尾(收尾行({ is_error: false, num_turns: 3 }), 'claude-stream-json')), null, '没出错就没有失败原因');
+});
+
+t('执行失败有归宿：退回待投 + 证据进工单 + 进呼叫信箱，且不自动重派', () => {
+  const 源 = fs.readFileSync(path.join(平台根, 'scripts', '执行器.js'), 'utf8');
+  const i = 源.indexOf('if (!判.成) {');
+  assert.ok(i > 0, '失败分支必须存在——此前它整个是空的，工单就留在「在途」等巡检归错因');
+  const 段 = 源.slice(i, i + 2200);
+  assert.match(段, /'在途', '待投'/, '在途的意思是「AI 正在干」，它已经不在干了');
+  assert.match(段, /fm\.执行失败 = \{/, '证据要落进工单，不能只在那一次的 HTTP 回执里');
+  assert.match(段, /尾巴/, '光一句「退出码 1」等于没说');
+  assert.match(段, /呼叫\.急/, '无人值守时信箱是唯一有人会看见的地方');
+  assert.match(段, /不会自动重派/, '重派要花额度，那是人的决定');
+});
+
+t('回合上限可配，且缺省不注入（与协-024 之前逐字节相同）', () => {
+  const a = require('../../../packages/providers/claude-cli').create({});
+  assert.ok(!a.buildInvocation({}).args.includes('--max-turns'), '缺省不注入——公用件的既有行为不许被顺手改掉');
+  const 带 = a.buildInvocation({ maxTurns: 60 }).args;
+  assert.equal(带[带.indexOf('--max-turns') + 1], '60');
+  assert.ok(!a.buildInvocation({ maxTurns: 0 }).args.includes('--max-turns'), '0 与非法值一律当没配');
+  const 源 = fs.readFileSync(path.join(平台根, 'scripts', '执行器.js'), 'utf8');
+  assert.match(源, /fm\.回合上限 \|\| t\.fm\.maxTurns \|\| \(配置\.执行 && 配置\.执行\.回合上限\)/,
+    '工单能自己声明（大单要多几轮），否则走配置');
+});
+
+t('跑通了就把上一趟的失败戳摘掉（陈旧告警看几次就没人信）', () => {
+  // HW-4 实测：前两轮被回合数上限截断留下 执行失败，第三轮跑通落了检查点，
+  // 而那个戳还挂在单上——一张既有成功检查点又标着「执行失败」的单，谁看都得愣一下。
+  const 源 = fs.readFileSync(path.join(平台根, 'scripts', '执行器.js'), 'utf8');
+  const i = 源.indexOf('const 目标 = 检.要');
+  assert.ok(i > 0);
+  const 段 = 源.slice(i, i + 1600);
+  assert.match(段, /delete fm.执行失败/, '成功流转时要摘掉失败戳');
+  assert.match(段, /delete fm.空转/, '空转戳同理');
+});
+
 console.log('全部通过：' + passed + ' 项');
