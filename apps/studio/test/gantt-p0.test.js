@@ -470,6 +470,29 @@ t('⑪ 悬浮卡依赖：粒ID引用→对端单号+题名+规则；单号引用
   assert.ok(!/\[object Object\]/.test(卡2 + 卡3), '三形一律不许出现 [object Object]');
 });
 
+t('⑫ 今时线：body 竖线在时间区坐标（树宽 280 之后）与表头徽章同刻对位；分钟自走挪线换徽', () => {
+  // 病例（2026-08-24 制作人验收）：body 线漏加树宽画进树列假时刻位；今线不进轮询签名冻在末次渲染时刻
+  const 数据 = 造台账();
+  const { ctx, 容器 } = 画(数据);
+  const 岛 = 容器._gt2;                                // render 把岛实例挂在传入容器上
+  assert.ok(岛 && 岛.st, '岛实例可达（容器._gt2）');
+  const 线 = 岛.body.querySelectorAll('.gt2now').find ? 岛.body.querySelectorAll('.gt2now')[0] : null;
+  const 徽 = 岛.head.querySelectorAll('.gt2now')[0] || null;
+  assert.ok(线 && !线.hidden && 徽, '今在窗内：body 线与表头徽章都得在');
+  // 沙箱里 JS 写的 style.left 可读，innerHTML 静态解析的要从 style 属性抽——两路都认
+  const 时x = (el) => { const v = el.style && el.style.left; if (v) return parseFloat(v);
+    const m = /left:\s*([\d.]+)px/.exec(el.getAttribute('style') || ''); return m ? parseFloat(m[1]) : NaN; };
+  // 同刻对位：body 线（.gt2body 从 0 起）＝ 280 ＋ 徽章（.gt2hx 自带 left:280px 故不加）
+  assert.equal(Math.round(时x(线)), Math.round(280 + 时x(徽)),
+    'body 线须加树宽 280——两根线必须指同一时刻（漏加即画进树列的假位置）');
+  // 分钟自走（注入假钟走同一条生产路）：st/数据 的今更新＋线位右移＋徽章换文
+  const 原x = 时x(线);
+  ctx.GanttIsland._测.走今(岛, '2026-08-24T13:00');    // 台账统一时钟 12:00 → 拨快 1h
+  assert.equal(岛.st.数据.今, '2026-08-24T13:00', '走今 须更新 st.数据.今');
+  assert.ok(Math.abs(时x(线) - 原x - 20) < 0.6, '拨快 1h 线右移 20px（HW=20px/h）');
+  assert.ok(徽.textContent.includes('13:00'), '徽章文字跟着换刻');
+});
+
 (async () => {
   for (const [n, f] of 待) { await f(); passed++; console.log('  ✓ ' + n); }
   console.log('全部通过：' + passed + ' 项');

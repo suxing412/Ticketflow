@@ -516,6 +516,7 @@
   let 末岛 = null;
   let 已挂resize = false; // T8 单例分发旗：全模块只挂一个 resize 监听（见 挂事件）
   let 已挂可见 = false;   // DS#1 单例分发旗：全模块只挂一个 visibilitychange 监听（见 挂事件）
+  let 已挂今走 = false;   // 今时线分钟自走单例旗
   function 找岛() { const box = document.getElementById('rl-gantt'); return (box && box._gt2) || 末岛; }
 
   function 重排(岛) {
@@ -570,10 +571,7 @@
     岛.head.innerHTML = 表头HTML(st);
     const bg = 岛.body.querySelector('.gt2gridbg');
     bg.style.width = st.窗.宽 + 'px';
-    const 今线 = 岛.body.querySelector('.gt2now.b');
-    if (st.今ms != null && st.今ms >= st.窗.t0 && st.今ms <= st.窗.t1) {
-      今线.hidden = false; 今线.style.left = X(st.今ms, st.窗).toFixed(1) + 'px';
-    } else 今线.hidden = true;
+    摆今线(岛);
     画行(岛);
     还焦点(岛, 焦);
   }
@@ -632,6 +630,31 @@
     st.折叠.clear();
     (function 走(列) { for (const n of 列) { if (n.子.length && 型层[n.型] >= lv - 1) st.折叠.add(n.键); 走(n.子); } })(st.根);
     存重画(岛);
+  }
+  /* 今时线摆位与分钟自走（2026-08-24 制作人验收所指两病一修）：
+     ① body 竖线在 .gt2body 坐标系（0 起），时间几何 X() 是时间区坐标（280 树宽之后）——
+        原先漏加 树宽，线画进树列右缘的假时刻位（表头徽章父容器 .gt2hx 自带 left:280px 故无恙）；
+     ② 今时线不进 30s 轮询签名（粒ID|状态|版本号），数据不变永不重绘，今线冻在末次渲染时刻——
+        今时线是墙钟不是数据，60s 单例自走（同 resize 成例经 找岛 分发），越出窗界才全量重排。 */
+  function 摆今线(岛) {
+    const st = 岛.st; if (!st || st.窗.空) return;
+    const 今线 = 岛.body.querySelectorAll('.gt2now')[0];
+    if (!今线) return;
+    if (st.今ms != null && st.今ms >= st.窗.t0 && st.今ms <= st.窗.t1) {
+      今线.hidden = false; 今线.style.left = (树宽 + X(st.今ms, st.窗)).toFixed(1) + 'px';
+    } else 今线.hidden = true;
+  }
+  function 走今(岛, 注入串) {                            // 注入串＝判据的假钟口，生产不传走真钟
+    const st = 岛.st; if (!st || st.窗.空) return;
+    const 今串 = 注入串 || 毫钟面(Date.now());
+    if (st.数据.今 === 今串) return;                       // 分钟未跳，不动
+    st.数据.今 = 今串; 岛.数据.今 = 今串;
+    const 点 = 解时(今串); st.今ms = 点 ? 点.ms : null;
+    if (st.今ms != null && st.今ms > st.窗.t1) { 重排(岛); return; }  // 滚出窗右缘：重算窗
+    摆今线(岛);
+    const 徽 = 岛.head.querySelectorAll('.gt2now')[0];
+    if (徽) { 徽.style.left = X(st.今ms, st.窗).toFixed(1) + 'px';
+      const em = 徽.querySelector('em'); if (em) em.textContent = '今 ' + 今串.slice(11, 16); }
   }
   function 回今(岛) {
     const st = 岛.st; if (!st || st.窗.空 || st.今ms == null) return;
@@ -998,6 +1021,14 @@
         else if (!活._拖 && 活._拖后数据) { 活.数据 = 活._拖后数据; 活._拖后数据 = null; 重排(活); }
       });
     }
+    // 今时线分钟自走单例（同上成例；setInterval 不用 rAF——后台冻结的教训同喂岛）
+    if (!已挂今走 && typeof setInterval === 'function') {
+      已挂今走 = true;
+      setInterval(() => {
+        const 活 = 找岛();
+        if (活 && 活.根el && 活.根el.isConnected && 活.st && !活._拖) 走今(活);
+      }, 60000);
+    }
     // #8 右键两区菜单：岛容器一个 contextmenu 委托——条上（实条/迷你条）＞行上＞空白
     岛.根el.addEventListener('contextmenu', (e) => {
       if (!岛.st) return;
@@ -1068,7 +1099,7 @@
     render, 更新, 切折叠, 悬浮卡Html, 离屏端点, 聚焦, 退出聚焦, 菜单Html,
     试拖, // P2 程序口：鼠标松手（收拖）分流的同一条产线，判据②③直调不模拟鼠标
     // 判据面（H104：验行为不 grep 源码）：纯函数出口，node 沙箱直调断结构
-    _测: { 拼树, 铺算, 建状态, 试渲染, 展平, 默认折叠, 可视范围, 泳道, 段, 算窗, 行HTML, 表头HTML, 行高, HW, 树宽, 头高,
+    _测: { 拼树, 铺算, 建状态, 试渲染, 展平, 默认折叠, 可视范围, 泳道, 段, 算窗, 行HTML, 表头HTML, 走今, 行高, HW, 树宽, 头高,
       吸附, 像素毫, 毫钟面, 拖几何, 可拖判, 贝塞尔, 锚点集, 线HTML, 刻毫 }, // P2 判据①④⑤的纯函数面
   };
 })();
