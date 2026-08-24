@@ -285,5 +285,42 @@ await t('⑥ 详情页进度条：审检链新阶段序列（QA开→初检→�
       assert.ok(!names.includes(旧), `旧阶段词「${旧}」还在进度条上：` + names.join('/'));
 });
 
+await t('⑦ 看板列排定宽：bgcols 内联宽度＝CSS 列宽之和（Electron 30/Chromium 124 嵌套 flex 内容宽误算的防复发）', async () => {
+  // 案情（2026-08-24）：制作人窗口（Electron 30 壳，Chromium 124）里 auto basis 的 .bgroup
+  // 被算成内容宽的六成（待办 457px/应 676px，与视口宽无关），兄弟组按塌陷宽度排位互相叠压；
+  // 同一引擎里定长 basis 的结束段渲染正确。修法＝渲染时给 .bgcols 写内联定宽。
+  // 本判据的期望值从 style.css 现场解析、列宽类从渲染输出现读——JS 求和坏、像素表与 CSS
+  // 走散、CSS 改列宽 JS 没跟，任何一侧都红。
+  const store = require('../lib/core/store');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
+  const 抽 = (re, 名) => { const m = css.match(re); assert.ok(m, 'style.css 里找不到 ' + 名 + '——列宽定义挪了窝，本判据要跟着搬'); return Number(m[1]); };
+  const 基宽 = 抽(/\.bcol2 \{ flex:0 0 (\d+)px/, '.bcol2 基宽');
+  const 宽168 = 抽(/\.bcol2\.w168 \{ flex-basis:(\d+)px/, '.w168');
+  const 宽128 = 抽(/\.bcol2\.w128 \{ flex-basis:(\d+)px/, '.w128');
+  const 缝 = 抽(/\.bgcols \{ display:flex; gap:(\d+)px/, '.bgcols gap');
+  const board = {}; for (const s of store.STATES) board[s] = [];
+  const ctx = 装载前端();
+  桩(ctx, { '/api/config': { 项目: { 注册: { TK: {} }, 默认: 'TK' }, 闸值: {} },
+    '/api/board': { states: store.STATES, board, 大态: store.大态, 隐藏数: 0 },
+    '/api/gates': { paused: false, locks: { codex: {}, claude: {} } } });
+  await ctx.loadCfg(true);
+  const h = await ctx.viewBoard();
+  for (const g of ['待办', '在途']) {
+    const 起 = h.indexOf(`data-bg="${g}"`);
+    const 序 = ['待办', '在途', '结束']; const 后 = 序[序.indexOf(g) + 1];
+    const 段 = h.slice(起, h.indexOf(`data-bg="${后}"`));
+    // 列宽类从输出现读：每列真挂的 class 决定它占几像素
+    const 列类 = [...段.matchAll(/class="bcol2 ([^"]*)"/g)].map((m) => m[1]);
+    assert.ok(列类.length > 0, g + ' 段一列都没有');
+    const 应 = 列类.reduce((a, c) => a + (/\bw168\b/.test(c) ? 宽168 : /\bw128\b/.test(c) ? 宽128 : 基宽), 0)
+      + (列类.length - 1) * 缝;
+    assert.match(段, new RegExp(`class="bgcols" style="width:${应}px"`),
+      g + ` 段的列排没有定宽 width:${应}px（${列类.length} 列）——旧引擎会把组算塌、兄弟组叠上来`);
+  }
+  // 结束段结构不同（bendbody 计数入口），定宽由 CSS 的 .bgroup.bend flex-basis 管，不吃内联宽
+  assert.ok(!/data-bg="结束"[^>]*>[\s\S]{0,200}?bgcols/.test(h.slice(h.indexOf('data-bg="结束"'))),
+    '结束段不该出现 bgcols 列排');
+});
+
 console.log('全部通过：' + passed + ' 项');
 })().catch((e) => { console.error(e); process.exit(1); });

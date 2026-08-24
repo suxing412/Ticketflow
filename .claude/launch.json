@@ -4,9 +4,20 @@
     {
       "name": "studio",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["server.js"],
+      "runtimeArgs": [
+        "server.js"
+      ],
       "cwd": "apps/studio",
       "port": 4270
+    },
+    {
+      "name": "studio-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "dev4299.js"
+      ],
+      "cwd": "apps/studio",
+      "port": 4299
     }
   ]
 }

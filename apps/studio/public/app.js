@@ -542,11 +542,17 @@ async function viewBoard() {
     return `<div class="bcol2 ${widths[s] || ''} ${hot ? 'hot' : ''}">${head}${cards}</div>`;
   };
   // 待办/在途 两段铺列（列序照 大态 分组表，完成 摘出）；结束段只给计数入口，不铺一张卡。
+  // 列排定宽：Electron 30 壳（Chromium 124）算不准「auto basis 嵌套 flex」的内容宽——
+  // 组盒被压成内容的六成、兄弟组叠上来（2026-08-24 制作人窗口实测：待办组 457px/应 676px，
+  // 且与视口宽无关）。同一引擎里定长 basis 的结束段渲染正确，所以列排直接给定宽，
+  // 不让旧引擎猜。像素表与 style.css 的 .bcol2(160)/.w168/.w128/gap(12) 锚定，ui-truth ⑦ 盯脱钩。
+  const 列宽px = (s) => (widths[s] === 'w168' ? 168 : widths[s] === 'w128' ? 128 : 160);
   const 段 = (g) => {
     const ss = (大态[g] || []).filter((s) => 全态.includes(s) && !BOARD_OUT.has(s));
     const n = ss.reduce((a, s) => a + (board[s] || []).length, 0);
+    const 排宽 = ss.reduce((a, s) => a + 列宽px(s), 0) + Math.max(0, ss.length - 1) * 12;
     return `<div class="bgroup" data-bg="${esc(g)}"><div class="bghead"><b>${esc(g)}</b><span class="cnt">${n}</span></div>
-      <div class="bgcols">${ss.map(列).join('')}</div></div>`;
+      <div class="bgcols" style="width:${排宽}px">${ss.map(列).join('')}</div></div>`;
   };
   const cols = ['待办', '在途'].map(段).join('');
   // 结束段计数入口（含被摘出的 完成）：落袋离场，这一页永不堆积；明细去报表/详情。
