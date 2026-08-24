@@ -270,4 +270,64 @@ t('跑通了就把上一趟的失败戳摘掉（陈旧告警看几次就没人�
   assert.match(段, /delete fm.空转/, '空转戳同理');
 });
 
+
+
+// ---------- 隔离工作区里跑不动任何命令（协-026）----------
+// 案源：HW-4 第二次被判不过，理由不是活干错了，是三条必验命令一条都跑不起来——
+// worktree 是一次干净 checkout，从来没人在里面装过依赖。
+const 工作区件 = require('../lib/workspace/worktree');
+const os = require('os');
+
+t('默认不装依赖（大多数单不需要，npm ci 在 monorepo 上动辄几分钟）', () => {
+  assert.equal(工作区件.装依赖(os.tmpdir(), { fm: {} }), null);
+  assert.equal(工作区件.装依赖(os.tmpdir(), { fm: { 需要依赖: false } }), null);
+});
+
+t('工单声明才装，认 true / 字符串 / 数组三种写法', () => {
+  assert.deepEqual(工作区件.依赖目录表({ fm: { 需要依赖: true } }), ['.']);
+  assert.deepEqual(工作区件.依赖目录表({ fm: { 需要依赖: 'tooling' } }), ['tooling']);
+  assert.deepEqual(工作区件.依赖目录表({ fm: { 需要依赖: ['tooling', 'services/api'] } }), ['tooling', 'services/api']);
+  assert.deepEqual(工作区件.依赖目录表({ fm: { needDeps: true } }), ['.'], 'ASCII 别名同样认');
+});
+
+t('目录不许逃出工作区（frontmatter 是 agent 改得动的）', () => {
+  const 临 = fs.mkdtempSync(path.join(os.tmpdir(), '协026-'));
+  assert.throws(() => 工作区件.装依赖(临, { fm: { 需要依赖: ['../别的仓'] } }), /逃出了工作区/);
+  fs.rmSync(临, { recursive: true, force: true });
+});
+
+t('指的目录里没有 package.json 就当场抛（别等跑完才发现装了个寂寞）', () => {
+  const 临 = fs.mkdtempSync(path.join(os.tmpdir(), '协026-'));
+  assert.throws(() => 工作区件.装依赖(临, { fm: { 需要依赖: true } }), /没有 package\.json/);
+  fs.rmSync(临, { recursive: true, force: true });
+});
+
+t('已经装过就不重装（返工会复用同一个工作区）', () => {
+  const 临 = fs.mkdtempSync(path.join(os.tmpdir(), '协026-'));
+  fs.writeFileSync(path.join(临, 'package.json'), '{"name":"x"}');
+  fs.mkdirSync(path.join(临, 'node_modules'));
+  const 记 = 工作区件.装依赖(临, { fm: { 需要依赖: true } });
+  assert.equal(记.length, 1);
+  assert.equal(记[0].跳过, '已装过', '每轮重装几分钟纯属浪费');
+  assert.equal(记[0].耗时毫秒, 0);
+  fs.rmSync(临, { recursive: true, force: true });
+});
+
+t('装依赖排在依赖集成**之后**（上游可能带进 lockfile 改动）', () => {
+  const 源 = fs.readFileSync(path.join(平台根, 'lib', 'workspace', 'worktree.js'), 'utf8');
+  const 集成 = 源.indexOf('result.integration = integrate(');
+  const 装 = 源.indexOf('const 装 = 装依赖(');
+  assert.ok(集成 > 0 && 装 > 集成, '先装再合的话，装的是旧的那一份');
+});
+
+t('装不上就抛——抛在 prepare 里零成本，一个 token 都没花', () => {
+  // 这条守的是**位置**：prepare 发生在拉起 agent 之前。若改成「记下失败继续跑」，
+  // 就又回到「花几分钟跑出一个注定验不了的结果」，正是本单要治的病。
+  const 源 = fs.readFileSync(path.join(平台根, 'lib', 'workspace', 'worktree.js'), 'utf8');
+  const i = 源.indexOf('function 装依赖(');
+  const 段 = 源.slice(i, i + 2000);
+  assert.match(段, /throw new Error\(`装依赖失败/);
+  assert.match(段, /slice\(-8\)/, '要带 npm 的尾巴，不然又是一句「装失败了」等于没说');
+});
+
 console.log('全部通过：' + passed + ' 项');

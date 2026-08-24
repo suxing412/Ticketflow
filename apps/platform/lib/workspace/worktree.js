@@ -27,6 +27,70 @@ function git(cwd, args, allowed = [0]) {
   return { code: result.status, stdout: String(result.stdout || '').trim(), stderr: String(result.stderr || '').trim() };
 }
 
+// ——— 依赖装配（协-026）———
+//
+// 案源：HW-4 第二次被判不过，**理由不是活干错了，是三条必验命令一条都跑不起来**：
+//   npm --prefix tooling run typecheck  → 缺 tooling/node_modules/typescript/bin/tsc
+//   npm --prefix tooling run unit       → vitest 命令不可用
+//   npm --prefix services/api run build → Cannot find module '@nestjs/common' / 'pg'
+// 隔离 worktree 是一次干净 checkout，**从来没人在里面装过依赖**。于是任何验收标准
+// 里要求「跑测试/跑构建」的工单，在当前设计下永远过不了——不是代码的问题，
+// 是工作区跑不动任何东西。HW-1 补 README、HW-3 只读盘点都不需要跑命令，所以一直没撞上。
+//
+// 默认**不装**：大多数单不需要，而 npm ci 在 monorepo 上动辄几分钟。
+// 要装就得工单自己说：`需要依赖: true`（仓根）或 `需要依赖: ["tooling","services/api"]`。
+//
+// 三条纪律：
+//   ① **已经装过就不重装**。同一个工作区会被返工复用，每轮重装几分钟纯属浪费；
+//   ② **装不上就抛**，别让它带着「注定验不了」的状态往下跑——那正是要治的病。
+//      抛在这里零成本：prepare 发生在拉起 agent **之前**，一个 token 都没花；
+//   ③ **耗时要记账**。装依赖是这条链上最慢的一步，不记的话人会以为是 agent 慢。
+//
+// 安全边界：`npm ci` 会执行目标仓 package.json 里的生命周期脚本。这不是新增的信任面——
+// 平台本来就在这个仓里跑有写权限的 agent；装的也是它自己 lockfile 里的东西。
+const 依赖目录表 = (工单) => {
+  const v = (工单 && 工单.fm && (工单.fm.需要依赖 ?? 工单.fm.needDeps));
+  if (v === true) return ['.'];
+  if (Array.isArray(v)) return v.map(String).map((s) => s.trim()).filter(Boolean);
+  if (typeof v === 'string' && v.trim()) return [v.trim()];
+  return [];
+};
+
+function 装依赖(工作路径, 工单, 超时毫秒) {
+  const 目录表 = 依赖目录表(工单);
+  if (!目录表.length) return null;
+  const 记 = [];
+  for (const 相对 of 目录表) {
+    // 不许逃出工作区：工单的 frontmatter 是可以被 agent 改的，`../../` 得挡住。
+    const 目标 = path.resolve(工作路径, 相对);
+    if (目标 !== 工作路径 && !目标.startsWith(工作路径 + path.sep)) {
+      throw new Error(`需要依赖 的目录逃出了工作区：${相对}`);
+    }
+    if (!fs.existsSync(path.join(目标, 'package.json'))) {
+      throw new Error(`需要依赖 指的目录里没有 package.json：${相对}`);
+    }
+    if (fs.existsSync(path.join(目标, 'node_modules'))) {
+      记.push({ 目录: 相对, 跳过: '已装过', 耗时毫秒: 0 });
+      continue;
+    }
+    const 有锁 = fs.existsSync(path.join(目标, 'package-lock.json'));
+    const 命令 = 有锁 ? ['ci'] : ['install'];
+    const 起 = Date.now();
+    const r = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', [...命令, '--no-audit', '--no-fund'], {
+      cwd: 目标, encoding: 'utf8', windowsHide: true, shell: process.platform === 'win32',
+      timeout: 超时毫秒, maxBuffer: 8 * 1024 * 1024,
+    });
+    const 耗时毫秒 = Date.now() - 起;
+    if (r.error || r.status !== 0) {
+      const 尾 = String(r.stderr || r.stdout || (r.error && r.error.message) || '')
+        .trim().split(/\r?\n/).slice(-8).join('\n');
+      throw new Error(`装依赖失败（${相对}，npm ${命令[0]}，${Math.round(耗时毫秒 / 1000)}s）：\n${尾}`);
+    }
+    记.push({ 目录: 相对, 命令: `npm ${命令[0]}`, 耗时毫秒 });
+  }
+  return 记;
+}
+
 function configOf(cfg) {
   const value = cfg.workspace || cfg.工作区 || {};
   return {
@@ -43,6 +107,9 @@ function configOf(cfg) {
     integrateDependencies: value.integrateDependencies !== false && value.集成依赖 !== false,
     allowMissingDependencies: value.allowMissingDependencies === true || value.允许缺失依赖 === true,
     requireGit: value.requireGit === true || value.必须Git === true,
+    // 装依赖的超时。monorepo 冷装几分钟是常态，给足；超了会带着 npm 的尾巴抛出来。
+    装依赖超时毫秒: Number(value.装依赖超时毫秒 || value.installTimeoutMs) > 0
+      ? Number(value.装依赖超时毫秒 || value.installTimeoutMs) : 15 * 60 * 1000,
   };
 }
 
@@ -365,6 +432,10 @@ function prepare(monitorRoot, cfg, ticket, project, options = {}) {
     }
     result.commit = head(workPath);
   }
+  // 装依赖排在集成之后：上游单可能带进 package.json / lockfile 的改动，
+  // 先装再合的话装的是旧的那一份。
+  const 装 = 装依赖(workPath, ticket, wc.装依赖超时毫秒);
+  if (装) result.依赖 = 装;
   return result;
 }
 
@@ -562,6 +633,7 @@ function 遗留工作区(monitorRoot, cfg, project, 工单表) {
 }
 
 module.exports = {
+  装依赖, 依赖目录表,
   收工, 遗留工作区, 审阅区,
   configOf, isGitRepo, repoTop, workspaceRoot, worktreeList,
   prepare, integrate, checkpoint, dependencyTickets, publish, changedFiles, enforceWriteScope,
