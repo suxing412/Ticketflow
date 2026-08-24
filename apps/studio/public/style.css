@@ -1646,13 +1646,22 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 
 /* 滚动视口＋画布：虚拟化底座（固定行高 30px，只画可视行） */
 .gt2wrap { position:relative; overflow:auto; max-height:640px; border:1px solid var(--line);
-  border-radius:12px; background:var(--card); }
+  border-radius:12px; background:var(--card); scrollbar-width:thin; }
+/* 岛专属细滚条：8px 圆拇指贴主题、轨透明（原生粗默认滚条与暗色卡面打架——2026-08-24 制作人验收所指） */
+.gt2wrap::-webkit-scrollbar { width:8px; height:8px; }
+.gt2wrap::-webkit-scrollbar-thumb { background:var(--chip); border-radius:8px; border:2px solid transparent; background-clip:padding-box; }
+.gt2wrap::-webkit-scrollbar-thumb:hover { background:var(--ink3); background-clip:padding-box; }
+.gt2wrap::-webkit-scrollbar-track, .gt2wrap::-webkit-scrollbar-corner { background:transparent; }
 .gt2wrap:focus-visible { outline:2px solid var(--ink); outline-offset:1px; }
 .gt2cv { position:relative; }
-/* 双行表头 sticky：上＝日期（整日界加重），下＝每 4 小时；树列头 sticky 钉左 */
-.gt2head { position:sticky; top:0; z-index:5; height:46px; background:var(--sect);
+/* 双行表头 sticky：上＝日期（整日界加重），下＝每 4 小时；树列头 sticky 钉左。
+   sticky 面必须**实底**：glass 主题的 --sect/--card 是近全透明的 rgba，行滚过表头会整字透出来
+   （2026-08-24 制作人验收所指「上下滑动后重叠」）——一律「半透明色叠不透明 --paper」双层背景，两主题通吃。 */
+.gt2head { position:sticky; top:0; z-index:5; height:46px;
+  background:linear-gradient(var(--sect), var(--sect)) var(--paper);
   border-bottom:1px solid var(--line); }
-.gt2ht { position:sticky; left:0; z-index:6; float:left; width:280px; height:46px; background:var(--sect);
+.gt2ht { position:sticky; left:0; z-index:6; float:left; width:280px; height:46px;
+  background:linear-gradient(var(--sect), var(--sect)) var(--paper);
   border-right:1px solid var(--line); padding:24px 12px 0; font-size:11px; color:var(--ink3); letter-spacing:.06em; }
 .gt2hx { position:absolute; left:280px; top:0; height:46px; }
 .gt2hx .t1 { position:absolute; top:0; left:0; right:0; height:22px; border-bottom:1px solid var(--line); }
@@ -1671,10 +1680,11 @@ html[data-theme="glass"] .gt2body .gt2gridbg { opacity:.5; }
 /* 行：absolute 定位（虚拟化），树列格 sticky 钉左 */
 .gt2r, .gt2row { position:absolute; left:0; right:0; height:30px; border-bottom:1px solid var(--sect); }
 .gt2r:hover { background:var(--we); }
-.gt2t { position:sticky; left:0; z-index:2; width:280px; height:100%; background:var(--card);
+.gt2t { position:sticky; left:0; z-index:2; width:280px; height:100%;
+  background:linear-gradient(var(--card), var(--card)) var(--paper); /* 同表头：sticky 面实底，横滚时条不透进树列 */
   border-right:1px solid var(--line); display:grid; grid-template-columns:16px auto minmax(0,1fr) auto;
   align-items:center; column-gap:5px; padding-right:8px; }
-.gt2r:hover .gt2t { background:var(--we); }
+.gt2r:hover .gt2t { background:linear-gradient(var(--we), var(--we)) var(--paper); }
 .gt2tri { width:16px; height:20px; color:var(--ink3); font-size:9px; border-radius:4px; text-align:center; }
 .gt2tri:hover { background:var(--sect); color:var(--ink); }
 .gt2tri:focus-visible { outline:2px solid var(--ink); outline-offset:-1px; }
