@@ -1763,4 +1763,46 @@ a.gt2nm:hover, a.gt2nm:focus-visible { background:var(--sect); color:var(--accen
   padding:8px 12px; font-size:12px; color:var(--gatetx); }
 .gt2debtrow { display:block; width:100%; text-align:left; padding:3px 8px; border-radius:8px;
   font-size:12px; color:var(--ink2); }
+
+/* ===== 甘特岛 P1 交互层（#8/#9/#19/#20 · 2026-08-24）===== */
+/* #8 右键两区菜单：自绘 fixed 防出屏，菜单项按上下文出现 */
+.gt2menu { position:fixed; z-index:99; min-width:200px; max-width:280px; padding:5px;
+  background:var(--frost); backdrop-filter:blur(var(--frost-blur)); -webkit-backdrop-filter:blur(var(--frost-blur));
+  border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow-lg); display:none; }
+.gt2menu.show { display:block; }
+.gt2mi { display:block; width:100%; text-align:left; padding:6px 10px; border-radius:7px;
+  font-size:12.5px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.gt2mi:hover, .gt2mi:focus-visible { background:var(--sect); outline:none; }
+.gt2mrow { display:flex; align-items:center; gap:2px; padding:2px 10px; }
+.gt2mrow i { font-style:normal; font-size:10.5px; color:var(--ink3); margin-right:4px; }
+.gt2mrow .gt2mi.lv { display:inline-block; width:auto; padding:3px 7px; font-size:11px; color:var(--ink2); }
+/* #9 聚焦面包屑：全部 › <节点名> ✕退出（Esc 同效） */
+.gt2crumb { display:flex; align-items:center; gap:8px; margin:0 0 10px; padding:6px 12px;
+  border:1px solid var(--accent); border-radius:10px; background:var(--card); font-size:12.5px; }
+.gt2crumb .gt2mi { display:inline-block; width:auto; padding:2px 8px; color:var(--accent-ink); }
+.gt2crumb i { font-style:normal; color:var(--ink3); }
+.gt2crumb b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gt2crumb-x { margin-left:auto; font-size:11.5px; color:var(--ink3); padding:2px 8px; border-radius:7px; }
+.gt2crumb-x:hover, .gt2crumb-x:focus-visible { background:var(--dangerbg); color:var(--danger); outline:none; }
+/* #19 越线计数角标（红底数字）＋待重判标记可点 */
+.gt2xbadge { background:var(--danger); color:var(--card); font-size:11.5px; font-weight:700;
+  font-family:var(--mono); padding:3px 10px; border-radius:999px; }
+.gt2xbadge:hover, .gt2xbadge:focus-visible { filter:brightness(1.12); outline:none; }
+.gt2flag.rejudge { cursor:pointer; }
+.gt2flag.rejudge:hover, .gt2flag.rejudge:focus-visible { border-color:var(--danger); color:var(--danger); outline:none; }
+/* #20 树列轻量字段：状态色点＋工期徽章（聚合行只有子单计数，不挂这两样） */
+.gt2dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--ink3);
+  margin-right:4px; vertical-align:middle; }
+.gt2dot.plan { background:transparent; border:1.5px solid var(--ink3); }
+.gt2dot.draft { background:var(--warn); }
+.gt2dot.made { background:var(--accent); }
+.gt2dot.done { background:var(--ok); }
+.gt2dot.drop { background:var(--chip); }
+.gt2dot.xline { background:var(--danger); }
+.gt2dur { font-weight:400; font-size:9.5px; font-family:var(--mono); color:var(--ink3); }
+/* 表态弹窗（app.js tqStance，与 tqReplan 同视觉家族）：二选一横排 */
+.stance-pick { display:grid; gap:6px; }
+.stance-opt { display:flex; align-items:baseline; gap:8px; font-size:12.5px; color:var(--ink2);
+  padding:6px 10px; border:1px solid var(--line); border-radius:9px; cursor:pointer; }
+.stance-opt:hover { background:var(--sect); }
 .gt2debtrow:hover, .gt2debtrow:focus-visible { background:var(--card); outline:none; }

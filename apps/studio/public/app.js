@@ -4000,6 +4000,62 @@ window.tqReplanGo = async (粒ID, 预期版本, btn) => {
   btn.disabled = false;
   if (r) { const m = document.querySelector('.mwrap'); if (m) m.remove(); }
 };
+/* ---- 表态弹窗（甘特 P1 #19 越线图内处置 · H112 二选一 + H113 五类 · 2026-08-24）----
+   甘特岛的越线红点/「待重判」标记/右键「表态」都落到这里（岛经 window.tqStance 调用，
+   与 tqReplan 同一条岛↔壳约定：岛只递粒ID，弹窗自己现读现态取版本号——页面读数可能已被项管改过）。
+   类别表与 lib/pm/schedule.重排类别集 同一份五类（服务端强校验唯一判据，这里抄一份只为别让人白填一趟）。
+   触发源写死「今时线」：本口只服务越线处置，故弹窗只给 派发/重排 两选——「无需调整」在越线源下
+   服务端 400 拒（强制二选一），压根不该画出来让人点。CAS 冲突走 排程写 的统一口径（如实报+重绘）。 */
+const 重排类别集 = ['前置依赖未到', '额度不够', '并发满', '估值变化', '优先级不够'];
+window.tqStance = async (粒ID) => {
+  const g = await 取待办(粒ID);
+  if (!g) return toast('这条待办已不在现态（可能刚成单或被撤销）');
+  if (排期终态.includes(g.状态)) return toast(`终态待办无从表态（当前 ${g.状态}）`);
+  const w = showModal(`<h3>越线表态 · <span class="mono">${esc(上级名(g.上级))}${g.序 ? '·' + g.序 : ''}</span>
+      <span class="x" onclick="this.closest('.mwrap').remove()">×</span></h3>
+    <p class="dim" style="margin:-4px 0 12px;font-size:12.5px">${esc(g.题 || '')} · 现计划 ${esc(g.计划开始 || '?')} → ${esc(g.计划完成 || '?')}</p>
+    <div class="f-field"><label>决定（越线强制二选一，无第三值）</label>
+      <div class="stance-pick">
+        <label class="stance-opt"><input type="radio" name="st-d" value="派发" onchange="tqStanceMode(this.value)"/>派发——按现计划放行（禁带新计划；真正放行走派单链，表态只落审计痕）</label>
+        <label class="stance-opt"><input type="radio" name="st-d" value="重排" checked onchange="tqStanceMode(this.value)"/>重排——挪期，必带类别＋新计划＋因</label>
+      </div></div>
+    <div id="st-re">
+      <div class="f-field"><label>类别（H113 五类，归档轴）</label><select id="st-c" class="mono">
+        ${重排类别集.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select></div>
+      <div class="f-row2">
+        <div class="f-field"><label>新计划开始（YYYY-MM-DDTHH:mm，刻钟）</label><input id="st-s" class="mono" value="${esc(g.计划开始 || '')}" placeholder="2026-08-25T09:00"/></div>
+        <div class="f-field"><label>新计划完成</label><input id="st-e" class="mono" value="${esc(g.计划完成 || '')}" placeholder="2026-08-25T12:00"/></div>
+      </div>
+      <div class="f-field"><label>预估单元（仅 类别=估值变化 必填，同事务落盘）</label><input id="st-u" class="mono" value="${esc(g.预估单元 == null ? '' : g.预估单元)}" placeholder="估没变就留着别动"/></div>
+      <div class="f-field"><label>因（必填——类别是归档轴，因才是这一次的实情）</label><input id="st-w" placeholder="如：额度周转不开，整条后挪一天"/></div>
+    </div>
+    <div class="note">触发源＝今时线（计划开始已过线未派发，数据层已立债）。写账署名 <b>${esc(排期署名)}</b> · 版本 ${g.版本号}（CAS，冲突如实报）
+      · 任何类别推迟累计≥3 次升格总监</div>
+    <div class="mfoot"><div class="rgt2"><button class="btn h36" onclick="this.closest('.mwrap').remove()">取消</button>
+      <button class="btn accent h36" onclick="tqStanceGo('${qesc(粒ID)}',${g.版本号},this)">表态</button></div></div>`);
+  const s = w.querySelector('#st-w'); if (s) s.focus();
+};
+window.tqStanceMode = (v) => { const 区 = $('st-re'); if (区) 区.style.display = v === '重排' ? '' : 'none'; };
+window.tqStanceGo = async (粒ID, 预期版本, btn) => {
+  const 定 = (document.querySelector('input[name="st-d"]:checked') || {}).value || '重排';
+  const body = { 粒ID, 预期版本, 触发源: '今时线', 决定: 定 };
+  if (定 === '重排') {
+    const 因 = String((($('st-w') || {}).value || '')).trim();
+    if (!因) return toast('决定=重排 必须填因——类别是归档轴，因才是这一次的实情（后端同判据）');
+    body.类别 = (($('st-c') || {}).value || '').trim();
+    body.新计划开始 = String((($('st-s') || {}).value || '')).trim() || null;
+    body.新计划完成 = String((($('st-e') || {}).value || '')).trim() || null;
+    if (!body.新计划开始 && !body.新计划完成) return toast('决定=重排 必带新计划（至少一格）——不挪就该选派发');
+    body.因 = 因;
+    // 预估单元只随 估值变化 走同事务（别的类别带上会被服务端 400——那不是宽容项，别递）
+    const 估 = String((($('st-u') || {}).value || '')).trim();
+    if (body.类别 === '估值变化' && 估) body.预估单元 = Number(估);
+  }
+  btn.disabled = true;
+  const r = await 排程写('表态', body, 定 === '派发' ? '已表态：派发（按现计划放行，转移走派单链）' : '已表态：重排落账');
+  btn.disabled = false;
+  if (r) { const m = document.querySelector('.mwrap'); if (m) m.remove(); }
+};
 // 应用内确认层（2026-08-06 制作人实测：Electron 壳内原生 confirm() 哑弹——放弃想法死按钮案，
 // 同族十个确认门全部换装。自绘 overlay，浏览器与 exe 行为一致）
 window.ask = (msg) => new Promise((res) => {

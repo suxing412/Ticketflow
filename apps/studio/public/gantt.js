@@ -14,7 +14,11 @@
 //     悬浮卡显真实区间并标「超长异常」——写口不加闸，图不被撑爆。
 //   · 孤儿契约（P0-0 裁决⑤）：直挂特性/无父两形原生接受，渲染期不修数据。
 //
-// P1/P2 留接口不留死代码：右键菜单/聚焦/越线处置弹窗/拖拽/依赖线一律不在本文件；
+// P1（施工令 #8/#9/#19/#20 · 2026-08-24）已入本文件：右键两区菜单（行/条＋空白）、聚焦模式
+//   （祖先链+子孙投影＋面包屑，会话内不持久化）、越线图内处置（红点/待重判标记/右键表态 →
+//   window.tqStance，弹窗在 app.js 与 tqReplan 同区）、树列轻量字段（状态色点＋工期徽章）、
+//   越线计数角标（点击滚到下一张越线行）。
+// P2 留接口不留死代码：拖拽/依赖线不在本文件；
 // 依赖线（P2）需要的离屏端点聚合只留一个桩（离屏端点），数据.边 原样存着不画。
 (function () {
   'use strict';
@@ -100,9 +104,9 @@
       (亲 ? 亲.子 : 伪组.子).push(n);
     }
     if (伪组.子.length) 根.push(伪组);   // 根级尾部：伪组永远排在所有管线之后
-    // 闸债 → 节点（数据源 /api/attn，路由随债下发，本层不猜跳哪儿）
+    // 闸债 → 节点（数据源 /api/attn，路由随债下发，本层不猜跳哪儿）；顺手记 父键（#9 聚焦要走祖先链）
     const 索 = new Map();
-    (function 走(列) { for (const n of 列) { 索.set(n.键, n); if (n.粒 && n.粒.单号) 索.set(String(n.粒.单号), n); 走(n.子); } })(根);
+    (function 走(列, 父) { for (const n of 列) { n.父键 = 父 ? 父.键 : null; 索.set(n.键, n); if (n.粒 && n.粒.单号) 索.set(String(n.粒.单号), n); 走(n.子, n); } })(根, null);
     for (const d of (数据.债 || [])) { const n = 索.get(String(d.id)); if (n) n.债.push(d); }
     return { 根, 键表: 索 };
   }
@@ -155,13 +159,16 @@
     return { 折叠, 默认 };
   }
 
-  // 展平：折叠节点自身仍出行（rollup 投影画在它行上），子孙跳过
-  function 展平(根, 折叠) {
+  // 展平：折叠节点自身仍出行（rollup 投影画在它行上），子孙跳过。
+  // 聚焦投影（#9）：只出 祖先链+聚焦节点+子孙；祖先链强制展开（折着的支里也能聚到叶子），
+  // 但**不改折叠集**——聚焦态与折叠态正交，退出聚焦后折叠原样。
+  function 展平(根, 折叠, 聚) {
     const 行 = [];
     (function 走(列, 深) {
       for (const n of 列) {
+        if (聚 && !聚.准许.has(n.键)) continue;
         行.push({ 节点: n, 深 });
-        if (n.子.length && !折叠.has(n.键)) 走(n.子, 深 + 1);
+        if (n.子.length && (!折叠.has(n.键) || (聚 && 聚.链.has(n.键)))) 走(n.子, 深 + 1);
       }
     })(根, 0);
     return 行;
@@ -203,21 +210,29 @@
   const 钻串 = (债) => (债 || []).map((d) => `<button class="gt2gem" data-act="gem" data-r="${esc(d.路由 || '')}"
       title="${esc(`${d.闸号 || ''} ${d.闸名 || ''} · 闸债${d.停摆小时 != null ? ` · 停摆 ${d.停摆小时}h` : ''}\n点击去处置：${d.路由 || ''}`)}">◆</button>`).join('');
 
+  // 四层详情路由＝P0-0 裁决③（名链与右键「跳详情」共用一处，两口一把尺）
+  function 详情路由(n) {
+    if (n.型 === '管线') return `#/tickets/${n.号}`;
+    if (n.型 === '特性' && n.管线) return `#/tickets/${n.管线}/${n.号}`;
+    if (n.型 === '专项') return `#/sp/${n.号}`;
+    if (n.型 === '工单' && n.粒 && 单号形.test(String(n.粒.单号 || ''))) return `#/t/${n.粒.单号}`;
+    return null;
+  }
   function 名链(n) {
-    // #16 三分工：三角=折叠、名称=详情、条=排期操作。四层路由＝P0-0 裁决③。
-    let r = null;
-    if (n.型 === '管线') r = `#/tickets/${n.号}`;
-    else if (n.型 === '特性' && n.管线) r = `#/tickets/${n.管线}/${n.号}`;
-    else if (n.型 === '专项') r = `#/sp/${n.号}`;
-    else if (n.型 === '工单' && n.粒 && 单号形.test(String(n.粒.单号 || ''))) r = `#/t/${n.粒.单号}`;
+    // #16 三分工：三角=折叠、名称=详情、条=排期操作。
+    const r = 详情路由(n);
     const 名 = esc(n.名 || (n.粒 && n.粒.粒ID) || n.号);
     return r ? `<a class="gt2nm" href="${esc(r)}" title="进${n.型}详情">${名}</a>` : `<span class="gt2nm plain">${名}</span>`;
   }
+
+  // 工期徽章文（#20）：真实工期（超长条也显真 30h——截断只截图，不截事实）
+  const 工期文 = (s) => ((s.真讫 - s.起) / 时毫).toFixed(1).replace(/\.0$/, '') + 'h';
 
   function 行HTML(r, st) {
     const n = r.节点, 窗 = st.窗, 折 = st.折叠.has(n.键) && n.子.length > 0;
     const px = (v) => v.toFixed(1) + 'px';
     const 条宽 = (s) => px(Math.max(3, X(s.讫, 窗) - X(s.起, 窗)));
+    const 越行 = n.型 === '工单' && 越线判(n.粒, n.段, st.今ms, st.停表);
     // —— 树列格（grid，无嵌套 flex）——
     // 自由文本单号照样显示（判据⑧：不成链不等于不显示——库里实证有「（无单·直接落码）」形）
     const 显号 = n.型 === '工单' ? String(n.粒.单号 || '') : n.号;
@@ -225,9 +240,14 @@
       ? `<button class="gt2tri" data-act="tri" data-k="${esc(n.键)}" aria-expanded="${!折}"
           title="折叠/展开（Ctrl+点击＝整支递归）" aria-label="${折 ? '展开' : '折叠'} ${esc(n.名)}">${折 ? '▸' : '▾'}</button>`
       : '<span class="gt2tri leaf"></span>';
+    // 树列轻量字段（#20/DS-5）：工单行＝状态色点（按粒状态着色，越线加红点纹）＋工期徽章（Nh）；
+    // 聚合行＝子单计数照旧（不挂工期徽章——聚合区间在括号条与悬浮卡，树列不重复报数）
+    const 轻 = n.型 === '工单'
+      ? `<i class="gt2dot ${状态类[n.粒.状态] || ''}${越行 ? ' xline' : ''}" title="${esc(越行 ? '越线待重判' : n.粒.状态 || '')}"></i>${n.段 ? `<b class="gt2dur">${工期文(n.段)}</b>` : ''}`
+      : (n.子.length ? `${n.叶数} 单` : '');
     const 树格 = `<div class="gt2t" style="padding-left:${8 + r.深 * 16}px">${tri}
       <span class="gt2id mono">${esc(显号)}${n.型 === '专项' ? ' ◈' : ''}</span>${名链(n)}
-      <span class="gt2mx mono">${n.子.length ? `${n.叶数} 单` : ''}${钻串(n.债)}</span></div>`;
+      <span class="gt2mx mono">${轻}${钻串(n.债)}</span></div>`;
     // —— 时间格 ——
     let 条 = '';
     if (!窗.空) {
@@ -239,7 +259,7 @@
           键: x.键, 起: x.段.起, 讫: x.段.讫,
           越线: 越线判(x.粒, x.段, st.今ms, st.停表), 完成: x.粒.状态 === '完成',
         })));
-        条 = 分配.map((m) => `<i class="gt2mini${m.越线 ? ' xline' : ''}${m.完成 ? ' done' : ''}" data-tid="${esc(m.键)}" data-act="bar" data-g="${esc(m.键)}"
+        条 = 分配.map((m) => `<i class="gt2mini${m.越线 ? ' xline' : ''}${m.完成 ? ' done' : ''}" data-tid="${esc(m.键)}" data-act="bar" data-g="${esc(m.键)}"${m.越线 ? ' data-x="1"' : ''}
             data-gid="${esc(m.键)}" data-道="${m.道}" style="left:${px(X(m.起, 窗))};width:${条宽(m)};top:${5 + m.道 * 7}px"></i>`).join('')
           + 块.map((b) => `<button class="gt2dens gt2dense" data-act="dens" data-k="${esc(n.键)}" style="left:${px(X(b.起, 窗))};width:${条宽(b)}"
               title="同时段并发子单 ${b.数} 张（3 道泳道装不下）——点击展开这一支">+${b.数}</button>`).join('');
@@ -250,17 +270,19 @@
         if (n.聚) 条 += `<i class="gt2sum" data-tid="${esc(n.键)}" style="left:${px(X(n.聚.起, 窗))};width:${条宽(n.聚)};top:${n.自段 ? 21 : 13}px"></i>`;
       } else if (n.粒) {
         const g = n.粒, s = n.段, j = g.判定 || null;
-        const 越 = 越线判(g, s, st.今ms, st.停表);
+        const 越 = 越行;
         if (n.基) 条 += `<i class="gt2base" style="left:${px(X(n.基.起, 窗))};width:${条宽(n.基)}"></i>`;
         if (s) {
           // 越线灰显不标红（重判前不算超期事故）；不越线才按服务端判定挂延期/超期记号
           const 红 = 越 ? '' : `${j && j.超期 ? ' gt2-od' : ''}${j && j.延期 ? ' gt2-late' : ''}`;
+          // 越线条带 data-x：点击分流到表态口（#19，普通条仍走重排）
           条 += `<i class="gt2bar ${状态类[g.状态] || ''}${s.单端 ? ' half' : ''}${s.超长 ? ' cut gt2cut' : ''}${越 ? ' xline' : ''}${红}"
-              data-tid="${esc(n.键)}" data-act="bar" data-g="${esc(g.粒ID)}" tabindex="0" role="button"
-              aria-label="${esc((g.题 || '') + '：点击改排期')}" style="left:${px(X(s.起, 窗))};width:${条宽(s)}"></i>`;
+              data-tid="${esc(n.键)}" data-act="bar" data-g="${esc(g.粒ID)}"${越 ? ' data-x="1"' : ''} tabindex="0" role="button"
+              aria-label="${esc((g.题 || '') + (越 ? '：越线待重判，点击表态（派发/重排二选一）' : '：点击改排期'))}" style="left:${px(X(s.起, 窗))};width:${条宽(s)}"></i>`;
           const 尾 = px(X(s.讫, 窗) + 4);
-          // 徽标（越线＞判定，判定只读服务端下发——无判定不造字）
-          if (越) 条 += `<em class="gt2flag rejudge" style="left:${尾}" title="计划开始已过今时线且未表态——数据层已立债给项管（派发/重排二选一），重判前灰显不标红">待重判</em>`;
+          // 徽标（越线＞判定，判定只读服务端下发——无判定不造字）；
+          // 待重判标记可点（#19/DS-3）：处置不出甘特页，点它直接弹表态框
+          if (越) 条 += `<em class="gt2flag rejudge" data-act="stance" data-g="${esc(g.粒ID)}" role="button" tabindex="0" style="left:${尾}" title="计划开始已过今时线且未表态——点击表态（派发/重排二选一），重判前灰显不标红">待重判</em>`;
           else if (j && j.需重排) 条 += `<em class="gt2flag od" style="left:${尾}" title="已超期${j.超期天 != null ? ' ' + j.超期天 + ' 天' : ''}未了结：该重排了">该重排</em>`;
           else if (j && j.延期) 条 += `<em class="gt2flag late" style="left:${尾}" title="现计划较基线累计后挪 ${j.延期天} 天（服务端判定）">延 ${j.延期天}d</em>`;
         }
@@ -343,13 +365,22 @@
   }
 
   /* ═══ 状态装配（纯，无 DOM——判据面：_测.试渲染 走的就是这一条）═══ */
-  function 建状态(数据) {
+  // 聚焦键（#9）：可选。有效时投影＝祖先链+聚焦节点+子孙；键在数据里找不到（粒被删/改名）即失焦回全量。
+  function 建状态(数据, 聚焦键) {
     const { 根, 键表 } = 拼树(数据);
     const 今点 = 解时(数据.今);
     const 今ms = 今点 ? 今点.ms : null;
     铺算(根, 今ms);
     const { 折叠, 默认 } = 生效折叠(根, 键表);
-    const 行 = 展平(根, 折叠);
+    let 聚 = null;
+    if (聚焦键 != null && 键表.has(String(聚焦键))) {
+      const 焦 = 键表.get(String(聚焦键));
+      const 准许 = new Set(), 链 = new Set();
+      for (let p = 焦; p.父键 != null && 键表.has(p.父键);) { p = 键表.get(p.父键); 准许.add(p.键); 链.add(p.键); }
+      (function 走(x) { 准许.add(x.键); for (const k of x.子) 走(k); })(焦);
+      聚 = { 键: 焦.键, 名: 焦.名 || 焦.号, 准许, 链 };
+    }
+    const 行 = 展平(根, 折叠, 聚);
     const 点 = [];
     (function 走(x) {
       if (x.粒) { if (x.段) 点.push(x.段.起, x.段.讫); if (x.基) 点.push(x.基.起, x.基.讫); }
@@ -357,7 +388,8 @@
       for (const k of x.子) 走(k);
     })({ 子: 根 });
     if (今ms != null) 点.push(今ms);
-    return { 数据, 根, 键表, 行, 折叠, 默认, 今ms, 停表: !!数据.停表, 窗: 算窗(点) };
+    // 窗按全树算不按投影算（#9「全局树不销毁只淡出」）：聚焦切换时时间轴不跳
+    return { 数据, 根, 键表, 行, 折叠, 默认, 今ms, 停表: !!数据.停表, 窗: 算窗(点), 聚焦: 聚 };
   }
   function 试渲染(数据, 视口, 选项) {
     const st = 建状态(规范数据(数据, 选项));
@@ -377,8 +409,10 @@
       <div class="gt2bar-tools" role="toolbar" aria-label="甘特工具">
         <span class="gt2grp"><i class="gt2lab">折到</i><button data-act="fold" data-lv="1">1 管线</button><button data-act="fold" data-lv="2">2 特性</button><button data-act="fold" data-lv="3">3 专项</button><button data-act="fold" data-lv="4">4 工单</button></span>
         <span class="gt2grp"><button data-act="today" title="快捷键 T：横滚到今时线并闪一下">◎ 回到今天</button></span>
-        <span class="gt2note subnote">固定小时轴 ${HW}px/h · 数字键 1-4 折层 · ⋯＝超 24h 截断（悬浮看真实区间）</span>
+        <button class="gt2xbadge" data-act="xnext" hidden title="越线待重判计数（#19）——点击滚到下一张越线行，逐个处置">越线 0</button>
+        <span class="gt2note subnote">固定小时轴 ${HW}px/h · 数字键 1-4 折层 · 右键有菜单 · ⋯＝超 24h 截断（悬浮看真实区间）</span>
       </div>
+      <div class="gt2crumb" hidden></div>
       <div class="gt2stopband" hidden>产线关闭中 · 停表</div>
       <div class="gt2wrap" role="region" aria-label="四层甘特图" tabindex="0">
         <div class="gt2cv"><div class="gt2head gt2hd"></div><div class="gt2body"><i class="gt2gridbg"></i><i class="gt2now b" hidden></i></div></div>
@@ -390,6 +424,7 @@
     岛.head = 岛.根el.querySelector('.gt2head');
     岛.body = 岛.根el.querySelector('.gt2body');
     岛.卡 = document.createElement('div'); 岛.卡.className = 'gt2tip'; 岛.根el.appendChild(岛.卡);
+    岛.菜 = document.createElement('div'); 岛.菜.className = 'gt2menu'; 岛.根el.appendChild(岛.菜); // #8 自绘右键菜单（fixed 定位防出屏）
     挂事件(岛);
     重排(岛);
     return 岛;
@@ -401,9 +436,25 @@
 
   function 重排(岛) {
     const 焦 = 记焦点(岛);
-    岛.st = 建状态(岛.数据);
+    关菜单(岛); // 数据/结构一变，悬着的菜单就是对着旧图开的——先收
+    岛.st = 建状态(岛.数据, 岛.聚焦);
+    if (岛.聚焦 && !岛.st.聚焦) 岛.聚焦 = null; // 聚焦的节点已不在数据里：失焦回全量（会话态，不持久化）
     const st = 岛.st, 空 = !st.行.length || st.窗.空;
     岛.根el.querySelector('.gt2stopband').hidden = !st.停表;
+    // 面包屑（#9）：全部 › <节点名> ✕退出（Esc 同效）
+    const 屑 = 岛.根el.querySelector('.gt2crumb');
+    if (屑) {
+      if (st.聚焦) {
+        屑.hidden = false;
+        屑.innerHTML = `<button class="gt2mi" data-act="m-unfocus" title="退出聚焦，回全量树">全部</button><i>›</i><b>${esc(st.聚焦.名)}</b>
+          <button class="gt2crumb-x" data-act="m-unfocus" title="Esc 同效">✕ 退出聚焦</button>`;
+      } else { 屑.hidden = true; 屑.innerHTML = ''; }
+    }
+    // 越线计数角标（#19）：计全树不计投影——折叠/聚焦藏得住行，藏不住债
+    let 越数 = 0;
+    (function 走(x) { if (x.粒 && 越线判(x.粒, x.段, st.今ms, st.停表)) 越数++; for (const k of x.子) 走(k); })({ 子: st.根, 粒: null });
+    const 标 = 岛.根el.querySelector('.gt2xbadge');
+    if (标) { 标.hidden = !越数; 标.setAttribute('data-数', String(越数)); 标.textContent = '越线 ' + 越数; }
     const 空框 = 岛.根el.querySelector('.gt2empty');
     空框.hidden = !空;
     岛.wrap.hidden = 空;
@@ -498,26 +549,148 @@
     });
   }
 
+  /* ═══ 聚焦模式（#9）：会话态不持久化——聚焦是「现在只看这一支」，不是折叠那种工作习惯 ═══ */
+  function 设聚焦(岛, 键) { 岛.聚焦 = 键 == null ? null : String(键); 重排(岛); }
+
+  /* ═══ 右键两区菜单（#8）：行上/条上/空白，菜单项按上下文出现 ═══ */
+  // 造菜单＝菜单内容的唯一产地（H104 判据面：程序口 菜单Html 与 contextmenu 处理器走的是同一条）
+  const 层名 = ['管线', '特性', '专项', '工单'];
+  function 造菜单(st, 种类, id) {
+    const B = (act, attrs, 文) => `<button class="gt2mi" data-act="${act}"${attrs || ''}>${文}</button>`;
+    const 空白菜 = () => B('m-expand', '', '全部展开') + B('m-collapse', '', '全部折叠') + B('m-today', '', '回到今天（T）');
+    if (种类 === '空白' || id == null) return 空白菜();
+    const n = st.键表.get(String(id));
+    if (!n) return 空白菜();
+    if (种类 === '条') {
+      // 条上两分：越线待重判条→表态（强制二选一，不给普通重排口绕），普通条→重排；终态条只留跳详情
+      const g = n.粒 || (n.型 === '专项' ? n.自粒 : null);
+      let h = '';
+      if (g && !终态.includes(g.状态)) {
+        h += (n.粒 && 越线判(g, n.段, st.今ms, st.停表))
+          ? B('m-stance', ` data-g="${esc(g.粒ID)}"`, '表态：派发 / 重排（越线强制二选一）')
+          : B('m-replan', ` data-g="${esc(g.粒ID)}"`, '重排（改计划起讫，必带因）');
+      }
+      const r = 详情路由(n);
+      if (r) h += B('m-goto', ` data-r="${esc(r)}"`, `跳${n.型}详情`);
+      return h || 空白菜();
+    }
+    // 行上：折叠此支（叶子行没有）/折到N层/聚焦此分支/跳详情/改期（有粒且非终态才有）
+    let h = '';
+    if (n.子.length) h += B('m-fold', ` data-k="${esc(n.键)}"`, st.折叠.has(n.键) ? '展开此支' : '折叠此支');
+    h += `<div class="gt2mrow"><i>折到</i>${[1, 2, 3, 4].map((lv) =>
+      `<button class="gt2mi lv" data-act="m-foldlv" data-lv="${lv}" title="同数字键 ${lv}">${lv} ${层名[lv - 1]}</button>`).join('')}</div>`;
+    h += B('m-focus', ` data-k="${esc(n.键)}"`, '聚焦此分支');
+    const r = 详情路由(n);
+    if (r) h += B('m-goto', ` data-r="${esc(r)}"`, `跳${n.型}详情`);
+    const g = n.粒 || n.自粒;
+    if (g && !终态.includes(g.状态)) {
+      h += (n.粒 && 越线判(g, n.段, st.今ms, st.停表))
+        ? B('m-stance', ` data-g="${esc(g.粒ID)}"`, '表态：派发 / 重排（越线）')
+        : B('m-replan', ` data-g="${esc(g.粒ID)}"`, '改期（重排，必带因）');
+    }
+    return h;
+  }
+  function 开菜单(岛, x, y, html) {
+    const 菜 = 岛.菜; if (!菜 || !html) return;
+    菜.innerHTML = html;
+    菜.className = 'gt2menu show'; // 不走 classList：headless 判据环境的 El 只有 className（判据装载约定）
+    // fixed 定位防出屏：先量再摆，右缘/下缘各留 8px
+    const W = window.innerWidth || 1280, H = window.innerHeight || 800;
+    菜.style.left = Math.max(4, Math.min(x, W - (菜.offsetWidth || 220) - 8)) + 'px';
+    菜.style.top = Math.max(4, Math.min(y, H - (菜.offsetHeight || 160) - 8)) + 'px';
+    if (!岛._菜哨 && typeof document.addEventListener === 'function') {
+      岛._菜哨 = (ev) => { if (!菜.contains(ev.target)) 关菜单(岛); }; // 点别处关闭
+      document.addEventListener('mousedown', 岛._菜哨, true);
+    }
+  }
+  function 关菜单(岛) {
+    if (岛.菜) { 岛.菜.className = 'gt2menu'; 岛.菜.innerHTML = ''; }
+    if (岛._菜哨 && typeof document.removeEventListener === 'function') {
+      document.removeEventListener('mousedown', 岛._菜哨, true); 岛._菜哨 = null;
+    }
+  }
+
+  /* ═══ 越线定位（#19 角标）：点一下滚到下一张越线行（折叠行里的越线显影也算靶）═══ */
+  function 越线定位(岛) {
+    const st = 岛.st; if (!st) return;
+    const 有越 = (x) => (x.粒 && 越线判(x.粒, x.段, st.今ms, st.停表)) || x.子.some(有越);
+    const 靶 = [];
+    st.行.forEach((r, i) => {
+      const n = r.节点;
+      const 折 = st.折叠.has(n.键) && n.子.length > 0;
+      if ((n.粒 && 越线判(n.粒, n.段, st.今ms, st.停表)) || (折 && n.子.some(有越))) 靶.push(i);
+    });
+    if (!靶.length) return;
+    岛._越游 = ((岛._越游 == null ? -1 : 岛._越游) + 1) % 靶.length;
+    const i = 靶[岛._越游], n = st.行[i].节点;
+    const s = n.段 || n.聚;
+    岛.wrap.scrollTo({
+      top: Math.max(0, i * 行高 - 120),
+      left: s && !st.窗.空 ? Math.max(0, 树宽 + X(s.起, st.窗) - 240) : 岛.wrap.scrollLeft,
+      behavior: 'smooth',
+    });
+    const el = document.getElementById('gt2-row-' + n.键);
+    if (el && el.animate) el.animate([{ opacity: 1 }, { opacity: .25 }, { opacity: 1 }, { opacity: .25 }, { opacity: 1 }], { duration: 800 });
+  }
+
   function 挂事件(岛) {
     岛.根el.addEventListener('click', (e) => {
       const b = e.target.closest('[data-act]'); if (!b || !岛.根el.contains(b)) return;
       const act = b.dataset.act;
+      const 去 = (fn) => { 关菜单(岛); fn(); }; // 菜单项点完即收
       if (act === 'tri') 折切(岛, b.dataset.k, e.ctrlKey || e.metaKey);
       else if (act === 'dens') { 岛.st.折叠.delete(b.dataset.k); 存重画(岛); }
       else if (act === 'fold') 折到层(岛, +b.dataset.lv || 4);
       else if (act === 'today') 回今(岛);
+      else if (act === 'xnext') 越线定位(岛);
       else if (act === 'gem') { e.stopPropagation(); if (b.dataset.r) location.hash = b.dataset.r; }
-      else if (act === 'bar') { const g = b.dataset.g; if (g && typeof window.tqReplan === 'function') window.tqReplan(g); }
+      // 条点击分流（#19）：越线条（data-x）→ 表态弹窗，普通条 → 重排弹窗（两窗都在 app.js 壳层）
+      else if (act === 'bar' || act === 'stance') {
+        const g = b.dataset.g; if (!g) return;
+        const 表态口 = (act === 'stance' || b.dataset.x) && typeof window.tqStance === 'function';
+        if (表态口) window.tqStance(g);
+        else if (typeof window.tqReplan === 'function') window.tqReplan(g);
+      }
+      // 右键菜单项（#8）：落点全是既有实体（折切/折到层/设聚焦/回今/tqReplan/tqStance）
+      else if (act === 'm-fold') 去(() => 折切(岛, b.dataset.k, false));
+      else if (act === 'm-foldlv') 去(() => 折到层(岛, +b.dataset.lv || 4));
+      else if (act === 'm-focus') 去(() => 设聚焦(岛, b.dataset.k));
+      else if (act === 'm-unfocus') 去(() => 设聚焦(岛, null));
+      else if (act === 'm-goto') 去(() => { if (b.dataset.r) location.hash = b.dataset.r; });
+      else if (act === 'm-replan') 去(() => { if (b.dataset.g && typeof window.tqReplan === 'function') window.tqReplan(b.dataset.g); });
+      else if (act === 'm-stance') 去(() => { if (b.dataset.g && typeof window.tqStance === 'function') window.tqStance(b.dataset.g); });
+      else if (act === 'm-expand') 去(() => { 岛.st.折叠.clear(); 存重画(岛); });
+      else if (act === 'm-collapse') 去(() => 折到层(岛, 1));
+      else if (act === 'm-today') 去(() => 回今(岛));
+    });
+    // #8 右键两区菜单：岛容器一个 contextmenu 委托——条上（实条/迷你条）＞行上＞空白
+    岛.根el.addEventListener('contextmenu', (e) => {
+      if (!岛.st) return;
+      const 条 = e.target.closest && e.target.closest('.gt2bar,.gt2mini');
+      const 行 = e.target.closest && e.target.closest('.gt2r');
+      const html = 条 && 条.dataset.g ? 造菜单(岛.st, '条', 条.dataset.g)
+        : 行 ? 造菜单(岛.st, '行', 行.dataset.k)
+          : 造菜单(岛.st, '空白', null);
+      if (!html) return;
+      e.preventDefault();
+      开菜单(岛, e.clientX, e.clientY, html);
     });
     // #14 最小集：快捷键挂岛内（岛里有焦点才响应），输入框/IME 组合一律放行
     岛.根el.addEventListener('keydown', (e) => {
       if (e.isComposing || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
-      if (e.key === 'Enter' && e.target.dataset && e.target.dataset.act === 'bar') { e.preventDefault(); e.target.click(); return; }
+      // Esc 两段收：先收菜单，再退聚焦（#8/#9）
+      if (e.key === 'Escape') {
+        if (岛.菜 && /\bshow\b/.test(岛.菜.className)) { e.preventDefault(); 关菜单(岛); }
+        else if (岛.聚焦) { e.preventDefault(); 设聚焦(岛, null); }
+        return;
+      }
+      if (e.key === 'Enter' && e.target.dataset && (e.target.dataset.act === 'bar' || e.target.dataset.act === 'stance')) { e.preventDefault(); e.target.click(); return; }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key >= '1' && e.key <= '4') { e.preventDefault(); 折到层(岛, +e.key); }
       else if (e.key === 't' || e.key === 'T') { e.preventDefault(); 回今(岛); }
     });
     岛.wrap.addEventListener('scroll', () => {
+      关菜单(岛); // 菜单是对着点下去那一刻的坐标开的，一滚就不作数
       if (岛._滚订) return;
       岛._滚订 = requestAnimationFrame ? requestAnimationFrame(() => { 岛._滚订 = 0; 画行(岛); }) : (画行(岛), 0);
     }, { passive: true });
@@ -539,16 +712,24 @@
     岛.卡.style.top = Math.min(e.clientY + 16, (window.innerHeight || 800) - 岛.卡.offsetHeight - 12) + 'px';
   }
 
-  // 程序口（gantt-p0 判据约定：事件处理器的落点实体，判据直接调不模拟点击）
+  // 程序口（gantt-p0/p1 判据约定：事件处理器的落点实体，判据直接调不模拟点击）
   function 切折叠(id) { const 岛 = 找岛(); if (岛 && 岛.st) 折切(岛, String(id), false); }
   function 悬浮卡Html(粒ID) {
     const 岛 = 找岛(); if (!岛 || !岛.st) return '';
     const n = 岛.st.键表.get(String(粒ID));
     return n ? 卡HTML(n, 岛.st) : '';
   }
+  // P1 程序口：聚焦/退出聚焦＝右键「聚焦此分支」与面包屑 ✕ 的落点；
+  // 菜单Html＝contextmenu 处理器造菜单的同一条产线（判据①断的就是它，不模拟右键）。
+  function 聚焦(id) { const 岛 = 找岛(); if (岛 && 岛.st) 设聚焦(岛, id); }
+  function 退出聚焦() { const 岛 = 找岛(); if (岛 && 岛.st) 设聚焦(岛, null); }
+  function 菜单Html(种类, id) {
+    const 岛 = 找岛(); if (!岛 || !岛.st) return '';
+    return 造菜单(岛.st, 种类, id == null ? null : String(id));
+  }
 
   window.GanttIsland = {
-    render, 更新, 切折叠, 悬浮卡Html, 离屏端点,
+    render, 更新, 切折叠, 悬浮卡Html, 离屏端点, 聚焦, 退出聚焦, 菜单Html,
     // 判据面（H104：验行为不 grep 源码）：纯函数出口，node 沙箱直调断结构
     _测: { 拼树, 铺算, 建状态, 试渲染, 展平, 默认折叠, 可视范围, 泳道, 段, 算窗, 行HTML, 表头HTML, 行高, HW, 树宽, 头高 },
   };
