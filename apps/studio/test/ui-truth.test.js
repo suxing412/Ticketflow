@@ -16,6 +16,11 @@ const path = require('path');
 const report = require('../lib/report');
 const { makeRoot, seed } = require('./helper');
 const { 装载前端 } = require('./frontend-sandbox');
+// 甘特岛（P0 重做）：渲染外迁 public/gantt.js，判据①随之换面——同一沙箱里追加装载岛渲染器，
+// 走它的纯函数出口 GanttIsland._测.试渲染 断真吐出来的行 HTML（仍旧一条 grep 源码的断言都没有）。
+const vm = require('vm');
+const gantt源 = fs.readFileSync(path.join(__dirname, '..', 'public', 'gantt.js'), 'utf8');
+const 装载岛 = (ctx) => { vm.runInContext(gantt源, ctx, { filename: 'gantt.js' }); return ctx.GanttIsland; };
 
 let passed = 0;
 const t = (n, f) => { const r = f(); const 收 = () => { passed++; console.log('  ✓ ' + n); };
@@ -41,44 +46,45 @@ const 总览壳 = (h) => ({ 总单数: 1, 完成: 1, 已归档: 0, 实际h合计
 
 (async () => {
 
-await t('① 甘特真按服务端判定画出红条与徽标，且每个记号在样式表里都有主', () => {
+await t('① 甘特岛真按服务端判定画徽标与记号，且每个记号在样式表里都有主', () => {
   const ctx = 装载前端();
+  const 岛 = 装载岛(ctx);
   const 粒 = [
-    { 粒ID: 'a', 题: '延期件', 状态: '未开工', 计划开始: '2026-08-25', 计划完成: '2026-08-25',
-      基线开始: '2026-08-22', 基线完成: '2026-08-22',
+    { 粒ID: 'a', 题: '延期件', 状态: '起草中', 计划开始: '2026-08-25T10:00', 计划完成: '2026-08-25T14:00',
+      基线开始: '2026-08-22T10:00', 基线完成: '2026-08-22T14:00',
       判定: { 已排期: true, 延期: true, 延期天: 3, 余量天: 3, 超期: false, 超期天: 0, 需重排: false } },
-    { 粒ID: 'b', 题: '超期件', 状态: '在途', 计划开始: '2026-08-10', 计划完成: '2026-08-12',
-      基线开始: '2026-08-10', 基线完成: '2026-08-12',
+    { 粒ID: 'b', 题: '超期件', 状态: '起草中', 计划开始: '2026-08-10T10:00', 计划完成: '2026-08-12T10:00',
+      基线开始: '2026-08-10T10:00', 基线完成: '2026-08-12T10:00',
       判定: { 已排期: true, 延期: false, 超期: true, 超期天: 5, 需重排: true } },
   ];
-  const html = ctx.甘特Html(粒, Date.parse('2026-08-22'), []);
-  // 只看条子那一段：图例里「延 Nd」「该重排」是解释文字，本来就该常驻，拿全文断言会被图例假绿。
-  const 条区 = (h) => h.slice(h.indexOf('gtbody'), h.indexOf('fglegend'));
+  const 画 = (粒们) => 岛._测.试渲染({ 管线: [], 特性: [], 专项: [], 粒: 粒们, 名册: {}, 板归属: {},
+    今: '2026-08-22T12:00', 停表: false, 债: [] }).html;
   const 类们 = (h) => { const s = new Set();
     for (const m of h.matchAll(/class="([^"]*)"/g)) for (const c of m[1].trim().split(/\s+/)) if (c) s.add(c);
     return s; };
-  // 类名按 token 取、不按子串取：'gt-lateX' 里含着 'gt-late'，用 includes 判会被改名蒙混过去。
-  const 条 = 条区(html); const 有类 = 类们(条);
-  assert.ok(有类.has('gt-late'), '延期行要挂延期记号，实得：' + [...有类].join(' '));
-  assert.ok(有类.has('gt-od'), '超期行要挂超期记号，实得：' + [...有类].join(' '));
+  // 类名按 token 取、不按子串取：'gt2-lateX' 里含着 'gt2-late'，用 includes 判会被改名蒙混过去。
+  const 条 = 画(粒); const 有类 = 类们(条);
+  assert.ok(有类.has('gt2-late'), '延期条要挂延期记号，实得：' + [...有类].join(' '));
+  assert.ok(有类.has('gt2-od'), '超期条要挂超期记号，实得：' + [...有类].join(' '));
   // `>X<` 而不是 `X`：徽标是**看得见的元素文字**。只写进 title= 悬浮不算数——
   // 那要把鼠标停上去才知道，跟「藏起来」只差一个动作。
   assert.match(条, />延 3d</, '延期天数要写在徽标上——「延期了」而不说几天，等于没说');
   assert.match(条, />该重排</, '需重排要出徽标（写在悬浮里不算：得停鼠标才看得见）');
   assert.ok(/已超期 5 天/.test(条), '超期天数要进悬浮');
   // 那句失实的脚注：验渲染结果，不验源码里那几个字
-  assert.ok(!/暂缺|待服务端下发|不下发/.test(html), '「红条与徽标暂缺 / 判定待下发」这类话必须从画面上消失');
-  // 类名与样式表对账：光挂 class 不给规则，就是「画了个看不见的红条」（3 条真延期在条子上一点色都没有）。
-  // 选择器同样按边界匹配：'.gt-lateNOPE' 不算 '.gt-late' 的主。
+  assert.ok(!/暂缺|待服务端下发|判定不下发/.test(条), '「红条与徽标暂缺 / 判定待下发」这类话必须从画面上消失');
+  // 类名与样式表对账：光挂 class 不给规则，就是「画了个看不见的红条」。
+  // 选择器同样按边界匹配：'.gt2-lateNOPE' 不算 '.gt2-late' 的主。
   const 有主 = (c) => new RegExp('\\.' + c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w-])').test(css);
-  for (const c of [...有类].filter((c) => /^gt(-|flag)/.test(c))) {
+  for (const c of [...有类].filter((c) => /^gt2/.test(c))) {
     assert.ok(有主(c), `${c} 在样式表里没有主——空 class 画不出任何东西`);
   }
-  assert.ok(/\.gtflag\.late(?![\w-])/.test(css), '「延 Nd」徽标的延期变体也要有样式');
-  // 反证：不下发判定就什么都不画，证明上面几条不是无条件成立
-  const 素 = 条区(ctx.甘特Html(粒.map(({ 判定, ...g }) => g), Date.parse('2026-08-22'), []));
+  assert.ok(/\.gt2flag\.late(?![\w-])/.test(css) && /\.gt2flag\.od(?![\w-])/.test(css),
+    '「延 Nd」「该重排」徽标的两个变体都要有样式');
+  // 反证：不下发判定就什么都不画，证明上面几条不是无条件成立（悬浮卡走「—」，徽标零渲染）
+  const 素 = 画(粒.map(({ 判定, ...g }) => g));
   const 素类 = 类们(素);
-  assert.ok(!素类.has('gt-late') && !素类.has('gt-od') && !/该重排|延 \d+d/.test(素),
+  assert.ok(!素类.has('gt2-late') && !素类.has('gt2-od') && !/该重排|延 \d+d/.test(素),
     '服务端不下发判定时前端不许自己造——两把尺是这本账最贵的病');
 });
 

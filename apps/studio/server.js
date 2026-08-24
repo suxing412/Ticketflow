@@ -276,6 +276,8 @@ app.get('/api/board', (req, res) => {
     // H103 · 施工令-058：专项挂链 + 伪单印。迁移至专项 有值 = 这张单是被实体化掉的**容器伪单**，
     // 工单板据此把它从盘面上摘掉（要件5「工单板不再显示专项伪单」）——纸面还在，只是不占条位。
     专项: t.fm.专项 || null, 迁移至专项: t.fm.迁移至专项 || null,
+    特性: t.fm.特性 || null, // 甘特施工令 P0-0 裁决②：四层树 feed 前端拼装的最后一格——没它，直挂特性的工单在树上找不到娘家
+
     领单时间: t.fm.领单时间 || null, 交付时间: t.fm.交付时间 || null, 滞留告警: !!t.fm.滞留告警,
     挂起: t.fm.挂起 || null, // 施工令-021：工单池卡/树形行/流程节点/在途四处的 ❄ 置灰都读这一个字段
     // 施工令-022 流程视图（现在线管线甘特）两个必需字段：
@@ -1246,6 +1248,7 @@ app.post('/api/pm/poolbalance/:action', (req, res) => { // 中文动作名走 :a
 // 不是"底层顺手做了"——版本冲突回 409 并把现态一起下发，前端照着重试即可）。
 // 消费接线（流程页/总览/晨晚报）在施工令-041，本令不动前端。
 const schedule = require('./lib/pm/schedule');
+const scheduleEdges = require('./lib/pm/schedule-edges'); // 依赖边读口（甘特施工令 P0-0 裁决④）
 app.get('/api/schedule', (req, res) => {
   if (!ready(res)) return;
   const 粒 = schedule.现态(ROOT); // 已按 批/序 排好：排序口径在 lib 里唯一，消费端不许各排各的
@@ -1261,7 +1264,16 @@ app.get('/api/schedule', (req, res) => {
   const 名册 = {};
   try { for (const f of require('./lib/features').list(ROOT) || []) 名册[f.id] = (f.fm && f.fm.名称) || ''; } catch { /* 退化成裸号，不炸页 */ }
   try { for (const sp of require('./lib/specials').list(ROOT) || []) 名册[sp.id] = (sp.fm && sp.fm.名称) || ''; } catch { /* 同上 */ }
-  res.json({ 粒: 带判定, 计数, 名册, 型集: schedule.型集, 状态全集: schedule.状态全集, 转移表: schedule.转移表 });
+  // 依赖边随现态**同口增发**（甘特施工令 P0-0 裁决④）：边与 粒 出自同一次 现态() 快照——
+  // 另开端点的话，两次拉取之间落一笔 CAS 写就会出现「边指向的粒不在粒表里」的悬空线；
+  // 且甘特 30s 轮询已拉这口，增发省一次请求。冲突/环/外部全在服务端判（CX-3/DS-1 前端只画不判）。
+  // 粒传**全量**不按项目过滤（跨项目前置是常态，过滤后判会把它判成悬空）；项目视界只作跨项目标注轴。
+  const 单册 = {};
+  { const snap = store.snapshot(ROOT);
+    for (const s of store.STATES) for (const t of (snap[s] || []))
+      单册[t.id] = { 态: s, 项目: t.fm.项目 || null, 归档原因: t.fm.归档原因 || null, 依赖: t.fm.依赖 || null }; }
+  const 图 = scheduleEdges.边集(粒, 单册, { 项目: String(req.query.项目 || '').trim() || null });
+  res.json({ 粒: 带判定, 计数, 名册, 边: 图.边, 边统计: 图.统计, 型集: schedule.型集, 状态全集: schedule.状态全集, 转移表: schedule.转移表 });
 });
 // 三条写路由走 :action 参数而不是三个中文字面量路径——express 4 的静态路径按**原始 URL**
 // 匹配，而 fetch('/api/schedule/登记') 发出去的是百分号编码，字面量路由一律 404（本令实测踩到）。

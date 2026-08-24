@@ -1625,3 +1625,142 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 .gtzoom button.on { background:var(--sect); color:var(--ink); border-color:var(--ink3); }
 /* 日视图轨道细网格：暗示刻钟（15 分对齐）粒度；周视图不出 */
 .gtwrap.q15 .gtrow .gttrack { background-image:repeating-linear-gradient(90deg, transparent 0 23px, var(--sect) 23px 24px); border-radius:6px; }
+
+/* ===== 甘特岛（P0 重做） =====
+   施工令《方案-甘特表现层重做-2026-08-24》。岛渲染器＝public/gantt.js，宿主只吐空壳。
+   纪律：全部颜色走 :root 语义令牌（paper/glass 双主题自动成立）；
+   布局层禁嵌套 flex 撑宽（Chromium 124 事故）——行＝absolute、树列格＝grid，flex 只许工具条单层用。
+   旧 .gt* 样式不删（旧日粒度几何测试仍引用，整合期清）。 */
+.gt2 { outline:none; }
+.gt2bar-tools { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 10px; }
+.gt2grp { display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:8px;
+  background:var(--card); overflow:hidden; }
+.gt2grp .gt2lab { font-style:normal; font-size:10.5px; color:var(--ink3); letter-spacing:.06em; padding:0 8px; }
+.gt2grp button { font-size:12px; color:var(--ink2); padding:5px 10px; border-left:1px solid var(--line); }
+.gt2grp button:first-child { border-left:none; }
+.gt2grp button:hover { background:var(--sect); color:var(--ink); }
+.gt2grp button:focus-visible { outline:2px solid var(--ink); outline-offset:-2px; }
+.gt2note { font-size:11px; }
+.gt2stopband { margin:0 0 10px; padding:8px 12px; border-radius:10px; background:var(--chip); color:var(--ink3);
+  font-size:12px; letter-spacing:.04em; }
+
+/* 滚动视口＋画布：虚拟化底座（固定行高 30px，只画可视行） */
+.gt2wrap { position:relative; overflow:auto; max-height:640px; border:1px solid var(--line);
+  border-radius:12px; background:var(--card); }
+.gt2wrap:focus-visible { outline:2px solid var(--ink); outline-offset:1px; }
+.gt2cv { position:relative; }
+/* 双行表头 sticky：上＝日期（整日界加重），下＝每 4 小时；树列头 sticky 钉左 */
+.gt2head { position:sticky; top:0; z-index:5; height:46px; background:var(--sect);
+  border-bottom:1px solid var(--line); }
+.gt2ht { position:sticky; left:0; z-index:6; float:left; width:280px; height:46px; background:var(--sect);
+  border-right:1px solid var(--line); padding:24px 12px 0; font-size:11px; color:var(--ink3); letter-spacing:.06em; }
+.gt2hx { position:absolute; left:280px; top:0; height:46px; }
+.gt2hx .t1 { position:absolute; top:0; left:0; right:0; height:22px; border-bottom:1px solid var(--line); }
+.gt2hx .t1 span { position:absolute; top:3px; font-size:11px; color:var(--ink2); font-family:var(--mono);
+  padding-left:6px; border-left:1.5px solid var(--line); white-space:nowrap; }
+.gt2hx .t2 { position:absolute; top:22px; left:0; right:0; height:24px; }
+.gt2hx .t2 span { position:absolute; top:4px; font-size:10px; color:var(--ink3); font-family:var(--mono);
+  padding-left:4px; border-left:1px solid var(--line); white-space:nowrap; }
+.gt2body { position:relative; }
+/* 时间区网格底：4h 细线＋整日界加重（窗起整日取齐，条纹天然对位；20px/h ⇒ 4h=80px，日=480px） */
+.gt2body .gt2gridbg { position:absolute; left:280px; top:0; bottom:0; pointer-events:none;
+  background-image:repeating-linear-gradient(90deg, var(--line) 0 1.5px, transparent 1.5px 480px),
+    repeating-linear-gradient(90deg, var(--sect) 0 1px, transparent 1px 80px); opacity:.7; }
+html[data-theme="glass"] .gt2body .gt2gridbg { opacity:.5; }
+
+/* 行：absolute 定位（虚拟化），树列格 sticky 钉左 */
+.gt2r, .gt2row { position:absolute; left:0; right:0; height:30px; border-bottom:1px solid var(--sect); }
+.gt2r:hover { background:var(--we); }
+.gt2t { position:sticky; left:0; z-index:2; width:280px; height:100%; background:var(--card);
+  border-right:1px solid var(--line); display:grid; grid-template-columns:16px auto minmax(0,1fr) auto;
+  align-items:center; column-gap:5px; padding-right:8px; }
+.gt2r:hover .gt2t { background:var(--we); }
+.gt2tri { width:16px; height:20px; color:var(--ink3); font-size:9px; border-radius:4px; text-align:center; }
+.gt2tri:hover { background:var(--sect); color:var(--ink); }
+.gt2tri:focus-visible { outline:2px solid var(--ink); outline-offset:-1px; }
+.gt2tri.leaf { visibility:hidden; }
+.gt2id { font-size:10.5px; white-space:nowrap; }
+.gt2nm { font-size:12px; color:var(--ink); text-decoration:none; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; border-radius:5px; padding:1px 3px; }
+a.gt2nm:hover, a.gt2nm:focus-visible { background:var(--sect); color:var(--accent-ink); outline:none; }
+.gt2nm.plain { color:var(--ink2); }
+.gt2mx { font-size:9.5px; color:var(--ink3); white-space:nowrap; }
+.gt2r.lv0 .gt2id { color:var(--accent-ink); } .gt2r.lv0 .gt2nm { font-weight:700; }
+.gt2r.lv1 .gt2nm { font-weight:600; }
+.gt2r.lv2 .gt2id { color:var(--ok); }
+.gt2r.lv3 .gt2nm { color:var(--ink2); }
+.gt2g { position:absolute; left:280px; top:0; height:100%; }
+.gt2gem { font-size:11px; color:var(--warn); padding:0 1px; }
+.gt2gem:hover, .gt2gem:focus-visible { transform:scale(1.25); outline:none; }
+
+/* 三型条（#17）：管线/特性括号条 · 专项实条＋汇总 · 工单实条＋基线影子 */
+.gt2brkt { position:absolute; top:11px; height:8px; border:1.5px solid var(--accent); border-top:none;
+  border-radius:0 0 4px 4px; opacity:.8; }
+.gt2brkt.lv1 { border-color:var(--accent-ink); opacity:.55; }
+.gt2spbar { position:absolute; top:9px; height:12px; border-radius:6px; background:var(--ok); opacity:.75; }
+.gt2sum { position:absolute; height:5px; border-radius:3px; background:var(--okln); opacity:.9; }
+.gt2base { position:absolute; top:21px; height:4px; border-radius:2px; background:var(--chip); }
+.gt2bar { position:absolute; top:7px; height:13px; border-radius:4px; background:var(--ink3); cursor:pointer;
+  box-shadow:var(--shadow-sm); }
+.gt2bar:hover { filter:brightness(1.12); }
+.gt2bar:focus-visible { outline:2px solid var(--ink); outline-offset:1px; }
+.gt2bar.plan { background:transparent; border:1px dashed var(--ink3); }
+.gt2bar.draft { background:var(--warnbg); border:1px solid var(--warnln); }
+.gt2bar.made { background:var(--accent); }
+.gt2bar.done { background:var(--ok); opacity:.7; }
+.gt2bar.half { border-style:dotted; }
+/* 服务端判定记号（只画不判）：延期＝虚线描边，超期＝实线描边 */
+.gt2bar.gt2-od { outline:1.5px solid var(--danger); outline-offset:1px; }
+.gt2bar.gt2-late { outline:1.5px dashed var(--warn); outline-offset:1px; }
+/* 越线待重判：斜纹＋红点（色盲可达性升级，不再只靠灰） */
+.gt2bar.xline { background:repeating-linear-gradient(45deg, var(--chip) 0 6px, var(--sect) 6px 12px);
+  border:1px solid var(--line); }
+.gt2bar.xline::after { content:''; position:absolute; right:-3px; top:-3px; width:7px; height:7px;
+  border-radius:50%; background:var(--danger); border:1.5px solid var(--card); }
+/* 超长截断（CX-5 乙案）：24h 处折断符号，真实区间在悬浮卡 */
+.gt2bar.cut::before, .gt2bar.gt2cut::before { content:'⋯'; position:absolute; right:1px; top:-2px; font-size:11px; font-weight:700;
+  color:var(--warn); line-height:1; }
+.gt2flag { position:absolute; top:7px; font-style:normal; font-size:9.5px; line-height:1.4; padding:0 5px;
+  border-radius:5px; white-space:nowrap; background:var(--sect); color:var(--ink3); border:1px solid var(--line); }
+.gt2flag.late { background:var(--warnbg); color:var(--warn); border-color:var(--warnln); }
+.gt2flag.od { background:var(--dangerbg); color:var(--danger); border-color:var(--dangerbg); }
+.gt2flag.rejudge { background:var(--chip); color:var(--ink3); }
+
+/* 折叠投影（rollup #17）：迷你条微型泳道 ≤3 道＋密度块，越线永在最上道 */
+.gt2mini { position:absolute; height:5px; border-radius:3px; background:var(--accent); opacity:.85; cursor:pointer; }
+.gt2mini:hover { opacity:1; }
+.gt2mini.done { background:var(--ok); }
+.gt2mini.xline { background:repeating-linear-gradient(45deg, var(--danger) 0 4px, var(--chip) 4px 8px); opacity:1; }
+.gt2dens, .gt2dense { position:absolute; top:9px; height:12px; min-width:22px; border-radius:6px; background:var(--chip);
+  border:1px solid var(--line); color:var(--ink2); font-size:9.5px; font-family:var(--mono); line-height:1; }
+.gt2dens:hover, .gt2dens:focus-visible { background:var(--sect); color:var(--ink); outline:none; }
+
+/* 今时线（分钟粒度）：表头带「今 HH:mm」徽章，行区只画线 */
+.gt2now { position:absolute; top:0; bottom:0; width:1.5px; background:var(--now); z-index:3; pointer-events:none; }
+.gt2now.h { z-index:7; }
+.gt2now.h em { position:absolute; top:1px; left:2px; font-size:9.5px; font-family:var(--mono); font-style:normal;
+  font-weight:700; color:var(--card); background:var(--now); border-radius:3px; padding:0 4px; white-space:nowrap; }
+
+/* 悬浮详情卡（#18）：判定字段全读服务端下发 */
+.gt2tip { position:fixed; z-index:98; background:var(--frost); backdrop-filter:blur(var(--frost-blur));
+  -webkit-backdrop-filter:blur(var(--frost-blur)); border:1px solid var(--line); border-radius:10px;
+  box-shadow:var(--shadow-lg); padding:10px 12px 9px; min-width:210px; max-width:300px;
+  display:none; pointer-events:none; }
+.gt2tip.show { display:block; }
+.gt2tip .th { display:grid; grid-template-columns:auto auto auto 1fr; align-items:baseline; column-gap:8px; }
+.gt2tip .th .id { font-size:11px; color:var(--accent-ink); }
+.gt2tip .st { font-size:10px; border-radius:4px; padding:1px 6px; font-weight:600; background:var(--sect); color:var(--ink2); }
+.gt2tip .st.ok { background:var(--okbg); color:var(--ok); }
+.gt2tip .st.late { background:var(--dangerbg); color:var(--danger); }
+.gt2tip .tt { font-size:12.5px; line-height:1.4; margin:2px 0 6px; }
+.gt2tip .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 12px; font-size:11.5px; }
+.gt2tip .kv .k { color:var(--ink3); }
+.gt2tip .kv .v { font-family:var(--mono); font-size:11px; color:var(--ink2); }
+.gt2tip .kv .v.warn { color:var(--danger); }
+.gt2tip .note { margin-top:6px; font-size:10.5px; color:var(--warn); border-top:1px dashed var(--line); padding-top:5px; }
+/* 岛内欠账区（.gt2debt 判据抓手；宿主项管页传 欠账区=false 用壳层带按钮的版本，此块隐藏） */
+.gt2debt { margin-top:10px; border:1px dashed var(--gateln); border-radius:12px; background:var(--gatebg);
+  padding:8px 12px; font-size:12px; color:var(--gatetx); }
+.gt2debtrow { display:block; width:100%; text-align:left; padding:3px 8px; border-radius:8px;
+  font-size:12px; color:var(--ink2); }
+.gt2debtrow:hover, .gt2debtrow:focus-visible { background:var(--card); outline:none; }

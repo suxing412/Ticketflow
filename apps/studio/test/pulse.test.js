@@ -387,6 +387,17 @@ t('data-live 元素原样不动：详情页秒表不被脉冲拨回 --:--（要�
   assert.equal(表.childNodes[0].nodeValue, '02:17', '秒表被脉冲拨回了占位值——正是要件3 要防的闪');
 });
 
+t('data-morph-skip 自渲染岛：morph 不进岛，岛内自管的行不被按位错位改写（甘特岛，spike A）', () => {
+  // 岛内由岛渲染器自己维护的行（服务端壳里没有），morph 拿着空壳来也不许动岛内容
+  const box = 现场('<div id="rl-gantt" data-morph-skip><div class="grow" data-key="TK-9">岛渲染器画的行</div></div>');
+  const 岛 = doc.getElementById('rl-gantt'), 行 = 岛.childNodes[0];
+  行.childNodes[0].nodeValue = '岛内实时状态';                 // 岛自己的增量更新写的
+  morph(box, '<div id="rl-gantt" data-morph-skip></div>');    // 服务端壳永远是空的
+  assert.equal(doc.getElementById('rl-gantt'), 岛, '岛外壳被重建了');
+  assert.equal(岛.childNodes[0], 行, '岛内的行被 morph 动了——skip 闸失灵，按位比对会把行错位改写');
+  assert.equal(行.childNodes[0].nodeValue, '岛内实时状态', '岛内容被服务端空壳抹掉了');
+});
+
 t('正在敲的输入框：值与焦点都不许被新数据盖掉', () => {
   const box = 现场('<form id="f"><input id="q" value=""></form>');
   const inp = doc.getElementById('q');
