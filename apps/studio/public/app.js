@@ -3779,7 +3779,9 @@ async function viewRelay() {
     粒: 在排, 名册, 板归属, 边: (sch && sch.边) || null, 边统计: (sch && sch.边统计) || null, 今: 现在, 停表,
     债: (attn && Array.isArray(attn.债)) ? attn.债 : [], 项目: p,
   };
-  requestAnimationFrame(() => 挂甘特岛(岛数据)); // 壳落地（innerHTML/morph 都是同步收尾）后下一帧喂岛
+  // 壳落地（innerHTML/morph 都是同步收尾）后喂岛。用 setTimeout 不用 rAF：rAF 在窗口不可见时
+  // 冻结（最小化期间 30s 轮询的喂岛会挂起到恢复才补），setTimeout 不依赖渲染帧，时序同样在壳之后。
+  setTimeout(() => 挂甘特岛(岛数据), 0);
   const 模型档 = (_cfg && _cfg.模型 && _cfg.模型.项管) || '—';
   const L = (pl && pl.台账) || {};
   const working = d.作业;
