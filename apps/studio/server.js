@@ -1258,7 +1258,18 @@ app.get('/api/schedule', (req, res) => {
   // 是 lib 里的纯函数，前端够不着。不下发的后果不是「少个字段」，是甘特要么不敢画红条、
   // 要么自己复刻一套判定——那就成了两把尺，同一条待办在甘特图和晨晚报里给出不同的延期天数。
   // 判定挂在每粒身上而不是另开一个端点：它是这粒的属性，分两处取必然有一处拿的是旧的。
-  const 带判定 = 粒.map((g) => ({ ...g, 判定: schedule.工期判定(g) }));
+  // 待表态 随粒下发（终审 T2：越线判定服务端化，前端只画不判）：谓词唯一实现＝
+  // schedule.越线待表态判（gatereg G23 同一份）。可派/停表 取自与 单册 同一次 snapshot / gates 读——
+  // 甘特岛的越线视觉/角标/菜单/拖拽分流全改读这一格，岛内不再有「计划态+开始≤今」的私判。
+  const snap = store.snapshot(ROOT);
+  const 可派 = new Set();
+  for (const s of ['待派', '待重派']) for (const t of (snap[s] || [])) 可派.add(t.id);
+  const 停表 = !!(gates.isPaused && gates.isPaused(ROOT));
+  const 此刻 = Date.now();
+  const 带判定 = 粒.map((g) => ({
+    ...g, 判定: schedule.工期判定(g),
+    ...(schedule.越线待表态判(g, { 现在: 此刻, 可派, 停表 }) ? { 待表态: true } : {}),
+  }));
   // 名册随现态下发（2026-08-21 归属换轴）：上级号 → 可读名。
   // 前端不自己去拼——特性册与专项册各有权威源，两处各拼一遍就是两把尺。
   const 名册 = {};
@@ -1269,8 +1280,7 @@ app.get('/api/schedule', (req, res) => {
   // 且甘特 30s 轮询已拉这口，增发省一次请求。冲突/环/外部全在服务端判（CX-3/DS-1 前端只画不判）。
   // 粒传**全量**不按项目过滤（跨项目前置是常态，过滤后判会把它判成悬空）；项目视界只作跨项目标注轴。
   const 单册 = {};
-  { const snap = store.snapshot(ROOT);
-    for (const s of store.STATES) for (const t of (snap[s] || []))
+  { for (const s of store.STATES) for (const t of (snap[s] || []))
       单册[t.id] = { 态: s, 项目: t.fm.项目 || null, 归档原因: t.fm.归档原因 || null, 依赖: t.fm.依赖 || null }; }
   const 图 = scheduleEdges.边集(粒, 单册, { 项目: String(req.query.项目 || '').trim() || null });
   res.json({ 粒: 带判定, 计数, 名册, 边: 图.边, 边统计: 图.统计, 型集: schedule.型集, 状态全集: schedule.状态全集, 转移表: schedule.转移表 });
@@ -1308,7 +1318,18 @@ const 排程动作 = {
     if (String(b.决定 || '') === '派发' && gates.isPaused && gates.isPaused(ROOT)) {
       return { ok: false, error: '产线闸关闭中——停表期只收重排，不收派发（H112/DS-11）' };
     }
-    return schedule.表态(ROOT, { 粒ID: b.粒ID, 预期版本: b.预期版本, 触发源: b.触发源, 决定: b.决定, 类别: b.类别, 新计划开始: b.新计划开始, 新计划完成: b.新计划完成, 预估单元: b.预估单元, 因: b.因, 操作者: b.操作者 });
+    const r = schedule.表态(ROOT, { 粒ID: b.粒ID, 预期版本: b.预期版本, 触发源: b.触发源, 决定: b.决定, 类别: b.类别, 新计划开始: b.新计划开始, 新计划完成: b.新计划完成, 预估单元: b.预估单元, 因: b.因, 操作者: b.操作者 });
+    // 消债闭环（终审 T3②）：决定=派发 且粒有单号 → 同一请求内复用 life.放行 落 fm.放行——
+    // 放行写口唯一在 lifecycle（待派态校验/重复放行拒绝都在那儿，与 ACTIONS.放行/releaseAll 同一条产线，勿另造）。
+    // 放行被拒（单在待重派/已放行/已派出）不撤表态：表态事件已消 G23 债（豁免谓词），
+    // 放行留人闸语义原样——待重派单的派出走 重投（自带 放行=true，H113），不归这一格代劳。
+    // 无单号纯计划粒只落表态事件：派单是人闸（H57），表态不代行。
+    if (r.ok && r.动作 === '派发' && r.单号) {
+      const p = life.放行(ROOT, r.单号);
+      r.放行 = p.ok ? { ok: true, 单号: r.单号 } : { ok: false, 单号: r.单号, 因: p.error };
+      if (p.ok) journal.append(ROOT, `表态派发联动放行 ${r.单号}（H112/G23 消债闭环 · ${String(b.操作者 || '')}）`);
+    }
+    return r;
   },
 };
 app.post('/api/schedule/:action', (req, res) => { // 参数名只能是 ASCII：path-to-regexp 不认中文占位符（会当字面量）

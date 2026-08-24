@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const schedule = require('../lib/pm/schedule');
-const { 造台账, 现在 } = require('./fixtures/甘特合成台账');
+const { 造台账, 现在, 标待表态 } = require('./fixtures/甘特合成台账');
 
 let passed = 0;
 const 待 = [];
@@ -193,6 +193,14 @@ t('① 钟面往返：像素↔时间恒等（含 23:45/跨日/纯日期存量�
   // 吸附=就近刻钟（不是截断也不是进位）：8min 进 15、7min 退 00——floor/ceil 冒充 round 在这必红
   assert.equal(T.吸附(窗.t0 + 8 * 60000), 窗.t0 + 15 * 60000, '8min 须就近吸附到 :15（floor 冒充必红）');
   assert.equal(T.吸附(窗.t0 + 7 * 60000), 窗.t0, '7min 须就近吸附到 :00（ceil 冒充必红）');
+  // 钟面轴统一（终审 T9）：岛毫秒轴 == 服务端 schedule.计划毫秒 逐样本相等（纯日期＝当日本地
+  // 00:00、刻钟形本地解析——两形态一把尺）。岛若再用 Date.UTC 自建轴，任何非 UTC 时区此断言当场红。
+  for (const 样 of ['2026-08-23', '2026-08-24T00:15', '2026-08-24T23:45', '2026-12-31T12:00', '2027-02-28']) {
+    assert.equal(T.段(样, null).起, schedule.计划毫秒(样),
+      `${样}：岛解析毫秒须与服务端 计划毫秒 同值——今时线比较与日期间隔才不会两把尺分叉`);
+  }
+  assert.equal(T.毫钟面(schedule.计划毫秒('2026-08-24T09:15')), '2026-08-24T09:15',
+    '服务端毫 → 岛钟面串往返恒等（本地 getters 收回本地 parse，同一把尺）');
   // 拖几何三模式（跨日样本 23:45→01:00）：移=平移工期不变、左=讫不动、右=起不动、最窄一刻钟
   const s = T.段('2026-08-24T23:45', '2026-08-25T01:00');
   const 移 = T.拖几何(s, '移', 20); // 20px = 1h
@@ -254,8 +262,9 @@ t('② 拖拽分流：普通条→tqReplan 预填、越线条→tqStance 预填(
   assert.ok(!/class="gt2h [lr]"/.test(停.html), '停表时整图不出端点手柄');
   assert.ok(停.ctx.GanttIsland.悬浮卡Html('g-c01').includes('并发件1'), '只读态悬停详情照常（#11）');
   assert.equal(记.重排.length, 3, '停表下没有一笔分流落口');
-  // 变异自证：g-越A 拨成已成单（不再越线）→ 分流翻到重排口
+  // 变异自证：g-越A 拨成已成单（不再越线）→ 服务端重判（标待表态＝同一份谓词重打下发字段）→ 分流翻到重排口
   const 变 = 变体(数据); 变.粒.find((g) => g.粒ID === 'g-越A').状态 = '已成单';
+  标待表态(变.粒);
   const 二 = 画(变);
   const 记2 = { 重排: [], 表态: [] };
   二.ctx.tqReplan = (id, 预填) => 记2.重排.push([id, 预填]);
@@ -287,7 +296,28 @@ t('③ 回滚：拖拽分流（=弹窗预填后取消）不动岛数据——DOM
 t('④ 依赖线：全边入图（6 条）；conflict⇔服务端 冲突:true；环边虚线+环组 title；悬空外部=半截线+空心端点符', () => {
   const 数据 = 造台账();
   const 首 = 画(数据);
-  首.ctx.GanttIsland.切折叠('S-2'); // 依赖花样全在 S-2（默认折叠），展开后端点行全可见
+  // ── 默认折叠态先断（终审 T5）：依赖花样全在 S-2 而 S-2 默认折叠——原判据先展开再断，
+  // 掩盖了「折叠即断线」的病（实测默认态 SVG 边组为 0）。折叠行以聚合桩建锚：
+  // x=叶子自己的段几何（与迷你条同位）、y=折叠行中线；单端边（悬空/跨项目）外部端点语义原样。──
+  const 默html = 首.容器.innerHTML;
+  const 默组 = 组们(默html);
+  assert.equal(默组.length, 数据.边.length,
+    `默认折叠态 ${数据.边.length} 条边须全数入图（实得 ${默组.length}）——折叠是收行，不是断线（删聚合桩锚必红）`);
+  const S2块 = 块(默html, 'data-gid="S-2"');
+  const S2top = +(/top:([\d.]+)px/.exec(S2块.slice(0, S2块.indexOf('>') + 1))[1]);
+  const 默内 = 默组.find((x) => x.from === 'g-冲A' && x.to === 'g-冲B');
+  assert.ok(默内, '折叠分支内边（g-冲A→g-冲B）默认态须在图');
+  assert.ok(近(默内.y1, S2top + 15) && 近(默内.y2, S2top + 15),
+    `折叠内边两端锚在 S-2 行中线（期 ${S2top + 15} 实 ${默内.y1}/${默内.y2}）`);
+  const 迷A = /<i class="gt2mini[^>]*data-gid="g-冲A"[^>]*left:([\d.]+)px;width:([\d.]+)px/.exec(S2块);
+  assert.ok(迷A, 'g-冲A 的迷你条须在 S-2 折叠行上显影');
+  assert.ok(近(默内.x1, +迷A[1] + +迷A[2]),
+    `折叠内边出点 x 须＝g-冲A 迷你条右端（期 ${+迷A[1] + +迷A[2]} 实 ${默内.x1}）——锚在叶子自己的时间位，不是行首乱堆`);
+  assert.ok(/\bconflict\b/.test(默内.类), '折叠态冲突边照样带 conflict（服务端字段不因折叠失效）');
+  const 默悬 = 默组.find((x) => x.from === '外:GHOST-404');
+  assert.ok(默悬 && /\bext\b/.test(默悬.类) && /hollow/.test(块级(默html, '外:GHOST-404')),
+    '默认折叠态单端边仍保留外部端点语义（半截线+空心端点符）');
+  首.ctx.GanttIsland.切折叠('S-2'); // 展开后端点行全可见，以下断逐行锚的精细几何
   const html = 首.容器.innerHTML;
   const 组 = 组们(html);
   assert.equal(组.length, 数据.边.length, `服务端下发 ${数据.边.length} 条边须全数入图（实得 ${组.length}）`);
@@ -388,6 +418,26 @@ t('⑥ 冲突角标：台账 边统计.冲突=3 → 角标数=3；拨统计字�
   const 变2 = 变体(数据); 变2.边统计 = { ...变2.边统计, 冲突: 0 };
   assert.ok(/ hidden/.test(/<button[^>]*gt2cbadge[^>]*>/.exec(画(变2).html)[0]),
     '冲突 0 时角标必须藏——不许挂个 0 在那儿唬人');
+});
+
+/* ═══ ⑦ resize 监听生命周期（终审 T8）：单例分发，反复挂载不累积 ═══
+ * 病例：每建一岛 window.addEventListener('resize', 匿名闭包) 且无注销口——路由反复进出页面，
+ * 已脱离的岛与整份台账被旧闭包锚住回收不掉。修法＝模块级一个监听，事件时经 找岛() 分发到活岛。
+ * 变异自证：改回「每岛一挂」（岛._挂resize 旗），计数变 2，本条当场红。 */
+t('⑦ resize 单例：两个容器三次挂载后全局 resize 监听计数恒=1，且事件仍分发到活岛', () => {
+  const 数据 = 造台账();
+  const ctx = 装岛();
+  const 计 = {}; const 听 = {};
+  ctx.addEventListener = (type, fn) => { 计[type] = (计[type] || 0) + 1; 听[type] = fn; };
+  const { El } = require('./minidom');
+  const 甲 = new El('div'), 乙 = new El('div');
+  ctx.GanttIsland.render(甲, 数据, { 现在, 视口: { 滚过行: 0, 行数: 40 } });
+  ctx.GanttIsland.render(乙, 数据, { 现在, 视口: { 滚过行: 0, 行数: 40 } });
+  ctx.GanttIsland.render(甲, 数据, { 现在, 视口: { 滚过行: 0, 行数: 40 } });
+  assert.equal(计.resize, 1,
+    `反复进出页面（两容器三挂载）后 window resize 监听须恒为 1，实得 ${计.resize || 0}——每岛一闭包即内存漏（终审 T8）`);
+  assert.equal(typeof 听.resize, 'function', '单例监听本体得真挂上（不是干脆不挂冒充 1）');
+  听.resize(); // 分发到活岛不炸＝事件路仍通（活岛=末次 render 的甲）
 });
 
 (async () => {

@@ -3721,7 +3721,10 @@ async function viewRelay() {
     api('/api/pm/ledger').catch(() => ({ 台账: {} })),
     api('/api/pm/roster').catch(() => null),
     api('/api/pm/chains').catch(() => null),
-    api('/api/schedule').catch(() => ({ 粒: [], 计数: {} })),
+    // 甘特读口带项目视界（终审 T1）：?项目= 让服务端在**同一快照**里按视界生成边集/边统计
+    // （跨项目端点标 外部:true，冲突角标不再把别家项目的边算进来）。粒 照旧全量下发
+    // （跨项目前置查表要用），前端过滤口径不变；未选项目时不硬塞空参数（同 队列口 的口径）。
+    api('/api/schedule' + (projActive() ? '?' + encodeURIComponent('项目') + '=' + encodeURIComponent(projActive()) : '')).catch(() => ({ 粒: [], 计数: {} })),
     // 队列卡也吃当前项目（2026-08-22 体检 #4）：页头写着「监制台 · TK」、甘特已按 g.项目 === p 切过，
     // 而这一口原样不带参数 ⇒ 后端 项目视界 拿不到项目、返回全量，于是页头 13 / 队列卡 34，两把尺。
     // 服务端 GET /api/schedule/:action 把 req.query 整个交给 scheduleView.队列页，认 项目 这一格。
@@ -3835,7 +3838,7 @@ async function viewRelay() {
         <span>折叠行＝聚合条退场，子孙工单以迷你条显影在各自时间位（≤3 道泳道，越线永在最上道，溢出聚「+N」密度块）</span>
         <span>斜纹＋红点＝越线待重判（重判前不标红）· ⋯＝工期超 24h 图端截断（悬浮卡显真实区间并标「超长异常」）· 今时线分钟粒度，T/按钮回到今天</span>
         <span class="subnote">延期/超期判定唯一实现：服务端 <span class="mono">lib/pm/schedule.工期判定</span> 随
-          <span class="mono">GET /api/schedule</span> 逐粒下发，悬浮卡与徽标只读不算；越线触发与立债在数据层独立调度器（H112，gateKey 幂等）。</span></div>
+          <span class="mono">GET /api/schedule</span> 逐粒下发，悬浮卡与徽标只读不算；越线待重判同为服务端逐粒下发（<span class="mono">待表态</span> 字段，与 G23 闸债同一份谓词——单已在途不再误标）；越线触发与立债在数据层独立调度器（H112，gateKey 幂等）。</span></div>
     </div>
     ${待办队列Html(q, 粒表, now)}
     <div class="rlcard card r14" id="rl-ideas">

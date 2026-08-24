@@ -28,7 +28,7 @@ function 排程桩(叫过) {
   return async (u) => {
     const url = decodeURIComponent(String(u));
     叫过.push(url);
-    if (url === '/api/schedule') {
+    if (/^\/api\/schedule(\?|$)/.test(url)) { // 甘特口可带 ?项目=（终审 T1）：粒 照旧全量（跨项目前置查表要用），项目只作边集视界
       return J({
         粒: [
           { 粒ID: 'g1', 题: 'TK活儿', 项目: 'TK', 状态: '计划', 批: 'A', 序: 1 },
@@ -59,6 +59,11 @@ t('项管页三处读数是同一个数：页头 / 队列卡 / 传给后端滤�
   ctx.fetch = 排程桩(叫过);
   const html = await ctx.viewRelay();
 
+  // 甘特读口带项目视界（终审 T1）：?项目= 让服务端在同一快照按视界生成 边/边统计（跨项目端点标 外部:true）。
+  // 不带参数＝边集不判跨项目（schedule-edges 判据 ⑨ 实证），冲突角标会把别家项目的边算进来。
+  const 甘特口 = 叫过.filter((u) => /^\/api\/schedule(\?|$)/.test(u));
+  assert.ok(甘特口.length >= 1 && 甘特口.every((u) => u.includes('项目=TK')),
+    '甘特读口必须带 ?项目=（终审 T1：边集/边统计要在服务端按视界生成）。实叫：' + JSON.stringify(甘特口));
   const 队列口 = 叫过.filter((u) => u.startsWith('/api/schedule/队列'));
   assert.equal(队列口.length, 1, '项管页该正好叫一次队列口，实叫：' + JSON.stringify(队列口));
   assert.ok(队列口[0].includes('项目=TK'),
@@ -91,6 +96,9 @@ t('不过滤态（未选项目 / 单项目部署）：全都要在，且队列�
   assert.ok(叫过.some((u) => u === '/api/schedule/队列'),
     '不过滤时不许硬塞一个空项目参数进去（?项目= 会被后端当成筛一个不存在的项目）。实叫：'
     + JSON.stringify(叫过.filter((u) => u.includes('队列'))));
+  assert.ok(叫过.some((u) => u === '/api/schedule'),
+    '不过滤时甘特口同样裸叫，不塞空 ?项目=（终审 T1 反向）。实叫：'
+    + JSON.stringify(叫过.filter((u) => /^\/api\/schedule(\?|$)/.test(u))));
   assert.ok(/TK活儿/.test(html) && /TF活儿/.test(html), '不过滤态下两个项目的活都该在');
   assert.match(html, /待办 3 条在排/, '不过滤时页头数全量');
   assert.match(html, /2 批 · 2 项未完/, '队列卡同样报全量——同尺是双向的');

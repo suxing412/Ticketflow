@@ -46,10 +46,13 @@
   const 型层 = { 管线: 0, 特性: 1, 专项: 2, 工单: 3, 伪组: 0 };
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-  /* ═══ 分钟几何（岛内自足，口径同旧 H112 分钟几何：本地钟面串 → 时区无关毫秒算术）═══ */
+  /* ═══ 分钟几何（终审 T9 统一钟面轴）：本地钟面串 → **本地墙钟毫秒**，与服务端
+     lib/pm/schedule.计划毫秒 同语义（纯日期＝当日本地 00:00，刻钟形本地解析）。
+     原以 Date.UTC 自建时区无关轴——岛内自洽但与服务端两把尺，遇夏令时部署即分叉；
+     判据（gantt-p2 ①）锁「岛毫秒轴 == schedule.计划毫秒 逐样本相等」。 ═══ */
   const 解时 = (v) => {
     const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(String(v == null ? '' : v));
-    return m ? { ms: Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)), 含时: m[4] != null } : null;
+    return m ? { ms: new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)).getTime(), 含时: m[4] != null } : null;
   };
   // 端点对 → 段。纯日期讫含尾一整天（040 老口径）；最窄一刻钟；>24h 截断（真讫留给悬浮卡）。
   function 段(开始, 完成) {
@@ -65,27 +68,32 @@
   const 计划段 = (g) => 段(g && g.计划开始, g && g.计划完成);
   const 基线段 = (g) => 段(g && g.基线开始, g && g.基线完成);
   // 时间窗＝计划/基线极值 ∪ 今，整日取齐（表头日界与 4h 网格因此天然对齐），两侧各留 1h 再取整。
+  // 取齐用**本地午夜**（T9：轴是本地墙钟毫秒，按 天毫 取整会齐到 UTC 午夜、把日界画到本地 08:00）。
+  const 整日下 = (ms) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
   function 算窗(点们) {
     const 点 = 点们.filter((x) => x != null);
     if (!点.length) return { 空: true };
-    const t0 = Math.floor((Math.min.apply(null, 点) - 时毫) / 天毫) * 天毫;
-    const t1 = Math.ceil((Math.max.apply(null, 点) + 时毫) / 天毫) * 天毫;
+    const t0 = 整日下(Math.min.apply(null, 点) - 时毫);
+    const 顶 = Math.max.apply(null, 点) + 时毫;
+    let t1 = 整日下(顶);
+    if (t1 < 顶) { const d = new Date(t1); t1 = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime(); }
     const 小时 = Math.round((t1 - t0) / 时毫);
     return { 空: false, t0, t1, 小时, 宽: 小时 * HW };
   }
   const X = (ms, 窗) => ((ms - 窗.t0) / 时毫) * HW;
-  const 毫文 = (ms) => new Date(ms).toISOString().slice(5, 16).replace('T', ' ');
+  const 毫文 = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }; // 本地格式（T9：轴是本地毫，toISOString 会漂回 UTC）
   const 时点文 = (v) => { const p = 解时(v); return p ? (p.含时 ? String(v).slice(5, 16).replace('T', ' ') : String(v).slice(5, 10)) : '未定'; };
 
   /* ═══ P2 #10 像素↔钟面反算（纯函数，判据①锁往返恒等）═══
-     解时 用 Date.UTC 做时区无关毫秒算术，反算就得用 getUTC* 收回来——同一把尺才有
-     像素→时间→像素恒等。产出串 'YYYY-MM-DDTHH:mm' 与 lib/pm/schedule.规范计划时刻 的刻钟形
-     一字不差（15 分对齐由 吸附 保证，服务端拒非刻钟），写口再按本地墙钟解析：串即契约。 */
+     解时 按本地墙钟解析（T9 统一轴），反算就得用本地 getters 收回来——同一把尺才有
+     像素→时间→像素恒等。吸附 落全球刻钟格（时区偏移全为 15 分整倍数，格即本地 00/15/30/45）。
+     产出串 'YYYY-MM-DDTHH:mm' 与 lib/pm/schedule.规范计划时刻 的刻钟形一字不差
+     （15 分对齐由 吸附 保证，服务端拒非刻钟），写口按本地墙钟解析：串即契约、轴即同轴。 */
   const 吸附 = (ms) => Math.round(ms / 刻毫) * 刻毫;
   const 像素毫 = (px) => (px / HW) * 时毫;
   function 毫钟面(ms) {
     const d = new Date(ms), p = (n) => String(n).padStart(2, '0');
-    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
   }
   // 拖几何：模式∈{移,左,右}。移=平移工期不变（真讫参与——超长条拖完还是超长，截断只截图）；
   // 左/右=改起/讫，最窄一刻钟；全部落点先过 吸附（图上跟随的就是吸附后的位置，所见即所提交）。
@@ -246,7 +254,12 @@
   }
 
   /* ═══ 行渲染（纯字符串：签名即 HTML，比对相等则一个字节不碰）═══ */
-  const 越线判 = (g, s, 今ms, 停表) => !!(!停表 && 今ms != null && g && g.状态 === '计划' && s && s.起 <= 今ms);
+  // 越线待重判＝服务端下发字段（终审 T2：只画不判）。唯一判处是 lib/pm/schedule.越线待表态判，
+  // 随 GET /api/schedule 逐粒下发 待表态:true——计划态/可派视野（单还在待派∕待重派才欠）/
+  // 停表短路/表态豁免（G23 同一份谓词）全在服务端。岛内原「计划态+开始≤今」私判已删：
+  // 「计划态但对应工单已在途」的粒从此不再被岛错标（终审点名的两把尺病例）；翻转下发字段，
+  // 越线视觉/角标/菜单/拖拽分流全跟走（判据锁死）。
+  const 越线判 = (g) => !!(g && g.待表态 === true);
   const 钻串 = (债) => (债 || []).map((d) => `<button class="gt2gem" data-act="gem" data-r="${esc(d.路由 || '')}"
       title="${esc(`${d.闸号 || ''} ${d.闸名 || ''} · 闸债${d.停摆小时 != null ? ` · 停摆 ${d.停摆小时}h` : ''}\n点击去处置：${d.路由 || ''}`)}">◆</button>`).join('');
 
@@ -272,7 +285,7 @@
     const n = r.节点, 窗 = st.窗, 折 = st.折叠.has(n.键) && n.子.length > 0;
     const px = (v) => v.toFixed(1) + 'px';
     const 条宽 = (s) => px(Math.max(3, X(s.讫, 窗) - X(s.起, 窗)));
-    const 越行 = n.型 === '工单' && 越线判(n.粒, n.段, st.今ms, st.停表);
+    const 越行 = n.型 === '工单' && 越线判(n.粒);
     // —— 树列格（grid，无嵌套 flex）——
     // 自由文本单号照样显示（判据⑧：不成链不等于不显示——库里实证有「（无单·直接落码）」形）
     const 显号 = n.型 === '工单' ? String(n.粒.单号 || '') : n.号;
@@ -297,7 +310,7 @@
         (function 走(x) { if (x.粒 && x.段) 叶.push(x); for (const k of x.子) 走(k); })(n);
         const { 分配, 块 } = 泳道(叶.map((x) => ({
           键: x.键, 起: x.段.起, 讫: x.段.讫,
-          越线: 越线判(x.粒, x.段, st.今ms, st.停表), 完成: x.粒.状态 === '完成',
+          越线: 越线判(x.粒), 完成: x.粒.状态 === '完成',
         })));
         条 = 分配.map((m) => `<i class="gt2mini${m.越线 ? ' xline' : ''}${m.完成 ? ' done' : ''}" data-tid="${esc(m.键)}" data-act="bar" data-g="${esc(m.键)}"${m.越线 ? ' data-x="1"' : ''}
             data-gid="${esc(m.键)}" data-道="${m.道}" style="left:${px(X(m.起, 窗))};width:${条宽(m)};top:${5 + m.道 * 7}px"></i>`).join('')
@@ -343,7 +356,7 @@
     if (!窗.空) {
       for (let h = 0; h < 窗.小时; h += 24) 时 += `<span class="d gt2hd-日" style="left:${h * HW}px">${毫文(窗.t0 + h * 时毫).slice(0, 5)}</span>`;
       let 下 = '';
-      for (let h = 0; h < 窗.小时; h += 4) 下 += `<span class="gt2hd-时" style="left:${h * HW}px">${String(((窗.t0 / 时毫 + h) % 24 + 24) % 24).padStart(2, '0')}:00</span>`;
+      for (let h = 0; h < 窗.小时; h += 4) 下 += `<span class="gt2hd-时" style="left:${h * HW}px">${String(new Date(窗.t0 + h * 时毫).getHours()).padStart(2, '0')}:00</span>`; // 本地小时（T9：t0/时毫 的模算是 UTC 位）
       时 = `<div class="t1">${时}</div><div class="t2">${下}</div>`;
       if (st.今ms != null && st.今ms >= 窗.t0 && st.今ms <= 窗.t1) {
         时 += `<i class="gt2now h" style="left:${X(st.今ms, 窗).toFixed(1)}px"><em>今 ${esc(String(st.数据.今 || '').slice(11, 16))}</em></i>`;
@@ -358,7 +371,7 @@
     const 行 = (k, v, c) => kv.push(`<span class="k">${esc(k)}</span><span class="v${c ? ' ' + c : ''}">${esc(v)}</span>`);
     if (n.型 === '工单') {
       const g = n.粒, s = n.段, j = g.判定 || null;
-      const 越 = 越线判(g, s, st.今ms, st.停表);
+      const 越 = 越线判(g);
       const 态 = 越 ? ['late', '越线待重判'] : g.状态 === '完成' ? ['ok', '完成'] : ['run', g.状态 || ''];
       行('计划', `${时点文(g.计划开始)} → ${时点文(g.计划完成)}`);
       if (s) 行('工期', ((s.真讫 - s.起) / 时毫).toFixed(1).replace(/\.0$/, '') + ' 小时' + (s.单端 ? '（单端）' : ''));
@@ -368,9 +381,16 @@
       行('偏差', j ? ([j.延期 ? `延期 ${j.延期天} 天` : null, j.超期 ? `超期 ${j.超期天} 天` : null]
         .filter(Boolean).join(' · ') || '—') : '—', j && (j.延期 || j.超期) ? 'warn' : '');
       行('需重排', j ? (j.需重排 ? '是' : '否') : '—', j && j.需重排 ? 'warn' : '');
+      // 依赖区（终审 T6）：粒.依赖 冻结形是 {ref,规则} 对象（lib/pm/schedule.规范依赖），
+      // 整对象 String() 只会印 [object Object]——按 d.ref 解析：粒ID/单号都在 键表（拼树两口都登记），
+      // 命中即渲染「单号 题名（规则）」；解析不到（悬空/树外）如实标，不冒充。esc 由 行() 统一转义。
       for (const d of ([].concat(g.依赖 || []))) {
-        const t = st.键表.get(String(d));
-        行('依赖', `${d}${t && t.名 ? `（${t.名}）` : ''}`);
+        const ref = d && typeof d === 'object' ? String(d.ref == null ? '' : d.ref) : String(d == null ? '' : d);
+        const 规则 = d && typeof d === 'object' && d.规则 ? String(d.规则) : '';
+        const t = ref ? st.键表.get(ref) : null;
+        行('依赖', t
+          ? `${显号于(t)}${t.名 ? ' ' + t.名 : ''}${规则 ? `（${规则}）` : ''}`
+          : `${ref || '(空引用)'}（悬空${规则 ? '·' + 规则 : ''}）`);
       }
       const 徽 = `<span class="st ${态[0]}">${esc(态[1])}</span>${s && s.超长 ? '<span class="st late">超长异常</span>' : ''}`;
       const 注 = s && s.超长 ? `<div class="note">工期超过 24h：图上截断到 24h（⋯），此处为真实区间——制度上小时级任务不该有这种条，走人闸处置</div>` : '';
@@ -378,7 +398,7 @@
     }
     let 完 = 0, 越 = 0, 数 = 0;
     (function 走(x) {
-      if (x.粒) { 数++; if (x.粒.状态 === '完成') 完++; if (越线判(x.粒, x.段, st.今ms, st.停表)) 越++; }
+      if (x.粒) { 数++; if (x.粒.状态 === '完成') 完++; if (越线判(x.粒)) 越++; }
       for (const k of x.子) 走(k);
     })(n);
     if (n.聚) 行('区间', `${毫文(n.聚.起)} → ${毫文(n.聚.讫)}`);
@@ -490,6 +510,7 @@
   }
   // 程序口按「末次 render 的岛」兜底（gantt-p0 判据约定：headless 容器没有 rl-gantt id 也得能调）
   let 末岛 = null;
+  let 已挂resize = false; // T8 单例分发旗：全模块只挂一个 resize 监听（见 挂事件）
   function 找岛() { const box = document.getElementById('rl-gantt'); return (box && box._gt2) || 末岛; }
 
   function 重排(岛) {
@@ -510,7 +531,7 @@
     }
     // 越线计数角标（#19）：计全树不计投影——折叠/聚焦藏得住行，藏不住债
     let 越数 = 0;
-    (function 走(x) { if (x.粒 && 越线判(x.粒, x.段, st.今ms, st.停表)) 越数++; for (const k of x.子) 走(k); })({ 子: st.根, 粒: null });
+    (function 走(x) { if (x.粒 && 越线判(x.粒)) 越数++; for (const k of x.子) 走(k); })({ 子: st.根, 粒: null });
     const 标 = 岛.根el.querySelector('.gt2xbadge');
     if (标) { 标.hidden = !越数; 标.setAttribute('data-数', String(越数)); 标.textContent = '越线 ' + 越数; }
     // 冲突角标（#12/DS-7）＝服务端 边统计.冲突——线着色读逐边字段、角标读统计字段，两格都不前端私算
@@ -632,7 +653,7 @@
       const g = n.粒 || (n.型 === '专项' ? n.自粒 : null);
       let h = '';
       if (g && !终态.includes(g.状态)) {
-        h += (n.粒 && 越线判(g, n.段, st.今ms, st.停表))
+        h += (n.粒 && 越线判(g))
           ? B('m-stance', ` data-g="${esc(g.粒ID)}"`, '表态：派发 / 重排（越线强制二选一）')
           : B('m-replan', ` data-g="${esc(g.粒ID)}"`, '重排（改计划起讫，必带因）');
       }
@@ -650,7 +671,7 @@
     if (r) h += B('m-goto', ` data-r="${esc(r)}"`, `跳${n.型}详情`);
     const g = n.粒 || n.自粒;
     if (g && !终态.includes(g.状态)) {
-      h += (n.粒 && 越线判(g, n.段, st.今ms, st.停表))
+      h += (n.粒 && 越线判(g))
         ? B('m-stance', ` data-g="${esc(g.粒ID)}"`, '表态：派发 / 重排（越线）')
         : B('m-replan', ` data-g="${esc(g.粒ID)}"`, '改期（重排，必带因）');
     }
@@ -679,12 +700,12 @@
   /* ═══ 越线定位（#19 角标）：点一下滚到下一张越线行（折叠行里的越线显影也算靶）═══ */
   function 越线定位(岛) {
     const st = 岛.st; if (!st) return;
-    const 有越 = (x) => (x.粒 && 越线判(x.粒, x.段, st.今ms, st.停表)) || x.子.some(有越);
+    const 有越 = (x) => (x.粒 && 越线判(x.粒)) || x.子.some(有越);
     const 靶 = [];
     st.行.forEach((r, i) => {
       const n = r.节点;
       const 折 = st.折叠.has(n.键) && n.子.length > 0;
-      if ((n.粒 && 越线判(n.粒, n.段, st.今ms, st.停表)) || (折 && n.子.some(有越))) 靶.push(i);
+      if ((n.粒 && 越线判(n.粒)) || (折 && n.子.some(有越))) 靶.push(i);
     });
     if (!靶.length) return;
     岛._越游 = ((岛._越游 == null ? -1 : 岛._越游) + 1) % 靶.length;
@@ -707,13 +728,25 @@
   // 出点＝条右端中点、入点＝条左端中点（施工令 #12 原文）；y 按行几何（行高恒定）恒等推得。
   function 锚点集(st, 行窗) {
     const 锚 = new Map();
+    const 放 = (键, 粒, a) => {
+      if (!锚.has(键)) 锚.set(键, a);
+      if (粒 && 粒.单号 && !锚.has(String(粒.单号))) 锚.set(String(粒.单号), a);
+    };
     for (let i = 0; i < st.行.length; i++) {
-      const n = st.行[i].节点, s = n.段 || n.自段;
-      if (!s) continue;
-      const a = { 入x: X(s.起, st.窗), 出x: X(s.讫, st.窗), y: i * 行高 + 行高 / 2, 行: i,
-        离屏: i < 行窗[0] ? '上' : (i >= 行窗[1] ? '下' : null) };
-      if (!锚.has(n.键)) 锚.set(n.键, a);
-      if (n.粒 && n.粒.单号 && !锚.has(String(n.粒.单号))) 锚.set(String(n.粒.单号), a);
+      const n = st.行[i].节点;
+      const 离屏 = i < 行窗[0] ? '上' : (i >= 行窗[1] ? '下' : null);
+      const s = n.段 || n.自段;
+      if (s) 放(n.键, n.粒, { 入x: X(s.起, st.窗), 出x: X(s.讫, st.窗), y: i * 行高 + 行高 / 2, 行: i, 离屏 });
+      // 折叠行聚合桩（终审 T5）：折叠分支的叶子不占整行，但迷你条仍显影在本行各自时间位——
+      // 依赖锚随之建在本行（x=叶子自己的段几何、y=行中线，与迷你泳道同高区），默认折叠态下
+      // 分支内/跨分支依赖线照样可表达；单端边（悬空/跨项目）锚得住可见端，外部端点语义原样。
+      // 删掉这一段，默认折叠的 S-2 六条边整组消失（gantt-p2 判据④默认态断言锁死）。
+      if (st.折叠.has(n.键) && n.子.length) {
+        (function 走(x) {
+          if (x !== n && x.粒 && x.段) 放(x.键, x.粒, { 入x: X(x.段.起, st.窗), 出x: X(x.段.讫, st.窗), y: i * 行高 + 行高 / 2, 行: i, 离屏 });
+          for (const k of x.子) 走(k);
+        })(n);
+      }
     }
     return 锚;
   }
@@ -822,7 +855,7 @@
     const st = 岛.st, n = st && st.键表.get(String(粒ID));
     if (!n || !n.粒) return null;
     const 起串 = 毫钟面(r.起), 讫串 = 毫钟面(r.讫);
-    if (越线判(n.粒, n.段, st.今ms, st.停表)) {
+    if (越线判(n.粒)) {
       const 预填 = { 决定: '重排', 新计划开始: 起串, 新计划完成: 讫串, 拖拽: true };
       if (typeof window.tqStance === 'function') window.tqStance(n.粒.粒ID, 预填);
       return { 口: '表态', 粒ID: n.粒.粒ID, 预填 };
@@ -924,10 +957,16 @@
     });
     // #10 拖拽起手：条身=平移、端点手柄(.gt2h)=改起/讫；只读态（#11）在 起拖 里不启动
     岛.根el.addEventListener('mousedown', (e) => 起拖(岛, e));
-    // #12：视口尺寸一变可视窗跟着变，行与依赖线同步重绘（DS-11）
-    if (!岛._挂resize && typeof window.addEventListener === 'function') {
-      岛._挂resize = true;
-      window.addEventListener('resize', () => { if (岛.根el && 岛.根el.isConnected && 岛.st) 画行(岛); });
+    // #12：视口尺寸一变可视窗跟着变，行与依赖线同步重绘（DS-11）。
+    // 单例分发（终审 T8）：模块级只挂**一个** resize 监听，事件时经 找岛() 分发到活岛——
+    // 原先每建一岛挂一个匿名闭包且无注销口，反复进出页面积攒已脱离的岛与整份台账（内存漏）；
+    // 单例不捕获任何岛引用，旧岛随 末岛 换代即可回收。判据：连续两次挂载后 resize 监听计数=1。
+    if (!已挂resize && typeof window.addEventListener === 'function') {
+      已挂resize = true;
+      window.addEventListener('resize', () => {
+        const 活 = 找岛();
+        if (活 && 活.根el && 活.根el.isConnected && 活.st) 画行(活);
+      });
     }
     // #8 右键两区菜单：岛容器一个 contextmenu 委托——条上（实条/迷你条）＞行上＞空白
     岛.根el.addEventListener('contextmenu', (e) => {

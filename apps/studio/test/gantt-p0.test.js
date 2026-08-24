@@ -445,6 +445,31 @@ t('⑩ 虚拟化：500 行档视口 40 行时渲染≤60 行；滚过 300 行换
   assert.ok(全.length >= 450, `视口 999 行须画出全部可见行（≥450），实得 ${全.length}——可视行选择器必须真由视口驱动`);
 });
 
+/* ═══ ⑪ 悬浮卡依赖区（终审 T6/T7）：结构化依赖 {ref,规则} 按 ref 解析渲染 ═══
+ * 病例（codex 终审实测）：对整对象 String() 显 [object Object]，且原三套判据把依赖区整段删除照绿。
+ * 本条把该变异固化为必红：粒ID引用/单号引用/悬空引用三样都断到字面，块一删三断言全炸。
+ * 转义断言（DS-9 同族）：依赖对端的题名带 HTML 也只能以实体形上卡。 */
+t('⑪ 悬浮卡依赖：粒ID引用→对端单号+题名+规则；单号引用同解析；悬空引用如实标；题名转义；无 [object Object]', () => {
+  const 数据 = 造台账();
+  const 变 = 变体(数据);
+  // 单号引用样本：g-c02 依赖 TK-301（=g-c01 的单号）——卡不读边集，改依赖不必重算 边
+  变.粒.find((g) => g.粒ID === 'g-c02').依赖 = [{ ref: 'TK-301', 规则: '任一完成' }];
+  // 转义样本：依赖对端 g-环2 的题名带 HTML
+  变.粒.find((g) => g.粒ID === 'g-环2').题 = '环乙<b>x</b>';
+  const { ctx } = 画(变);
+  const 卡1 = ctx.GanttIsland.悬浮卡Html('g-环1'); // 依赖 [{ref:'g-环2',规则:'全部完成'}]（粒ID 引用）
+  assert.ok(!/\[object Object\]/.test(卡1), '结构化依赖不许整对象字符串化（[object Object] 病例）');
+  assert.ok(卡1.includes('TK-332'), '粒ID 引用须解析出对端单号（g-环2 → TK-332）');
+  assert.ok(卡1.includes('环乙') && 卡1.includes('全部完成'), '对端题名与规则都得上卡（施工令 #18「依赖（单号+名）」）');
+  assert.ok(卡1.includes('环乙&lt;b&gt;x&lt;/b&gt;') && !卡1.includes('<b>x</b>'), '题名须转义——依赖区不是 XSS 旁门');
+  const 卡2 = ctx.GanttIsland.悬浮卡Html('g-c02'); // 单号引用
+  assert.ok(卡2.includes('TK-301') && 卡2.includes('并发件1') && 卡2.includes('任一完成'),
+    '单号引用须解析出对端题名与规则（TK-301＝并发件1）');
+  const 卡3 = ctx.GanttIsland.悬浮卡Html('g-悬'); // 悬空引用（GHOST-404 哪个册都查不到）
+  assert.ok(卡3.includes('GHOST-404') && /悬空/.test(卡3), '悬空引用如实标（不冒充可解析，不静默吞行）');
+  assert.ok(!/\[object Object\]/.test(卡2 + 卡3), '三形一律不许出现 [object Object]');
+});
+
 (async () => {
   for (const [n, f] of 待) { await f(); passed++; console.log('  ✓ ' + n); }
   console.log('全部通过：' + passed + ' 项');
