@@ -116,6 +116,25 @@
 </div>
 </div><!-- /页-驾驶舱 -->
 
+<!-- ── 工单实例页（协-028）：一张单**竖着看** ── -->
+<div id="页-工单" style="display:none">
+  <div class="面包屑"><button class="返回" onclick="location.hash='#/'" title="回看板">←</button>
+    <span class="淡">看板</span><span class="分">/</span><b id="单标题">工单</b></div>
+  <div class="栏" id="单头"></div>
+
+  <h2>阶段<span class="右 淡" id="单阶段说明"></span></h2>
+  <div id="单阶段"></div>
+
+  <h2>运行<span class="右 淡" id="单运行说明"></span></h2>
+  <div class="栏" id="单运行条"></div>
+  <div class="栏">
+    <label class="淡"><input type="checkbox" id="跟随" checked> 跟着最新往下滚</label>
+    <label class="淡"><input type="checkbox" id="看原始"> 看原始流（证据）</label>
+    <span class="淡" id="流状态"></span>
+  </div>
+  <pre id="流面板" class="流面板">选一次运行</pre>
+</div>
+
 <div id="页-流程" style="display:none">
   <h2>流程<span class="右"><button onclick="刷流程()">重算</button></span></h2>
   <div class="提示">看板是平的，答不了「为什么这张不动」。这里按<b>依赖深度</b>分层：第 0 层不等任何人，第 N 层等着第 N-1 层。</div>

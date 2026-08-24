@@ -10,7 +10,7 @@
     "desktop": "electron .",
     "dist": "electron-builder --win portable",
     "check": "node scripts/自查语法.js",
-    "test": "node test/公用件契约.test.js && node test/接线契约.test.js && node test/工单库契约.test.js && node test/执行链契约.test.js && node test/产线契约.test.js && node test/资产接线.test.js && node test/视图契约.test.js && node test/项目契约.test.js && node test/计费契约.test.js && node test/工作区契约.test.js && node test/编制契约.test.js && node test/额度契约.test.js && node test/在线契约.test.js && node test/写权契约.test.js",
+    "test": "node test/公用件契约.test.js && node test/接线契约.test.js && node test/工单库契约.test.js && node test/执行链契约.test.js && node test/产线契约.test.js && node test/资产接线.test.js && node test/视图契约.test.js && node test/项目契约.test.js && node test/计费契约.test.js && node test/工作区契约.test.js && node test/编制契约.test.js && node test/额度契约.test.js && node test/在线契约.test.js && node test/写权契约.test.js && node test/实例页契约.test.js",
     "workspace": "node scripts/工作区服务.js",
     "executor": "node scripts/执行器.js",
     "autostart": "node scripts/自启.js --install",

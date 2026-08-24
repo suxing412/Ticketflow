@@ -436,6 +436,53 @@ const 服务 = http.createServer((req, res) => {
   // ——— 工单库（协-001）———
   // 未配置根目录时一律 503 + 人话修法。**不猜路径不兜底**：猜一个位置往里写业务数据，
   // 等发现写错地方时数据已经散在两处了，比直接报错严重得多。
+  // ——— 工单实例（协-028）：一张单的一生 + 每次运行的流水 ———
+  //
+  // 看板是**横着看**的：一眼扫过所有单。而人点开一张单时问的是**竖着**的问题——
+  // 它走到哪一步了、每一步花了多久、那一步里 agent 到底说了什么。
+  // 这两个问题的答案此前散在四处：工单 frontmatter、provider-runs 账本、
+  // 那一次 HTTP 回执（关掉就没了）、以及**根本没留下的** agent 输出。
+  // 路由名用 ASCII：中文路径段会被浏览器百分号编码（`/实例` → `/%E5%AE%9E%E4%BE%8B`），
+  // 正则对不上就一路掉进块尾的 404——既有的 /move、/runs 也都是 ASCII，照做。
+  const 实例 = url路径.match(/^\/api\/tickets\/([^/]+)\/instance$/);
+  if (实例 && req.method === 'GET') {
+    if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
+    const id = decodeURIComponent(实例[1]);
+    const t = 工单库.find(工单根.根, id);
+    if (!t) return 发JSON(res, 404, { ok: false, error: `工单不存在：${id}` });
+    const 流水 = require('./lib/运行流水');
+    const 态 = 读JSON(path.join(账本根, 'journal', '执行器态.json'), {});
+    const 在跑 = (Array.isArray(态.在跑) ? 态.在跑 : []).find((x) => x.单 === id) || null;
+    return 发JSON(res, 200, {
+      ok: true, 工单: { id: t.id, state: t.state, fm: t.fm, body: t.body },
+      阶段: require('./lib/阶段轴').阶段轴(t),
+      运行: 流水.列(账本根, id),
+      在跑: 在跑 ? { ...在跑, 已跑毫秒: 在跑.起于 ? Math.max(0, Date.now() - Date.parse(在跑.起于)) : null } : null,
+      // 态龄跟着走：在跑那条若来自一份很旧的态文件，它说明不了「现在」。
+      态龄秒: 态.更新于 ? Math.max(0, Math.round((Date.now() - Date.parse(态.更新于)) / 1000)) : null,
+    });
+  }
+
+  // 一次运行的流水，增量读。**按字节偏移续读**——按行会因为半行而错位。
+  const 流 = url路径.match(/^\/api\/tickets\/([^/]+)\/stream\/([^/]+)$/);
+  if (流 && req.method === 'GET') {
+    const id = decodeURIComponent(流[1]);
+    const 运行号 = decodeURIComponent(流[2]);
+    const 流水 = require('./lib/运行流水');
+    const from = Number(查询.get('from')) || 0;
+    const 形 = 查询.get('形态') || '人读';
+    const r = 流水.读(账本根, id, 运行号, from);
+    const 元 = 流水.列(账本根, id).find((x) => x.运行号 === 运行号) || null;
+    return 发JSON(res, 200, {
+      ok: true, 运行号, ...r, 元,
+      内容: 形 === '原始' ? r.内容
+        : 流水.渲染(r.内容, (元 && 元.类别) === '质检' ? undefined : undefined) || r.内容,
+      形态: 形,
+      说明: '原始流是证据，人读那版是在读的时候现渲染的——格式会变，解析随时可能抽错，'
+        + '抽错了还能回头看原文（形态=原始），原文丢了就什么都没有。',
+    });
+  }
+
   if (url路径 === '/api/tickets' || url路径.startsWith('/api/tickets/')) {
     if (!工单根.ok) return 发JSON(res, 503, { ok: false, error: 工单根.错误 });
     const 根 = 工单根.根;

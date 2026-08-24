@@ -300,7 +300,17 @@ async function 刷工单() {
 
 // 单张详情。看板一行只有摘要——正文、质检意见、依赖链、流转痕迹都在 fm 里，
 // 不给个地方看，出问题时只能去翻磁盘上的 .md。
-async function 看单(id) {
+// 点单号 = **进那张单的实例页**（协-028）。
+//
+// 原先是在看板下面展开一块 <pre>，把 frontmatter 拍平成文本。那块地方答不了
+// 「它走到哪一步了」——所有事实平铺成一列，没有先后，也没有 agent 说过的话。
+// 现在换成一整页：阶段轴 + 每次运行的流水（跑着的那次同步跟）。
+function 看单(id) {
+  location.hash = '#/t/' + encodeURIComponent(id);
+}
+
+// 旧的那块展开面板留着当**兜底**：实例页读不到时还能看见原始 frontmatter。
+async function 看单原始(id) {
   $('运行区').style.display = '';
   $('运行').textContent = '读取中…';
   try {
@@ -985,6 +995,117 @@ const 页表 = {
   '/设置': '设置',                    // 旧书签别名，勿删
 };
 
+/* ═══════════ 工单实例页（协-028）═══════════
+ * 看板是**横着看**的：一眼扫过所有单，每张一行。这一页是**竖着看**：
+ * 这一张走到哪了、每一步留下什么证据、那一步里 agent 到底说了什么。
+ *
+ * 「同步输出」不是装饰：人问「它还在跑吗」，最好的答案不是一个转圈图标，
+ * 是**正在往外吐的那几行**。所以流面板按字节偏移增量续读，跑着的那次自动跟。
+ */
+let 流态 = { 单: null, 运行号: null, 偏移: 0, 计时: null, 原始: false };
+
+function 停流() {
+  if (流态.计时) { clearTimeout(流态.计时); 流态.计时 = null; }
+}
+
+const 态色 = { 成: '', 阻: '级急', 在做: '', 跳过: '淡', 未到: '淡' };
+const 态记 = { 成: '✓', 阻: '✗', 在做: '◐', 跳过: '–', 未到: '·' };
+
+async function 刷实例(单号) {
+  if (!单号) return;
+  if (流态.单 !== 单号) { 停流(); 流态 = { 单: 单号, 运行号: null, 偏移: 0, 计时: null, 原始: false }; }
+  try {
+    const { 码, 体: j } = await 取JSON('/api/tickets/' + encodeURIComponent(单号) + '/instance');
+    if (码 !== 200 || !j.ok) { $('单标题').textContent = 单号; $('单头').innerHTML = '<span class="级急">' + 转义(j.error || '读不到这张单') + '</span>'; return; }
+    const fm = j.工单.fm || {};
+    $('单标题').textContent = 单号 + '　' + (fm.title || '');
+    // 在跑那条要**带上态龄**：它来自执行器落的态文件，文件在进程崩了之后还在。
+    const 陈旧 = j.态龄秒 != null && j.态龄秒 > 60;
+    $('单头').innerHTML = [
+      '<span class="态">' + 转义(j.工单.state) + '</span>',
+      fm.role ? '<span class="淡">' + 转义(fm.role) + '</span>' : '',
+      fm.项目 ? '<span class="淡">项目 ' + 转义(fm.项目) + '</span>' : '<span class="淡">无项目</span>',
+      fm.执行池 ? '<span class="淡">池 ' + 转义(fm.执行池) + '</span>' : '',
+      j.在跑 ? '<span class="' + (陈旧 ? '级急' : '') + '">◐ ' + 转义(j.在跑.类别) + '中 '
+        + 时长(j.在跑.已跑毫秒 || 0) + (陈旧 ? '（态 ' + j.态龄秒 + 's 没更新，可能已经不在跑了）' : '') + '</span>' : '',
+    ].filter(Boolean).join('　');
+
+    // ——— 阶段轴 ———
+    const 阶 = j.阶段 || [];
+    $('单阶段说明').textContent = 阶.filter((x) => x.态 === '阻').length
+      ? 阶.filter((x) => x.态 === '阻').length + ' 处卡着' : '';
+    $('单阶段').innerHTML = 阶.map((x) => {
+      const 证 = Object.entries(x.证据 || {}).filter(([, v]) => v != null && v !== '' && !(Array.isArray(v) && !v.length));
+      return '<div class="阶段行 ' + (态色[x.态] || '') + '">'
+        + '<div class="阶段头"><b>' + (态记[x.态] || '') + ' ' + 转义(x.名) + '</b>'
+        + '<span class="淡">' + 转义(x.说) + '</span></div>'
+        + (x.该谁 ? '<div class="阶段该谁">→ 该 ' + 转义(x.该谁) + '</div>' : '')
+        + (证.length ? '<div class="阶段证据">' + 证.map(([k, v]) => '<span class="淡">' + 转义(k) + '：</span>'
+          + 转义(typeof v === 'object' ? JSON.stringify(v) : String(v)).slice(0, 300)).join('<br>') + '</div>' : '')
+        + '</div>';
+    }).join('');
+
+    // ——— 运行列表 ———
+    const 运行 = j.运行 || [];
+    $('单运行说明').textContent = 运行.length ? 运行.length + ' 次' : '还没跑过';
+    if (!运行.length) {
+      $('单运行条').innerHTML = '<span class="淡">这张单还没有落下过运行流水。'
+        + '协-028 之前的运行不会有——那时 agent 的输出是跑完就扔的。</span>';
+      $('流面板').textContent = '（无）';
+      return;
+    }
+    $('单运行条').innerHTML = 运行.map((r) => {
+      const 跑着 = !r.讫于;
+      return '<button class="' + (r.运行号 === 流态.运行号 ? '主' : '') + '" onclick="选运行(\'' + 转义(r.运行号) + '\')">'
+        + (跑着 ? '◐ ' : '') + 转义(r.类别) + ' · ' + 转义(String(r.运行号).slice(9, 15))
+        + (r.池 ? ' · ' + 转义(r.池) : '')
+        + (r.退出码 != null ? ' · 码' + r.退出码 : '') + '</button>';
+    }).join(' ');
+    // 默认选**在跑的那次**，没有就选最新的一次——人来这一页多半是想看现在在生成什么。
+    if (!流态.运行号) 选运行((运行.find((r) => !r.讫于) || 运行[0]).运行号);
+  } catch (e) { $('单头').innerHTML = '<span class="级急">实例接口不可达</span>'; }
+}
+
+function 选运行(运行号) {
+  if (流态.运行号 !== 运行号) { 流态.运行号 = 运行号; 流态.偏移 = 0; $('流面板').textContent = ''; }
+  停流();
+  拉流();
+}
+
+async function 拉流() {
+  if (!流态.单 || !流态.运行号) return;
+  const 原始 = !!($('看原始') && $('看原始').checked);
+  // 切换「原始/人读」要从头重读：两种渲染的字节偏移不通用。
+  if (原始 !== 流态.原始) { 流态.原始 = 原始; 流态.偏移 = 0; $('流面板').textContent = ''; }
+  try {
+    const { 码, 体: j } = await 取JSON('/api/tickets/' + encodeURIComponent(流态.单)
+      + '/stream/' + encodeURIComponent(流态.运行号) + '?from=' + 流态.偏移 + '&形态=' + (原始 ? '原始' : '人读'));
+    if (码 === 200 && j.ok) {
+      if (j.内容) {
+        const 面 = $('流面板');
+        面.textContent += (面.textContent ? '\n' : '') + j.内容;
+        if ($('跟随') && $('跟随').checked) 面.scrollTop = 面.scrollHeight;
+      }
+      流态.偏移 = j.讫 || 流态.偏移;
+      const 跑着 = j.元 && !j.元.讫于;
+      $('流状态').textContent = (跑着 ? '◐ 跑着 · ' : '已结束 · ')
+        + Math.round((j.大小 || 0) / 1024) + 'KB'
+        + (j.元 && j.元.退出码 != null ? ' · 退出码 ' + j.元.退出码 : '');
+      // 跑着就接着轮；跑完了再拉一次收尾（最后一块可能刚落）然后停。
+      if (跑着) 流态.计时 = setTimeout(拉流, 1500);
+      else if (j.内容) 流态.计时 = setTimeout(拉流, 1500);
+    }
+  } catch { $('流状态').textContent = '流接口不可达'; }
+}
+
+// 工单实例页走 #/t/<单号>（协-028）。它跟别的页不同：**带参数**，
+// 所以不能只查一张静态表——先认前缀，再把单号解出来。
+function 当前单号() {
+  let h = (location.hash || '').replace(/^#/, '');
+  try { h = decodeURIComponent(h); } catch { return null; }
+  return h.indexOf('/t/') === 0 ? h.slice(3) : null;
+}
+
 function 当前页() {
   let h = (location.hash || '').replace(/^#/, '');
   // 浏览器会把中文 hash 百分号编码：`#/设置` 读回来是 `#/%E8%AE%BE%E7%BD%AE`，
@@ -992,12 +1113,13 @@ function 当前页() {
   // 点导航像没反应。解码之后再查表。
   // try 是必需的：地址栏里的半截百分号（人手改 URL 就会出现）会让 decode 抛。
   try { h = decodeURIComponent(h); } catch { /* 解不开就按原样查，落默认页 */ }
+  if (h.indexOf('/t/') === 0) return '工单';
   return 页表[h] || '驾驶舱';
 }
 
 function 切页() {
   const 页 = 当前页();
-  for (const 名 of ['驾驶舱', '流程', '知识库', '项目', '设置']) {
+  for (const 名 of ['驾驶舱', '流程', '知识库', '项目', '设置', '工单']) {
     const el = $('页-' + 名);
     if (el) el.style.display = 名 === 页 ? '' : 'none';
   }
@@ -1010,6 +1132,8 @@ function 切页() {
   // 少了这一句，从项目页切换项目跳回来，看板还是上一个项目的内容：
   // 顶栏胶囊已经变了，表格没变，两处自相矛盾。
   if (页 === '驾驶舱') { 刷工单(); 刷调度(); }
+  // 离开实例页就停轮询：一个后台每秒打一次的 tail 会跟真跑抢日志（协-006 那条老教训）。
+  if (页 === '工单') 刷实例(当前单号()); else 停流();
   if (页 === '流程') 刷流程();
   if (页 === '知识库') 刷知识分区();
   if (页 === '项目') 刷项目页();
