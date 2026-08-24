@@ -44,7 +44,7 @@
   const 单号形 = /^[A-Za-z]+-\d+$/;   // P0-0 裁决③：过形才成链（库里实证有「（无单·直接落码）」自由文本）
   const 状态类 = { 计划: 'plan', 起草中: 'draft', 已成单: 'made', 完成: 'done', 撤销: 'drop' };
   const 型层 = { 管线: 0, 特性: 1, 专项: 2, 工单: 3, 伪组: 0 };
-  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); // ' 也转（DS 终审 #8）：题名/名册进双引号属性值时单引号不许裸奔
 
   /* ═══ 分钟几何（终审 T9 统一钟面轴）：本地钟面串 → **本地墙钟毫秒**，与服务端
      lib/pm/schedule.计划毫秒 同语义（纯日期＝当日本地 00:00，刻钟形本地解析）。
@@ -330,7 +330,9 @@
           const 红 = 越 ? '' : `${j && j.超期 ? ' gt2-od' : ''}${j && j.延期 ? ' gt2-late' : ''}`;
           // 越线条带 data-x：点击分流到表态口（#19，普通条仍走重排）
           // 可拖（#10）⇔ 非只读（#11 最小实现：停表或终态即只读——不出手柄、拖不启动，悬停详情照常）
-          const 拖ok = !st.停表 && !终态.includes(g.状态);
+          // 且非超长（DS 终审 #2）：>24h 截断条是异常态，图上拖的是截断影子、所见非所提交——
+          // 处置走重排弹窗（悬浮卡「超长异常」照旧点名），不走拖拽。
+          const 拖ok = !st.停表 && !终态.includes(g.状态) && !s.超长;
           条 += `<i class="gt2bar ${状态类[g.状态] || ''}${s.单端 ? ' half' : ''}${s.超长 ? ' cut gt2cut' : ''}${越 ? ' xline' : ''}${红}${拖ok ? ' drag' : ''}"
               data-tid="${esc(n.键)}" data-act="bar" data-g="${esc(g.粒ID)}"${越 ? ' data-x="1"' : ''} tabindex="0" role="button"
               aria-label="${esc((g.题 || '') + (越 ? '：越线待重判，点击表态（派发/重排二选一）' : '：点击改排期'))}" style="left:${px(X(s.起, 窗))};width:${条宽(s)}">${拖ok
@@ -471,6 +473,7 @@
       // #10/DS-6：拖拽进行中一律不重绘（30s 轮询在壳层已挂旗跳过，这里兜其余入口）——
       // 新数据存着，松手（收拖）后补一拍，既不丢更新也不打断手上的条。
       if (岛._拖) { 岛._拖后数据 = d; return 岛; }
+      岛._拖后数据 = null;   // DS#1：新数据直落即最新事实，取消拖拽遗留的挂起件作废（防恢复可见时旧盖新）
       岛.数据 = d; 重排(岛); return 岛;
     }
     岛 = 容器._gt2 = 末岛 = { 容器, 数据: null, 选项: 选项 || {}, 图: new Map(), st: null };
@@ -506,11 +509,13 @@
     const 岛 = 找岛(); if (!岛) return;
     const d = 规范数据(数据, 岛.选项);
     if (岛._拖) { 岛._拖后数据 = d; return; } // 同 render：拖拽中挂起，松手补一拍
+    岛._拖后数据 = null;   // 同 render（DS#1）：直落的新数据作废取消拖拽遗留的挂起件
     岛.数据 = d; 重排(岛);
   }
   // 程序口按「末次 render 的岛」兜底（gantt-p0 判据约定：headless 容器没有 rl-gantt id 也得能调）
   let 末岛 = null;
   let 已挂resize = false; // T8 单例分发旗：全模块只挂一个 resize 监听（见 挂事件）
+  let 已挂可见 = false;   // DS#1 单例分发旗：全模块只挂一个 visibilitychange 监听（见 挂事件）
   function 找岛() { const box = document.getElementById('rl-gantt'); return (box && box._gt2) || 末岛; }
 
   function 重排(岛) {
@@ -803,7 +808,7 @@
   function 画线(岛) {
     const svg = 岛.线; if (!svg) return;
     const st = 岛.st;
-    if (!st || st.窗.空 || !边表(st.数据).length) { svg.innerHTML = ''; 岛._锚 = null; return; }
+    if (!st || st.窗.空 || !边表(st.数据).length) { svg.innerHTML = ''; 岛._锚 = null; 岛._行窗 = null; return; } // 锚与行窗同清（DS 终审 #10）：半新半旧的缓存对 离屏端点 是错位源，null 走全量重建兜底
     const 行窗 = 岛._行窗 || [0, st.行.length];
     const 锚 = 岛._锚 = 锚点集(st, 行窗);
     const 高 = st.行.length * 行高;
@@ -844,9 +849,10 @@
   /* ═══ 拖拽两路分流（#10）＋只读态（#11）═══
      计算与分流全走下面这三个落点（可拖判/拖几何/拖分流）——鼠标路（起拖/拖动/收拖）与
      程序口（试拖，判据②③直调）共用同一条产线，H104 验的就是行为本体。 */
-  // 只读（#11 最小实现）：停表（/api/gates paused）或粒终态 ⇒ 拖不启动（手柄在 行HTML 同判据不出）
+  // 只读（#11 最小实现）：停表（/api/gates paused）或粒终态 ⇒ 拖不启动（手柄在 行HTML 同判据不出）；
+  // 超长（>24h 截断，DS 终审 #2）同禁：异常态处置走重排弹窗，截断影子上的拖拽所见非所提交。
   function 可拖判(st, n) {
-    return !!(n && n.型 === '工单' && n.粒 && n.段 && !st.停表 && !终态.includes(n.粒.状态));
+    return !!(n && n.型 === '工单' && n.粒 && n.段 && !n.段.超长 && !st.停表 && !终态.includes(n.粒.状态));
   }
   // 松手分流：普通条→重排口预填、越线待重判条→表态口预填（决定=重排+新计划）——
   // 弹窗与写口都在壳层（app.js tqReplan/tqStance，CAS+必填因原样），岛只递 粒ID+预填。
@@ -869,7 +875,7 @@
     const 岛 = 找岛(); if (!岛 || !岛.st) return { 启动: false, 因: '无岛' };
     const n = 岛.st.键表.get(String(粒ID));
     if (!可拖判(岛.st, n)) {
-      return { 启动: false, 因: !n || !n.粒 ? '非工单行' : (岛.st.停表 ? '停表只读' : (终态.includes(n.粒.状态) ? '终态只读' : '无段')) };
+      return { 启动: false, 因: !n || !n.粒 ? '非工单行' : (岛.st.停表 ? '停表只读' : (终态.includes(n.粒.状态) ? '终态只读' : (n.段 && n.段.超长 ? '超长禁拖' : '无段'))) };
     }
     const r = 拖几何(n.段, String(模式 || '移'), Number(dx像素) || 0);
     if (r.起 === n.段.起 && r.讫 === n.段.真讫) return { 启动: true, 变: false };
@@ -905,22 +911,33 @@
       tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY - 34) + 'px';
     }
   }
-  function 收拖(岛) {
-    const D = 岛._拖; if (!D) return;
+  // 摘拖（公共收尾）：摘 document 监听、清全局旗与提示、把被拖过内联样式的那一行扔出签名图
+  //（岛数据没动过，重画即原位回滚）。返回拖账 D 给两条出路：收拖=松手分流、取消拖=DS#1 可见性补给。
+  function 摘拖(岛) {
+    const D = 岛._拖; if (!D) return null;
     岛._拖 = null;
     document.removeEventListener('mousemove', D.动);
     document.removeEventListener('mouseup', D.收);
     window._gt2Dragging = false;
     if (岛.拖tip) 岛.拖tip.className = 'gt2dragtip';
-    // 原位回滚（#10）：岛数据没动过——把被拖过内联样式的那一行扔出签名图，按数据重画即是回滚。
     const 旧 = 岛.图.get(D.键);
     if (旧) { 岛.图.delete(D.键); if (旧.el && 旧.el.remove) 旧.el.remove(); }
+    return D;
+  }
+  function 收拖(岛) {
+    const D = 摘拖(岛); if (!D) return;
     if (岛._拖后数据) { 岛.数据 = 岛._拖后数据; 岛._拖后数据 = null; 重排(岛); } // 拖拽期挂起的更新补一拍
-    else 画行(岛);
+    else 画行(岛);   // 原位回滚（#10）：岛数据没动过，按数据重画即是回滚
     const r = D.新;
     if (!r || (r.起 === D.段.起 && r.讫 === D.段.真讫)) return;   // 没挪就不弹（原地松手＝取消）
     岛._拖动过 = true;   // 吞掉随 mouseup 补发的那记 click——分流已开弹窗，别再叠一个普通口
     拖分流(岛, D.粒ID, r);
+  }
+  // 取消拖（DS 终审 #1）：页面转不可见时的强制收手——只回滚不分流（拖一半没有「默认成交」）；
+  // 拖拽期挂起的 _拖后数据 不在这儿消化（不可见时重排是白画），留给恢复可见那拍补。
+  function 取消拖(岛) {
+    if (!摘拖(岛)) return;
+    画行(岛);
   }
 
   function 挂事件(岛) {
@@ -966,6 +983,19 @@
       window.addEventListener('resize', () => {
         const 活 = 找岛();
         if (活 && 活.根el && 活.根el.isConnected && 活.st) 画行(活);
+      });
+    }
+    // 拖拽可见性补给（DS 终审 #1）：后台标签页里 mouseup 送不到（事件冻结），_gt2Dragging 悬 true
+    // ⇒ 30s 轮询无限期挂起。visibilitychange 单例（同 T8 resize 成例，事件时经 找岛() 分发）：
+    // 转不可见时若在拖拽中 ⇒ 取消拖拽（原位回滚、清旗、不分流）；恢复可见时若拖拽期挂起过
+    // 数据（_拖后数据）补一拍重绘——轮询错过的那拍不丢。
+    if (!已挂可见 && typeof document.addEventListener === 'function') {
+      已挂可见 = true;
+      document.addEventListener('visibilitychange', () => {
+        const 活 = 找岛(); if (!活) return;
+        const 藏 = document.hidden === true || document.visibilityState === 'hidden';
+        if (藏) { if (活._拖) 取消拖(活); }
+        else if (!活._拖 && 活._拖后数据) { 活.数据 = 活._拖后数据; 活._拖后数据 = null; 重排(活); }
       });
     }
     // #8 右键两区菜单：岛容器一个 contextmenu 委托——条上（实条/迷你条）＞行上＞空白

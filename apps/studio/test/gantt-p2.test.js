@@ -63,7 +63,9 @@ function 补岛DOM() {
     contains(n) { while (n) { if (n === this) return true; n = n.parentNode; } return false; },
     remove() { if (this.parentNode) this.parentNode.removeChild(this); },
     replaceWith(nw) { if (this.parentNode) this.parentNode.replaceChild(nw, this); },
-    addEventListener() {}, removeEventListener() {},
+    // 判据⑧（DS#1）要走真鼠标路起拖：元素监听登记在 _听，用例亲手派发 mousedown/mousemove
+    addEventListener(type, fn) { (this._听 || (this._听 = {}))[type] = (this._听[type] || []).concat([fn]); },
+    removeEventListener() {},
     getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; },
   });
   Object.defineProperties(El.prototype, {
@@ -114,6 +116,7 @@ function 装岛(存储) {
   const src = fs.readFileSync(岛路径, 'utf8');
   const El = 补岛DOM();
   const noop = () => {};
+  const 文听 = {};   // document 级监听登记（DS#1 判据要亲手扳 visibilitychange / 派发拖拽 mousemove）
   const ctx = {
     console: { log: noop, warn: noop, error: noop },
     setTimeout: noop, clearTimeout: noop, clearInterval: noop, setInterval: noop, requestAnimationFrame: noop,
@@ -121,9 +124,12 @@ function 装岛(存储) {
     location: { hash: '' },
     innerWidth: 1280, innerHeight: 800,
     addEventListener: noop, removeEventListener: noop,
-    document: { createElement: (tag) => new El(tag), getElementById: () => null, activeElement: null },
+    document: { createElement: (tag) => new El(tag), getElementById: () => null, activeElement: null,
+      hidden: false, visibilityState: 'visible',
+      addEventListener: (type, fn) => { 文听[type] = fn; }, removeEventListener: noop },
   };
   ctx.window = ctx;
+  ctx._文听 = 文听;
   vm.createContext(ctx);
   vm.runInContext(src, ctx, { filename: 'gantt.js' });
   assert.ok(ctx.GanttIsland && typeof ctx.GanttIsland.render === 'function', 'gantt.js 装载后必须挂出 window.GanttIsland.render');
@@ -262,6 +268,15 @@ t('② 拖拽分流：普通条→tqReplan 预填、越线条→tqStance 预填(
   assert.ok(!/class="gt2h [lr]"/.test(停.html), '停表时整图不出端点手柄');
   assert.ok(停.ctx.GanttIsland.悬浮卡Html('g-c01').includes('并发件1'), '只读态悬停详情照常（#11）');
   assert.equal(记.重排.length, 3, '停表下没有一笔分流落口');
+  // 超长禁拖（DS 终审 #2）：>24h 截断条是异常态——手柄不出、试拖不启动（处置走重排弹窗不走拖拽，
+  // 截断影子上的拖拽所见非所提交）；截断记号与悬浮卡「超长异常」点名照旧
+  const r5 = 首.ctx.GanttIsland.试拖('g-长', '移', 40);
+  assert.deepEqual([r5.启动, r5.因], [false, '超长禁拖'], '超长条（30h）拖拽不启动（DS#2）');
+  const 长块 = 块(首.html, 'data-gid="g-长"');
+  assert.ok(!/class="gt2h [lr]"/.test(长块), '超长条不出端点手柄（.gt2h）——异常态排除在可拖判之外');
+  assert.ok(/gt2cut/.test(长块), '超长条截断记号（gt2cut）照旧——禁拖不改画法');
+  assert.ok(首.ctx.GanttIsland.悬浮卡Html('g-长').includes('超长异常'), '悬浮卡「超长异常」标记照旧（CX-5 乙案不动）');
+  assert.equal(记.重排.length + 记.表态.length, 4, '超长条没有一笔分流落口');
   // 变异自证：g-越A 拨成已成单（不再越线）→ 服务端重判（标待表态＝同一份谓词重打下发字段）→ 分流翻到重排口
   const 变 = 变体(数据); 变.粒.find((g) => g.粒ID === 'g-越A').状态 = '已成单';
   标待表态(变.粒);
@@ -391,6 +406,21 @@ t('⑤ 锚点同步：两条边对账（出点=条右端中点、入点=条左�
   assert.ok(组3, '单端离屏的边仍须画（另一端在窗内）');
   assert.ok(近(组3.y2, (idxA + 1) * 30 - 3), `离屏入点须截在可视区下缘（期 ${(idxA + 1) * 30 - 3} 实 ${组3.y2}）`);
   assert.ok(/offarw/.test(块级(h3, 'data-from="g-冲A"')), '离屏端须带方向箭头（offarw）');
+  // 极小视口（DS 终审 #3）：窗收到 1 行也不许抛异常；窗滚到冲突对所在行时可表达边仍在图——
+  // 边过滤若把「两端都离屏才跳过」误写宽（漏掉离屏判定/条件写反），大视口判据照绿、小窗先在这儿现形。
+  首.ctx.GanttIsland.render(首.容器, 数据, { 现在, 视口: { 滚过行: 0, 行数: 1 } }); // 顶部 1 行窗：不抛即基线
+  assert.ok(/gt2row/.test(首.容器.innerHTML), '{滚过行:0,行数:1} 极小窗：渲染不抛异常且行照画');
+  首.ctx.GanttIsland.render(首.容器, 数据, { 现在, 视口: { 滚过行: idxA, 行数: 1 } });
+  const 组小 = 组们(首.容器.innerHTML);
+  assert.ok(组小.length > 0, `极小窗（1 行）滚到冲突行：有可表达边时 SVG 边组须非零（实得 ${组小.length}）——小窗不许边全灭`);
+  assert.ok(组小.some((x) => x.from === 'g-冲A' && x.to === 'g-冲B'), '冲突对的边在极小窗内仍在图（在窗端锚得住）');
+  // 锚窗清空一致（DS 终审 #10）：边表清空 → 画线 清 _锚 时同步清 _行窗；离屏端点 对 null 全量重建兜底
+  const 清 = 变体(数据); 清.边 = []; 清.边统计 = { ...清.边统计, 冲突: 0 };
+  首.ctx.GanttIsland.更新(清);
+  assert.equal(组们(首.容器.innerHTML).length, 0, '边表清空后 SVG 线组清干净');
+  const 端 = 首.ctx.GanttIsland.离屏端点('g-冲A');
+  assert.ok(端 && typeof 端.y === 'number' && typeof 端.行 === 'number',
+    '边表清空后调 离屏端点 不抛异常且全量重建兜底给得出锚（DS#10：锚与行窗不许半新半旧）');
   // 变异自证：前置 g-冲A 计划完成 +1h → 出点 x 右移一格（20px/h）
   const 变 = 变体(数据);
   变.粒.find((g) => g.粒ID === 'g-冲A').计划完成 = '2026-08-27T18:00';
@@ -410,14 +440,24 @@ t('⑥ 冲突角标：台账 边统计.冲突=3 → 角标数=3；拨统计字�
   assert.ok(标, '工具栏必须挂冲突角标（gt2cbadge）');
   assert.ok(/data-数="3"/.test(标[0]) && 标[0].includes('冲突 3'), `角标须=边统计.冲突（3），实得 ${标[0]}`);
   assert.ok(!/ hidden/.test(标[0]), '有冲突时角标不许藏');
-  // 变异自证 a：只拨统计（边与粒一字不动）→ 角标跟统计字段走（角标读的是 边统计.冲突，不是数线）
+  // 变异自证 a：只拨统计（边与粒一字不动）→ 角标跟统计字段走（角标读的是 边统计.冲突，不是数线）；
+  // 文本与计数一致（DS 终审 #4）：data-数 与 textContent 两格都得翻，不许一格跟走一格装死
   const 变 = 变体(数据); 变.边统计 = { ...变.边统计, 冲突: 9 };
-  assert.ok(/data-数="9"/.test(/<button[^>]*gt2cbadge[^>]*>/.exec(画(变).html)[0]),
-    '拨 边统计.冲突=9（边未动）角标须显 9——统计字段是唯一读数源');
+  const 标9 = /<button[^>]*gt2cbadge[^>]*>[^<]*/.exec(画(变).html)[0];
+  assert.ok(/data-数="9"/.test(标9) && 标9.includes('冲突 9'),
+    '拨 边统计.冲突=9（边未动）角标计数与文本都须跟到 9——统计字段是唯一读数源');
   // 变异自证 b：拨 0 → 隐藏
   const 变2 = 变体(数据); 变2.边统计 = { ...变2.边统计, 冲突: 0 };
   assert.ok(/ hidden/.test(/<button[^>]*gt2cbadge[^>]*>/.exec(画(变2).html)[0]),
     '冲突 0 时角标必须藏——不许挂个 0 在那儿唬人');
+  // 同岛先 3 后 0（DS 终审 #4）：hidden 态 textContent 不许残留旧数——残留脏文本只在换数据的重绘路上现形
+  const 岛0 = 画(数据);
+  岛0.ctx.GanttIsland.更新(变2);
+  const 标0 = /<button[^>]*gt2cbadge[^>]*>[^<]*/.exec(岛0.容器.innerHTML)[0];
+  assert.ok(/ hidden/.test(标0), '同岛拨到 0 后角标须藏');
+  const 文0 = 标0.slice(标0.indexOf('>') + 1);
+  assert.match(文0, /^(冲突 0)?$/,
+    `拨 0 后角标文本只许空或「冲突 0」（实得「${文0}」）——hidden 态不许残留「冲突 3」脏文本（DS#4）`);
 });
 
 /* ═══ ⑦ resize 监听生命周期（终审 T8）：单例分发，反复挂载不累积 ═══
@@ -440,6 +480,49 @@ t('⑦ resize 单例：两个容器三次挂载后全局 resize 监听计数恒=
   听.resize(); // 分发到活岛不炸＝事件路仍通（活岛=末次 render 的甲）
 });
 
+/* ═══ ⑧ 拖拽可见性补给（DS 终审 #1）：后台标签页 mouseup 送不到（事件冻结）——转不可见强制收手 ═══
+ * 真鼠标路起拖（mousedown/mousemove 从元素与 document 的监听登记里亲手派发），再亲手扳 visibilitychange：
+ * 转不可见 ⇒ 取消拖拽（_gt2Dragging 清 false、DOM 原位回滚、不分流——没这一手 30s 轮询见旗无限期挂起）；
+ * 拖拽期挂起的更新（_拖后数据）恢复可见时补一拍重绘。
+ * 变异自证点（实现侧）：visibilitychange 处理器删掉取消分支 → 旗清/回滚断言红。 */
+t('⑧ 拖拽补给：拖拽中转不可见→取消（旗清+DOM 回滚+不分流）；拖拽期挂起的数据恢复可见补一拍', () => {
+  const 数据 = 造台账();
+  const 首 = 画(数据);
+  const 记 = { 重排: [], 表态: [] };
+  首.ctx.tqReplan = (id, 预填) => 记.重排.push([id, 预填]);
+  首.ctx.tqStance = (id, 预填) => 记.表态.push([id, 预填]);
+  const 文听 = 首.ctx._文听;
+  assert.equal(typeof 文听.visibilitychange, 'function',
+    '岛装配后 document 上须挂 visibilitychange 监听（单例分发，同 T8 resize 成例）');
+  const 前几何 = 行几何(首.容器.innerHTML, 'g-c01');
+  // 真鼠标路起拖：mousedown 落在 g-c01 实条条身（无手柄 ⇒ 模式=移）
+  const 根el = 首.容器.firstElementChild;
+  const barEl = 首.容器.querySelector('[data-gid="g-c01"]').querySelector('.gt2bar');
+  assert.ok(barEl && 根el._听 && 根el._听.mousedown, 'g-c01 实条与岛根 mousedown 监听都在场');
+  for (const fn of 根el._听.mousedown) fn({ button: 0, target: barEl, clientX: 100, clientY: 50, preventDefault: () => {} });
+  assert.equal(首.ctx._gt2Dragging, true, 'mousedown 起拖后 window._gt2Dragging=true（30s 轮询见旗跳过）');
+  assert.equal(typeof 文听.mousemove, 'function', '拖拽中 document 上挂了 mousemove');
+  文听.mousemove({ clientX: 140, clientY: 60 });   // +40px = +2h：条身半透明跟随
+  const 中几何 = 行几何(首.容器.innerHTML, 'g-c01');
+  assert.ok(近(中几何.left, 前几何.left + 40), `拖拽中条身须跟随 +40px（期 ${前几何.left + 40} 实 ${中几何.left}）`);
+  // 拖拽期到账的新数据挂起（#10/DS-6 成例）：DOM 一字不动
+  const 变 = 变体(数据); 变.粒.find((g) => g.粒ID === 'g-c01').题 = '补给样本甲';
+  首.ctx.GanttIsland.更新(变);
+  assert.ok(!首.容器.innerHTML.includes('补给样本甲'), '拖拽中到账的更新须挂起（不重绘）');
+  // 转不可见：取消拖拽——旗清、DOM 原位回滚、不分流
+  首.ctx.document.hidden = true; 首.ctx.document.visibilityState = 'hidden';
+  文听.visibilitychange();
+  assert.equal(首.ctx._gt2Dragging, false, '转不可见后 _gt2Dragging 须清 false——否则 30s 轮询无限期挂起（DS#1）');
+  assert.deepEqual(行几何(首.容器.innerHTML, 'g-c01'), 前几何, '取消拖拽＝DOM 原位回滚（left/width/top 与拖前逐格一致）');
+  assert.ok(!首.容器.innerHTML.includes('补给样本甲'), '不可见期不消化挂起数据（白画），留给恢复可见那拍');
+  assert.equal(记.重排.length + 记.表态.length, 0, '取消不分流——拖一半没有「默认成交」');
+  // 恢复可见：挂起的 _拖后数据 补一拍重绘
+  首.ctx.document.hidden = false; 首.ctx.document.visibilityState = 'visible';
+  文听.visibilitychange();
+  assert.ok(首.容器.innerHTML.includes('补给样本甲'), '恢复可见须把拖拽期挂起的数据补一拍重绘（DS#1 补给）');
+  assert.equal(记.重排.length + 记.表态.length, 0, '补给重绘也不分流——写口只认松手');
+});
+
 (async () => {
   for (const [n, f] of 待) { await f(); passed++; console.log('  ✓ ' + n); }
   console.log('全部通过：' + passed + ' 项');
@@ -456,4 +539,8 @@ t('⑦ resize 单例：两个容器三次挂载后全局 resize 监听计数恒=
    r1b 拖分流 越线分支删掉（越线也走重排）→ ② 红；
    r2a 线HTML conflict 类改前端私算（比 起/讫 毫）→ ④ 红（翻字段线不动）；
    r2b 锚点集 y 写死 0 → ⑤ 红（行几何对账炸）；
-   r2c 重排 冲突角标改数 边 里 冲突===true 的条数 → ⑥ 红（拨统计字段角标不动）。 */
+   r2c 重排 冲突角标改数 边 里 冲突===true 的条数 → ⑥ 红（拨统计字段角标不动）。
+   r3（DS 终审二轮 2026-08-24）：
+   r3a 可拖判/行HTML 撤掉 !超长 排除 → ② 红（超长条手柄出/试拖启动）；
+   r3b visibilitychange 处理器删掉取消分支 → ⑧ 红（转不可见后 _gt2Dragging 悬 true）；
+   r3c 离屏端点 删掉 _行窗 null 兜底 → ⑤ 红（边表清空后调离屏端点 TypeError）。 */
