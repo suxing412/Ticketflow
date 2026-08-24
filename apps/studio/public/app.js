@@ -3766,7 +3766,8 @@ async function viewRelay() {
   const 没排 = 在排.filter((g) => g.型 !== '专项' && !g.计划开始 && !g.计划完成);
   const 在图数 = 在排.length - 没排.length;
   const 停表 = !!(gz && gz.paused);
-  // 甘特岛数据包（渲染在 public/gantt.js；/api/schedule 的 边/判定 随 sch 原样携带，边 P2 才画）
+  // 甘特岛数据包（渲染在 public/gantt.js；/api/schedule 的 边/边统计/判定 随 sch 原样携带——
+  // P2 #12 依赖线与冲突角标只按这两格着色报数，前端不自算）
   const 板归属 = {};
   if (板口 && 板口.board) {
     for (const s of (板口.states || [])) for (const t of (板口.board[s] || [])) {
@@ -3775,7 +3776,7 @@ async function viewRelay() {
   }
   const 岛数据 = {
     管线: (管线口 && 管线口.管线) || [], 特性: (特性口 && 特性口.特性) || [], 专项: (专项口 && 专项口.专项) || [],
-    粒: 在排, 名册, 板归属, 边: (sch && sch.边) || null, 今: 现在, 停表,
+    粒: 在排, 名册, 板归属, 边: (sch && sch.边) || null, 边统计: (sch && sch.边统计) || null, 今: 现在, 停表,
     债: (attn && Array.isArray(attn.债)) ? attn.债 : [], 项目: p,
   };
   requestAnimationFrame(() => 挂甘特岛(岛数据)); // 壳落地（innerHTML/morph 都是同步收尾）后下一帧喂岛
@@ -3802,8 +3803,9 @@ async function viewRelay() {
   const 号 = window._rlSeq = (window._rlSeq || 0) + 1;
   pollLoop('rl-gantt', 30000, async () => {
     if (号 !== window._rlSeq) return;
+    if (window._gt2Dragging) return; // #10/DS-6：拖拽期间挂起 30s 轮询重绘——半路重绘会把手上的条抽走
     const nd = await api('/api/schedule').catch(() => null);
-    if (号 === window._rlSeq && nd && nd.粒 && ssig(nd) !== ssig0) repaint('排程账变');
+    if (号 === window._rlSeq && nd && nd.粒 && !window._gt2Dragging && ssig(nd) !== ssig0) repaint('排程账变');
   });
 
   return `<div class="rlpage">
@@ -3847,9 +3849,16 @@ async function viewRelay() {
 /* ---- 排期的手：就绪打勾 / 重排。两口都走 CAS（预期版本取自本次渲染读到的现态）---- */
 // 409 = 别的调用方（项管自己/另一个窗口）先写了一笔。不静默重试：静默重试等于拿旧意图覆盖新事实，
 // 而这是一本只追加的审计账。如实说一句并原地重绘，制作人看着最新现态再点一次。
-async function 排程写(动作, body, 成功文) {
+async function 排程写(动作, body, 成功文, opts) {
   const r = await post('/api/schedule/' + encodeURIComponent(动作), { ...body, 操作者: 排期署名 });
   if (!r.ok) {
+    // 拖拽路的 CAS 409（甘特 P2 #10）：两选——重新加载（拉最新数据重绘）/放弃。
+    // 两选都收弹窗结束本次拖拽流：岛数据从头没动过，不重绘条也在原位（原位回滚天然成立）。
+    if (r.冲突 && opts && opts.拖拽) {
+      const m = document.querySelector('.mwrap'); if (m) m.remove();
+      if (await ask('已被他处改动（版本冲突）——重新加载最新数据并重绘？\n取消＝放弃本次拖拽改期（原位回滚，图未动账）')) repaint('排程 CAS 冲突重载');
+      return null;
+    }
     toast(r.冲突 ? '版本冲突：这条刚被改过，已刷新，请照新现态再来一次' : (r.error || '失败'));
     if (r.冲突) repaint('排程 CAS 冲突');
     return null;
@@ -3961,29 +3970,36 @@ window.tqEditDepsGo = async (粒ID, 预期版本, btn) => {
   toast(refs.length ? `已更新依赖（${refs.length} 条）` : '已清空依赖');
   repaint('编依赖');
 };
-window.tqReplan = async (粒ID) => {
+// 预填（甘特 P2 #10 拖拽两路分流）：岛松手后带 {计划开始,计划完成,拖拽:true} 进来——
+// 两格预填新计划（刻钟形 YYYY-MM-DDTHH:mm，后端 规范计划时刻 同一形），确认前可改；
+// 取消＝原位回滚（岛数据没动过，图上的条本来就没挪账）。不带预填＝原样人工重排口。
+window.tqReplan = async (粒ID, 预填) => {
   const g = await 取待办(粒ID);
   if (!g) return toast('这条待办已不在现态（可能刚成单或被撤销）');
   if (排期终态.includes(g.状态)) return toast(`终态待办不可重排（当前 ${g.状态}）——要重排的是它后面还没做的那些`);
+  const 拖 = !!(预填 && 预填.拖拽);
+  const 起v = 预填 && 预填.计划开始 !== undefined ? 预填.计划开始 : g.计划开始;
+  const 讫v = 预填 && 预填.计划完成 !== undefined ? 预填.计划完成 : g.计划完成;
   const 基 = g.基线完成 || g.基线开始
     ? `<div class="note">基线 ${esc(g.基线开始 || '?')} → ${esc(g.基线完成 || '?')}（首次排期时立下，不随重排变；延期＝现计划较它挪了多少，由服务端判定）</div>`
     : '<div class="note">这条还没有基线——本次若填了计划完成，系统就以这一份作为基线（首次排期）</div>';
   const w = showModal(`<h3>重排 · <span class="mono">${esc(上级名(g.上级))}${g.序 ? '·' + g.序 : ''}</span>
       <span class="x" onclick="this.closest('.mwrap').remove()">×</span></h3>
     <p class="dim" style="margin:-4px 0 12px;font-size:12.5px">${esc(g.题 || '')}</p>
+    ${拖 ? `<div class="note">拖拽预填：${esc(g.计划开始 || '?')} → ${esc(g.计划完成 || '?')} 改为下面两格（15 分钟吸附）。取消＝原位回滚（图未动账）。</div>` : ''}
     <div class="f-row2">
-      <div class="f-field"><label>计划开始（YYYY-MM-DD，留空＝清空）</label><input id="rp-s" class="mono" value="${esc(g.计划开始 || '')}" placeholder="2026-08-21"/></div>
-      <div class="f-field"><label>计划完成（YYYY-MM-DD，留空＝清空）</label><input id="rp-e" class="mono" value="${esc(g.计划完成 || '')}" placeholder="2026-08-25"/></div>
+      <div class="f-field"><label>计划开始（YYYY-MM-DD 或 YYYY-MM-DDTHH:mm 刻钟，留空＝清空）</label><input id="rp-s" class="mono" value="${esc(起v || '')}" placeholder="2026-08-21T09:00"/></div>
+      <div class="f-field"><label>计划完成（同上，留空＝清空）</label><input id="rp-e" class="mono" value="${esc(讫v || '')}" placeholder="2026-08-25T12:00"/></div>
     </div>
     <div class="f-field"><label>工期天（可选，非负数）</label><input id="rp-d" class="mono" value="${esc(g.工期天 == null ? '' : g.工期天)}" placeholder="3"/></div>
     <div class="f-field"><label>因（必填——后端强制，没有因的甘特图没人敢照着排产）</label><input id="rp-w" placeholder="如：依赖 Q5 未完，整批后挪一周"/></div>
     ${基}
     <div class="note">写账署名 <b>${esc(排期署名)}</b>（重排操作域＝项管/总监，制作人不在域内）· 版本 ${g.版本号}（CAS）</div>
     <div class="mfoot"><div class="rgt2"><button class="btn h36" onclick="this.closest('.mwrap').remove()">取消</button>
-      <button class="btn accent h36" onclick="tqReplanGo('${qesc(粒ID)}',${g.版本号},this)">重排</button></div></div>`);
-  const s = w.querySelector('#rp-s'); if (s) s.focus();
+      <button class="btn accent h36" onclick="tqReplanGo('${qesc(粒ID)}',${g.版本号},this,${拖 ? 1 : 0})">重排</button></div></div>`);
+  const s = w.querySelector(拖 ? '#rp-w' : '#rp-s'); if (s) s.focus();
 };
-window.tqReplanGo = async (粒ID, 预期版本, btn) => {
+window.tqReplanGo = async (粒ID, 预期版本, btn, 拖) => {
   const 因 = ($('rp-w') || {}).value || '';
   if (!因.trim()) return toast('必须填因——排期每一次改动都要留下「为什么」，否则甘特图三周后没人答得上');
   // 三格原样透传：'' → null 是**清空**（后端认 null/'' 为清空、不传为不动），
@@ -3996,7 +4012,7 @@ window.tqReplanGo = async (粒ID, 预期版本, btn) => {
     计划完成: (($('rp-e') || {}).value || '').trim() || null,
     工期天: 数(($('rp-d') || {}).value),
     因: 因.trim(),
-  }, '已重排');
+  }, '已重排', { 拖拽: !!拖 });
   btn.disabled = false;
   if (r) { const m = document.querySelector('.mwrap'); if (m) m.remove(); }
 };
@@ -4007,13 +4023,19 @@ window.tqReplanGo = async (粒ID, 预期版本, btn) => {
    触发源写死「今时线」：本口只服务越线处置，故弹窗只给 派发/重排 两选——「无需调整」在越线源下
    服务端 400 拒（强制二选一），压根不该画出来让人点。CAS 冲突走 排程写 的统一口径（如实报+重绘）。 */
 const 重排类别集 = ['前置依赖未到', '额度不够', '并发满', '估值变化', '优先级不够'];
-window.tqStance = async (粒ID) => {
+// 预填（甘特 P2 #10）：越线条拖拽松手带 {决定:'重排', 新计划开始, 新计划完成, 拖拽:true} 进来——
+// 决定钉在重排（拖动作本身就是在挪期）、两格预填拖出的新计划；取消＝原位回滚，同 tqReplan。
+window.tqStance = async (粒ID, 预填) => {
   const g = await 取待办(粒ID);
   if (!g) return toast('这条待办已不在现态（可能刚成单或被撤销）');
   if (排期终态.includes(g.状态)) return toast(`终态待办无从表态（当前 ${g.状态}）`);
+  const 拖 = !!(预填 && 预填.拖拽);
+  const 起v = 预填 && 预填.新计划开始 !== undefined ? 预填.新计划开始 : g.计划开始;
+  const 讫v = 预填 && 预填.新计划完成 !== undefined ? 预填.新计划完成 : g.计划完成;
   const w = showModal(`<h3>越线表态 · <span class="mono">${esc(上级名(g.上级))}${g.序 ? '·' + g.序 : ''}</span>
       <span class="x" onclick="this.closest('.mwrap').remove()">×</span></h3>
     <p class="dim" style="margin:-4px 0 12px;font-size:12.5px">${esc(g.题 || '')} · 现计划 ${esc(g.计划开始 || '?')} → ${esc(g.计划完成 || '?')}</p>
+    ${拖 ? `<div class="note">拖拽预填：新计划两格已按拖放位置填好（15 分钟吸附）。越线强制二选一照旧；取消＝原位回滚（图未动账）。</div>` : ''}
     <div class="f-field"><label>决定（越线强制二选一，无第三值）</label>
       <div class="stance-pick">
         <label class="stance-opt"><input type="radio" name="st-d" value="派发" onchange="tqStanceMode(this.value)"/>派发——按现计划放行（禁带新计划；真正放行走派单链，表态只落审计痕）</label>
@@ -4023,8 +4045,8 @@ window.tqStance = async (粒ID) => {
       <div class="f-field"><label>类别（H113 五类，归档轴）</label><select id="st-c" class="mono">
         ${重排类别集.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select></div>
       <div class="f-row2">
-        <div class="f-field"><label>新计划开始（YYYY-MM-DDTHH:mm，刻钟）</label><input id="st-s" class="mono" value="${esc(g.计划开始 || '')}" placeholder="2026-08-25T09:00"/></div>
-        <div class="f-field"><label>新计划完成</label><input id="st-e" class="mono" value="${esc(g.计划完成 || '')}" placeholder="2026-08-25T12:00"/></div>
+        <div class="f-field"><label>新计划开始（YYYY-MM-DDTHH:mm，刻钟）</label><input id="st-s" class="mono" value="${esc(起v || '')}" placeholder="2026-08-25T09:00"/></div>
+        <div class="f-field"><label>新计划完成</label><input id="st-e" class="mono" value="${esc(讫v || '')}" placeholder="2026-08-25T12:00"/></div>
       </div>
       <div class="f-field"><label>预估单元（仅 类别=估值变化 必填，同事务落盘）</label><input id="st-u" class="mono" value="${esc(g.预估单元 == null ? '' : g.预估单元)}" placeholder="估没变就留着别动"/></div>
       <div class="f-field"><label>因（必填——类别是归档轴，因才是这一次的实情）</label><input id="st-w" placeholder="如：额度周转不开，整条后挪一天"/></div>
@@ -4032,11 +4054,11 @@ window.tqStance = async (粒ID) => {
     <div class="note">触发源＝今时线（计划开始已过线未派发，数据层已立债）。写账署名 <b>${esc(排期署名)}</b> · 版本 ${g.版本号}（CAS，冲突如实报）
       · 任何类别推迟累计≥3 次升格总监</div>
     <div class="mfoot"><div class="rgt2"><button class="btn h36" onclick="this.closest('.mwrap').remove()">取消</button>
-      <button class="btn accent h36" onclick="tqStanceGo('${qesc(粒ID)}',${g.版本号},this)">表态</button></div></div>`);
+      <button class="btn accent h36" onclick="tqStanceGo('${qesc(粒ID)}',${g.版本号},this,${拖 ? 1 : 0})">表态</button></div></div>`);
   const s = w.querySelector('#st-w'); if (s) s.focus();
 };
 window.tqStanceMode = (v) => { const 区 = $('st-re'); if (区) 区.style.display = v === '重排' ? '' : 'none'; };
-window.tqStanceGo = async (粒ID, 预期版本, btn) => {
+window.tqStanceGo = async (粒ID, 预期版本, btn, 拖) => {
   const 定 = (document.querySelector('input[name="st-d"]:checked') || {}).value || '重排';
   const body = { 粒ID, 预期版本, 触发源: '今时线', 决定: 定 };
   if (定 === '重排') {
@@ -4052,7 +4074,7 @@ window.tqStanceGo = async (粒ID, 预期版本, btn) => {
     if (body.类别 === '估值变化' && 估) body.预估单元 = Number(估);
   }
   btn.disabled = true;
-  const r = await 排程写('表态', body, 定 === '派发' ? '已表态：派发（按现计划放行，转移走派单链）' : '已表态：重排落账');
+  const r = await 排程写('表态', body, 定 === '派发' ? '已表态：派发（按现计划放行，转移走派单链）' : '已表态：重排落账', { 拖拽: !!拖 });
   btn.disabled = false;
   if (r) { const m = document.querySelector('.mwrap'); if (m) m.remove(); }
 };

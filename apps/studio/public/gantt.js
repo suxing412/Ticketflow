@@ -18,8 +18,22 @@
 //   （祖先链+子孙投影＋面包屑，会话内不持久化）、越线图内处置（红点/待重判标记/右键表态 →
 //   window.tqStance，弹窗在 app.js 与 tqReplan 同区）、树列轻量字段（状态色点＋工期徽章）、
 //   越线计数角标（点击滚到下一张越线行）。
-// P2 留接口不留死代码：拖拽/依赖线不在本文件；
-// 依赖线（P2）需要的离屏端点聚合只留一个桩（离屏端点），数据.边 原样存着不画。
+// P2（施工令 #10/#11/#12 · 2026-08-24）已入本文件：
+//   #10 拖拽两路分流——工单条（非终态）拖条身=整体平移（工期不变）、拉端点(.gt2h 6px 热区)=改起/讫；
+//     拖拽中条半透明跟随+悬浮时间提示（刻钟吸附实时显示）；像素→时间反算＝窗起点毫+px/HW 小时、
+//     15 分钟吸附，产 'YYYY-MM-DDTHH:mm' 本地钟面（串即契约：lib/pm/schedule.规范计划时刻 原样收下，
+//     计划毫秒 按本地墙钟解析——判据①拿服务端模块对拍往返）；松手分流：普通条→tqReplan 预填、
+//     越线待重判条→tqStance 预填(决定=重排)；取消/失败原位回滚（岛数据不变重绘即回滚）；
+//     拖拽期间 window._gt2Dragging=true 挂起 30s 轮询重绘（app.js pollLoop 见旗跳过，DS-6）；
+//     CAS 409 冲突二选（重新加载/放弃）在壳层 排程写。
+//   #11 只读态（最小实现）：停表（/api/gates paused，viewRelay 十四口已带）或粒终态 ⇒
+//     不出端点手柄、拖拽不启动、悬停详情照常。不做用户角色系统（单用户桌面应用，写口自有域校验兜底）。
+//   #12 依赖线——数据=服务端已下发 边/边统计（/api/schedule 增发，lib/pm/schedule-edges 冻结形）；
+//     岛内全局 SVG 层（绝对定位盖时间区，pointer-events:none）；三次贝塞尔（出点=前置条右端中点、
+//     入点=后继条左端中点、控制柄 k 按施工令 #12 原文）；着色只按服务端字段：冲突=红、环=虚线+环组
+//     title、外部/解析不到=半截线+空心端点符；默认淡色退后台，悬停条时其上下游线点亮；
+//     锚点缓存 key→{x,y}，虚拟滚动窗变/横滚/resize 同步重绘；离屏端点走 P0 预留的 离屏端点 桩
+//     （线画到可视区边缘+方向箭头）；工具栏冲突角标＝边统计.冲突（点击定位下一条冲突线）。
 (function () {
   'use strict';
 
@@ -62,6 +76,26 @@
   const X = (ms, 窗) => ((ms - 窗.t0) / 时毫) * HW;
   const 毫文 = (ms) => new Date(ms).toISOString().slice(5, 16).replace('T', ' ');
   const 时点文 = (v) => { const p = 解时(v); return p ? (p.含时 ? String(v).slice(5, 16).replace('T', ' ') : String(v).slice(5, 10)) : '未定'; };
+
+  /* ═══ P2 #10 像素↔钟面反算（纯函数，判据①锁往返恒等）═══
+     解时 用 Date.UTC 做时区无关毫秒算术，反算就得用 getUTC* 收回来——同一把尺才有
+     像素→时间→像素恒等。产出串 'YYYY-MM-DDTHH:mm' 与 lib/pm/schedule.规范计划时刻 的刻钟形
+     一字不差（15 分对齐由 吸附 保证，服务端拒非刻钟），写口再按本地墙钟解析：串即契约。 */
+  const 吸附 = (ms) => Math.round(ms / 刻毫) * 刻毫;
+  const 像素毫 = (px) => (px / HW) * 时毫;
+  function 毫钟面(ms) {
+    const d = new Date(ms), p = (n) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+  }
+  // 拖几何：模式∈{移,左,右}。移=平移工期不变（真讫参与——超长条拖完还是超长，截断只截图）；
+  // 左/右=改起/讫，最窄一刻钟；全部落点先过 吸附（图上跟随的就是吸附后的位置，所见即所提交）。
+  function 拖几何(s, 模式, dx像素) {
+    const d = 像素毫(dx像素);
+    if (模式 === '左') return { 起: Math.min(吸附(s.起 + d), s.真讫 - 刻毫), 讫: s.真讫 };
+    if (模式 === '右') return { 起: s.起, 讫: Math.max(吸附(s.真讫 + d), s.起 + 刻毫) };
+    const 起 = 吸附(s.起 + d);
+    return { 起, 讫: 起 + (s.真讫 - s.起) };
+  }
 
   /* ═══ 拼树（P0-0 契约②：pipelines/features/specials/schedule＋board 四口前端拼装）═══ */
   function 拼树(数据) {
@@ -180,8 +214,14 @@
     const b = Math.min(总行, Math.ceil((滚 + 视高) / 行高) + 缓);
     return [a, b];
   }
-  // 离屏依赖端点聚合桩（P2 依赖线用；本期只定接口）：给行键，回该行在图上的锚点或 null（离屏）。
-  function 离屏端点() { return null; }
+  // 离屏依赖端点（P0 桩 → P2 #12 实装）：给行键（节点键/粒ID/单号），回该行在图上的锚点
+  // {入x,出x,y,行}（当前可视窗内）或 null（离屏/不在树上）——离屏端点的线画到可视区边缘+方向箭头。
+  function 离屏端点(键) {
+    const 岛 = 找岛(); if (!岛 || !岛.st) return null;
+    const k = String(键);
+    const a = 端锚(岛._锚 || 锚点集(岛.st, 岛._行窗 || [0, 岛.st.行.length]), { 键: k, 粒ID: k, 单号: k });
+    return a && !a.离屏 ? { 入x: a.入x, 出x: a.出x, y: a.y, 行: a.行 } : null;
+  }
 
   /* ═══ rollup 微型泳道（#17）：≤3 道，越线单永在最上道，溢出聚成密度块 ═══ */
   function 泳道(子列) {
@@ -276,9 +316,12 @@
           // 越线灰显不标红（重判前不算超期事故）；不越线才按服务端判定挂延期/超期记号
           const 红 = 越 ? '' : `${j && j.超期 ? ' gt2-od' : ''}${j && j.延期 ? ' gt2-late' : ''}`;
           // 越线条带 data-x：点击分流到表态口（#19，普通条仍走重排）
-          条 += `<i class="gt2bar ${状态类[g.状态] || ''}${s.单端 ? ' half' : ''}${s.超长 ? ' cut gt2cut' : ''}${越 ? ' xline' : ''}${红}"
+          // 可拖（#10）⇔ 非只读（#11 最小实现：停表或终态即只读——不出手柄、拖不启动，悬停详情照常）
+          const 拖ok = !st.停表 && !终态.includes(g.状态);
+          条 += `<i class="gt2bar ${状态类[g.状态] || ''}${s.单端 ? ' half' : ''}${s.超长 ? ' cut gt2cut' : ''}${越 ? ' xline' : ''}${红}${拖ok ? ' drag' : ''}"
               data-tid="${esc(n.键)}" data-act="bar" data-g="${esc(g.粒ID)}"${越 ? ' data-x="1"' : ''} tabindex="0" role="button"
-              aria-label="${esc((g.题 || '') + (越 ? '：越线待重判，点击表态（派发/重排二选一）' : '：点击改排期'))}" style="left:${px(X(s.起, 窗))};width:${条宽(s)}"></i>`;
+              aria-label="${esc((g.题 || '') + (越 ? '：越线待重判，点击表态（派发/重排二选一）' : '：点击改排期'))}" style="left:${px(X(s.起, 窗))};width:${条宽(s)}">${拖ok
+                ? '<b class="gt2h l" title="拉起点：改计划开始（15 分钟吸附）"></b><b class="gt2h r" title="拉讫点：改计划完成（15 分钟吸附）"></b>' : ''}</i>`;
           const 尾 = px(X(s.讫, 窗) + 4);
           // 徽标（越线＞判定，判定只读服务端下发——无判定不造字）；
           // 待重判标记可点（#19/DS-3）：处置不出甘特页，点它直接弹表态框
@@ -402,7 +445,14 @@
   function render(容器, 数据, 选项) {
     if (!容器) return;
     let 岛 = 容器._gt2;
-    if (岛 && 岛.根el && 岛.根el.isConnected) { 末岛 = 岛; 岛.选项 = 选项 || 岛.选项; 岛.数据 = 规范数据(数据, 岛.选项); 重排(岛); return 岛; }
+    if (岛 && 岛.根el && 岛.根el.isConnected) {
+      末岛 = 岛; 岛.选项 = 选项 || 岛.选项;
+      const d = 规范数据(数据, 岛.选项);
+      // #10/DS-6：拖拽进行中一律不重绘（30s 轮询在壳层已挂旗跳过，这里兜其余入口）——
+      // 新数据存着，松手（收拖）后补一拍，既不丢更新也不打断手上的条。
+      if (岛._拖) { 岛._拖后数据 = d; return 岛; }
+      岛.数据 = d; 重排(岛); return 岛;
+    }
     岛 = 容器._gt2 = 末岛 = { 容器, 数据: null, 选项: 选项 || {}, 图: new Map(), st: null };
     岛.数据 = 规范数据(数据, 岛.选项);
     容器.innerHTML = `<div class="gt2" tabindex="-1">
@@ -410,12 +460,13 @@
         <span class="gt2grp"><i class="gt2lab">折到</i><button data-act="fold" data-lv="1">1 管线</button><button data-act="fold" data-lv="2">2 特性</button><button data-act="fold" data-lv="3">3 专项</button><button data-act="fold" data-lv="4">4 工单</button></span>
         <span class="gt2grp"><button data-act="today" title="快捷键 T：横滚到今时线并闪一下">◎ 回到今天</button></span>
         <button class="gt2xbadge" data-act="xnext" hidden title="越线待重判计数（#19）——点击滚到下一张越线行，逐个处置">越线 0</button>
-        <span class="gt2note subnote">固定小时轴 ${HW}px/h · 数字键 1-4 折层 · 右键有菜单 · ⋯＝超 24h 截断（悬浮看真实区间）</span>
+        <button class="gt2cbadge" data-act="cnext" hidden title="依赖冲突计数（#12/DS-7，服务端 边统计.冲突）——点击定位下一条冲突线，逐个处置">冲突 0</button>
+        <span class="gt2note subnote">固定小时轴 ${HW}px/h · 数字键 1-4 折层 · 右键有菜单 · ⋯＝超 24h 截断（悬浮看真实区间）· 拖条身平移/拉端点改起讫（15 分钟吸附）</span>
       </div>
       <div class="gt2crumb" hidden></div>
       <div class="gt2stopband" hidden>产线关闭中 · 停表</div>
       <div class="gt2wrap" role="region" aria-label="四层甘特图" tabindex="0">
-        <div class="gt2cv"><div class="gt2head gt2hd"></div><div class="gt2body"><i class="gt2gridbg"></i><i class="gt2now b" hidden></i></div></div>
+        <div class="gt2cv"><div class="gt2head gt2hd"></div><div class="gt2body"><i class="gt2gridbg"></i><i class="gt2now b" hidden></i><svg class="gt2deps" aria-hidden="true"></svg></div></div>
       </div>
       <div class="gt2empty gtempty" hidden></div>
       <div class="gt2debt" hidden></div>`;
@@ -425,11 +476,18 @@
     岛.body = 岛.根el.querySelector('.gt2body');
     岛.卡 = document.createElement('div'); 岛.卡.className = 'gt2tip'; 岛.根el.appendChild(岛.卡);
     岛.菜 = document.createElement('div'); 岛.菜.className = 'gt2menu'; 岛.根el.appendChild(岛.菜); // #8 自绘右键菜单（fixed 定位防出屏）
+    岛.拖tip = document.createElement('div'); 岛.拖tip.className = 'gt2dragtip'; 岛.根el.appendChild(岛.拖tip); // #10 拖拽悬浮时间提示
+    岛.线 = 岛.根el.querySelector('.gt2deps'); // #12 依赖线全局 SVG 层
     挂事件(岛);
     重排(岛);
     return 岛;
   }
-  function 更新(数据) { const 岛 = 找岛(); if (岛) { 岛.数据 = 规范数据(数据, 岛.选项); 重排(岛); } }
+  function 更新(数据) {
+    const 岛 = 找岛(); if (!岛) return;
+    const d = 规范数据(数据, 岛.选项);
+    if (岛._拖) { 岛._拖后数据 = d; return; } // 同 render：拖拽中挂起，松手补一拍
+    岛.数据 = d; 重排(岛);
+  }
   // 程序口按「末次 render 的岛」兜底（gantt-p0 判据约定：headless 容器没有 rl-gantt id 也得能调）
   let 末岛 = null;
   function 找岛() { const box = document.getElementById('rl-gantt'); return (box && box._gt2) || 末岛; }
@@ -455,12 +513,18 @@
     (function 走(x) { if (x.粒 && 越线判(x.粒, x.段, st.今ms, st.停表)) 越数++; for (const k of x.子) 走(k); })({ 子: st.根, 粒: null });
     const 标 = 岛.根el.querySelector('.gt2xbadge');
     if (标) { 标.hidden = !越数; 标.setAttribute('data-数', String(越数)); 标.textContent = '越线 ' + 越数; }
+    // 冲突角标（#12/DS-7）＝服务端 边统计.冲突——线着色读逐边字段、角标读统计字段，两格都不前端私算
+    const 统 = 岛.数据.边统计 || null;
+    const 冲数 = 统 && 统.冲突 != null ? Number(统.冲突) : 0;
+    const c标 = 岛.根el.querySelector('.gt2cbadge');
+    if (c标) { c标.hidden = !冲数; c标.setAttribute('data-数', String(冲数)); c标.textContent = '冲突 ' + 冲数; }
     const 空框 = 岛.根el.querySelector('.gt2empty');
     空框.hidden = !空;
     岛.wrap.hidden = 空;
     if (空) {
       空框.innerHTML = '甘特图上没有可画的行——四层树是空的，或没有一粒待办排过日期。排期入口在下方待办队列（欠账区列着每一条没排期的活）。';
       岛.图.clear(); 岛.body.querySelectorAll('.gt2r').forEach((e) => e.remove());
+      if (岛.线) 岛.线.innerHTML = '';
       return;
     }
     const cv = 岛.根el.querySelector('.gt2cv');
@@ -511,6 +575,8 @@
       岛.图.set(键, { 签: html, el });
     }
     for (const [键, v] of 岛.图) if (!留.has(键)) { v.el.remove(); 岛.图.delete(键); }
+    岛._行窗 = [a, b];
+    画线(岛); // #12：行几何与可视窗一变（重排/虚拟滚动换窗/resize），依赖线同步重绘（DS-11）
   }
 
   const 记焦点 = (岛) => {
@@ -633,8 +699,200 @@
     if (el && el.animate) el.animate([{ opacity: 1 }, { opacity: .25 }, { opacity: 1 }, { opacity: .25 }, { opacity: 1 }], { duration: 800 });
   }
 
+  /* ═══ 依赖线（#12）：岛内全局 SVG 层（绝对定位盖时间区，pointer-events:none），只画不判——
+     冲突/环/外部一律读服务端下发字段（lib/pm/schedule-edges 冻结形，/api/schedule 增发），
+     前端一格都不自算：翻转下发字段，线就得跟着变（判据④锁死）。 ═══ */
+  function 边表(数据) { const b = 数据 && 数据.边; return Array.isArray(b) ? b : []; }
+  // 锚点缓存 key→{入x,出x,y,行,离屏}（DS-11）：树行里有段的行才有锚；节点键与单号都作 key。
+  // 出点＝条右端中点、入点＝条左端中点（施工令 #12 原文）；y 按行几何（行高恒定）恒等推得。
+  function 锚点集(st, 行窗) {
+    const 锚 = new Map();
+    for (let i = 0; i < st.行.length; i++) {
+      const n = st.行[i].节点, s = n.段 || n.自段;
+      if (!s) continue;
+      const a = { 入x: X(s.起, st.窗), 出x: X(s.讫, st.窗), y: i * 行高 + 行高 / 2, 行: i,
+        离屏: i < 行窗[0] ? '上' : (i >= 行窗[1] ? '下' : null) };
+      if (!锚.has(n.键)) 锚.set(n.键, a);
+      if (n.粒 && n.粒.单号 && !锚.has(String(n.粒.单号))) 锚.set(String(n.粒.单号), a);
+    }
+    return 锚;
+  }
+  const 端锚 = (锚, 端) => (端 ? (锚.get(String(端.粒ID || '')) || 锚.get(String(端.单号 || '')) || 锚.get(String(端.键 || '')) || null) : null);
+  // 三次贝塞尔（施工令 #12 原文）：k = dx≥24 ? clamp(dx/2,12,32) : min(44, 12+(24−dx)·0.45)——
+  // 常规平缓 S 形，相接/倒挂时柄随贴近程度加长、曲线外鼓绕行不打结；两控制点与端点同高
+  // ⇒ 出入切向水平；同行顺排（|dy|<1 且 dx>0）退化直线。
+  function 贝塞尔(x1, y1, x2, y2) {
+    const dx = x2 - x1;
+    if (Math.abs(y2 - y1) < 1 && dx > 0) return `M${x1},${y1} L${x2},${y2}`;
+    const k = dx >= 24 ? Math.max(12, Math.min(32, dx / 2)) : Math.min(44, 12 + (24 - dx) * 0.45);
+    return `M${x1},${y1} C${x1 + k},${y1} ${x2 - k},${y2} ${x2},${y2}`;
+  }
+  function 线HTML(st, 行窗, 锚) {
+    const 边 = 边表(st.数据);
+    if (!边.length || st.窗.空 || !st.行.length) return '';
+    const f = (v) => String(+(+v).toFixed(1));
+    const 上缘 = 行窗[0] * 行高 + 3, 下缘 = 行窗[1] * 行高 - 3;
+    const out = [];
+    for (let i = 0; i < 边.length; i++) {
+      const e = 边[i];
+      const A = 端锚(锚, e.from), B = 端锚(锚, e.to);
+      if (!A && !B) continue;                        // 两端都不在树上：无处可挂
+      if ((!A || A.离屏) && (!B || B.离屏)) continue; // 整条在可视窗外（离屏聚合只救单端）
+      // 着色只按服务端字段（CX-3/DS-1）：冲突=红、环=虚线+环组 title、外部=半截线家族
+      const cls = 'gtedge' + (e.冲突 === true ? ' conflict' : '') + (e.环 ? ' cyc' : '') + (e.外部 ? ' ext' : '');
+      const 词 = e.冲突因 || e.外部因 || (e.环 ? `环组 ${e.环组}：循环依赖（服务端判定）` : `${e.规则 || ''}${e.源 ? ' · ' + e.源 : ''}`);
+      let x1, y1, x2, y2, d; const 饰 = [];
+      if (A) { x1 = A.出x; y1 = A.离屏 ? (A.离屏 === '上' ? 上缘 : 下缘) : A.y; }
+      if (B) { x2 = B.入x; y2 = B.离屏 ? (B.离屏 === '上' ? 上缘 : 下缘) : B.y; }
+      if (!A) {
+        // 前置不可见/外部（含 外:悬空）：半截线+空心端点符，向岛缘一侧收 36px（#12 乙式兜底）
+        x1 = Math.max(0, x2 - 36); y1 = y2;
+        d = `M${f(x1)},${f(y1)} L${f(x2)},${f(y2)}`;
+        饰.push(`<circle class="hollow" cx="${f(x1)}" cy="${f(y1)}" r="3"/>`);
+        饰.push(`<path class="arw" d="M${f(x2)},${f(y2)} l-6,-3.5 l0,7 z"/>`);
+      } else if (!B) {
+        x2 = Math.min(st.窗.宽, x1 + 36); y2 = y1;
+        d = `M${f(x1)},${f(y1)} L${f(x2)},${f(y2)}`;
+        饰.push(`<circle class="dot" cx="${f(x1)}" cy="${f(y1)}" r="2.5"/>`);
+        饰.push(`<circle class="hollow" cx="${f(x2)}" cy="${f(y2)}" r="3"/>`);
+      } else {
+        d = 贝塞尔(+f(x1), +f(y1), +f(x2), +f(y2));
+        // 起点圆点贴条缘、终点箭头水平指入；离屏端换方向箭头（线画到可视区边缘，#15 聚合桩语义）
+        饰.push(A.离屏 ? `<path class="offarw" d="M${f(x1)},${f(y1)} l-4,${A.离屏 === '上' ? '6' : '-6'} l8,0 z"/>`
+          : `<circle class="dot" cx="${f(x1)}" cy="${f(y1)}" r="2.5"/>`);
+        饰.push(B.离屏 ? `<path class="offarw" d="M${f(x2)},${f(y2)} l-4,${B.离屏 === '上' ? '6' : '-6'} l8,0 z"/>`
+          : `<path class="arw" d="M${f(x2)},${f(y2)} l-6,-3.5 l0,7 z"/>`);
+      }
+      out.push(`<g class="${cls}" data-边="${i}" data-from="${esc(e.from && e.from.键)}" data-to="${esc(e.to && e.to.键)}"><title>${esc(词)}</title><path class="ln" d="${d}"/>${饰.join('')}</g>`);
+    }
+    return out.join('');
+  }
+  function 画线(岛) {
+    const svg = 岛.线; if (!svg) return;
+    const st = 岛.st;
+    if (!st || st.窗.空 || !边表(st.数据).length) { svg.innerHTML = ''; 岛._锚 = null; return; }
+    const 行窗 = 岛._行窗 || [0, st.行.length];
+    const 锚 = 岛._锚 = 锚点集(st, 行窗);
+    const 高 = st.行.length * 行高;
+    svg.setAttribute('width', String(Math.max(1, Math.round(st.窗.宽))));
+    svg.setAttribute('height', String(Math.max(1, 高)));
+    svg.setAttribute('style', `left:${树宽}px;width:${st.窗.宽}px;height:${高}px`);
+    svg.innerHTML = 线HTML(st, 行窗, 锚);
+  }
+  // 悬停联动（#12）：悬停任一条时其上下游线点亮（挂 P0 悬浮卡委托里，默认淡色退后台）
+  function 亮线(岛, n) {
+    const svg = 岛.线; if (!svg || !svg.children) return;
+    const 中 = (v) => !!(v != null && n && (v === n.键
+      || (n.粒 && n.粒.单号 && (v === String(n.粒.单号) || v === '单:' + n.粒.单号))));
+    for (const g of [...svg.children]) {
+      if (!g.getAttribute) continue;
+      const 类 = (g.getAttribute('class') || '').replace(/ ?\blit\b/, '');
+      g.setAttribute('class', (n && (中(g.getAttribute('data-from')) || 中(g.getAttribute('data-to')))) ? 类 + ' lit' : 类);
+    }
+  }
+  // 冲突定位（#12/DS-7 角标落点）：点一下滚到下一条冲突线的可锚端，循环轮转（同 越线定位 的成例）
+  function 冲突定位(岛) {
+    const st = 岛.st; if (!st || st.窗.空) return;
+    const 锚 = 岛._锚 || 锚点集(st, [0, st.行.length]);
+    const 靶 = [];
+    for (const e of 边表(st.数据)) {
+      if (e.冲突 !== true) continue;
+      const B = 端锚(锚, e.to) || 端锚(锚, e.from);
+      if (B) 靶.push(B);
+    }
+    if (!靶.length) return;
+    岛._冲游 = ((岛._冲游 == null ? -1 : 岛._冲游) + 1) % 靶.length;
+    const B = 靶[岛._冲游];
+    岛.wrap.scrollTo({ top: Math.max(0, B.行 * 行高 - 120), left: Math.max(0, 树宽 + B.入x - 240), behavior: 'smooth' });
+    const el = document.getElementById('gt2-row-' + (st.行[B.行] && st.行[B.行].节点.键));
+    if (el && el.animate) el.animate([{ opacity: 1 }, { opacity: .25 }, { opacity: 1 }, { opacity: .25 }, { opacity: 1 }], { duration: 800 });
+  }
+
+  /* ═══ 拖拽两路分流（#10）＋只读态（#11）═══
+     计算与分流全走下面这三个落点（可拖判/拖几何/拖分流）——鼠标路（起拖/拖动/收拖）与
+     程序口（试拖，判据②③直调）共用同一条产线，H104 验的就是行为本体。 */
+  // 只读（#11 最小实现）：停表（/api/gates paused）或粒终态 ⇒ 拖不启动（手柄在 行HTML 同判据不出）
+  function 可拖判(st, n) {
+    return !!(n && n.型 === '工单' && n.粒 && n.段 && !st.停表 && !终态.includes(n.粒.状态));
+  }
+  // 松手分流：普通条→重排口预填、越线待重判条→表态口预填（决定=重排+新计划）——
+  // 弹窗与写口都在壳层（app.js tqReplan/tqStance，CAS+必填因原样），岛只递 粒ID+预填。
+  // 取消/失败一律原位回滚：岛数据从头到尾没动过，重绘即回滚。
+  function 拖分流(岛, 粒ID, r) {
+    const st = 岛.st, n = st && st.键表.get(String(粒ID));
+    if (!n || !n.粒) return null;
+    const 起串 = 毫钟面(r.起), 讫串 = 毫钟面(r.讫);
+    if (越线判(n.粒, n.段, st.今ms, st.停表)) {
+      const 预填 = { 决定: '重排', 新计划开始: 起串, 新计划完成: 讫串, 拖拽: true };
+      if (typeof window.tqStance === 'function') window.tqStance(n.粒.粒ID, 预填);
+      return { 口: '表态', 粒ID: n.粒.粒ID, 预填 };
+    }
+    const 预填 = { 计划开始: 起串, 计划完成: 讫串, 拖拽: true };
+    if (typeof window.tqReplan === 'function') window.tqReplan(n.粒.粒ID, 预填);
+    return { 口: '重排', 粒ID: n.粒.粒ID, 预填 };
+  }
+  // 程序口（判据②③直调；也是排障入口）：给 粒ID+模式+像素位移，跑完整条拖拽管线
+  function 试拖(粒ID, 模式, dx像素) {
+    const 岛 = 找岛(); if (!岛 || !岛.st) return { 启动: false, 因: '无岛' };
+    const n = 岛.st.键表.get(String(粒ID));
+    if (!可拖判(岛.st, n)) {
+      return { 启动: false, 因: !n || !n.粒 ? '非工单行' : (岛.st.停表 ? '停表只读' : (终态.includes(n.粒.状态) ? '终态只读' : '无段')) };
+    }
+    const r = 拖几何(n.段, String(模式 || '移'), Number(dx像素) || 0);
+    if (r.起 === n.段.起 && r.讫 === n.段.真讫) return { 启动: true, 变: false };
+    return { 启动: true, 变: true, ...拖分流(岛, String(粒ID), r) };
+  }
+  function 起拖(岛, e) {
+    if (e.button !== 0 || !岛.st || 岛._拖) return;
+    const bar = e.target.closest && e.target.closest('.gt2bar');
+    if (!bar || !bar.dataset.g) return;
+    const n = 岛.st.键表.get(String(bar.dataset.g));
+    if (!可拖判(岛.st, n)) return;   // 只读态（#11）：拖拽不启动
+    const h = e.target.closest && e.target.closest('.gt2h');
+    e.preventDefault();
+    const D = 岛._拖 = { 键: n.键, 粒ID: n.粒.粒ID, 模式: h ? (/\bl\b/.test(h.className) ? '左' : '右') : '移',
+      起x: e.clientX, bar, 段: n.段, 新: null };
+    window._gt2Dragging = true;      // DS-6：拖拽期间挂起 30s 轮询重绘（app.js pollLoop 见旗跳过）
+    if (bar.classList) bar.classList.add('dragging');
+    D.动 = (ev) => 拖动(岛, ev); D.收 = () => 收拖(岛);
+    document.addEventListener('mousemove', D.动);
+    document.addEventListener('mouseup', D.收);
+  }
+  function 拖动(岛, e) {
+    const D = 岛._拖; if (!D) return;
+    const r = D.新 = 拖几何(D.段, D.模式, e.clientX - D.起x);
+    const 窗 = 岛.st.窗;
+    const l = X(r.起, 窗);
+    D.bar.style.left = l.toFixed(1) + 'px';   // 半透明跟随（.dragging 样式管透明度）
+    D.bar.style.width = Math.max(3, X(Math.min(r.讫, r.起 + 天毫), 窗) - l).toFixed(1) + 'px'; // 图上仍守 24h 截断
+    const tip = 岛.拖tip;
+    if (tip) {   // 悬浮时间提示：刻钟吸附实时显示——所见即所提交
+      tip.textContent = `${毫钟面(r.起).replace('T', ' ')} → ${毫钟面(r.讫).replace('T', ' ')}`;
+      tip.className = 'gt2dragtip show';
+      tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY - 34) + 'px';
+    }
+  }
+  function 收拖(岛) {
+    const D = 岛._拖; if (!D) return;
+    岛._拖 = null;
+    document.removeEventListener('mousemove', D.动);
+    document.removeEventListener('mouseup', D.收);
+    window._gt2Dragging = false;
+    if (岛.拖tip) 岛.拖tip.className = 'gt2dragtip';
+    // 原位回滚（#10）：岛数据没动过——把被拖过内联样式的那一行扔出签名图，按数据重画即是回滚。
+    const 旧 = 岛.图.get(D.键);
+    if (旧) { 岛.图.delete(D.键); if (旧.el && 旧.el.remove) 旧.el.remove(); }
+    if (岛._拖后数据) { 岛.数据 = 岛._拖后数据; 岛._拖后数据 = null; 重排(岛); } // 拖拽期挂起的更新补一拍
+    else 画行(岛);
+    const r = D.新;
+    if (!r || (r.起 === D.段.起 && r.讫 === D.段.真讫)) return;   // 没挪就不弹（原地松手＝取消）
+    岛._拖动过 = true;   // 吞掉随 mouseup 补发的那记 click——分流已开弹窗，别再叠一个普通口
+    拖分流(岛, D.粒ID, r);
+  }
+
   function 挂事件(岛) {
     岛.根el.addEventListener('click', (e) => {
+      if (岛._拖动过) { 岛._拖动过 = false; return; } // #10：拖完松手补发的那记 click 不作数（分流已开弹窗）
       const b = e.target.closest('[data-act]'); if (!b || !岛.根el.contains(b)) return;
       const act = b.dataset.act;
       const 去 = (fn) => { 关菜单(岛); fn(); }; // 菜单项点完即收
@@ -643,6 +901,7 @@
       else if (act === 'fold') 折到层(岛, +b.dataset.lv || 4);
       else if (act === 'today') 回今(岛);
       else if (act === 'xnext') 越线定位(岛);
+      else if (act === 'cnext') 冲突定位(岛);
       else if (act === 'gem') { e.stopPropagation(); if (b.dataset.r) location.hash = b.dataset.r; }
       // 条点击分流（#19）：越线条（data-x）→ 表态弹窗，普通条 → 重排弹窗（两窗都在 app.js 壳层）
       else if (act === 'bar' || act === 'stance') {
@@ -663,6 +922,13 @@
       else if (act === 'm-collapse') 去(() => 折到层(岛, 1));
       else if (act === 'm-today') 去(() => 回今(岛));
     });
+    // #10 拖拽起手：条身=平移、端点手柄(.gt2h)=改起/讫；只读态（#11）在 起拖 里不启动
+    岛.根el.addEventListener('mousedown', (e) => 起拖(岛, e));
+    // #12：视口尺寸一变可视窗跟着变，行与依赖线同步重绘（DS-11）
+    if (!岛._挂resize && typeof window.addEventListener === 'function') {
+      岛._挂resize = true;
+      window.addEventListener('resize', () => { if (岛.根el && 岛.根el.isConnected && 岛.st) 画行(岛); });
+    }
     // #8 右键两区菜单：岛容器一个 contextmenu 委托——条上（实条/迷你条）＞行上＞空白
     岛.根el.addEventListener('contextmenu', (e) => {
       if (!岛.st) return;
@@ -697,14 +963,15 @@
     // 悬浮卡：mouseover 委托 + mousemove 跟随，出屏收边
     岛.根el.addEventListener('mouseover', (e) => {
       const t = e.target.closest && e.target.closest('[data-tid]');
-      if (!t || !岛.根el.contains(t)) { 岛.卡.classList.remove('show'); return; }
+      if (!t || !岛.根el.contains(t)) { 岛.卡.classList.remove('show'); 亮线(岛, null); return; }
       const n = 岛.st && 岛.st.键表.get(t.dataset.tid);
       if (!n) return;
       岛.卡.innerHTML = 卡HTML(n, 岛.st);
       岛.卡.classList.add('show');
+      亮线(岛, n); // #12：悬停条时其上下游依赖线点亮（默认淡色退后台）
       摆卡(岛, e);
     });
-    岛.根el.addEventListener('mouseleave', () => 岛.卡.classList.remove('show'));
+    岛.根el.addEventListener('mouseleave', () => { 岛.卡.classList.remove('show'); 亮线(岛, null); });
     岛.根el.addEventListener('mousemove', (e) => { if (岛.卡.classList.contains('show')) 摆卡(岛, e); });
   }
   function 摆卡(岛, e) {
@@ -730,7 +997,9 @@
 
   window.GanttIsland = {
     render, 更新, 切折叠, 悬浮卡Html, 离屏端点, 聚焦, 退出聚焦, 菜单Html,
+    试拖, // P2 程序口：鼠标松手（收拖）分流的同一条产线，判据②③直调不模拟鼠标
     // 判据面（H104：验行为不 grep 源码）：纯函数出口，node 沙箱直调断结构
-    _测: { 拼树, 铺算, 建状态, 试渲染, 展平, 默认折叠, 可视范围, 泳道, 段, 算窗, 行HTML, 表头HTML, 行高, HW, 树宽, 头高 },
+    _测: { 拼树, 铺算, 建状态, 试渲染, 展平, 默认折叠, 可视范围, 泳道, 段, 算窗, 行HTML, 表头HTML, 行高, HW, 树宽, 头高,
+      吸附, 像素毫, 毫钟面, 拖几何, 可拖判, 贝塞尔, 锚点集, 线HTML, 刻毫 }, // P2 判据①④⑤的纯函数面
   };
 })();

@@ -1806,3 +1806,36 @@ a.gt2nm:hover, a.gt2nm:focus-visible { background:var(--sect); color:var(--accen
   padding:6px 10px; border:1px solid var(--line); border-radius:9px; cursor:pointer; }
 .stance-opt:hover { background:var(--sect); }
 .gt2debtrow:hover, .gt2debtrow:focus-visible { background:var(--card); outline:none; }
+
+/* ===== 甘特岛 P2 写口交互（#10/#11/#12 · 2026-08-24）===== */
+/* #10 拖拽：条身可拖（grab）＋左右端点 6px 热区（ew-resize）；拖拽中半透明跟随＋悬浮时间提示 */
+.gt2bar.drag { cursor:grab; }
+.gt2bar.drag:active, .gt2bar.dragging { cursor:grabbing; }
+.gt2bar.dragging { opacity:.55; z-index:6; }
+.gt2h { position:absolute; top:-2px; bottom:-2px; width:6px; cursor:ew-resize; opacity:0; border-radius:2px;
+  background:var(--ink3); }
+.gt2h.l { left:-2px; } .gt2h.r { right:-2px; }
+.gt2bar:hover .gt2h, .gt2bar.dragging .gt2h { opacity:.75; }
+.gt2dragtip { position:fixed; z-index:99; display:none; padding:3px 9px; border-radius:8px;
+  font-family:var(--mono); font-size:11px; color:var(--ink); background:var(--frost);
+  backdrop-filter:blur(var(--frost-blur)); -webkit-backdrop-filter:blur(var(--frost-blur));
+  border:1px solid var(--line); box-shadow:var(--shadow-lg); pointer-events:none; white-space:nowrap; }
+.gt2dragtip.show { display:block; }
+/* #12 依赖线：全局 SVG 层盖时间区（pointer-events:none）；默认淡色退后台，悬停上下游点亮（.lit） */
+.gt2body .gt2deps { position:absolute; top:0; pointer-events:none; z-index:2; overflow:visible; }
+.gt2deps .gtedge .ln { fill:none; stroke:var(--ink3); stroke-width:1.2; opacity:.38; }
+.gt2deps .gtedge .dot { fill:var(--ink3); opacity:.5; }
+.gt2deps .gtedge .arw, .gt2deps .gtedge .offarw { fill:var(--ink3); opacity:.5; }
+.gt2deps .gtedge .hollow { fill:none; stroke:var(--ink3); stroke-width:1.2; opacity:.6; } /* 外部/悬空端点符 */
+.gt2deps .gtedge.ext .ln { stroke-dasharray:2 3; }              /* 半截线家族：外部端淡虚线 */
+.gt2deps .gtedge.cyc .ln { stroke-dasharray:5 3; stroke:var(--warn); opacity:.55; } /* 环＝独立记号（虚线+环组 title） */
+.gt2deps .gtedge.cyc .dot, .gt2deps .gtedge.cyc .arw { fill:var(--warn); }
+.gt2deps .gtedge.conflict .ln { stroke:var(--danger); opacity:.8; stroke-width:1.6; } /* 冲突＝红（服务端 冲突:true） */
+.gt2deps .gtedge.conflict .dot, .gt2deps .gtedge.conflict .arw { fill:var(--danger); opacity:.9; }
+.gt2deps .gtedge.lit .ln { opacity:1; stroke-width:1.8; stroke:var(--accent-ink); }
+.gt2deps .gtedge.conflict.lit .ln { stroke:var(--danger); }
+.gt2deps .gtedge.lit .dot, .gt2deps .gtedge.lit .arw { opacity:1; }
+/* #12/DS-7 冲突角标（读服务端 边统计.冲突；点击定位下一条冲突线） */
+.gt2cbadge { background:var(--dangerbg); color:var(--danger); border:1px solid var(--danger);
+  font-size:11.5px; font-weight:700; font-family:var(--mono); padding:2px 10px; border-radius:999px; }
+.gt2cbadge:hover, .gt2cbadge:focus-visible { filter:brightness(1.08); outline:none; }
