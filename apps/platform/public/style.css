@@ -453,3 +453,22 @@ th { white-space:nowrap; }
 .池选 .序 { display:inline-flex; align-items:center; justify-content:center;
   width:16px; height:16px; margin-right:6px; border-radius:8px;
   background:var(--on-accent); color:var(--accent); font-size:10px; font-weight:700; font-family:var(--mono); }
+
+/* ── 工单实例页（协-028）── */
+/* 阶段轴：一行一阶段。左边是判定，右边是证据——**证据不折叠**：
+   折起来的东西没人会去点开，而这一页存在的理由就是把证据摆出来。 */
+.阶段行 { border-left: 3px solid var(--line); padding: .5rem .75rem; margin: .35rem 0; background: var(--card); border-radius: 0 6px 6px 0; }
+.阶段行.级急 { border-left-color: var(--danger); }
+.阶段行.淡 { opacity: .55; }
+.阶段头 { display: flex; gap: .75rem; align-items: baseline; flex-wrap: wrap; }
+.阶段头 b { font-weight: 600; }
+.阶段该谁 { margin-top: .3rem; font-size: .9em; color: var(--warn); }
+.阶段证据 { margin-top: .35rem; font-size: .85em; line-height: 1.6; word-break: break-all; }
+
+/* 流面板：等宽、可滚、够高。**高度要够**——三行的窗口看流式输出等于没有，
+   人会一直手动往下拖，然后就不看了。 */
+.流面板 {
+  height: 32rem; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  background: var(--inbg); border: 1px solid var(--line); border-radius: 6px;
+  padding: .75rem; font-size: .86em; line-height: 1.5;
+}
