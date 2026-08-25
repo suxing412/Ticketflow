@@ -1748,11 +1748,17 @@ a.gt2nm:hover, a.gt2nm:focus-visible { background:var(--sect); color:var(--accen
   border:1px solid var(--line); color:var(--ink2); font-size:9.5px; font-family:var(--mono); line-height:1; }
 .gt2dens:hover, .gt2dens:focus-visible { background:var(--sect); color:var(--ink); outline:none; }
 
-/* 今时线（分钟粒度）：表头带「今 HH:mm」徽章，行区只画线 */
-.gt2now { position:absolute; top:0; bottom:0; width:1.5px; background:var(--now); z-index:3; pointer-events:none; }
-.gt2now.h { z-index:7; }
-.gt2now.h em { position:absolute; top:1px; left:2px; font-size:9.5px; font-family:var(--mono); font-style:normal;
-  font-weight:700; color:var(--card); background:var(--now); border-radius:3px; padding:0 4px; white-space:nowrap; }
+/* 今时线（分钟粒度）：表头顶部精致胶囊徽章+细线渐隐尾（2026-08-25 制作人「画得好看一点」重画）。
+   两条教训固化：①徽章文字色**定死深色**不吃主题变量——glass 的 --card 近全透明，「橙块没字」正是它
+   （透明变量病第二案，同 sticky 实底案一族）；②z 序让位 sticky 树列（原 z:7/3 盖过树列头 z:6 与
+   行树格 z:2，横滚时整套今时线滑到树列上面压字）——今时线全族 z:1，滑进树列底下即被盖。 */
+.gt2now { position:absolute; top:0; bottom:0; width:1.5px; z-index:1; pointer-events:none;
+  background:linear-gradient(180deg, var(--now) 0, var(--now) 72%, transparent); }
+.gt2now.h { z-index:1; }
+.gt2now.h em { position:absolute; top:3px; left:50%; transform:translateX(-50%); font-size:10px;
+  font-family:var(--mono); font-style:normal; font-weight:600; letter-spacing:.02em;
+  color:#1f1509; background:var(--now); border-radius:99px; padding:1.5px 8px; white-space:nowrap;
+  box-shadow:0 1px 4px rgba(0,0,0,.35); }
 
 /* 悬浮详情卡（#18）：判定字段全读服务端下发 */
 .gt2tip { position:fixed; z-index:98; background:var(--frost); backdrop-filter:blur(var(--frost-blur));
