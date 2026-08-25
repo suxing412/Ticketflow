@@ -3771,7 +3771,12 @@ async function viewRelay() {
   const 了结数 = 粒们.length - 在排.length;
   // 欠账（未排期）：无计划开始也无计划完成的粒不进树时间区，图下方欠账列表单列（专项登记粒是容器，不算欠账）
   const 没排 = 在排.filter((g) => g.型 !== '专项' && !g.计划开始 && !g.计划完成);
-  const 在图数 = 在排.length - 没排.length;
+  // 上图=成单（2026-08-25 制作人拍板「进甘特图的都应该是成单的工单」）：计划/起草中的粒是意向
+  // 不是承诺，不画条——排期作业收官即批量孵化成单，孵化管道以「成单中 N」计数呈报。
+  // 专项容器粒（型=专项）照旧入树（它是结构节点不是工单行）。
+  const 上图 = 在排.filter((g) => g.型 === '专项' || g.状态 === '已成单' || (g.计划开始 || g.计划完成) === null);
+  const 成单中 = 在排.filter((g) => g.型 !== '专项' && (g.计划开始 || g.计划完成) && g.状态 !== '已成单').length;
+  const 在图数 = 上图.filter((g) => g.型 !== '专项' && (g.计划开始 || g.计划完成)).length;
   const 停表 = !!(gz && gz.paused);
   // 甘特岛数据包（渲染在 public/gantt.js；/api/schedule 的 边/边统计/判定 随 sch 原样携带——
   // P2 #12 依赖线与冲突角标只按这两格着色报数，前端不自算）
@@ -3783,7 +3788,7 @@ async function viewRelay() {
   }
   const 岛数据 = {
     管线: (管线口 && 管线口.管线) || [], 特性: (特性口 && 特性口.特性) || [], 专项: (专项口 && 专项口.专项) || [],
-    粒: 在排, 名册, 板归属, 边: (sch && sch.边) || null, 边统计: (sch && sch.边统计) || null, 今: 现在, 停表,
+    粒: 上图, 名册, 板归属, 边: (sch && sch.边) || null, 边统计: (sch && sch.边统计) || null, 今: 现在, 停表,
     债: (attn && Array.isArray(attn.债)) ? attn.债 : [], 项目: p,
   };
   // 壳落地（innerHTML/morph 都是同步收尾）后喂岛。用 setTimeout 不用 rAF：rAF 在窗口不可见时
@@ -3834,7 +3839,7 @@ async function viewRelay() {
       <div class="rlch"><b>甘特图</b>
         <span class="subnote">管线 → 特性 → 专项 → 工单 四层树 · 固定小时轴（20px/h，无缩放档）· 今时线分钟粒度</span>
         <span class="sp"></span>
-        <span class="rlnum mono">在图 ${在图数} · 未排期 ${没排.length}${停表 ? ' · 停表' : ''}</span></div>
+        <span class="rlnum mono">在图 ${在图数}${成单中 ? ' · 成单中 ' + 成单中 : ''} · 未排期 ${没排.length}${停表 ? ' · 停表' : ''}</span></div>
       <div id="rl-gantt" data-morph-skip></div>
       ${欠账区Html(没排, 未归属)}
       <div class="fglegend gtlg">
