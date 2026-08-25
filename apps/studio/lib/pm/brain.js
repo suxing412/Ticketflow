@@ -482,26 +482,41 @@ function answer(root, cfg, question, cb) {
 // 排期作业（2026-08-25「委托项管排期」键）：制作人一键把全部未排期粒打包委托项管。
 // 照 adjudicateReferral 的 JSON 合同模式：会话只产计划合同，落账由 schedule.消化排期合同 代执行
 // （操作者=项管，逐粒 CAS）——模型不碰写口，排期判断权与写口纪律两全（H57/H112）。
-function schedulePlan(root, cfg, cb) {
+function schedulePlan(root, cfg, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = {}; }   // 兼容 (root,cfg,cb)
   const schedule = require('./schedule');
   const 全 = schedule.现态(root);
   const 未排 = schedule.未排期粒(root);
-  if (!未排.length) return cb({ ok: false, error: '没有未排期粒——无事可排' });
-  const 已排 = 全.filter((g) => (g.计划开始 || g.计划完成) && !schedule.终态.includes(g.状态));
+  // 含已排（2026-08-25 制作人「项管要有自我思考」）：整批重排模式——计划态已排粒也入作业，
+  // 项管可推翻自己的旧计划重想；默认只排欠账。
+  const 重排集 = opts.含已排 ? 全.filter((g) => g.状态 === '计划' && (g.计划开始 || g.计划完成)) : [];
+  const 作业粒 = [...未排, ...重排集];
+  if (!作业粒.length) return cb({ ok: false, error: '没有可排粒——无事可排' });
+  const 已排 = opts.含已排 ? [] : 全.filter((g) => (g.计划开始 || g.计划完成) && !schedule.终态.includes(g.状态));
   const now = new Date();
   const p = (n) => String(n).padStart(2, '0');
   const 今 = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}T${p(now.getHours())}:${p(now.getMinutes())}`;
-  const 粒行 = (g) => JSON.stringify({ 粒ID: g.粒ID, 题: g.题, 上级: g.上级, 序: g.序, 预估单元: g.预估单元, 依赖: g.依赖, 优先级: g.优先级, 状态: g.状态 });
+  const 粒行 = (g) => JSON.stringify({ 粒ID: g.粒ID, 题: g.题, 上级: g.上级, 序: g.序, 预估单元: g.预估单元, 依赖: g.依赖, 优先级: g.优先级, 状态: g.状态, 现计划: g.计划开始 ? { 开始: g.计划开始, 完成: g.计划完成 } : undefined });
+  // 产线事实面（2026-08-25 制作人「如果是我们给方案还要什么项管」）：并发/编制/审检是**事实**，
+  // 注入给项管自己推策略——这里一个字的排法指令都不许有，纪律只留制度性硬约束。
+  let 产线事实 = '（读取失败——盲区，保守估计）';
+  try {
+    const 并发 = require('../concurrency').view(cfg, require('./ledger').read(root).并发上限);
+    const 编制 = require('../roster').snapshot(cfg, null);
+    产线事实 = 'AI 产线全天候连轴（无上下班）。并发快照：' + JSON.stringify(并发) + '\n编制（各职能可用池序）：' + JSON.stringify(编制);
+  } catch (e) { 产线事实 += e.message; }
   const prompt = [
-    '你是单流的「项目管理」职能。制作人按下「委托项管排期」——把下列全部未排期粒按今时线制排出计划（H112）。',
-    '排期纪律：①计划时刻用 YYYY-MM-DDTHH:mm，分钟只许 00/15/30/45（刻钟制）②一律排在今时之后 ③尊重依赖先后（前置的计划完成 ≤ 后继的计划开始）④单粒工期按预估单元估算（1 单元≈1-2 小时），尽量不超 24 小时——超长任务在制度上不受欢迎 ⑤同上级的粒按 序 排先后 ⑥与已排粒错峰，不无谓并行。',
-    '输出契约：先一段 100 字内排期思路说明，然后一个 ```json 代码块——数组，每元素：',
+    '你是单流的「项目管理」职能。制作人按下「委托项管排期」——给下列粒排出计划（H112 今时线制）。',
+    '怎么排（串行还是并行、密度多大、给谁让路）是**你的排期判断**——按产线事实自己定，并在思路说明里讲清你的策略与理由。',
+    '制度硬约束（这些不是策略是纪律）：①计划时刻 YYYY-MM-DDTHH:mm，分钟只许 00/15/30/45 ②一律排在今时之后 ③前置的计划完成 ≤ 后继的计划开始 ④单粒工期按预估单元估算（1 单元≈1-2 小时），超 24 小时的任务制度上不受欢迎 ⑤需要制作人亲自出场的环节（读屏/手感/签字）排进白班时段。',
+    '输出契约：先一段 150 字内排期思路（含你的并行/串行策略与理由），然后一个 ```json 代码块——数组，每元素：',
     '{"粒ID":"（原样）","计划开始":"YYYY-MM-DDTHH:mm","计划完成":"YYYY-MM-DDTHH:mm","因":"一句排期理由"}',
-    '每个未排期粒都要出现；实在排不了的（如依赖悬空）也要出现，计划两格给 null 并在 因 里说明。',
+    '每个作业粒都要出现；实在排不了的（如依赖悬空）也要出现，计划两格给 null 并在 因 里说明。',
     '',
     '=== 今时 ===', 今,
-    '=== 未排期粒（' + 未排.length + ' 条）===', 未排.map(粒行).join('\n'),
-    '=== 已排在场（错峰参照）===', 已排.map((g) => JSON.stringify({ 粒ID: g.粒ID, 题: g.题, 计划开始: g.计划开始, 计划完成: g.计划完成 })).join('\n') || '（无）',
+    '=== 产线事实 ===', 产线事实,
+    '=== 作业粒（' + 作业粒.length + ' 条' + (opts.含已排 ? '，含已排重想——现计划附上，可推翻' : '') + '）===', 作业粒.map(粒行).join('\n'),
+    '=== 已排在场 ===', 已排.map((g) => JSON.stringify({ 粒ID: g.粒ID, 题: g.题, 计划开始: g.计划开始, 计划完成: g.计划完成 })).join('\n') || '（无）',
   ].join('\n');
   const cmd = cli();
   const model = (cfg.模型 || {}).项管 || 'fable';

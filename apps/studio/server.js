@@ -1072,17 +1072,20 @@ app.post('/api/relay', (req, res) => {
 app.post('/api/pm/schedule-plan', (req, res) => {
   if (!ready(res)) return;
   if (pmBusy) return res.status(409).json({ error: '项管手头有活（一次一作业），稍候再委托' });
-  const 未排数 = require('./lib/pm/schedule').未排期粒(ROOT).length;
-  if (!未排数) return res.status(400).json({ error: '没有未排期粒——无事可排' });
+  const 含已排 = !!(req.body || {}).含已排;   // 整批重排模式：计划态已排粒也交项管重想（可推翻旧计划）
+  const S = require('./lib/pm/schedule');
+  const 未排数 = S.未排期粒(ROOT).length;
+  const 重排数 = 含已排 ? S.现态(ROOT).filter((g) => g.状态 === '计划' && (g.计划开始 || g.计划完成)).length : 0;
+  if (!未排数 && !重排数) return res.status(400).json({ error: '没有可排粒——无事可排' });
   pmBusy = true;
-  relay.append(ROOT, '制作人', `【排期作业】委托项管排期：未排期 ${未排数} 粒（甘特欠账区一键委托）`);
-  journal.append(ROOT, `排期作业发起：未排期 ${未排数} 粒 → 项管`);
-  require('./lib/pm/brain').schedulePlan(ROOT, cfg, (a) => {
+  relay.append(ROOT, '制作人', `【排期作业】委托项管排期：未排期 ${未排数} 粒${含已排 ? ` + 整批重想已排 ${重排数} 粒` : ''}（甘特欠账区一键委托）`);
+  journal.append(ROOT, `排期作业发起：未排 ${未排数}${含已排 ? `+重排 ${重排数}` : ''} → 项管`);
+  require('./lib/pm/brain').schedulePlan(ROOT, cfg, { 含已排 }, (a) => {
     pmBusy = false;
     relay.append(ROOT, '项管', a.text || a.error || '（排期作业无应答）');
     journal.append(ROOT, `排期作业收官：${String(a.text || a.error || '').slice(0, 80)}`);
   });
-  res.json({ ok: true, 已受理: 未排数 });
+  res.json({ ok: true, 已受理: 未排数 + 重排数, 含已排 });
 });
 
 // 远程配置（参数页卡片）：开关 + 令牌重生成（仅本机可改——远程端不许给自己续权）
