@@ -178,7 +178,7 @@ t('③桩台起服务实测：/api/runner 报 桩台:true 运行:false，点启�
 /* ===================== 三′、H108 三大态：/api/board 下发 12 态 + 大态分组 ===================== */
 // STUB 只验**接口形状**（前端 G 组吃这个形状画看板三组），不当派发链路判据——链路归执行器组。
 
-t("③'H108 /api/board 真起 STUB 服务打一遍：12 态齐全 + 大态:{待办/在途/结束} 分组表下发", () => {
+t("③'H108/H116 /api/board 真起 STUB 服务打一遍：13 态齐全 + 大态:{待办/在途/结束} 分组表下发", () => {
   const store = require('../lib/core/store');
   const root = 桩台仓();
   seed(root, '待派', { id: 'B-1', 放行: true });
@@ -196,12 +196,13 @@ t("③'H108 /api/board 真起 STUB 服务打一遍：12 态齐全 + 大态:{待�
     encoding: 'utf8', timeout: 60000,
   });
   const v = JSON.parse(out.split('@@')[1]);
-  assert.deepEqual(v.states, store.STATES, 'states 必须与 store.STATES 全同（12 态）');
-  assert.equal(v.states.length, 12, '十二态一个不许少');
+  assert.deepEqual(v.states, store.STATES, 'states 必须与 store.STATES 全同（13 态）');
+  assert.equal(v.states.length, 13, '十三态一个不许少（H116 补 已排期）');
+  assert.ok(v.states.includes('已排期'), 'H116：已排期 必在下发态表里');
   assert.deepEqual(v.大态, store.大态, '大态分组表必须原样下发 store.大态（前端不许自己抄分组）');
   assert.deepEqual(Object.keys(v.大态), ['待办', '在途', '结束'], '三大组齐且序稳');
   assert.deepEqual([...v.大态.待办, ...v.大态.在途, ...v.大态.结束].sort(), [...store.STATES].sort(),
-    '三组并起来恰是 12 态——漏一态就是看板上凭空消失一列');
+    '三组并起来恰是 13 态——漏一态就是看板上凭空消失一列');
   assert.deepEqual(Object.keys(v.board).sort(), [...store.STATES].sort(), 'board 每态一键');
   assert.deepEqual(v.board.待派.map((x) => x.id), ['B-1'], '待派列真下发了铺的单');
   assert.deepEqual(v.board.完成.map((x) => x.id), ['B-2'], '完成列真下发了铺的单');

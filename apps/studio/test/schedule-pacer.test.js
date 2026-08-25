@@ -16,8 +16,8 @@ const D = require('../lib/pm/dispatch');
 store.ensureDirs(root);
 fs.writeFileSync(path.join(root, 'studio.config.json'), JSON.stringify({ 项目: { 注册: { TK: {} }, 默认: 'TK' } }));
 
-const 造单 = (id, fm = {}) => {
-  fs.writeFileSync(path.join(root, '待派', id + '.md'),
+const 造单 = (id, fm = {}, 态 = '待派') => {
+  fs.writeFileSync(path.join(root, 态, id + '.md'),
     '---\n' + Object.entries({ id, title: id + '题', 职能: '程序', 放行: true, ...fm })
       .map(([k, v]) => k + ': ' + JSON.stringify(v)).join('\n') + '\n---\n正文\n');
 };
@@ -36,20 +36,25 @@ console.log('排期节拍器与复判测试（H115）');
 
 (async () => {
 
-await t('① 节拍闸四分支：到点入池 / 未到点不入 / 散单照旧 / 悬空粒不卡死', () => {
+await t('① 节拍闸分支（H115 + H116 扫描面）：已排期到点入池 / 未到点不入 / 待派散单照旧 / 待派有粒单不直派 / 已排期悬空粒不卡死', () => {
   // 粒 a=过去 1h（到点）、粒 b=未来 2h（未到点）
   S.登记(root, [
     { 题: '到点粒', 预估单元: 1, 来源: 'pacer判据', 计划开始: 时串(-60), 计划完成: 时串(60), 因: '判据' },
     { 题: '未来粒', 预估单元: 1, 来源: 'pacer判据', 计划开始: 时串(120), 计划完成: 时串(240), 因: '判据' },
   ], '项管');
   const [ga, gb] = S.现态(root);
-  造单('TK-901', { 粒ID: ga.粒ID });
-  造单('TK-902', { 粒ID: gb.粒ID });
-  造单('TK-903', {});                                  // 散单无粒
-  造单('TK-904', { 粒ID: 'ghost-绝不存在' });          // 悬空粒
+  造单('TK-901', { 粒ID: ga.粒ID }, '已排期');         // H116：有粒的单经排期桥住 已排期，到点即入
+  造单('TK-902', { 粒ID: gb.粒ID }, '已排期');         // 已排期但未到点：节拍器拦到点再放
+  造单('TK-903', {});                                  // 散单无粒：待派直派道照旧
+  造单('TK-904', { 粒ID: 'ghost-绝不存在' });          // 待派里有粒ID 的单：H116 不直派（G24 未排期视野兜）
+  造单('TK-905', { 粒ID: 'ghost-也不存在' }, '已排期'); // 已排期悬空粒：台账残缺不许把单永久卡死，照派
   const ids = D.readySet(root, null).map((x) => x.id).sort();
-  assert.deepEqual(ids, ['TK-901', 'TK-903', 'TK-904'],
-    '到点/散单/悬空入池，未来粒的 TK-902 不入——节拍器把它拦到点再放（实得 ' + ids.join(',') + '）');
+  assert.deepEqual(ids, ['TK-901', 'TK-903', 'TK-905'],
+    '已排期到点/散单/已排期悬空入池；未来粒 TK-902 拦到点，待派有粒单 TK-904 不直派（实得 ' + ids.join(',') + '）');
+  // 态 字段随行下发（派发 move 以它为源态，不硬编码 待派）
+  const 态表 = Object.fromEntries(D.readySet(root, null).map((x) => [x.id, x.态]));
+  assert.equal(态表['TK-901'], '已排期');
+  assert.equal(态表['TK-903'], '待派');
 });
 
 await t('② 排序带排期次序：同优先级下计划开始早者先派；无计划的殿后', () => {

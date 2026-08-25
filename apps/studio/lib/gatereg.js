@@ -227,9 +227,11 @@ const 判据表 = {
     // 甘特上的灰带就成了装饰——测试的停表档变异自证验的正是这一刀。
     if (d.gates.isPaused(root)) return [];
     const now = Number.isFinite(d.现在) ? d.现在 : Date.now();
-    // 单号→在不在重派视野：待派/待重派 是仅有的两个「还能派」的家（H108 边表）。
+    // 单号→在不在重派视野：待派/待重派/已排期 是仅有的三个「还能派」的家（H108 边表 + H116 已排期）。
+    // 已排期必须入集（2026-08-26）：排期落账后单已迁 已排期，漏掉它 = 有单号的越线粒被误判「已在途不欠」，
+    // 到点没派的债整层蒸发——正是 G23 要立的那笔。
     const 可派 = new Set();
-    for (const s of ['待派', '待重派']) for (const t of d.store.list(root, s)) 可派.add(t.id);
+    for (const s of ['待派', '待重派', '已排期']) for (const t of d.store.list(root, s)) 可派.add(t.id);
     // 谓词唯一实现＝schedule.越线待表态判（终审 T2/T3）：计划态、可派视野、计划开始≤now、
     // 表态豁免（已表态且表态后未再越线的粒不入债）四段全在那一份里——GET /api/schedule 的
     // 待表态 下发标记走的也是它，甘特灰显与闸债从此一把尺。停表短路保留在上面（deps 注入面）。

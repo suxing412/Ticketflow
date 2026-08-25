@@ -95,8 +95,8 @@ function onChildDispatched(root, parentId, 专项号) {
   if (专项号) { try { require('../specials').首派(root, 专项号); } catch { /* 注册表读写失败不阻塞派发 */ } }
   if (!parentId) return;
   const p = store.find(root, parentId);
-  if (!p || !isCampaign(p) || p.state !== '待派') return; // H108：待投/池并入 待派
-  const r = store.move(root, parentId, '待派', '在途', (fm) => { fm.主办 = '专项'; fm.领单时间 = fm.领单时间 || new Date().toISOString(); }, new Date().toISOString());
+  if (!p || !isCampaign(p) || !['待派', '已排期'].includes(p.state)) return; // H108：待投/池并入 待派；H116：父单若被排期迁入 已排期 同样要推在途（源态取实际所在，不硬编码）
+  const r = store.move(root, parentId, p.state, '在途', (fm) => { fm.主办 = '专项'; fm.领单时间 = fm.领单时间 || new Date().toISOString(); }, new Date().toISOString());
   if (r.ok) journal.append(root, `专项启动 ${parentId}（首子单派发 → 父单在途，H53 状态诚实映射）`);
 }
 
@@ -104,7 +104,7 @@ function checkCloseouts(root, cfg, opts = {}) {
   const woke = [];
   const l = ledger.read(root);
   l.已收口 = l.已收口 || {};
-  for (const s of ['在途', '待派', '待审']) { // H108：待投→待派、草稿→待审
+  for (const s of ['在途', '待派', '已排期', '待审']) { // H108：待投→待派、草稿→待审；H116：父单被排期迁入 已排期 也在收口视野
     for (const p of store.list(root, s)) {
       if (!isCampaign(p) || l.已收口[p.id]) continue;
       const kids = childrenOf(root, p.id);
@@ -120,10 +120,10 @@ function checkCloseouts(root, cfg, opts = {}) {
       woke.push(p.id);
       const lift = () => { // 收口后父单上「完成」：H108 出口驻留位=战役唯一签字位（保留签字上移，H53）
         const cur = store.find(root, p.id);
-        if (cur && ['在途', '待派'].includes(cur.state)) {
+        if (cur && ['在途', '待派', '已排期'].includes(cur.state)) {
           const iso = new Date().toISOString();
-          // 待派没有直达完成的边（边表封闭性）：先过 在途 再落 完成，两步都走状态机不抄近路
-          if (cur.state === '待派') store.move(root, p.id, '待派', '在途', (fm) => { fm.主办 = fm.主办 || '专项'; }, iso);
+          // 待派/已排期 没有直达完成的边（边表封闭性）：先过 在途 再落 完成，两步都走状态机不抄近路（H116 补 已排期 同路）
+          if (cur.state !== '在途') store.move(root, p.id, cur.state, '在途', (fm) => { fm.主办 = fm.主办 || '专项'; }, iso);
           const mv = store.move(root, p.id, '在途', '完成', (fm) => { fm.交付时间 = iso; }, iso);
           if (mv.ok) { journal.append(root, `专项收口 ${p.id} → 完成（父单=唯一签字位，H53/H108 验收闸前驻留）`); require('../inbox').post(root, '急', '专项待签', `${p.id} 收口完毕，待制作人签字`, { 单号: p.id }); }
         }

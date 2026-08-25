@@ -961,7 +961,7 @@ async function tick(root, cfg, opts = {}) {
       const picks = dispatch.pickNext(cfg, ready, runningByPool, gatesInfo2, ledger.并发上限);
       for (const p of picks) {
         const t0 = store.find(root, p.id);
-        if (!t0 || !['待派', '待重派'].includes(t0.state)) continue; // H108：待投/池并入 待派；待重派=重投/复活回队（readySet 同盘）
+        if (!t0 || !['已排期', '待派', '待重派'].includes(t0.state)) continue; // H108：待投/池并入 待派；待重派=重投/复活回队；H116：已排期=排期到点的主派发态（readySet 同盘三态）
         const 主办 = `${t0.fm.职能}·${p.id}`; // 一次性 agent：一人一单一生命周期
         const 源态 = t0.state;
         const mv = store.move(root, p.id, 源态, '在途', (fm) => {

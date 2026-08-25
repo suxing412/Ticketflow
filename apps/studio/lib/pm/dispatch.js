@@ -62,12 +62,15 @@ function readySet(root, crit) {
     return require('./schedule').计划毫秒(g.计划开始) <= Date.now();
   };
   const out = [];
-  for (const st of ['待派', '待重派']) for (const t of store.list(root, st)) {
+  // H116 扫描面（2026-08-26 制作人拍板）：已排期 是唯一被今时线扫描的排期态——
+  // 待派/待重派 里只剩**散单**（无粒挂钩的排期外杂活）可派；有粒的单必须经排期迁入 已排期。
+  for (const st of ['已排期', '待派', '待重派']) for (const t of store.list(root, st)) {
     if (!t.fm.放行) continue;
     if (t.fm.待复核) continue; // 挂起旗同样拦派发（2026-08-05 推演补漏：此前只拦断点续跑）
     if (t.fm.挂起) continue;   // H108 挂起已是目录态（住 挂起 目录的单根本不在本表）；旧 fm.挂起 标记过渡期兼认
+    if (st !== '已排期' && t.fm.粒ID) continue; // 有粒的单在 待派/待重派＝还没排期，不入就绪（H116）
     if (!depsDone(root, t)) continue;
-    if (!到点(t)) continue;    // 排期节拍器（H115）
+    if (!到点(t)) continue;    // 排期节拍器（H115）：已排期的单也要等计划开始到点
     const g = t.fm.粒ID && 粒表 ? 粒表.get(String(t.fm.粒ID)) : null;
     out.push({ id: t.id, 态: st, 职能: t.fm.职能, 优先级: t.fm.优先级 || 'P2', 执行池: t.fm.执行池 || null, // 池章直通（0.22.2：兼容池评测单盖章曾被 poolFor 覆盖）
       红链: crit ? crit.has(t.id) : false, 创建时间: t.fm.创建时间 || '',

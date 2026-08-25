@@ -1,4 +1,4 @@
-// store.test.js — 目录即状态机（H108 十二态）：建目录/定位/列举/合法转移/旧边拒绝/原子领单/移动钩子
+// store.test.js — 目录即状态机（H108 三大态 + H116 已排期 = 十三态）：建目录/定位/列举/合法转移/旧边拒绝/原子领单/移动钩子
 const assert = require('node:assert');
 const fs = require('fs');
 const store = require('../lib/core/store');
@@ -7,10 +7,10 @@ const { makeRoot, seed } = require('./helper');
 let passed = 0; const t = (n, f) => { f(); passed++; console.log('  ✓ ' + n); };
 console.log('store 目录即状态机测试');
 
-t('ensureDirs 建齐全部状态目录（12 态）+ 回执 + journal', () => {
+t('ensureDirs 建齐全部状态目录（13 态，H116 补 已排期）+ 回执 + journal', () => {
   const root = makeRoot();
-  assert.equal(store.STATES.length, 12);
-  for (const s of ['待审', '待派', '待处理', '待重派', '在途', '初检', '核查', '仲裁', '完成', '归档', '挂起', '废弃']) {
+  assert.equal(store.STATES.length, 13);
+  for (const s of ['待审', '待派', '待处理', '待重派', '已排期', '在途', '初检', '核查', '仲裁', '完成', '归档', '挂起', '废弃']) {
     assert.ok(store.STATES.includes(s), `STATES 缺 ${s}`);
     assert.ok(fs.existsSync(store.stateDir(root, s)), `目录缺 ${s}`);
   }
@@ -18,8 +18,8 @@ t('ensureDirs 建齐全部状态目录（12 态）+ 回执 + journal', () => {
   assert.ok(fs.existsSync(require('path').join(root, 'journal')));
 });
 
-t('大态分组齐整：12 态各归其组，TERMINAL=[归档,废弃]', () => {
-  assert.deepEqual(store.大态.待办, ['待审', '待派', '待处理', '待重派']);
+t('大态分组齐整：13 态各归其组（H116 已排期 入待办），TERMINAL=[归档,废弃]', () => {
+  assert.deepEqual(store.大态.待办, ['待审', '待派', '待处理', '待重派', '已排期']);
   assert.deepEqual(store.大态.在途, ['在途', '初检', '核查', '仲裁', '完成']);
   assert.deepEqual(store.大态.结束, ['归档', '挂起', '废弃']);
   assert.equal(store.大态of('初检'), '在途');

@@ -298,8 +298,13 @@ const 登记一 = (root, o = {}, 人 = '总监') => {
     S.挂钩起草(root, g.粒ID, 'TK-150');              // 起草半：粒 → 起草中
     seed(root, '待派', { id: 'TK-150', 职能: '程序', 放行: true, QA: '关', 粒ID: g.粒ID }); // 定稿放行后的形态
     seed(root, '待派', { id: 'TK-151', 职能: '程序', 放行: true, QA: '关' });               // 无粒ID 的普通单：钩子须当无关放过
+    // H116：有粒的单必须经排期迁入 已排期 才进派发扫描面（待派里的有粒单不再直派）。
+    // 重排落一个已到点的计划开始 → 桥当场迁 待派→已排期，随后 tick 从 已排期 派发。
+    const r重 = S.重排(root, { 粒ID: g.粒ID, 预期版本: S.取(root, g.粒ID).版本号, 计划开始: '2020-01-01', 因: 'H116 判据：排期落账迁已排期', 操作者: '项管' });
+    assert.ok(r重.ok, '重排应成功：' + r重.error);
+    assert.equal(store.find(root, 'TK-150').state, '已排期', 'H116 桥：排期落账即迁 已排期');
     await runner.tick(root, CFG, { durMs: 0 });
-    assert.notEqual(store.find(root, 'TK-150').state, '待派', '单已被派发');
+    assert.notEqual(store.find(root, 'TK-150').state, '已排期', '单已被派发（已排期→在途）');
     const now = S.取(root, g.粒ID);
     assert.equal(now.状态, '已成单', '派发时粒应转已成单（当前 ' + now.状态 + '）');
     assert.equal(now.单号, 'TK-150');

@@ -34,6 +34,15 @@ function 放行(root, id) {
   if (t.fm.放行 === true) return { ok: false, error: '该单已放行' };
   const r = store.update(root, id, (fm) => { fm.放行 = true; }, nowIso());
   if (r.ok) journal.append(root, `放行 ${id}（待派原地落 fm.放行=true · 人闸）`);
+  // H116 对称同步：放行时粒若已有计划（先排后放的顺序），此刻补迁 已排期——
+  // 排期侧的桥只在排期落账时跑，放行晚于排期的路要在这儿接上。
+  if (r.ok && t.fm.粒ID) {
+    try {
+      const S = require('./pm/schedule');
+      const g = S.取(root, String(t.fm.粒ID));
+      if (g) S.同步已排期态(root, g);
+    } catch { /* 同步失败不拖垮放行——G 闸巡账兜底 */ }
+  }
   return r;
 }
 
@@ -205,9 +214,10 @@ function 废弃(root, id, 因) {
   if (store.TERMINAL.includes(t.state)) return { ok: false, error: '终态单不可废弃' };
   if (!store.isLegal(t.state, '废弃')) return { ok: false, error: `${t.state} 不可直接废弃${t.state === '完成' ? '（做完的活：翻案走推翻，收账走验收）' : ''}` };
   // 依赖悬空扫描（夜班推演 #5）：废弃前查未完成单里还挂着本单依赖的——不阻断，呼叫+留痕，防静默死锁。
-  // 扫描面=待办四态+审检链在途四态+挂起（挂起会复活，依赖同样会悬空）；完成单依赖是历史，不扫。
+  // 扫描面=待办五态+审检链在途四态+挂起（挂起会复活，依赖同样会悬空）；完成单依赖是历史，不扫。
+  // H116：已排期 入扫描面——排好期的单依赖被废弃同样悬空，漏扫它就是静默死锁的新形态。
   const 悬空 = [];
-  for (const s of ['待审', '待派', '待处理', '待重派', '在途', '初检', '核查', '仲裁', '挂起']) {
+  for (const s of ['待审', '待派', '待处理', '待重派', '已排期', '在途', '初检', '核查', '仲裁', '挂起']) {
     for (const x of store.list(root, s)) {
       const d = x.fm.依赖; if (!d) continue;
       const arr = Array.isArray(d) ? d.map(String) : String(d).split(/[，,\s]+/).filter(Boolean);
@@ -340,12 +350,12 @@ function 解除待复核(root, id, 确认说明) {
 // 旧形态（fm.挂起 印 + 原位冻结 + store.update）已退役为迁移期兼容读（见 交产出/滞留检查 的残留守卫）；
 // 新形态：挂起是结束大态里的目录，唯一可逆——复活走 挂起→待重派（人闸：制作人/总监专权）。
 // 三把闸的语义分家（别混）：废弃=终态判决；收回=在途退待派活照干；挂起=按停入库，复活后从待重派重新排队。
-// 边表口径：只有 待派/待重派/在途 有→挂起边（审检链中/分诊中的单先走完当口再挂；完成/归档/废弃不可挂）。
+// 边表口径：只有 待派/待重派/已排期/在途 有→挂起边（审检链中/分诊中的单先走完当口再挂；完成/归档/废弃不可挂）。
 function 挂起(root, id, 因, 操作者, 连带自) {
   const t = store.find(root, id);
   if (!t) return { ok: false, error: '不存在' };
   if (t.state === '挂起') return { ok: false, error: '该单已挂起' };
-  if (!store.isLegal(t.state, '挂起')) return { ok: false, error: `${t.state} 不可挂起（边表只允许 待派/待重派/在途）` };
+  if (!store.isLegal(t.state, '挂起')) return { ok: false, error: `${t.state} 不可挂起（边表只允许 待派/待重派/已排期/在途）` };
   const 人 = String(操作者 || '制作人').slice(0, 40);
   const 前态 = t.state;
   const r = store.move(root, id, 前态, '挂起', (fm) => {

@@ -1292,7 +1292,7 @@ app.get('/api/schedule', (req, res) => {
   // 甘特岛的越线视觉/角标/菜单/拖拽分流全改读这一格，岛内不再有「计划态+开始≤今」的私判。
   const snap = store.snapshot(ROOT);
   const 可派 = new Set();
-  for (const s of ['待派', '待重派']) for (const t of (snap[s] || [])) 可派.add(t.id);
+  for (const s of ['待派', '待重派', '已排期']) for (const t of (snap[s] || [])) 可派.add(t.id); // H116：已排期同入可派视野（与 gatereg G23 同口径）
   const 停表 = !!(gates.isPaused && gates.isPaused(ROOT));
   const 此刻 = Date.now();
   const 带判定 = 粒.map((g) => ({

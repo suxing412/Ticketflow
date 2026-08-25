@@ -14,10 +14,10 @@ const FNCLS = { 策划: 'fn-plan', 技术策划: 'fn-tplan', 程序: 'fn-code', 
 // 三大态状态机（H108，2026-08-24）：12 目录态。权威表在 lib/core/store.js，
 // /api/board 随行下发 大态 分组；下面这份兜底表只在服务端没给时用（口径抄 store，不许自创）。
 const STCLS = { 在途: 'st-doing', 初检: 'st-review', 核查: 'st-review', 仲裁: 'st-review', 完成: 'st-done',
-  待处理: 'st-escal', 待重派: 'st-escal', 待审: 'mut', 待派: '', 归档: 'mut', 挂起: 'mut', 废弃: 'mut' };
-const STPCT = { 待审: 0, 待派: 0, 待重派: 0, 待处理: 60, 在途: 60, 初检: 75, 核查: 85, 仲裁: 85, 完成: 100, 归档: 0, 挂起: 0, 废弃: 0 };
-const 大态兜底 = {
-  待办: ['待审', '待派', '待处理', '待重派'],
+  待处理: 'st-escal', 待重派: 'st-escal', 待审: 'mut', 待派: '', 已排期: '', 归档: 'mut', 挂起: 'mut', 废弃: 'mut' };
+const STPCT = { 待审: 0, 待派: 0, 待重派: 0, 已排期: 0, 待处理: 60, 在途: 60, 初检: 75, 核查: 85, 仲裁: 85, 完成: 100, 归档: 0, 挂起: 0, 废弃: 0 };
+const 大态兜底 = { // H116 十三态：已排期（放行∧有排期，候今时线派发）入待办段，口径抄 store
+  待办: ['待审', '待派', '待处理', '待重派', '已排期'],
   在途: ['在途', '初检', '核查', '仲裁', '完成'],
   结束: ['归档', '挂起', '废弃'],
 };
@@ -180,7 +180,7 @@ async function viewHub() {
     // 待派这一栏 2026-08-22 补（原「待投」，三大态改造改名）：G1「项管闸放行」的落点就是它，
     // 卡上没有这个数，「需处理 N」里那笔放行债在项目卡上就找不到对应的去处。
     const counts = [['在途', cnt(a, '在途', '初检', '核查', '仲裁'), ''], ['待派', cnt(a, '待派'), ''], ['待重派', cnt(a, '待重派'), ''],
-      ['完成', cnt(a, '完成'), ''], ['待处理', cnt(a, '待处理'), 'err']];
+      ['已排期', cnt(a, '已排期'), ''], ['完成', cnt(a, '完成'), ''], ['待处理', cnt(a, '待处理'), 'err']]; // H116：排队计数补 已排期
     const eng = reg[n] && reg[n].引擎;
     // H-2 零值灰显 / H-3 键盘可达（2026-08-06 UI 评审 hub 页）
     return `<div class="hubcard card r16" onclick="enterProj('${esc(n)}')" tabindex="0" role="button" aria-label="进入项目 ${esc(n)}"
@@ -327,7 +327,7 @@ function ovRunHtml(ag) {
 async function viewOverview() {
   const [{ all, board }, jn, ag, attn] = await Promise.all([loadBoard(), api('/api/journal').catch(() => null), api('/api/agents').catch(() => ({})), api('/api/attn').catch(() => null)]);
   const n = (s) => (board[s] || []).length;
-  const groups = [['在途', n('在途') + n('初检') + n('核查') + n('仲裁'), ''], ['完成', n('完成'), ''], ['待处理', n('待处理'), n('待处理') ? 'err' : ''], ['待派', n('待派'), ''], ['待重派', n('待重派'), '']];
+  const groups = [['在途', n('在途') + n('初检') + n('核查') + n('仲裁'), ''], ['完成', n('完成'), ''], ['待处理', n('待处理'), n('待处理') ? 'err' : ''], ['待派', n('待派'), ''], ['待重派', n('待重派'), ''], ['已排期', n('已排期'), '']]; // H116：排队计数补 已排期
   const strip = groups.map(([l, v, c], i) => `${i ? '<div class="vdiv"></div>' : ''}<div class="grp"><span class="lbl">${l}</span><span class="num ${c}">${v}</span></div>`).join('');
   // 收件箱换轴（2026-08-20，施工令-061 二·4）：原先是「待验收 ∪ 待定夺」两态拼接——
   // 判据轴是**工单状态**，于是「专项关账」这类非工单实体的人闸结构上就看不见
@@ -629,7 +629,7 @@ async function viewBoard() {
    15s 活体刷新复用在途页那条 pollLoop。挂起（施工令-021）不进现在/接下来两段，直接落沉淀抽屉的 ❄ 类。 */
 const FG_DOING = new Set(['在途', '初检', '核查', '仲裁']); // 现在区：实心条 + 实时百分比（审检链目录化后判官态也是「现在」）
 const FG_STUCK = new Set(['待处理']);             // 现在区：卡住的也算「现在」（三问之一就是「卡在哪」）
-const FG_QUEUE = new Set(['待派', '待重派', '待审']); // 接下来区：按依赖拓扑排
+const FG_QUEUE = new Set(['待派', '待重派', '已排期', '待审']); // 接下来区：按依赖拓扑排（H116 补 已排期）
 const FG_DONE = new Set(['完成', '归档']);        // 依赖口径：完成=做完等关账（专项内部口径），归档=落袋
 const FG_SIGN = new Set(['完成', '待处理']);      // 等制作人落笔（006 签字位；完成=候专项级验收）
 // 沉淀四分类（制作人追加重点）：完成 / ❄挂起 / 废弃 / 推翻——计数分开列，点哪类只展哪类
@@ -2124,7 +2124,7 @@ async function viewDetail(id) {
   // 位置放在操作栏最前：这是「先停下」的闸，它比任何往前推的动作都优先。
   const 有子 = (c.父子.子 || []).length;
   if (已挂) ops.push(['解挂', `转「待重派」重新排队（挂起是唯一可逆终态，H108）${有子 ? '（可连带子单）' : ''}`, `suspAsk('${id}',false,${有子 ? 'true' : 'false'})`]);
-  else if (['待派', '待重派', '在途'].includes(d.state)) ops.push(['挂起', `冻结进「挂起」目录态：全链路跳过${有子 ? `（可连带 ${有子} 张子单全树挂起）` : ''}`, `suspAsk('${id}',true,${有子 ? 'true' : 'false'})`]);
+  else if (['待派', '待重派', '已排期', '在途'].includes(d.state)) ops.push(['挂起', `冻结进「挂起」目录态：全链路跳过${有子 ? `（可连带 ${有子} 张子单全树挂起）` : ''}`, `suspAsk('${id}',true,${有子 ? 'true' : 'false'})`]);
   if (d.state === '待派') ops.push(['撤回', '回待审（撤下排队）', `act2('撤回','${id}')`]);
   if (d.state === '在途') ops.push(['收回', '从执行方取回在途单', `act2('收回','${id}')`]);
   if (fm.待复核) ops.push(['解除复核', `上游 ${esc(fm.待复核.锚号 || '')} 已核对新版`, `act2('解除复核','${id}')`]); // D36
@@ -2140,7 +2140,7 @@ async function viewDetail(id) {
   if (d.state === '待审') ops.push(['定稿', '审过 → 待派（总监审核闸）', `act2('定稿','${id}')`]);
   if (d.state === '待派') ops.push(['放行', '项管闸放行（落 fm.放行 标记，依赖就绪即自动派发，H109）', `act2('放行','${id}')`]);
   // 废弃（带因）：按状态机允许的边出（终态与 完成/挂起 不可废弃；历史废弃单留在归档不改史）
-  if (['待审', '待派', '待处理', '待重派', '在途', '初检', '核查', '仲裁'].includes(d.state))
+  if (['待审', '待派', '待处理', '待重派', '已排期', '在途', '初检', '核查', '仲裁'].includes(d.state))
     ops.push(['废弃', '进废弃态（留档不删，R2；返工另开新单）', `dropModal('${id}')`]);
   if (d.state === '待审') ops.push(['编辑', '打开起草页修改', `location.hash='#/draft?edit=${id}'`]);
   if (['完成', '归档'].includes(d.state)) { // 审批点④：入库（D12 精选制，唯一写者=制作人层）
