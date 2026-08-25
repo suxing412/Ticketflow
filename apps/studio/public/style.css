@@ -1647,9 +1647,9 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 /* 滚动视口＋画布：虚拟化底座（固定行高 30px，只画可视行） */
 .gt2wrap { position:relative; overflow:auto; max-height:640px; border:1px solid var(--line);
   border-radius:12px; background:var(--card); scrollbar-width:thin; }
-/* 岛专属细滚条：纵向 8px 圆拇指贴主题、轨透明（2026-08-24 制作人验收所指）；
-   横滚条撤销（2026-08-25 制作人拍板）——横向平移走鼠标中键拖拽，纵滚条保留定位感 */
-.gt2wrap::-webkit-scrollbar { width:8px; height:0; }
+/* 滚条全撤（2026-08-25 制作人拍板「要么优化要么取消」→ 取消）：
+   横向=中键拖拽平移，纵向=滚轮+中键，甘特区不再画任何滚动条 */
+.gt2wrap::-webkit-scrollbar { width:0; height:0; }
 .gt2wrap::-webkit-scrollbar-thumb { background:var(--chip); border-radius:8px; border:2px solid transparent; background-clip:padding-box; }
 .gt2wrap::-webkit-scrollbar-thumb:hover { background:var(--ink3); background-clip:padding-box; }
 .gt2wrap::-webkit-scrollbar-track, .gt2wrap::-webkit-scrollbar-corner { background:transparent; }
@@ -1790,6 +1790,9 @@ a.gt2nm:hover, a.gt2nm:focus-visible { background:var(--sect); color:var(--accen
 /* #9 聚焦面包屑：全部 › <节点名> ✕退出（Esc 同效） */
 .gt2crumb { display:flex; align-items:center; gap:8px; margin:0 0 10px; padding:6px 12px;
   border:1px solid var(--accent); border-radius:10px; background:var(--card); font-size:12.5px; }
+/* display:flex 会盖掉 [hidden] 的 UA display:none——空面包屑永远显示成一根紫边空条
+   （2026-08-25 制作人「左右滑动条看着很怪」的怪条真身）。凡作者 display 的可藏件都要补这一条。 */
+.gt2crumb[hidden], .gt2stopband[hidden] { display:none; }
 .gt2crumb .gt2mi { display:inline-block; width:auto; padding:2px 8px; color:var(--accent-ink); }
 .gt2crumb i { font-style:normal; color:var(--ink3); }
 .gt2crumb b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

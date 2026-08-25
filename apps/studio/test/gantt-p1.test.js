@@ -205,6 +205,11 @@ t('② 聚焦投影：聚焦 S-1 可见行集合=祖先链+子孙（集合相等
   const h2 = 首.容器.innerHTML;
   assert.deepEqual(行表(h2).map((r) => r.gid).sort(), 全集, '退出聚焦后全量恢复（聚焦是投影不是删树）');
   assert.ok(!h2.includes('退出聚焦'), '退出后面包屑消失');
+  // [hidden] 有主（2026-08-25 紫边空条案）：.gt2crumb 作者样式 display:flex 会盖掉 UA 的
+  // [hidden]{display:none}，空面包屑显示成一根空条——样式表必须有 [hidden] 补丁规则兜住。
+  const css25 = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
+  assert.ok(/\.gt2crumb\[hidden\]/.test(css25),
+    'style.css 须有 .gt2crumb[hidden]{display:none} 补丁——display:flex 盖 hidden 的病不许复发');
   // 折叠正交：聚焦默认折叠支（S-2）里的叶子——祖先链强制展开、旁支兄弟不显、折叠集不被聚焦改写
   const 三 = 画(数据);
   三.ctx.GanttIsland.聚焦('g-环1');
