@@ -90,54 +90,17 @@ await t('G9：取消（askInput 返 null）一个请求都不许发', async () =
   assert.deepEqual(呼.filter((u) => u === '/api/pipelines'), [], '取消却发了请求');
 });
 
-/* ===================== ② G8 待办放行成单（#64）===================== */
+/* ===================== ② G8 待办放行成单——已裁撤（2026-08-26）===================== */
+// 制作人第一性拷问+对抗审「该去」：新单流（排期作业→孵化→审→放行→已排期）不经就绪旗，
+// 闸上已无水流。判据反转：裁撤要裁干净——注册表无此闸、判据无此谓词、前端无此机件。
 
-const 队列夹具 = (就绪) => ({
-  q: { 摘要: { 文: '共 2 项' },
-    批们: [{ 批: 'B-1', 完结: false, 计数: { 总: 2, 未完: 2, 完: 0 }, 预估: 3, 粒: [{ 粒ID: 'g1' }, { 粒ID: 'g2' }] }] },
-  粒表: { g1: { 状态: '计划', 就绪, 题: '甲', 版本号: 3 }, g2: { 状态: '计划', 就绪: false, 题: '乙', 版本号: 1 } },
-});
-
-await t('G8：有就绪待办时，「放行成单」是待办队列上一颗真按钮', () => {
+await t('G8 裁撤自证：注册表无 G8、无「待办候放行」判据、前端无 tqRelease/待办队列Html 残件', () => {
+  assert.ok(!gr.缺省注册表.some((x) => x.闸号 === 'G8'), 'G8 已裁撤，注册表里不许再有这一行');
+  assert.ok(!gr.缺省注册表.some((x) => x.判据 === '待办候放行'), '裁撤的判据不许被别的闸引用');
   const ctx = 装载前端();
-  const { q, 粒表 } = 队列夹具(true);
-  const 钮 = 钮文(ctx.待办队列Html(q, 粒表, Date.now()));
-  const g8 = 闸('G8');
-  assert.ok(钮.some((s) => s.includes(g8.按钮)),
-    `注册表 G8 写着 落点「${g8.落点}」/ 按钮「${g8.按钮}」，队列上的按钮却只有 ${JSON.stringify(钮)}`);
-  assert.equal(typeof ctx.tqRelease, 'function', '按钮绑的函数要真存在');
-});
-
-await t('G8：一条都没举旗时不许画这颗钮（闸口不是装饰）', () => {
-  const ctx = 装载前端();
-  const { q, 粒表 } = 队列夹具(false);
-  const 钮 = 钮文(ctx.待办队列Html(q, 粒表, Date.now()));
-  assert.ok(!钮.some((s) => s.includes('放行成单')), '零就绪却摆着放行钮：' + JSON.stringify(钮));
-});
-
-await t('G8：点「放行成单」真把已就绪的那条走 转移 计划→起草中，没举旗的不动', async () => {
-  const ctx = 装载前端();
-  const 呼 = [];
-  ctx.fetch = async (u, o) => {
-    呼.push([String(u), o && o.body ? JSON.parse(o.body) : null]);
-    if (String(u) === '/api/schedule' && !o) {
-      return { ok: true, json: async () => ({ 粒: [
-        { 粒ID: 'g1', 状态: '计划', 就绪: true, 版本号: 3, 题: '甲' },
-        { 粒ID: 'g2', 状态: '计划', 就绪: false, 版本号: 1, 题: '乙' }] }) };
-    }
-    return { ok: true, json: async () => ({ ok: true }) };
-  };
-  ctx.ask = async () => true;
-  const 吐 = []; ctx.toast = (m) => 吐.push(m);
-  ctx.repaint = () => {};
-  await ctx.tqRelease();
-  const 转 = 呼.filter(([u]) => u.startsWith('/api/schedule/'));
-  assert.equal(转.length, 1, '放行只该动已就绪那一条：' + JSON.stringify(转));
-  assert.equal(decodeURIComponent(转[0][0]), '/api/schedule/转移', '走的不是 转移 这条边');
-  assert.equal(转[0][1].粒ID, 'g1');
-  assert.equal(转[0][1].目标, '起草中', 'G8 的语义就是 计划→起草中');
-  assert.equal(转[0][1].预期版本, 3, 'CAS 版本号要带上，否则并发下会覆盖别人的改动');
-  assert.ok(吐.some((m) => /放行 1 条/.test(m)), '要把放行条数回给人看：' + JSON.stringify(吐));
+  assert.equal(ctx.tqRelease, undefined, 'tqRelease 该随区块拆除——留着就是死链路复活的种子');
+  assert.equal(ctx.待办队列Html, undefined, '待办队列Html 该随区块拆除');
+  assert.equal(typeof ctx.tqEditDeps, 'function', '编依赖能力不随区块陪葬（入口迁甘特右键菜单）');
 });
 
 /* ===================== ③ 特性待审的界面出口（#59）===================== */

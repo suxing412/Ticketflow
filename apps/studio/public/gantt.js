@@ -672,7 +672,7 @@
     空框.hidden = !空;
     岛.wrap.hidden = 空;
     if (空) {
-      空框.innerHTML = '甘特图上没有可画的行——四层树是空的，或没有一粒待办排过日期。排期入口在下方待办队列（欠账区列着每一条没排期的活）。';
+      空框.innerHTML = '甘特图上没有可画的行——四层树是空的，或没有一粒待办排过日期。排期入口在下方欠账区（列着每一条没排期的活；待办队列已随 2026-08-26 裁定拆除）。';
       岛.图.clear(); 岛.body.querySelectorAll('.gt2r').forEach((e) => e.remove());
       if (岛.线) 岛.线.innerHTML = '';
       return;
@@ -825,6 +825,8 @@
       h += (n.粒 && 越线判(g))
         ? B('m-stance', ` data-g="${esc(g.粒ID)}"`, '表态：派发 / 重排（越线）')
         : B('m-replan', ` data-g="${esc(g.粒ID)}"`, '改期（重排，必带因）');
+      // 编依赖入口随待办队列拆除迁到此（2026-08-26）：能力不随区块陪葬；史条伪粒（史:前缀）不给
+      if (!n.史) h += B('m-editdeps', ` data-g="${esc(g.粒ID)}"`, '编依赖（前置，CAS 留痕）');
     }
     return h;
   }
@@ -1161,6 +1163,7 @@
       else if (act === 'm-unfocus') 去(() => 设聚焦(岛, null));
       else if (act === 'm-goto') 去(() => { if (b.dataset.r) location.hash = b.dataset.r; });
       else if (act === 'm-replan') 去(() => { if (b.dataset.g && typeof window.tqReplan === 'function') window.tqReplan(b.dataset.g); });
+      else if (act === 'm-editdeps') 去(() => { if (b.dataset.g && typeof window.tqEditDeps === 'function') window.tqEditDeps(b.dataset.g); });
       else if (act === 'm-stance') 去(() => { if (b.dataset.g && typeof window.tqStance === 'function') window.tqStance(b.dataset.g); });
       else if (act === 'm-expand') 去(() => { 岛.st.折叠.clear(); 存重画(岛); });
       else if (act === 'm-collapse') 去(() => 折到层(岛, 1));

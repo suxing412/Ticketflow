@@ -80,10 +80,10 @@ t('项管页三处读数是同一个数：页头 / 队列卡 / 传给后端滤�
     assert.ok(叫.length >= 1 && 叫.every((u) => decodeURIComponent(u).includes('项目=TK')),
       口名 + ' 必须带 ?项目=（树的三层实体不滤就串项目）。实叫：' + JSON.stringify(叫));
   }
+  // 待办队列拆除（2026-08-26 裁定）：队列口不许再被叫——原「三处读数同一个数」改「页头↔甘特两处对账」，
+  // 第三把尺物理消灭比对齐三把更彻底（/api/schedule/队列 服务端读口暂留候安乐死，前端零消费）。
   const 队列口 = 叫过.filter((u) => u.startsWith('/api/schedule/队列'));
-  assert.equal(队列口.length, 1, '项管页该正好叫一次队列口，实叫：' + JSON.stringify(队列口));
-  assert.ok(队列口[0].includes('项目=TK'),
-    '队列口必须带项目参数——不带就是第二把尺（后端 项目视界 会返全量）。实叫：' + 队列口[0]);
+  assert.equal(队列口.length, 0, '待办队列已拆除，队列口不许再被前端叫。实叫：' + JSON.stringify(队列口));
   assert.ok(!/TF活儿/.test(html),
     '别家项目的待办不许铺在 TK 页上（制作人 2026-08-21 点名的正是这个）');
   // 上图=成单（2026-08-25 制作人拍板「进甘特图的都应该是成单的工单」）：计划态排了期的粒
@@ -105,7 +105,8 @@ t('项管页三处读数是同一个数：页头 / 队列卡 / 传给后端滤�
   // 项管动态位（08-25 制作人「有没有在干活/在不在重排」）：作业行带用途+已用分钟、近讯带时刻+摘要
   assert.match(html, /作业中 · 排期作业 · 已 3 分/, '作业行须带用途与已用分钟——「在不在重排」一眼可答');
   assert.ok(html.includes('rl-dutylast') && /排期作业收官/.test(html), '近讯行须带最近一条项管消息摘要——「刚才干了什么」也答得上');
-  assert.match(html, /1 批 · 1 项未完/, '队列卡必须报同一个数——两个数就是两把尺');
+  assert.ok(!/待办队列/.test(html.replace(/待办队列已随[^<]*拆除/g, '')) && !/放行成单/.test(html),
+    '待办队列区块（含放行成单钮）不许再出现在项管页——拆除要拆干净');
 });
 
 t('未归属的待办不许被过滤连带吞掉：单列一行且那颗指派钮真接了线（#4 副作用）', async () => {
@@ -121,21 +122,20 @@ t('未归属的待办不许被过滤连带吞掉：单列一行且那颗指派�
   assert.equal(typeof ctx.tqSetProj, 'function', 'onclick 指到的 tqSetProj 必须真存在，否则点了就是静默无事发生');
 });
 
-t('不过滤态（未选项目 / 单项目部署）：全都要在，且队列口不带参数（#4 反向）', async () => {
+t('不过滤态（未选项目 / 单项目部署）：全都要在，且队列口任何态都不再叫（#4 反向 · 2026-08-26 拆除）', async () => {
   const ctx = 装载前端();
   await 设项目(ctx, null, { TK: {} }); // 单项目注册 ⇒ projActive() 空 ⇒ 不过滤
   const 叫过 = [];
   ctx.fetch = 排程桩(叫过);
   const html = await ctx.viewRelay();
-  assert.ok(叫过.some((u) => u === '/api/schedule/队列'),
-    '不过滤时不许硬塞一个空项目参数进去（?项目= 会被后端当成筛一个不存在的项目）。实叫：'
+  assert.ok(!叫过.some((u) => u.startsWith('/api/schedule/队列')),
+    '待办队列已拆除（2026-08-26），任何过滤态都不该再叫队列口。实叫：'
     + JSON.stringify(叫过.filter((u) => u.includes('队列'))));
   assert.ok(叫过.some((u) => u === '/api/schedule'),
     '不过滤时甘特口同样裸叫，不塞空 ?项目=（终审 T1 反向）。实叫：'
     + JSON.stringify(叫过.filter((u) => /^\/api\/schedule(\?|$)/.test(u))));
   assert.ok(/TK活儿/.test(html) && /TF活儿/.test(html), '不过滤态下两个项目的活都该在');
   assert.match(html, /待办 5 条在排/, '不过滤时页头数全量（桩 5 粒：3 无计划+g4 成单中+g5 已成单）');
-  assert.match(html, /2 批 · 2 项未完/, '队列卡同样报全量——同尺是双向的');
 });
 
 /* ═══ 二、看板积压分子分母同尺（体检 #65）═══

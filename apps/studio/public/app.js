@@ -435,7 +435,7 @@ async function viewOverview() {
     const s = await api('/api/schedule/摘要');
     const el = $('ov-sched'); if (!el || !s || s.文 == null) return;
     el.innerHTML = `<div class="ovsched card r14" onclick="location.hash='#/relay'" tabindex="0" role="button"
-        onkeydown="if(event.key==='Enter'){location.hash='#/relay'}" title="点击进项管页看甘特与待办队列（流程页已随 11→8 页签定案摘牌）">
+        onkeydown="if(event.key==='Enter'){location.hash='#/relay'}" title="点击进项管页看甘特与排期（待办队列已随 2026-08-26 裁定拆除，流程页已随 11→8 页签定案摘牌）">
         <span class="osk">今日排程</span>
         <span class="ost"><b>${s.在做}</b> 在做${s.首条题 ? `（${esc(s.首条题)}）` : ''}</span><i class="osa">→</i>
         <span class="ost"><b>${s.接下来}</b> 项接下来${s.下一项题 ? `（${esc(s.下一项题)}）` : ''}</span><i class="osa">→</i>
@@ -921,26 +921,10 @@ window.fgDrawer = (key, cat) => {
   box.innerHTML = `<div class="fgdh">${esc(名)} · ${list.length} 单${cur === 'susp' ? '（挂起=原位冻结，全链路跳过；解挂在工单详情页）' : ''}</div><div class="fgdl">${rows}</div>`;
 };
 
-/* ===== 批分组折叠（原 P12b 队列页 · 施工令-042 §一 → 2026-08-20 并入项管页「待办队列」）=====
-   案由：制作人 2026-08-11 02:38「我现在完全看不到后续的队列里排了什么东西」。按 批→序 铺全量五态，
-   已完成的那几件也要在场，否则「还剩几件」这句话没有分母。判据全在服务端
-   lib/pm/schedule-view.队列页（纯函数、可单测），前端只画。
-   2026-08-20 页签定案 11→8：本页整体并入项管页，**viewQueue / qRow 已删**——
-   项管页的 tqRow 是它的超集（同一份服务端判据 + 就绪打勾 + 重排），留着旧版就是同一份账两处画，
-   而两份画法迟早对不上（这正是本仓「两把尺」病的成因）。折叠机件（qOpen/qFold）与 .qbatch 一族 CSS
-   仍在服役：项管页的批分组原样复用它们，视觉与交互一次定死，不再各画各的。 */
-let qOpen = {}; // 批名 → 用户是否手动展开/折叠（3s 脉冲重画会重进视图函数，不记住的话折叠状态每 3 秒被打回原形）
+/* ===== 批分组折叠 · 已随待办队列拆除（2026-08-26，原 P12b 队列页 → 08-20 并入项管页 → 本日整块裁撤）=====
+   qOpen/qFold/tqRow/待办队列Html 全删（裁定见 项管页 ② 的墓碑注释）；QCLS 状态色仍被
+   欠账区/未归属行引用，留任。 */
 const QCLS = { 计划: 'plan', 起草中: 'draft', 已成单: 'made', 完成: 'done', 撤销: 'drop' };
-// 批折叠：只切类不重画——重画要重取两个接口，还会把用户滚动位置打回顶部。
-window.qFold = (批) => {
-  const heads = [...document.querySelectorAll('.qbatch')];
-  const box = heads.find((el) => (el.querySelector('.qbh b') || {}).textContent === 批);
-  if (!box) return;
-  const 折 = !box.classList.contains('fold');
-  box.classList.toggle('fold', 折);
-  const h = box.querySelector('.qbh'); if (h) h.setAttribute('aria-expanded', String(!折));
-  qOpen[批] = !折; // 记住用户的选择，扛住 3s 脉冲重画
-};
 
 /* ===== P10 树形 · 已退役（施工令-028，制作人 2026-08-09 03:00 裁决）=====
    层级只有两层，树状铺陈形式大于信息。两项不可替代能力已迁走，整族（viewTree / tState /
@@ -3466,7 +3450,7 @@ const kSig = (链) => (链 || []).map((c) => `${c.id}|${c.态}|${c.徽}|${(c.链
      「项管责任很关键，一定要给足相对应的权力，并且**让它的行为可视化**」
    于是本页＝**未来面**（现在面归看板与在途），四块自上而下：
      ① 甘特图    排期的脸：一行一条待办，计划条 ＋ 基线影子，两条错位就是延期的可视证据
-     ② 待办队列  承接原 #/queue：按 批→序 分组，带「就绪打勾」与「重排」——排期的手
+     ② 待办队列  ~~承接原 #/queue~~ **2026-08-26 整块拆除**（第一性+对抗审「该去」，墓碑注释在下方原位）
      ③ 想法在池  承接原 #/ideas：入池/拍板/放弃三动作原样照搬，拍板仍是制作人唯一人闸
      ④ 项管行为  承接原「关键汇报＋详细流水」，流水改吃 /api/pm/actions 分桶
    页头保留只读的值守状态条与编制快照（可折叠）。
@@ -3554,12 +3538,7 @@ function 甘特刻度(窗, 目标) {
 }
 // @testable-end 甘特几何
 
-// 停摆时长：距最后一次事件多少天。**这不是延期判定**——它与计划日期无关（一条压根没排过期的
-// 待办同样有停摆时长），回答的是「这条躺了多久没人碰」。同 流程页「闲置 N 天」的既有口径。
-const 停摆天 = (g, now) => {
-  const t = Date.parse((g && (g.更新时刻 || g.登记时刻)) || '');
-  return Number.isNaN(t) ? null : Math.max(0, Math.floor(((now || Date.now()) - t) / 天毫));
-};
+// （停摆天 已随待办队列拆除，2026-08-26——唯一消费方 tqRow 不在了；需要时从流程页「闲置 N 天」口径重取）
 
 /* ---- ① 甘特岛（P0 重做 · 施工令《方案-甘特表现层重做-2026-08-24》）----
    渲染整体外迁 public/gantt.js（甘特岛，spike A 甲案）：本文件只吐壳
@@ -3613,71 +3592,13 @@ function 欠账区Html(没排, 未归属) {
   return 未排 + 未归;
 }
 
-/* ---- ② 待办队列 ---- */
-// 行 = 服务端队列卡（判据：批/序/徽章/依赖置灰/候谁，全在 lib/pm/schedule-view.队列页）
-//    + 现态原件（就绪/版本号/计划日期/更新时刻，GET /api/schedule 下发）。
-// 两份都要：判据不能在前端另立一套，而 CAS 要的版本号与 就绪 这面旗，队列卡里没有。
-function tqRow(c, g, now) {
-  const 终 = 排期终态.includes(c.状态);
-  const 可排 = !!g && !终;                       // 终态待办不可重排（后端同判据，此处只是别把按钮画出来）
-  const 可就绪 = !!g && g.状态 === '计划';        // 就绪旗只对计划态有意义：已过闸的粒再举旗只会污染 G8 清单
-  const 链 = c.单号 ? `<a class="qtk mono" href="#/t/${encodeURIComponent(c.单号)}" title="进工单详情">${esc(c.单号)}</a>` : '';
-  const 排期文 = g && (g.计划开始 || g.计划完成)
-    ? `${g.计划开始 || '?'} → ${g.计划完成 || '?'}` : '未排期';
-  const 停 = g && !终 ? 停摆天(g, now) : null;
-  const 提 = c.提示 + (g ? `\n排期：${排期文}${g.基线完成 ? `（基线 ${g.基线开始 || '?'} → ${g.基线完成}）` : ''}`
-    + (停 == null ? '' : `\n停摆 ${停} 天未动`) : '');
-  return `<div class="qrow${c.置灰 ? ' blocked' : ''}${终 ? ' fin' : ''}" data-gid="${esc(c.粒ID || '')}" title="${esc(提)}">
-      <span class="qs mono">${esc(上级名(c.上级))}${c.序 ? '·' + c.序 : ''}</span>
-      <span class="qb ${QCLS[c.状态] || ''}">${esc(c.徽章)}</span>
-      <span class="qt">${esc(c.题)}</span>${链}
-      ${c.候 ? `<span class="qwait" title="${esc('未满足依赖：' + (c.未满足 || []).map((x) => x.名 + (x.态 ? '（' + x.态 + '）' : '')).join('、'))}">候：${esc(c.候)}</span>` : ''}
-      ${c.池衡建议 ? `<span class="qpool" title="池衡建议">${esc(c.池衡建议)}</span>` : ''}
-      <span class="qplan mono${g && (g.计划开始 || g.计划完成) ? '' : ' none'}" title="计划区间（基线见悬浮全文）">${esc(排期文)}</span>
-      ${停 == null || 停 < 1 ? '' : `<span class="qidle" title="距最后一次事件 ${停} 天没人动过它——停摆时长与计划日期无关，不是延期判定">停摆 ${停}d</span>`}
-      <span class="qest mono">${c.预估单元 != null ? esc(c.预估单元 + ' 单元') : '—'}</span>
-      ${可就绪 ? `<button class="qrdy${g.就绪 ? ' on' : ''}" onclick="tqReady('${qesc(c.粒ID)}',${g.就绪 ? 'false' : 'true'},this)"
-        title="${esc(g.就绪 ? '已就绪 · 候放行成单。再点撤旗' : '标就绪＝项管说「这批排完了、可以放了」。\n放行成单是人闸（总监＋制作人），不在本页')}">${g.就绪 ? '✓ 就绪' : '标就绪'}</button>` : ''}
-      ${可排 ? `<button class="qplanbtn" onclick="tqReplan('${qesc(c.粒ID)}')" title="重排：改计划起讫/工期，必须带因（后端强制）">排期</button>` : ''}
-      ${可排 ? `<button class="qplanbtn qdep" onclick="tqEditDeps('${qesc(c.粒ID)}')" title="编依赖：改这条待办的前置依赖（逗号分隔单号/粒ID，走 调整 留痕，CAS）">编依赖${Array.isArray(g.依赖) && g.依赖.length ? ' ' + g.依赖.length : ''}</button>` : ''}
-    </div>`;
-}
-function 待办队列Html(q, 粒表, now) {
-  if (!q || !q.摘要) {
-    return `<div class="rlcard card r14"><div class="rlch"><b>待办队列</b></div>
-      <div class="gtempty">读不到排程台账——这台监制台上还没有 <span class="mono">排程台账/排程账.jsonl</span>，
-      或服务端版本尚未带 <span class="mono">/api/schedule/队列</span> 读口。</div></div>`;
-  }
-  const 就绪数 = Object.values(粒表).filter((g) => g.状态 === '计划' && g.就绪).length;
-  const 批Html = (q.批们 || []).map((b) => {
-    const 手动 = qOpen[b.批];
-    const 折 = 手动 === undefined ? !!b.折叠 : !手动; // 默认按服务端判据（完结批折叠），用户点过就听用户的
-    return `<div class="qbatch${折 ? ' fold' : ''}${b.完结 ? ' done' : ''}">
-      <div class="qbh" onclick="qFold('${qesc(b.批)}')" tabindex="0" role="button" aria-expanded="${!折}"
-          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();qFold('${qesc(b.批)}')}">
-        <span class="qcar">▾</span><b>${esc(b.批)}</b>
-        <span class="pill sm ${b.完结 ? 'ok' : 'mut'}">${b.完结 ? '本批已了' : b.计数.未完 + ' 项未完'}</span>
-        <span class="qbn">共 ${b.计数.总} 项${b.计数.完 ? ` · 已了 ${b.计数.完}` : ''}</span>
-        <span class="sp"></span>
-        <span class="qbe mono">${b.预估 ? b.预估 + ' 单元' : '无预估'}</span></div>
-      <div class="qrows">${b.粒.map((c) => tqRow(c, 粒表[c.粒ID], now)).join('')}</div></div>`;
-  }).join('') || '<div class="gtempty">队列空——批次拍板后由总监/项管登记。</div>';
-  return `<div class="rlcard card r14" id="rl-queue">
-    <div class="rlch"><b>待办队列</b>
-      <span class="subnote">按 批 → 序（口径同排程台账）· 点批头折叠 · 悬浮任一行看来源与基线全文</span>
-      <span class="sp"></span>
-      <span class="rlnum mono">${esc(q.摘要.文 || '')}</span></div>
-    <div class="rlgate">已就绪 <b>${就绪数}</b> 条候放行${就绪数 ? ` <button class="qrdy on" onclick="tqRelease()" title="G8 人闸：把已就绪的待办整批放行进工单队列（转移 计划→起草中，署名 ${esc(排期署名)}）">⇧ 放行成单 ${就绪数}</button>` : ''}
-      <span class="subnote">放行成单是<b>人闸</b>（总监＋制作人按产线节奏一堆一堆扔进工单队列）——
-      本页排完、举旗，右边那颗钮就是那一闸（2026-08-22 体检 #64：注册表 G8 的 落点「项管页 · 待办队列」/ 按钮「放行成单」此前全前端零命中）。
-      写账署名 ${esc(排期署名)}（调整/重排 操作域＝项管/总监；放行走 转移 计划→起草中，逐边操作域＝总监/制作人）。</span></div>
-    <div class="qboard" id="q-board">${批Html}</div>
-    <div class="fglegend" style="margin-top:10px">
-      <span><i class="lg-plan"></i>计划＝还没起草的活 · 起草中＝待审稿在台上 · 已成单→点单号进详情</span>
-      <span><i class="lg-stuck"></i>置灰＋「候：X」＝依赖未满足，这条现在开不了</span>
-      <span>已了的批默认折叠 · 预估合计只数未完的活</span></div>
-  </div>`;
-}
+/* ---- ② 待办队列（已拆除，2026-08-26）----
+   制作人第一性拷问「还有存在的必要吗」+ 总监对抗性裁定「该去」：三个历史职能全被取代——
+   「接下来干什么」归甘特四层树；「放行成单」（G8 举旗钮）是死链路（新单流=排期作业→孵化→
+   审→放行→已排期，不经就绪旗，闸上已无水流）；「批次组织」归四层树。保留方最强论点
+   「已了对账视角」被历史全量接入击穿（甘特史条即对账面）。tqRow/待办队列Html/tqReady/
+   tqRelease/qFold 同批拆除；G8 闸随之裁撤；/api/schedule/队列 读口暂留一版（无 UI 消费
+   自然安乐死，下次体检收尸）。编依赖 入口迁甘特右键菜单（能力不随区块陪葬）。 */
 
 /* ---- ④ 项管行为：/api/pm/actions 分桶 ---- */
 // 案源（丙-4 令面原话）：/api/pm/ledger 只下发尾 80 条，而台账里 巡检 909 + 台账对齐 751
@@ -3730,7 +3651,7 @@ function 项管行为Html(act, kc) {
 async function viewRelay() {
   // 数据七源。一律 catch 兜底：任何一个接口不在（老部署/桩台）都不许把整页拖白——
   // 本页是四块拼起来的，一块取不到就该只塌那一块。
-  const [d, pl, rs, kc, sch, q, id, act, attn, gz, 管线口, 特性口, 专项口, 板口] = await Promise.all([
+  const [d, pl, rs, kc, sch, id, act, attn, gz, 管线口, 特性口, 专项口, 板口] = await Promise.all([
     api('/api/relay').catch(() => ({ 消息: [] })),
     api('/api/pm/ledger').catch(() => ({ 台账: {} })),
     api('/api/pm/roster').catch(() => null),
@@ -3739,10 +3660,7 @@ async function viewRelay() {
     // （跨项目端点标 外部:true，冲突角标不再把别家项目的边算进来）。粒 照旧全量下发
     // （跨项目前置查表要用），前端过滤口径不变；未选项目时不硬塞空参数（同 队列口 的口径）。
     api('/api/schedule' + (projActive() ? '?' + encodeURIComponent('项目') + '=' + encodeURIComponent(projActive()) : '')).catch(() => ({ 粒: [], 计数: {} })),
-    // 队列卡也吃当前项目（2026-08-22 体检 #4）：页头写着「监制台 · TK」、甘特已按 g.项目 === p 切过，
-    // 而这一口原样不带参数 ⇒ 后端 项目视界 拿不到项目、返回全量，于是页头 13 / 队列卡 34，两把尺。
-    // 服务端 GET /api/schedule/:action 把 req.query 整个交给 scheduleView.队列页，认 项目 这一格。
-    api('/api/schedule/' + encodeURIComponent('队列') + (projActive() ? '?' + encodeURIComponent('项目') + '=' + encodeURIComponent(projActive()) : '')).catch(() => null),
+    // （队列口已随待办队列区块拆除，2026-08-26——/api/schedule/队列 服务端读口暂留候安乐死）
     api('/api/ideas').catch(() => null), // 兜底不许造出「0 条在池」这种假真空（2026-08-22 体检 #66）
     // 十口全并发（本页每次重绘都要取一遍，实测最慢那口 34ms；串成一列就是白等一个来回）
     api('/api/pm/actions').catch(() => null),
@@ -3905,7 +3823,6 @@ async function viewRelay() {
         <span class="subnote">延期/超期判定唯一实现：服务端 <span class="mono">lib/pm/schedule.工期判定</span> 随
           <span class="mono">GET /api/schedule</span> 逐粒下发，悬浮卡与徽标只读不算；越线待重判同为服务端逐粒下发（<span class="mono">待表态</span> 字段，与 G23 闸债同一份谓词——单已在途不再误标）；越线触发与立债在数据层独立调度器（H112，gateKey 幂等）。</span></div>
     </div>
-    ${待办队列Html(q, 粒表, now)}
     <div class="rlcard card r14" id="rl-ideas">
       <div class="rlch"><b>想法在池</b>
         <span class="subnote">随聊随记 → <b>拍板</b>成专项容器（补边界＋验收标准）→ 项管切单派发。拍板是制作人唯一人闸</span>
@@ -3937,31 +3854,8 @@ async function 排程写(动作, body, 成功文, opts) {
   repaint('排程' + 动作);
   return r;
 }
-window.tqReady = async (粒ID, 值, btn) => {
-  const g = await 取待办(粒ID);
-  if (!g) return toast('这条待办已不在现态（可能刚成单或被撤销）');
-  if (btn) btn.disabled = true;
-  // 就绪 原样透传布尔：省略键在后端是「这一格不动」，传 false 才是撤旗。
-  await 排程写('调整', { 粒ID, 预期版本: g.版本号, 就绪: !!值 }, 值 ? '已标就绪，候放行成单' : '已撤就绪旗');
-  if (btn) btn.disabled = false;
-};
-// G8 放行成单（2026-08-22 体检 #64）：走 转移 计划→起草中（lib/pm/schedule 逐边操作域＝总监/制作人），
-// 逐粒 CAS、不并批、不吞错——一批里有一条冲突，其余照放，未过的逐条报出来。
-// 版本号现读现取（同 tqReady/tqReplan 的纪律）：页面上那份读数可能已被项管改过。
-window.tqRelease = async () => {
-  const d = await api('/api/schedule').catch(() => null);
-  const 待 = ((d && d.粒) || []).filter((g) => g.状态 === '计划' && g.就绪);
-  if (!待.length) return toast('没有已就绪的待办可放行（就绪旗由项管在本页举）');
-  if (!await ask(`放行 ${待.length} 条已就绪待办进工单队列？放行后归项管全权推进。`)) return;
-  let 成 = 0; const 败 = [];
-  for (const g of 待) {
-    const r = await post('/api/schedule/' + encodeURIComponent('转移'),
-      { 粒ID: g.粒ID, 预期版本: g.版本号, 目标: '起草中', 操作者: 排期署名, 说明: 'G8 放行成单' }).catch((e) => ({ error: String((e && e.message) || e) }));
-    if (r && r.ok) 成++; else 败.push(`${g.题 || g.粒ID}：${(r && r.error) || '未知'}`);
-  }
-  toast(败.length ? `放行 ${成} 条，${败.length} 条未过：${败[0]}` : `已放行 ${成} 条成单`);
-  repaint('G8 放行成单');
-};
+// 就绪旗/放行成单（tqReady/tqRelease）已随待办队列区块拆除（2026-08-26 制作人第一性拷问 + 总监
+// 对抗性裁定「该去」）：新单流=排期作业→孵化→审→放行→已排期，根本不经过就绪旗——G8 闸同批裁撤。
 // 重排现读现态取版本号，不吃页面上那份可能已经过期的读数——CAS 的意义正在于此。
 async function 取待办(粒ID) {
   const d = await api('/api/schedule').catch(() => null);

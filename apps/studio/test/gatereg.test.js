@@ -247,15 +247,16 @@ t('G24 未排期（DS-12 防僵尸单）：待派∪待重派 无排期=债，�
   assert.equal(r齐.length, 0, '全排上日子 → 未排期债销光（不许恒真）');
 });
 
-t('backlog 不冒充欠债：计划态待办须显式标就绪才算候放行', () => {
+t('backlog 不冒充欠债（G8 已裁撤 2026-08-26）：举了就绪旗也不再立放行债，未排期照进 G24 聚合债', () => {
   const root = makeRoot();
   const 粒 = (id, o) => ({ 粒ID: id, 题: id, 状态: '计划', ...o });
   const r1 = gr.等我(root, { deps: { ...空, schedule: { 现态: () => [粒('g1'), 粒('g2'), 粒('g3')] } } });
-  assert.equal(r1.债.filter((x) => x.闸号 === 'G8').length, 0, '未标就绪的排期 backlog 一笔都不算——虚报会把清单变噪声');
   assert.deepEqual(r1.债.map((x) => x.gateKey), ['G24:未排期'],
-    'backlog 不进 G8 放行闸，但没排日子这件事进 G24 聚合债（一笔，不逐粒刷屏——H112/DS-12）');
+    'backlog 不立放行债，但没排日子这件事进 G24 聚合债（一笔，不逐粒刷屏——H112/DS-12）');
+  // 裁撤自证：就绪旗举着也不再产 G8 债——新单流不经就绪旗，这条闸连判据都没了
   const r2 = gr.等我(root, { deps: { ...空, schedule: { 现态: () => [粒('g1'), 粒('g2', { 就绪: true })] } } });
-  assert.deepEqual(r2.债.filter((x) => x.闸号 === 'G8').map((x) => x.id), ['g2']);
+  assert.equal(r2.债.filter((x) => x.闸号 === 'G8').length, 0, 'G8 裁撤后不许再立债');
+  assert.ok(!gr.缺省注册表.some((x) => x.闸号 === 'G8'), '注册表不许残留 G8 行');
 });
 
 t('幂等：同闸同实体只算一笔（gateKey 去重）', () => {
@@ -531,8 +532,8 @@ t('注册表路由随债下发 · 全响应闸实证：每笔债的 路由 = 注
 
   // ④ 点名三类非工单实体各自的落点，免得 ③ 靠「恰好一笔非工单债都没有」空过
   const 取 = (n) => r.债.find((d) => d.闸号 === n);
-  assert.deepEqual([取('G7').id, 取('G7').路由], ['I-m5x2k9', '#/relay'], '想法（I-xxx）落项管页待办队列');
-  assert.deepEqual([取('G8').id, 取('G8').路由], [待办uuid, '#/relay'], '待办（uuid）落项管页待办队列');
+  assert.deepEqual([取('G7').id, 取('G7').路由], ['I-m5x2k9', '#/relay'], '想法（I-xxx）落项管页');
+  assert.equal(取('G8'), undefined, 'G8 已裁撤（2026-08-26），uuid 待办不再立放行债');
   assert.deepEqual([取('G10').id, 取('G10').路由], ['美术标杆-配色', '#/wiki'], 'wiki（名称）落 Wiki 页');
   assert.deepEqual([取('G3').id, 取('G3').路由], ['TK-3', '#/t/TK-3'], '真工单才跳工单详情页');
   assert.equal(取('G6').路由, '#/tickets/P-1/F-3', '专项落它那张 spCard 真被画出来的那一层，不是管线网格');

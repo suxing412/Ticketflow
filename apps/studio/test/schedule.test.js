@@ -486,15 +486,15 @@ const 登记一 = (root, o = {}, 人 = '总监') => {
 
   await t('就绪：项管标得动，G8 人闸判据从此筛得出东西（此前结构性恒空）', async () => {
     const root = makeRoot();
-    const G8 = () => require('../lib/gatereg').判据表.待办候放行(root, { schedule: S });
+    // G8/待办候放行 已裁撤（2026-08-26）：本判据收窄为 就绪 字段本身的白名单/越权面——
+    // 旗还能举能撤（排程账的历史字段照旧可写），只是再没有闸消费它。
+    assert.equal(require('../lib/gatereg').判据表.待办候放行, undefined, '裁撤的判据不许残留');
     const g = 登记一(root);
-    assert.equal(G8().length, 0, '没标就绪之前 G8 空——backlog 不冒充欠债');
     const r = S.调整(root, { 粒ID: g.粒ID, 预期版本: 1, 就绪: true, 操作者: '项管' });
     assert.ok(r.ok, r.error);
     assert.equal(S.取(root, g.粒ID).就绪, true);
-    assert.deepEqual(G8().map((x) => x.id), [g.粒ID], '白名单收了 就绪，G8 判据才不是恒空的摆设');
     assert.ok(S.调整(root, { 粒ID: g.粒ID, 预期版本: 2, 就绪: false, 操作者: '项管' }).ok, '改主意也得改得回来');
-    assert.equal(G8().length, 0);
+    assert.equal(S.取(root, g.粒ID).就绪, false);
     const 越 = S.调整(root, { 粒ID: g.粒ID, 预期版本: 3, 就绪: true, 操作者: '美术' });
     assert.ok(!越.ok && 越.越权, '非项管/总监标就绪应越权拒');
     assert.ok(!S.调整(root, { 粒ID: g.粒ID, 预期版本: 3, 就绪: 1, 操作者: '项管' }).ok, '非布尔拒');

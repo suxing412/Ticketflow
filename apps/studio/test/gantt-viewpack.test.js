@@ -234,4 +234,14 @@ t('⑤ 窗与聚合吃实段：史条端点撑窗（全档窗起 ≤ 72h 前）�
   assert.ok(/gt2mini done/.test(mini), '折叠投影里史单以完成迷你条显影');
 });
 
+t('⑥ 编依赖入口迁菜单（待办队列拆除随迁）：粒行菜单产 m-editdeps 项；史条/终态不产', () => {
+  const 存 = 造存储(); 存.setItem('gt2-done', '全');
+  const { 岛, ctx } = 画(台账(), 存);
+  void 岛;
+  const 菜活 = ctx.GanttIsland.菜单Html('行', 'TK-902');
+  assert.ok(/m-editdeps/.test(菜活), '在排粒行的右键菜单必须有编依赖项（队列入口拆除后的唯一入口）');
+  const 菜史 = ctx.GanttIsland.菜单Html('行', 'TK-904');
+  assert.ok(!/m-editdeps/.test(菜史), '史条（已落袋伪粒）不给编依赖——改完活再改计划是改史');
+});
+
 console.log('全部通过：' + passed + ' 项');

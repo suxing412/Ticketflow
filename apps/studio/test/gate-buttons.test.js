@@ -53,35 +53,18 @@ const 开排期页 = async ({ 就绪 }) => {
 
 (async () => {
 
-await t('#64 G8：有就绪待办时，「放行成单」必须是一颗真按钮（闸表 落点＝项管页·待办队列）', async () => {
+await t('#64 反转（G8 裁撤 2026-08-26）：举着就绪旗也不许再画「放行成单」钮——死链路拆干净', async () => {
+  // 原判据锁「有就绪必有钮」；裁定「该去」后判据反转：任何态都不许有这颗钮、
+  // 待办队列区块整体不出现（第一性+对抗审，墓碑在 app.js 项管页 ②）。
   const { html } = await 开排期页({ 就绪: true });
-  assert.ok(有钮(html, '放行成单'),
-    'G8 的人闸在界面上按不下去：按钮内文里没有「放行成单」。现有按钮＝' + JSON.stringify(按钮内文(html)));
+  assert.ok(!有钮(html, '放行成单'), 'G8 已裁撤，放行钮不许再出现：' + JSON.stringify(按钮内文(html)));
+  assert.ok(!/id="rl-queue"/.test(html), '待办队列区块（#rl-queue）该整体拆除');
 });
 
-await t('#64 反例存档：只查「页面里有没有这四个字」的判据，病还在时照绿', async () => {
-  // 零就绪 ⇒ 那颗钮按设计不渲染（没有可放行的东西时摆一颗钮是骗人）。
-  // 此刻「按钮内文」这条尺读得出真相，而「页面文本」那条尺仍然是绿的——
-  // 后者正是 #64 病了整整一轮没被抓住的原因。
-  const { html } = await 开排期页({ 就绪: false });
-  assert.ok(!有钮(html, '放行成单'), '零就绪时不该摆一颗放行钮');
-  assert.match(html, /放行成单/,
-    '页面小注里本来就有这四个字——这一格若变红，说明反例前提没了，弱判据的存档要重写');
-});
-
-await t('#64 G8：按下去真走 转移 计划→起草中，逐粒带 CAS 版本号', async () => {
+await t('#64 反转续：tqRelease 机件已随 G8 拆除——按不下去因为根本不存在', async () => {
   const { ctx, 发出 } = await 开排期页({ 就绪: true });
-  await ctx.tqRelease();
-  assert.equal(发出.length, 1, 'tqRelease 一次也没往 /api/schedule/转移 发过东西');
-  assert.equal(发出[0].到, '/api/schedule/' + encodeURIComponent('转移'));
-  assert.deepEqual(发出[0].体, { 粒ID: 'g1', 预期版本: 3, 目标: '起草中', 操作者: '总监', 说明: 'G8 放行成单' },
-    '放行必须走 转移 计划→起草中 并带现读版本号（无 CAS 就是拿旧意图盖新事实）');
-});
-
-await t('#64 G8：没有就绪待办时按下去，一条转移都不许发', async () => {
-  const { ctx, 发出 } = await 开排期页({ 就绪: false });
-  await ctx.tqRelease();
-  assert.equal(发出.length, 0, '没有举旗的待办却放行了——G8 的就绪旗形同虚设');
+  assert.equal(ctx.tqRelease, undefined, 'tqRelease 该拆干净——留着的死函数是链路复活的种子');
+  assert.equal(发出.length, 0, '拆除后不许有任何 转移 被发出');
 });
 
 // ---- 工单页管线层（G9 落点：工单页 · 管线层）----

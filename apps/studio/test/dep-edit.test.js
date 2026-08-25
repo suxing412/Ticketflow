@@ -22,14 +22,12 @@ const 队列夹具 = () => ({
     g2: { 状态: '完成', 题: '乙', 版本号: 9 } },
 });
 
-t('入口：队列页待办卡真画「编依赖」钮且绑 tqEditDeps；终态卡不画', () => {
+t('入口（2026-08-26 迁）：待办队列拆除后 编依赖 入口迁甘特右键菜单；壳层函数链仍在', () => {
+  // 队列卡入口随区块拆除；菜单入口的行为判据在 gantt-viewpack ⑥（菜单Html 真产 m-editdeps 项、
+  // 终态/史条不产）。本席只守壳层能力：入口指到的函数必须真存在——菜单点了不能静默无事发生。
   const ctx = 装载前端();
-  const { q, 粒表 } = 队列夹具();
-  const html = ctx.待办队列Html(q, 粒表, Date.now());
-  assert.match(html, /编依赖/, '队列页整页没有「编依赖」入口');
-  assert.ok(html.includes("tqEditDeps('g1')"), '计划态待办卡的入口必须绑 tqEditDeps(g1)');
-  assert.ok(!html.includes("tqEditDeps('g2')"), '终态（完成）待办卡不许画编依赖——改完活再改计划是改史');
-  assert.equal(typeof ctx.tqEditDeps, 'function', '钮绑的 tqEditDeps 要真存在');
+  assert.equal(ctx.待办队列Html, undefined, '待办队列Html 已拆除，不许残留');
+  assert.equal(typeof ctx.tqEditDeps, 'function', '菜单项指到的 tqEditDeps 要真存在');
   assert.equal(typeof ctx.tqEditDepsGo, 'function', '提交函数 tqEditDepsGo 要真存在');
 });
 
