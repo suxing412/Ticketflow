@@ -261,7 +261,7 @@ function 收回(root, id) {
   const t = store.find(root, id);
   if (!t) return { ok: false, error: '不存在' };
   if (t.state !== '在途') return { ok: false, error: `只有在途单可收回（当前 ${t.state}）` };
-  const r = store.move(root, id, '在途', '待派', (fm) => { delete fm.主办; delete fm.领单时间; fm.放行 = false; }, nowIso()); // 收回=收权：撤放行旗（2026-08-05 语义分家：收回待重放行，重投带放行）
+  const r = store.move(root, id, '在途', '待派', (fm) => { delete fm.主办; delete fm.领单时间; delete fm.执行池; fm.放行 = false; }, nowIso()); // 收回=收权：撤放行旗（2026-08-05 语义分家：收回待重放行，重投带放行）；运行章一并销（2026-08-26 TK-201 案）
   if (r.ok) journal.append(root, `收回 ${id}（在途→待派 · 清主办 · 撤放行）`);
   return r;
 }
@@ -317,6 +317,7 @@ function 失败分诊(root, id, 决定) {
   if (决定 === '重投') {
     const r = store.move(root, id, '待处理', '待重派', (fm) => {
       delete fm.主办; delete fm.领单时间; delete fm.交付时间;
+      delete fm.执行池; // 运行章随会话销毁（2026-08-26 TK-201 案：残章钉死冻结池致静默滞留）
       fm.重投次数 = (Number(fm.重投次数) || 0) + 1;
       fm.放行 = true; // 重投=明确指令：带放行旗（2026-08-05 语义分家）
     }, nowIso());
@@ -379,6 +380,7 @@ function 复活(root, id, 操作者) {
   const r = store.move(root, id, '挂起', '待重派', (fm) => {
     fm.复活记录 = { 操作者: 人, 时间: nowIso(), 挂起于: fm.挂起时间 || '', 前态: fm.挂起前态 || '', ...(fm.挂起因 ? { 挂起因: fm.挂起因 } : {}) };
     delete fm.挂起前态; delete fm.挂起因; delete fm.挂起时间; delete fm.挂起操作者; delete fm.连带自;
+    delete fm.执行池; // 运行章随会话销毁（2026-08-26 TK-201 案）
     // 重投次数/推迟次数 一字不动：挂起不是重投，账不清零
   }, nowIso());
   if (r.ok) journal.append(root, `复活 ${id}（挂起→待重派 · ${人}）——重新排队，计数不清零`);

@@ -227,7 +227,7 @@ function 验收打回(root, sid, { 子单清单, 因, 操作者 } = {}) {
   if (!回.ok) return 回;
   const 打回 = []; const 失败 = [];
   for (const id of 单们) {
-    const mv = store.move(root, id, '完成', '待重派', (fm) => { fm.返修因 = 打回因; }, now);
+    const mv = store.move(root, id, '完成', '待重派', (fm) => { fm.返修因 = 打回因; delete fm.执行池; }, now); // 运行章随会话销毁（2026-08-26 TK-201 案）
     if (mv && mv.ok) {
       打回.push(id);
       try { require('./journal').append(root, `验收打回 ${id}：专项 ${sid} 验收不过 → 待重派（${打回因}，操作者：${人}）`); } catch { /* 留痕失败不阻塞 */ }

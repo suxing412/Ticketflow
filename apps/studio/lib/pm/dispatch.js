@@ -145,8 +145,17 @@ function 降级Of(cfg, 原池, 新池) {
   return { 原池, 新池, 原计费: a, 新计费: b, 因: `${原池} 套餐额度用尽/受限，降级到按量计费池 ${新池}——从此单起产生费用` };
 }
 
-function routePool(cfg, r, gatesInfo) {
-  if (r.执行池) return { 池: r.执行池 };
+function routePool(cfg, r, gatesInfo, 拒因) {
+  if (r.执行池) {
+    // 池章直通仅限章池活着（2026-08-26 TK-201 案）：回队单残留上次派发的 执行池 章，
+    // 旧代码无条件直通 → pickNext 撞冻结闸静默跳过，H85 自愈全程旁路，claude 有空槽
+    // 而四单滞留 7h、journal 零字。回队五路自此清运行章（lifecycle/runner/specials），
+    // 存活的章即故意钉池（池评测单）——钉池撞冻结不借调（借调=毁评测口径），
+    // 走死局路留 拒因，由 runner 出声，不许再静默。
+    if (!poolFrozen(cfg, gatesInfo, r.执行池)) return { 池: r.执行池 };
+    if (拒因) 拒因.push(`${r.id} 池章 ${r.执行池} 冻结：钉池单不借调，歇至池解冻`);
+    return null;
+  }
   const 池序 = rosterPools(cfg, r.职能);
   const base = 池序[0] || pool.poolFor(cfg, r.职能) || 'claude';
   if (!池序.length) return poolFrozen(cfg, gatesInfo, base) ? null : { 池: base };
@@ -156,18 +165,18 @@ function routePool(cfg, r, gatesInfo) {
     return { 池: 可用, ...(降级 ? { 降级 } : {}) };
   }
   const 借调 = Object.keys(cfg.执行池 || {}).find((p) => !poolFrozen(cfg, gatesInfo, p));
-  if (!借调) return null; // ③
+  if (!借调) { if (拒因) 拒因.push(`${r.id} ${r.职能} 编制池序全冻且无池可借调`); return null; } // ③
   const 降级 = 降级Of(cfg, base, 借调);
   return { 池: 借调, 改挂: { 原池: base, 因: `${base} 池冻结 · ${r.职能}编制池序全冻，临时借调` }, ...(降级 ? { 降级 } : {}) }; // ②
 }
 
 // 挑单：给定在跑计数与闸态，返回本轮可拉起的清单（不执行，纯决策——可测）
-function pickNext(cfg, ready, runningByPool, gatesInfo, caps) {
+function pickNext(cfg, ready, runningByPool, gatesInfo, caps, 拒因) {
   const picks = [];
   const cnt = { ...runningByPool };
   for (const r of sortReady(ready)) {
-    const route = routePool(cfg, r, gatesInfo);
-    if (!route) continue; // 死局：无可用池，滞留等零派发告警
+    const route = routePool(cfg, r, gatesInfo, 拒因);
+    if (!route) continue; // 死局：无可用池，滞留缘由已入 拒因，runner 记 journal
     const poolName = route.池;
     const cap = Math.min(Number((caps || {})[poolName]) || 1, HARD_CAP[poolName] || 1);
     if ((cnt[poolName] || 0) >= cap) continue;

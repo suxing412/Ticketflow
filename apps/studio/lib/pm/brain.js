@@ -306,9 +306,21 @@ function childFm(tk, { id, ids, parentId, 项目, 挂链, 容器管线 }) {
   };
 }
 
+// 归属自上级（2026-08-26 假 100% 案）：排程粒的 上级（F-n/S-n/P-n）翻成工单的直接归属档。
+// 案发：受托起草只透传了 粒ID/依赖，归属三档一档不落 → 孵化的 ~29 张单在工单页管线聚合里
+// 集体失踪，分母只剩老单，四条管线齐报 99-100% 落袋。工单只记直接上级（同 H 系口径），
+// 聚合沿实体树上溯，故一档即够。认不出的前缀返 null（散单/悬空照旧，不硬造归属——为图造数红线）。
+function 归属自上级(上级) {
+  const s = String(上级 || '').trim();
+  if (/^F-\d+$/.test(s)) return { 特性: s };
+  if (/^S-\d+$/.test(s)) return { 专项: s };
+  if (/^P-\d+$/.test(s)) return { 管线: s };
+  return null;
+}
+
 // 单张起草单的 frontmatter 白名单（draftTicket 用，与 childFm 同口径、独立一份因为无父单/无同批依赖）。
 // 无父单意味着归属没得继承——管线漏写就直接进散单行（TK-115/116 案发现场），比子单路径更该带。
-function draftFm(tk, { id, 项目, 粒ID, 依赖 }) {
+function draftFm(tk, { id, 项目, 粒ID, 依赖, 归属 }) {
   return {
     id, title: tk.fm.title || '起草单', 职能: tk.fm.职能 || '程序', 产出物类型: tk.fm.产出物类型 || '代码',
     优先级: tk.fm.优先级 || 'P1', 规模: '单兵', QA: tk.fm.QA || '开', 验收方式: tk.fm.验收方式 || '委托',
@@ -325,6 +337,9 @@ function draftFm(tk, { id, 项目, 粒ID, 依赖 }) {
     // 施工令-040：粒ID 由委托方（/api/pm/draft 请求体）指定，不由起草模型自填——
     // 它是台账与工单池的对账钥匙，让模型猜一个等于让账目自己长出来。
     ...(粒ID ? { 粒ID: String(粒ID) } : {}),
+    // 归属注入（2026-08-26 假 100% 案）：同 依赖/粒ID——排程台账是归属的事实源，
+    // 放在模型自填（上方 tk.fm.管线）之后＝注入盖过自填。
+    ...(归属 || {}),
   };
 }
 
@@ -725,7 +740,7 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
     const tk = tickets[0];
     const 粒ID = ((opts || {}).粒ID) || null;
     // P0-7：委托方（/api/pm/draft）解析好的依赖单号串，直落 fm——不依赖模型转述。
-    const fm = draftFm(tk, { id: nid, 项目, 粒ID, 依赖: ((opts || {}).依赖) || null });
+    const fm = draftFm(tk, { id: nid, 项目, 粒ID, 依赖: ((opts || {}).依赖) || null, 归属: ((opts || {}).归属) || null });
     const gate = 起草依赖闸(root, { id: nid, fm, body: tk.body });
     if (!gate.ok) return cb(gate);
     const 记 = 校准落fm(root, nid, fm, 校.表); // H101 机器兜底：落盘前复核估值
@@ -750,5 +765,5 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
-module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, schedulePlan, replanReview, parse复判, buildCutPrompt, buildDraftPrompt,
+module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, schedulePlan, replanReview, parse复判, 归属自上级, draftFm, buildCutPrompt, buildDraftPrompt,
   parseTickets, parse拒切, childFm, draftFm, 起草依赖闸, getWorking, 历史样本, 备校准, 校准落fm, 容器, 前缀Of, 下一号 };

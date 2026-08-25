@@ -25,6 +25,7 @@ const eventarchive = require('./eventarchive');
 const running = new Map();
 let loopTimer = null;
 let lastTick = null;
+let 滞留拒签 = ''; // 派发滞留 journal 去重签（2026-08-26 TK-201 案：15 秒一拍不去重就是一夜刷屏）
 
 const busyTickets = () => new Set([...running.values()].map((e) => e.id));
 function isOn(root) { return !!state.read(root).执行器?.运行; }
@@ -599,7 +600,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
         // 那两处会用各自的原因覆盖；在此之前详情页读到的就是这条真原因，不用 grep 流水猜。
         // H108：原 在途→池 改 在途→待派；撤放行=原地 fm.放行=false（放行已降为标记，项管重放行才可再派）。
         store.move(root, t.id, '在途', '待派', (fm) => {
-          delete fm.主办; delete fm.领单时间; fm.放行 = false; fm.评估回呈轮 = 轮;
+          delete fm.主办; delete fm.领单时间; delete fm.执行池; fm.放行 = false; fm.评估回呈轮 = 轮; // 运行章随会话销毁（2026-08-26 TK-201 案）
           fm.上呈原因 = `评估回呈第 ${轮} 轮：执行会话领单评估判定做不了，回待派候项管裁决（H61）`;
         }, new Date().toISOString());
         journal.append(root, `评估回呈 ${t.id}（第 ${轮} 轮）：执行会话判定做不了，回待派候项管裁决（H61）`);
@@ -958,7 +959,15 @@ async function tick(root, cfg, opts = {}) {
         if (pj && busyProjects.has(pj.name)) { result.拒因.push(`${r2.id} 挂起：项目 ${pj.name} 编辑器锁关（制作人验收中）`); return false; }
         return true;
       });
-      const picks = dispatch.pickNext(cfg, ready, runningByPool, gatesInfo2, ledger.并发上限);
+      // 派发滞留出声（2026-08-26 TK-201 案）：routePool 死局（钉池撞冻结/池序全冻）从此有 拒因，
+      // UI 拒因每拍都给，journal 只在滞留面变化时记一条——静默滞留和刷屏两个坑都堵。
+      const 派拒 = [];
+      const picks = dispatch.pickNext(cfg, ready, runningByPool, gatesInfo2, ledger.并发上限, 派拒);
+      if (派拒.length) {
+        for (const x of 派拒) result.拒因.push(x);
+        const 签 = 派拒.join('|');
+        if (签 !== 滞留拒签) { 滞留拒签 = 签; journal.append(root, `派发滞留 ${派拒.length} 项：${派拒.join('；')}`); }
+      } else 滞留拒签 = '';
       for (const p of picks) {
         const t0 = store.find(root, p.id);
         if (!t0 || !['已排期', '待派', '待重派'].includes(t0.state)) continue; // H108：待投/池并入 待派；待重派=重投/复活回队；H116：已排期=排期到点的主派发态（readySet 同盘三态）
