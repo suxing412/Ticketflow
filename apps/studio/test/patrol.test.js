@@ -1,4 +1,4 @@
-// patrol.test.js — 巡检零派发告警（H81）：就绪有单 + 连续零派发零执行 → 呼叫信箱告警
+// patrol.test.js — 巡检零派发告警（H81）：就绪有单 + 连续零派发零执行 → 呼叫队列告警
 // 案源 2026-08-06：换装后暂停闸漏开，四张放行单滞留 9.5 小时零派发零告警。
 const assert = require('node:assert');
 const patrol = require('../lib/pm/patrol');
@@ -11,7 +11,7 @@ console.log('patrol 巡检零派发告警测试（H81）');
 const CFG = { 执行器: { 派发制: true } };
 const 告警数 = (root) => inbox.list(root, 200).filter((e) => e.类型 === '零派发').length;
 
-t('就绪有单 + 连续两个周期零派发零执行 → 信箱告警（含滞留单号）', () => {
+t('就绪有单 + 连续两个周期零派发零执行 → 呼叫队列告警（含滞留单号）', () => {
   const root = makeRoot();
   seed(root, '待派', { id: 'Z-1', 职能: '程序', 放行: true });
   seed(root, '待派', { id: 'Z-2', 职能: '策划', 放行: true });
@@ -25,7 +25,7 @@ t('就绪有单 + 连续两个周期零派发零执行 → 信箱告警（含滞
   assert.ok(r2.告警, '第二个周期报警');
   assert.ok(r2.告警.includes('Z-1') && r2.告警.includes('Z-2'), '告警含滞留单号清单');
   const 信 = inbox.list(root, 50).filter((e) => e.类型 === '零派发');
-  assert.equal(信.length, 1, '呼叫信箱落一条');
+  assert.equal(信.length, 1, '呼叫队列落一条');
   assert.equal(信[0].级别, '急');
   assert.ok(ledger.events(root, 50).some((e) => e.类型 === '零派发'), '台账留痕');
 });
@@ -85,7 +85,7 @@ const 会话 = (id, tail) => ({ id, kind: '执行', tail });
 const T0 = Date.parse('2026-08-06T10:00:00.000Z');
 const 分 = (n) => T0 + n * 60000;
 
-t('曾有打点 + 最后打点 >20 分钟未前进 + tail 无新输出 → 信箱普通级一条', () => {
+t('曾有打点 + 最后打点 >20 分钟未前进 + tail 无新输出 → 呼叫队列普通级一条', () => {
   const root = makeRoot();
   patrol.重置(root);
   const 尾 = 'building… [进度 2/7 骨架搭好]';
@@ -149,7 +149,7 @@ console.log('patrol 零输出看门狗测试（施工令-010）');
 const 零输出数 = (root) => inbox.list(root, 200).filter((e) => e.类型 === '零输出').length;
 const 执session = (id, o = {}) => ({ id, kind: '执行', 池: o.池 || 'codex', startedAt: new Date(T0).toISOString(), tail: o.tail || '', 收字节: o.收字节 || 0 });
 
-t('零输出超时 → 信箱急件一条，含单号 / 池 / 已历时', () => {
+t('零输出超时 → 呼叫队列急件一条，含单号 / 池 / 已历时', () => {
   const root = makeRoot();
   patrol.重置(root);
   const r0 = patrol.零输出(root, CFG, { 执行中: [执session('Z-1')], now: 分(7) });

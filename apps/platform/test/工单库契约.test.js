@@ -234,6 +234,66 @@ t('list 可按状态过滤', () => {
   assert.ok(完成.some((x) => x.id === 'T-1'));
 });
 
+t('挂起字段保真：状态迁移后字段逐字等值，未知键相对顺序不变', () => {
+  const id = 'S-keep';
+  const fm = {
+    id, title: '保真样例', 未知前: { keep: ['a', 'b'] },
+    挂起: { 状态: '挂起', 原因: '等待上游裁决', 开始时间: '2026-08-25T01:02:03.000Z', 操作者: '制作人' },
+    未知后: '不可丢失', 未知末: { flag: true },
+  };
+  const 源 = 库.工单路径(沙盒, '草稿', id);
+  fs.writeFileSync(源, 库.序列化(fm, '正文'), 'utf8');
+  const 挂起原文 = JSON.stringify(库.解析(源).fm.挂起);
+  assert.equal(库.move(沙盒, id, '草稿', '待投').ok, true);
+  const 迁后 = 库.find(沙盒, id);
+  assert.equal(JSON.stringify(迁后.fm.挂起), 挂起原文, '挂起字段必须逐字等值');
+  const 键 = Object.keys(迁后.fm);
+  assert.ok(键.indexOf('未知前') < 键.indexOf('挂起') && 键.indexOf('挂起') < 键.indexOf('未知后') && 键.indexOf('未知后') < 键.indexOf('未知末'),
+    '未知字段相对顺序必须透传');
+});
+
+t('挂起字段保真：原地写回（看板/批量/归档共用入口）不触碰挂起键', () => {
+  const 前 = 库.find(沙盒, 'S-keep');
+  const 原 = JSON.stringify(前.fm.挂起);
+  const r = 库.update(沙盒, 'S-keep', (fm) => { fm.看板标记 = '已阅'; });
+  assert.equal(r.ok, true);
+  const 后 = 库.find(沙盒, 'S-keep');
+  assert.equal(JSON.stringify(后.fm.挂起), 原);
+  assert.equal(后.fm.看板标记, '已阅');
+});
+
+t('挂起字段只能由显式动作改写：通用 update 不得删除或覆盖', () => {
+  const r = 库.update(沙盒, 'S-keep', (fm) => { delete fm.挂起; });
+  assert.equal(r.ok, false);
+  assert.ok(/显式/.test(r.error));
+  assert.ok(库.find(沙盒, 'S-keep').fm.挂起, '被拒后原字段不得丢失');
+  assert.equal(库.create(沙盒, 'S-preload', { id: 'S-preload', 挂起: { 状态: '挂起' } }, '' ).ok, false,
+    '建单不得绕过挂起动作预置字段');
+});
+
+t('显式挂起/复工：只改挂起键，复工后清除且状态不隐式迁移', () => {
+  assert.equal(库.create(沙盒, 'S-action', { id: 'S-action', title: '动作样例', 未知键: '保留' }, '正文').ok, true);
+  const 挂 = 库.挂起(沙盒, 'S-action', { 原因: '等待外部依赖', 操作者: '制作人', 到期时间: '2026-08-26T00:00:00.000Z' });
+  assert.equal(挂.ok, true);
+  const 中 = 库.find(沙盒, 'S-action');
+  assert.equal(中.state, '草稿', '挂起不改变状态集合');
+  assert.equal(中.fm.挂起.原因, '等待外部依赖');
+  assert.equal(中.fm.未知键, '保留');
+  assert.equal(库.复工(沙盒, 'S-action').ok, true);
+  const 后 = 库.find(沙盒, 'S-action');
+  assert.equal(后.state, '草稿');
+  assert.equal(后.fm.挂起, undefined, '复工是唯一清除时机');
+  assert.equal(后.fm.未知键, '保留');
+});
+
+t('挂起字段保真：执行器状态迁移入口不清除有效挂起', () => {
+  const r = 库.move(沙盒, 'S-keep', '待投', '在途', (fm) => { fm.派单时间 = '2026-08-25T02:00:00.000Z'; });
+  assert.equal(r.ok, true);
+  const 后 = 库.find(沙盒, 'S-keep');
+  assert.equal(后.fm.挂起.原因, '等待上游裁决');
+  assert.equal(后.fm.派单时间, '2026-08-25T02:00:00.000Z');
+});
+
 // ---- plan.js 注入契约 ----
 t('本库满足 plan.js 的注入要求（find/create/move/update 四件齐备）', () => {
   const 计划 = require(path.join(平台根, 'lib', 'orchestration', 'plan.js'));

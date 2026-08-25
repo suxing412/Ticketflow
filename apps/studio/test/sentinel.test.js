@@ -31,7 +31,7 @@ const { makeRoot, seed, CFG } = require('./helper');
 const store = require('../lib/core/store');
 const sentinel = require('../lib/sentinel');
 const dispatch = require('../lib/pm/dispatch');
-const pool = require('../lib/pool');
+const gates = require('../lib/gates');
 const inbox = require('../lib/inbox');
 // 额度桩（坑档案「真实额度渗入测试」2026-08-05：判官类外部查询在套件顶部一律 mock；
 // 同 test/pool.test.js:9-10、test/gates.test.js:16 的手法）。
@@ -103,7 +103,7 @@ t('熔断即发急件 + 落 journal（急件带单号，摘要说得清怎么恢
   assert.ok(log.includes('Q20 同号双态'));
 });
 
-t('同一组冲突只喊一次：15 秒一拍的派发循环不许把信箱刷爆', () => {
+t('同一组冲突只喊一次：15 秒一拍的派发循环不许把呼叫队列刷爆', () => {
   const root = makeRoot();
   造双态(root, 'T-5', '在途', '完成');
   for (let i = 0; i < 5; i++) sentinel.熔断(root);
@@ -134,14 +134,11 @@ t('熔断堵派发制：就绪队列直接清空——哪怕单子已放行、�
   assert.deepEqual(dispatch.readySet(root, new Set()), [], '同号双态时一张都不许派');
 });
 
-t('熔断堵拉取制：claim 直接拒领并说明原因（派发制堵了不能让池里还能捞）', async () => {
+t('熔断阻止派发：就绪盘点直接为空（同号双态不得进入派发链）', async () => {
   const root = makeRoot();
   seed(root, '待派', { id: 'T-1a', 职能: '策划', 放行: true });
   造双态(root, 'T-1b', '在途', '完成');
-  const r = await pool.claim(root, CFG, '策划-A');
-  assert.equal(r.ok, false);
-  assert.equal(r.熔断, true);
-  assert.ok(r.error.includes('T-1b@在途+完成'));
+  assert.deepEqual(dispatch.readySet(root, new Set()), []);
 });
 
 t('删掉多余那份即自动恢复派发（人工修完不必重启值守）', () => {
@@ -164,14 +161,13 @@ t('哨兵扫不动不误熔断：根本不存在的仓返回不熔断，而不�
 // 「本套不外呼」是那条早返回的副作用，不是纪律。这一例把闸走完：哨兵不熔断 → canPull →
 // gates.poolLock → quota.getRateLimits/getClaudeUsage。桩子在，闸 fail-open，单领得到；
 // 桩子一撤，走的就是 execFile('curl', … api.anthropic.com) + spawn('codex') + 读真实凭据。
-t('非熔断态 claim 把额度闸走完：领得到单（这一例才是让 quota 桩真正上场的那一例）', async () => {
+t('非熔断态派发决策读取额度闸：可选择就绪单（quota 桩真正上场）', async () => {
   const root = makeRoot();
   seed(root, '待派', { id: 'Q-1', 职能: '策划', 优先级: 'P1', 放行: true });
   assert.equal(sentinel.熔断(root).熔断, false, '前置：这一例必须是非熔断态，否则 canPull 根本跑不到');
-  const r = await pool.claim(root, CFG, '策划-A');
-  assert.equal(r.ok, true, '额度桩返 null → 闸 fail-open → 该领得到：' + JSON.stringify(r));
-  assert.equal(r.id, 'Q-1');
-  assert.ok(store.ticketPath(root, '在途', 'Q-1') && fs.existsSync(store.ticketPath(root, '在途', 'Q-1')), '单子真的落到在途目录');
+  const locks = await gates.allLocks(CFG);
+  const picks = dispatch.pickNext(CFG, dispatch.readySet(root, new Set()), {}, locks, { claude: 1, codex: 1 });
+  assert.deepEqual(picks.map((p) => p.id), ['Q-1'], '额度桩返 null → 门闸 fail-open → 该单进入派发选择：' + JSON.stringify(picks));
 });
 
 // ── 收口：全程零真实外呼 ────────────────────────────────────────────

@@ -25,7 +25,7 @@ console.log('巡检拍测试');
 function 台(root, opts = {}) {
   const 炸 = new Set(opts.炸 || []);
   const 计 = { 在途扫描: 0, 巡检记账: 0, 巡检告警: 0, 零派发看门狗: 0, 打点停滞巡检: 0, 零输出看门狗: 0, 'OAuth 哨兵': 0, 池衡巡检: 0 };
-  const 痕 = []; const 信箱 = [];
+  const 痕 = []; const 告警 = [];
   const 关 = (名, 值) => { 计[名]++; if (炸.has(名)) throw new Error(名 + '故意炸'); return 值; };
   const deps = {
     journal: { append: (_r, s) => 痕.push(s) },
@@ -45,7 +45,7 @@ function 台(root, opts = {}) {
     },
     oauth: { 哨兵: async () => 关('OAuth 哨兵') },
     wake: { 池衡巡检: async () => 关('池衡巡检') },
-    inbox: { post: (_r, 级, 题, 摘) => 信箱.push({ 级, 题, 摘 }) },
+    inbox: { post: (_r, 级, 题, 摘) => 告警.push({ 级, 题, 摘 }) },
     // state 走真盘：G16 消费端要从 .studio-state.json 里读回来，注内存桩就把两端的接线断了
     state: require('../lib/core/state'),
     now: () => opts.现在 || Date.parse('2026-08-22T10:00:00Z'),
@@ -56,7 +56,7 @@ function 台(root, opts = {}) {
     const 原 = deps.inbox.post;
     deps.inbox.post = (r, 级, 题, 摘) => { if (题 === '巡检异常') { 计.巡检告警++; throw new Error('巡检告警故意炸'); } return 原(r, 级, 题, 摘); };
   }
-  return { 拍: 造巡检拍(() => root, () => (opts.cfg || {}), { deps }), 计, 痕, 信箱, 记账参数 };
+  return { 拍: 造巡检拍(() => root, () => (opts.cfg || {}), { deps }), 计, 痕, 告警, 记账参数 };
 }
 
 t('全绿一拍：七只狗全跑到，本拍全好，state 不留异常账', () => {
@@ -103,7 +103,7 @@ t('在途扫描能扫出异常并告警；告警那只炸了也不拖死后面',
   const 好 = 台(root, { 在途: 单 });
   好.拍();
   assert.deepEqual(好.记账参数[0], { 在途: 1, 异常: 1, 在途按池: { 未知: 1 }, 队列长: 0 }, '在途 1 张、无执行会话即 1 条异常——记账数要真是扫出来的');
-  assert.ok(好.信箱.find((m) => m.题 === '巡检异常' && /TK-1 在途但无执行会话/.test(m.摘)), '异常要进信箱');
+  assert.ok(好.告警.find((m) => m.题 === '巡检异常' && /TK-1 在途但无执行会话/.test(m.摘)), '异常要进入呼叫队列');
 
   const 坏 = 台(root, { 在途: 单, 炸: ['巡检告警'] });
   const r = 坏.拍();
@@ -164,7 +164,7 @@ t('#28 生产端：连炸三拍才立债，第三拍发急件，且消费端 G16
 
   s.拍();
   assert.equal(st.read(root).巡检异常拍, 3, '第三拍：连炸计数到位');
-  const 急 = s.信箱.find((m) => m.级 === '急' && m.题 === '巡检连炸');
+  const 急 = s.告警.find((m) => m.级 === '急' && m.题 === '巡检连炸');
   assert.ok(急, '三拍必须发急件——坏了没人知道正是本条要治的病');
   assert.match(急.摘, /连续 3 拍/);
   const 债 = G16(root);
@@ -174,7 +174,7 @@ t('#28 生产端：连炸三拍才立债，第三拍发急件，且消费端 G16
 
   s.拍();
   assert.equal(st.read(root).巡检异常拍, 4, '还在炸就继续累加');
-  assert.equal(s.信箱.filter((m) => m.题 === '巡检连炸').length, 1, '急件只在恰好第三拍发一封，不每拍刷屏');
+  assert.equal(s.告警.filter((m) => m.题 === '巡检连炸').length, 1, '急件只在恰好第三拍发一封，不每拍刷屏');
 });
 
 t('#28 生产端：好了即清零，债当场消失', () => {

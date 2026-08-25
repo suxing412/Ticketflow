@@ -515,6 +515,31 @@ const 服务 = http.createServer((req, res) => {
       });
     }
 
+    // 挂起/复工是 frontmatter.挂起 的唯一写口；不改状态集合，不由普通迁移暗中清除。
+    const 挂起 = url路径.match(/^\/api\/tickets\/([^/]+)\/suspend$/);
+    if (挂起 && req.method === 'POST') {
+      const id = decodeURIComponent(挂起[1]);
+      return 收体(req, 64 * 1024, (体) => {
+        try {
+          const r = 工单库.挂起(根, id, {
+            原因: 体 && (体.原因 || 体.reason),
+            操作者: 体 && (体.操作者 || 体.by),
+            到期时间: 体 && (体.到期时间 || 体.until),
+          });
+          return 发JSON(res, r.ok ? 200 : 409, r.ok ? { ok: true, ...r } : { ok: false, error: r.error });
+        } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+      });
+    }
+
+    const 复工 = url路径.match(/^\/api\/tickets\/([^/]+)\/resume$/);
+    if (复工 && req.method === 'POST') {
+      const id = decodeURIComponent(复工[1]);
+      try {
+        const r = 工单库.复工(根, id);
+        return 发JSON(res, r.ok ? 200 : 409, r.ok ? { ok: true, ...r } : { ok: false, error: r.error });
+      } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
+    }
+
     // 运行历史必须在「单张详情」**之前**判——不然会被块尾的 404 吃掉。
     // 全局战绩看不出「这一张跑过几轮、每轮什么结果」，而判不过会回待投重跑，
     // 一张单跑三四轮是常态：不按单归集，就没法回答「它为什么还没完成」。

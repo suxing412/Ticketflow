@@ -335,6 +335,11 @@
         if (s) {
           // 越线灰显不标红（重判前不算超期事故）；不越线才按服务端判定挂延期/超期记号
           const 红 = 越 ? '' : `${j && j.超期 ? ' gt2-od' : ''}${j && j.延期 ? ' gt2-late' : ''}`;
+          // 红段只消费服务端给出的「超期 + 超期天」：N 天直接换成固定小时轴的 N*24*HW 像素，
+          // 不从日期重算。真讫保留了超长条截断前的计划终点，红段才不会接在截断影子后误报。
+          const 超期天 = Number(j && j.超期天);
+          const 出红段 = !越 && !终态.includes(g.状态) && !!(j && j.超期)
+            && Number.isFinite(超期天) && 超期天 > 0;
           // 越线条带 data-x：点击分流到表态口（#19，普通条仍走重排）
           // 可拖（#10）⇔ 非只读（#11 最小实现：停表或终态即只读——不出手柄、拖不启动，悬停详情照常）
           // 且非超长（DS 终审 #2）：>24h 截断条是异常态，图上拖的是截断影子、所见非所提交——
@@ -344,6 +349,9 @@
               data-tid="${esc(n.键)}" data-act="bar" data-g="${esc(g.粒ID)}"${越 ? ' data-x="1"' : ''} tabindex="0" role="button"
               aria-label="${esc((g.题 || '') + (越 ? '：越线待重判，点击表态（派发/重排二选一）' : '：点击改排期'))}" style="left:${px(X(s.起, 窗))};width:${条宽(s)}">${拖ok
                 ? '<b class="gt2h l" title="拉起点：改计划开始（15 分钟吸附）"></b><b class="gt2h r" title="拉讫点：改计划完成（15 分钟吸附）"></b>' : ''}</i>`;
+          if (出红段) 条 += `<i class="gt2overdue" data-g="${esc(g.粒ID)}" role="img"
+              aria-label="${esc(`超期 ${超期天} 天（服务端判定）`)}" title="${esc(`超期 ${超期天} 天（服务端判定）`)}"
+              style="left:${px(X(s.真讫, 窗))};width:${px(超期天 * 24 * HW)}"></i>`;
           const 尾 = px(X(s.讫, 窗) + 4);
           // 徽标（越线＞判定，判定只读服务端下发——无判定不造字）；
           // 待重判标记可点（#19/DS-3）：处置不出甘特页，点它直接弹表态框
@@ -467,7 +475,11 @@
     const st = 建状态(规范数据(数据, 选项), null, 选项 && 选项.视口 && 选项.视口.宽小时);
     const v = 视口 || { 滚: 0, 高: Infinity };
     const [a, b] = 可视范围(v.滚, v.高, st.行.length);
-    return { 状态: st, 可视: [a, b], 表头: 表头HTML(st), html: st.行.slice(a, b).map((r) => 行HTML(r, st)).join('') };
+    return { 状态: st, 可视: [a, b], 表头: 表头HTML(st), 图例: 图例HTML(), html: st.行.slice(a, b).map((r) => 行HTML(r, st)).join('') };
+  }
+
+  function 图例HTML() {
+    return '<span class="gt2legend"><i class="gt2legend-overdue" aria-hidden="true"></i>红条＝超期（服务端判定）</span>';
   }
 
   /* ═══ DOM 装配与增量重绘（key→节点 Map＋行签名＝行 HTML 串，spike A 甲案）═══ */
@@ -491,6 +503,7 @@
         <span class="gt2grp"><button data-act="today" title="快捷键 T：横滚到今时线并闪一下">◎ 回到今天</button></span>
         <button class="gt2xbadge" data-act="xnext" hidden title="越线待重判计数（#19）——点击滚到下一张越线行，逐个处置">越线 0</button>
         <button class="gt2cbadge" data-act="cnext" hidden title="依赖冲突计数（#12/DS-7，服务端 边统计.冲突）——点击定位下一条冲突线，逐个处置">冲突 0</button>
+        ${图例HTML()}
         <span class="gt2note subnote">固定小时轴 ${HW}px/h · 数字键 1-4 折层 · 右键有菜单 · ⋯＝超 24h 截断（悬浮看真实区间）· 拖条身平移/拉端点改起讫（15 分钟吸附）</span>
       </div>
       <div class="gt2crumb" hidden></div>

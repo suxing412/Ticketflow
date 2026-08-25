@@ -81,7 +81,7 @@ t('阈值可配（config.凭据.临期分钟）：厂商砍寿命时改配置不
 // ---- ② 巡检哨兵：临期 / 过期 / 缺失 三分支的告警形态（自续探不成时）----
 console.log('oauth 巡检哨兵告警（要件 1）');
 
-await ta('临期 → 信箱急件一条（含一键重登配方），不挂门禁横幅', async () => {
+await ta('临期 → 呼叫队列急件一条（含一键重登配方），不挂门禁横幅', async () => {
   const root = makeRoot(); oauth.重置(root);
   const r = await 哨(root, CFG, { now: T0, 文件: 凭据(root, 12) });
   assert.equal(r.态, '临期');

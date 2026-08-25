@@ -489,7 +489,7 @@ await t('接线：机判不过 → 单留核查、不烧深检、信道有急件
   const r2 = await runner.tick(root, 两检开, { durMs: 0 });
   assert.ok(!(r2.代核 || []).includes('R-03'), '下轮也不进深检（初检未过）');
   const 信道 = require('../lib/inbox').list(root);
-  assert.ok(信道.some((x) => x.类型 === '初检不过' && x.单号 === 'R-03'), '呼叫信箱有条目：' + JSON.stringify(信道));
+  assert.ok(信道.some((x) => x.类型 === '初检不过' && x.单号 === 'R-03'), '呼叫队列有条目：' + JSON.stringify(信道));
 });
 
 await t('接线：二线LLM 开关打开 → 不走机判（回滚路留着，且此时仍要池在册）', async () => {

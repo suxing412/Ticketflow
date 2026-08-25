@@ -280,6 +280,6 @@ t('空仓首写不算退空：没有主档 ≠ 主档坏了（门闩不许把新
   const p = path.join(root, '项管台账', '台账.json');
   assert.equal(JSON.parse(fs.readFileSync(p, 'utf8')).管理费.次数, 1, '首写必须落主档');
   assert.ok(!fs.existsSync(p + '.待人裁'), '首写不是灾情，不许改道');
-  assert.ok(!fs.existsSync(path.join(root, '呼叫', 'inbox.jsonl')), '首写更不该往信箱里丢急件');
+  assert.ok(!fs.existsSync(path.join(root, '呼叫', 'inbox.jsonl')), '首写更不该往呼叫队列里丢急件');
 });
 console.log(`全部通过：${passed} 项`);

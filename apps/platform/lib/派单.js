@@ -250,6 +250,8 @@ function 依赖就绪(工单库, 根, 工单) {
 function 落单(工单库, 根, id, 派单结果) {
   const t = 工单库.find(根, id);
   if (!t) return { ok: false, error: `工单不存在：${id}` };
+  const 挂 = 工单库.挂起状态(t.fm);
+  if (挂.挂起 && !挂.已到期) return { ok: false, error: `工单已挂起：${id}（${挂.原因}）` };
   if (t.state !== '待投') {
     return { ok: false, error: `只有「待投」的工单可以派发，当前是「${t.state}」` };
   }

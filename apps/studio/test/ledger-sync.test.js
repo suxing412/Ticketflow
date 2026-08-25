@@ -1,6 +1,6 @@
 // ledger-sync.test.js — 工单台账自动对齐（H102 · 施工令-052 第 5 条）
 // 被测面：差量纯函数各分支（新单挂粒 / 返修承袭 / 状态各迁移 / 废弃口径 / 只前进不倒退 /
-// 孤粒告警）、执行器（CAS 落地 · 幂等 · 失败重试一轮 · 信箱告警）、挂拍（journal 增量去抖合并
+// 孤粒告警）、执行器（CAS 落地 · 幂等 · 失败重试一轮 · 呼叫队列告警）、挂拍（journal 增量去抖合并
 // + 5 分钟例行兜底 + 首跑全量）。
 // 纪律沿用 schedule.test：接线那一格走**真 runner.tick**，不拿 mock 冒充接线证据——
 // 挂接点挂错了而单测全绿，正是施工令-039 那类事故的温床。
@@ -169,7 +169,7 @@ const 差 = (root) => LS.差量(store.snapshot(root), S.现态(root));
   });
 
   // ---- ③ 孤粒 ----
-  await t('孤粒：粒指的单不存在 → 报异常不自动删；信箱告警按粒去重', async () => {
+  await t('孤粒：粒指的单不存在 → 报异常不自动删；呼叫队列告警按粒去重', async () => {
     const root = makeRoot();
     S.登记(root, [{ 批: '批A', 序: 1, 题: '幽灵粒', 来源: 's', 状态: '已成单', 单号: 'TK-777' }], '总监');
     const { 动作, 异常 } = 差(root);
@@ -183,7 +183,7 @@ const 差 = (root) => LS.差量(store.snapshot(root), S.现态(root));
     assert.equal(S.现态(root).length, 1, '报异常归报异常，粒一条都不许少');
     assert.equal(inbox.list(root).filter((e) => e.类型 === '台账孤粒').length, 1);
     const r2 = LS.同步(root, { 触发: '例行' });
-    assert.deepEqual(r2.新报孤粒, [], '同一条孤粒不重复告警（否则 5 分钟一拍能把信箱淹了）');
+    assert.deepEqual(r2.新报孤粒, [], '同一条孤粒不重复告警（否则 5 分钟一拍能把呼叫队列淹了）');
     assert.equal(inbox.list(root).filter((e) => e.类型 === '台账孤粒').length, 1);
   });
 
@@ -212,7 +212,7 @@ const 差 = (root) => LS.差量(store.snapshot(root), S.现态(root));
     assert.equal(pmLedger.events(root).filter((e) => e.类型 === '台账对齐').pop().动作数, 0);
   });
 
-  await t('执行器：失败重试一轮，仍败则入信箱告警（其余动作照常落，不整批陪葬）', async () => {
+  await t('执行器：失败重试一轮，仍败则入呼叫队列告警（其余动作照常落，不整批陪葬）', async () => {
     const root = makeRoot();
     铺专项(root);
     seed(root, '在途', { id: 'TK-156', title: '好单', 父单: 'TK-150' });

@@ -82,7 +82,7 @@ const 流水 = (root) => {
     assert.equal(store.find(root2, 'C-EX2').state, '核查', '仅保留不免检 → 照走核查简检（保留的例外在验收闸，H110）');
   });
 
-  await t('H108 链·集成（拉取制一把 tick）：待派(放行)→在途→初检→核查→完成 同轮走通', async () => {
+  await t('H108 链·集成（派发制一把 tick）：待派(放行)→在途→初检→核查→完成 同轮走通', async () => {
     const root = makeRoot(); on(root);
     seed(root, '待派', { id: 'P-02', 职能: '程序', QA: '开', 验收方式: '委托', 放行: true });
     const r = await runner.tick(root, CFG, UN);
@@ -94,7 +94,7 @@ const 流水 = (root) => {
     assert.equal(cur.fm.质检人, 'QA'); // H85 去岗位化：判官会话标签=职能名
     assert.equal(cur.fm.核查.结论, '通过');
     const j = 流水(root);
-    assert.match(j, /领单 P-02（待派→在途/, '领单边改道 待派→在途');
+    assert.match(j, /派发 P-02（待派→在途/, '派发边改道 待派→在途');
     assert.match(j, /交产出 P-02（在途→初检/, '执行完改道 在途→初检');
     assert.match(j, /QA 通过 P-02（初检→核查）/);
     assert.match(j, /核查过 P-02（核查→完成/);
@@ -190,9 +190,9 @@ const 流水 = (root) => {
     const root = makeRoot(); on(root);
     seed(root, '待派', { id: 'P-90', 职能: '程序', QA: '开', 放行: true });
     const r = await runner.tick(root, 新, UN);
-    assert.deepEqual(r.领单, ['P-90'], '编制去岗位化后拉取制按职能领单（id 即职能名）');
+    assert.deepEqual(r.领单, ['P-90'], '编制去岗位化后派发制按职能选择（id 即职能名）');
     const cur = store.find(root, 'P-90');
-    assert.equal(cur.fm.主办, '程序', '主办=职能名，不再有 -A 岗位号');
+    assert.equal(cur.fm.主办, '程序·P-90', '派发执行位由职能与工单号组成，不再有 -A 岗位号');
     assert.equal(cur.fm.执行池, 'codex', '池序首位即默认落点');
     assert.equal(cur.fm.质检人, 'QA');
     assert.equal(cur.state, '完成', '同轮走完 初检→核查→完成');
@@ -268,7 +268,7 @@ const 流水 = (root) => {
     const r = await runner.tick(root, CFG, UN);
     assert.ok(r.领单.includes('P-RD1'), '待重派单可领');
     assert.equal(store.find(root, 'P-RD1').state, '完成');
-    assert.match(流水(root), /领单 P-RD1（待重派→在途/, '流水如实记来路');
+    assert.match(流水(root), /派发 P-RD1（待重派→在途/, '流水如实记来路');
   });
 
   await t('暂停总闸合上 → 不领单', async () => {
@@ -661,7 +661,7 @@ const 流水 = (root) => {
     assert.ok((r2.执行 || []).includes('H-01'), '撤旗后原位复活可被正常调度');
   });
 
-  await t('挂起·迁移期 fm 旗②：领单（拉取制 claim）跳过带旗的待派单', async () => {
+  await t('挂起·迁移期 fm 旗②：派发制跳过带旗的待派单', async () => {
     const root = makeRoot(); on(root);
     seed(root, '待派', { id: 'H-02', 职能: '策划', 放行: true, 挂起: { 操作者: '制作人', 时间: 'x' } });
     const r = await runner.tick(root, CFG, UN);
@@ -824,7 +824,7 @@ const 流水 = (root) => {
     const j = 流水(root);
     assert.ok(/核查过·候引擎实证 E-01/.test(j), j.slice(-400));
     assert.ok(!/核查通过 E-01 → 完成/.test(j), '没有偷偷放行');
-    assert.ok(require('../lib/inbox').list(root).some((x) => x.类型 === '候引擎实证' && x.单号 === 'E-01'), '呼叫信箱有候检条目');
+    assert.ok(require('../lib/inbox').list(root).some((x) => x.类型 === '候引擎实证' && x.单号 === 'E-01'), '呼叫队列有候检条目');
   });
 
   await t('放行：候检单走「实证放行」核查→完成；停闸期间不被再次核查', async () => {

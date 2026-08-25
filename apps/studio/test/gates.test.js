@@ -7,7 +7,7 @@ const path = require('path');
 const gates = require('../lib/gates');
 const state = require('../lib/core/state');
 const quota = require('../lib/quota');
-const pool = require('../lib/pool');
+const dispatch = require('../lib/pm/dispatch');
 const { makeRoot, seed, CFG } = require('./helper');
 
 let passed = 0; const tests = [];
@@ -68,9 +68,8 @@ t('额度锁拦领单：claude 池锁死时 claude 岗领不到单', async () =>
   quota.getRateLimits = async () => null;
   quota.getClaudeUsage = async () => ({ fiveHour: { utilization: 95, resets_at: '2026-07-08T05:50:00Z' } });
   seed(root, '待派', { id: 'A', 职能: '策划', 放行: true }); // H108：池并入待派，放行=fm 标记
-  const r = await pool.claim(root, CFG, '策划-A');
-  assert.equal(r.ok, false);
-  assert.ok(r.gated);
+  const locks = await gates.allLocks(CFG);
+  assert.equal(dispatch.poolFrozen(CFG, locks, 'claude'), true, '派发决策认定 claude 池冻结');
   assert.equal(require('../lib/core/store').find(root, 'A').state, '待派'); // 没被领走
 });
 

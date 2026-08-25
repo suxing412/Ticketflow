@@ -167,11 +167,54 @@ function 落位(平台根, 值) {
 // 远小于「手搓 YAML 静默损坏嵌套字段」的风险。这个取舍是有意的。
 const 分隔 = '---';
 
+// frontmatter 是工单协议，不是实现白名单。写回必须从读入对象完整复制，
+// 只让动作补丁改动自己的键；未知键及其相对顺序一律透传。
+function 保全字段(fm) {
+  const 出 = {};
+  for (const [k, v] of Object.entries(fm || {})) if (v !== undefined) 出[k] = v;
+  return 出;
+}
+
 function 序列化(fm, 正文) {
-  const 净 = {};
   // 剔 undefined：JSON.stringify 会把它整个吃掉，留着只会让字段悄无声息地消失
-  for (const [k, v] of Object.entries(fm || {})) if (v !== undefined) 净[k] = v;
+  const 净 = 保全字段(fm);
   return `${分隔}\n${JSON.stringify(净, null, 2)}\n${分隔}\n\n${String(正文 || '')}`;
+}
+
+// 挂起协议（字段规范由动作与巡检共同执行）：
+// fm.挂起 ∈ 缺失 | { 状态:'挂起', 原因:非空字符串, 开始时间:ISO8601,
+//                     操作者?:字符串, 到期时间?:ISO8601 }。
+// 只有 挂起()/复工() 可写/清该键；状态迁移与其它 update 一律只透传。
+function 挂起状态(fm, 现在 = Date.now()) {
+  const 原 = fm && fm.挂起;
+  if (!原) return { 挂起: false, 已到期: false };
+  // 存量 true/非对象值按仍挂起的旧格式读取，避免一次升级把旧单重新计时。
+  const 值 = 原 && typeof 原 === 'object' && !Array.isArray(原) ? 原 : {};
+  const 到期时间 = String(值.到期时间 || '');
+  const 到期毫秒 = Date.parse(到期时间);
+  const 已到期 = Number.isFinite(到期毫秒) && 到期毫秒 <= Number(现在);
+  return {
+    挂起: true,
+    已到期,
+    原因: String(值.原因 || (原 === true ? '旧格式未载明原因' : '未载明原因')),
+    开始时间: String(值.开始时间 || ''),
+    操作者: String(值.操作者 || ''),
+    到期时间: Number.isFinite(到期毫秒) ? 到期时间 : '',
+    旧格式: !(原 && typeof 原 === 'object' && !Array.isArray(原) && 原.状态 === '挂起'),
+  };
+}
+
+function 同值(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+
+function 组织写回(fm, mutator, { 允许挂起变更 = false } = {}) {
+  const 原挂起 = fm && fm.挂起;
+  const 新fm = 保全字段(fm);
+  新fm.更新时间 = new Date().toISOString();
+  const 结果 = typeof mutator === 'function' ? mutator(新fm) : null;
+  if (!允许挂起变更 && !同值(原挂起, 新fm.挂起)) {
+    return { ok: false, error: '挂起字段只能由显式「挂起/复工」动作写入或清除' };
+  }
+  return { ok: true, fm: 新fm, 结果 };
 }
 
 function 解析(文件) {
@@ -224,6 +267,9 @@ function list(根, 状态) {
 function create(根, id, fm, 正文) {
   const 坏 = 校验编号(id);
   if (坏) return { ok: false, error: 坏 };
+  if (fm && Object.prototype.hasOwnProperty.call(fm, '挂起')) {
+    return { ok: false, error: '挂起字段只能由显式「挂起」动作写入，建单不得预置' };
+  }
   if (find(根, id)) return { ok: false, error: `编号已存在：${id}` };
   const 目标 = 工单路径(根, '草稿', id);
   const 闸 = 收窄(根, 目标);
@@ -252,28 +298,56 @@ function move(根, id, from, to, mutator) {
   if (fs.existsSync(的.路径)) return { ok: false, error: `目标已存在同名单：${to}/${id}` };
 
   const { fm, 正文 } = 解析(源.路径);
-  const 新fm = { ...fm, 更新时间: new Date().toISOString() };
-  if (typeof mutator === 'function') mutator(新fm);
+  const 写回 = 组织写回(fm, mutator);
+  if (!写回.ok) return 写回;
   fs.mkdirSync(状态目录(根, to), { recursive: true });
-  fs.writeFileSync(源.路径, 序列化(新fm, 正文), 'utf8');
+  fs.writeFileSync(源.路径, 序列化(写回.fm, 正文), 'utf8');
   fs.renameSync(源.路径, 的.路径);   // 同盘改名，原子
   return { ok: true, id, from, to, file: 的.路径 };
 }
 
-// mutator(fm, 工单) 可改 frontmatter，返回 { body } 则一并换正文。
-function update(根, id, mutator) {
+// 写回唯一内核：update、显式挂起与复工共用。未授权调用无法改变 fm.挂起。
+function 写回(根, id, mutator, opts) {
   const t = find(根, id);
   if (!t) return { ok: false, error: `工单不存在：${id}` };
-  const fm = { ...t.fm, 更新时间: new Date().toISOString() };
+  const 结果 = 组织写回(t.fm, (fm) => (typeof mutator === 'function' ? mutator(fm, t) : null), opts);
+  if (!结果.ok) return 结果;
   let 正文 = t.body;
-  const r = typeof mutator === 'function' ? mutator(fm, t) : null;
-  if (r && typeof r.body === 'string') 正文 = r.body;
-  fs.writeFileSync(t.file, 序列化(fm, 正文), 'utf8');
+  if (结果.结果 && typeof 结果.结果.body === 'string') 正文 = 结果.结果.body;
+  fs.writeFileSync(t.file, 序列化(结果.fm, 正文), 'utf8');
   return { ok: true, id, state: t.state, file: t.file };
+}
+
+// mutator(fm, 工单) 可改 frontmatter，返回 { body } 则一并换正文。
+function update(根, id, mutator) { return 写回(根, id, mutator); }
+
+function 挂起(根, id, { 原因, 操作者, 到期时间 } = {}) {
+  const t = find(根, id);
+  if (!t) return { ok: false, error: `工单不存在：${id}` };
+  if (TERMINAL.includes(t.state)) return { ok: false, error: `已归档工单不可挂起：${id}` };
+  if (挂起状态(t.fm).挂起 && !挂起状态(t.fm).已到期) return { ok: false, error: `工单已挂起：${id}` };
+  const 因 = String(原因 || '').trim();
+  if (!因) return { ok: false, error: '挂起必须提供原因' };
+  const 到期 = String(到期时间 || '').trim();
+  if (到期 && !Number.isFinite(Date.parse(到期))) return { ok: false, error: '挂起到期时间必须是可解析的 ISO8601 时间' };
+  return 写回(根, id, (fm) => {
+    fm.挂起 = {
+      状态: '挂起', 原因: 因, 开始时间: new Date().toISOString(),
+      ...(String(操作者 || '').trim() ? { 操作者: String(操作者).trim().slice(0, 80) } : {}),
+      ...(到期 ? { 到期时间: 到期 } : {}),
+    };
+  }, { 允许挂起变更: true });
+}
+
+function 复工(根, id) {
+  const t = find(根, id);
+  if (!t) return { ok: false, error: `工单不存在：${id}` };
+  if (!挂起状态(t.fm).挂起) return { ok: false, error: `工单未挂起：${id}` };
+  return 写回(根, id, (fm) => { delete fm.挂起; }, { 允许挂起变更: true });
 }
 
 module.exports = {
   STATES, TERMINAL, TRANSITIONS, isLegal,
   解析根目录, 落位, 配置文件, 校验编号, 建目录, 状态目录, 工单路径, 解析, 序列化,
-  find, list, create, move, update,
+  保全字段, 挂起状态, find, list, create, move, update, 挂起, 复工,
 };

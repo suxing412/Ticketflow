@@ -1677,6 +1677,9 @@ app.post('/api/draft', (req, res) => {
     const r = store.update(ROOT, b.id, (f) => { Object.assign(f, fm); return { body: b.body != null ? b.body : undefined }; });
     return res.json({ ...r, edited: true });
   }
+  // TK-188：新单落盘前并入未收口依赖图。真环由既有急件通道上呈，异常边只上报、不拦截。
+  const gate = require('./lib/dependency-cycle').beforePersist(ROOT, { id: b.id, fm, body: b.body });
+  if (!gate.ok) return res.status(400).json({ ok: false, error: gate.error });
   const r = store.create(ROOT, b.id, fm, b.body || '## 范围\n\n## 不要做\n\n## 验收标准\n\n## 完工要求\n');
   if (r.ok) journal.append(ROOT, `起草 ${b.id}（${fm.职能}）`);
   res.status(r.ok ? 200 : 400).json(r);

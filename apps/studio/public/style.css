@@ -1725,6 +1725,9 @@ a.gt2nm:hover, a.gt2nm:focus-visible { background:var(--sect); color:var(--accen
 /* 服务端判定记号（只画不判）：延期＝虚线描边，超期＝实线描边 */
 .gt2bar.gt2-od { outline:1.5px solid var(--danger); outline-offset:1px; }
 .gt2bar.gt2-late { outline:1.5px dashed var(--warn); outline-offset:1px; }
+.gt2overdue { position:absolute; top:7px; height:13px; border-radius:0 4px 4px 0; background:var(--danger); box-shadow:var(--shadow-sm); }
+.gt2legend { display:inline-flex; align-items:center; gap:5px; color:var(--ink3); font-size:11px; white-space:nowrap; }
+.gt2legend-overdue { display:inline-block; width:16px; height:8px; border-radius:3px; background:var(--danger); }
 /* 越线待重判：斜纹＋红点（色盲可达性升级，不再只靠灰） */
 .gt2bar.xline { background:repeating-linear-gradient(45deg, var(--chip) 0 6px, var(--sect) 6px 12px);
   border:1px solid var(--line); }

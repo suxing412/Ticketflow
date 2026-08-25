@@ -88,6 +88,32 @@ await t('① 甘特岛真按服务端判定画徽标与记号，且每个记号�
     '服务端不下发判定时前端不许自己造——两把尺是这本账最贵的病');
 });
 
+await t('①b 甘特红条只按服务端超期天数分段，四种边界态不误画', () => {
+  const ctx = 装载前端();
+  const 岛 = 装载岛(ctx);
+  const 粒 = [
+    { 粒ID: 'overdue-n', 题: '超期三天', 状态: '起草中', 计划开始: '2026-08-20T10:00', 计划完成: '2026-08-20T14:00',
+      判定: { 超期: true, 超期天: 3 } },
+    { 粒ID: 'no-verdict', 题: '无判定', 状态: '起草中', 计划开始: '2026-08-20T10:00', 计划完成: '2026-08-20T14:00' },
+    { 粒ID: 'zero-days', 题: '零天超期', 状态: '起草中', 计划开始: '2026-08-20T10:00', 计划完成: '2026-08-20T14:00',
+      判定: { 超期: false, 超期天: 0 } },
+    { 粒ID: 'completed', 题: '已完成', 状态: '完成', 计划开始: '2026-08-20T10:00', 计划完成: '2026-08-20T14:00',
+      判定: { 超期: true, 超期天: 4 } },
+  ];
+  const 试 = 岛._测.试渲染({ 管线: [], 特性: [], 专项: [], 粒, 名册: {}, 板归属: {},
+    今: '2026-08-24T12:00', 停表: false, 债: [] });
+  // 正常超期：3 天直接按 3*24*20px=1440px 画红尾段；计划原条仍是起草态，不拿红色覆盖它。
+  assert.match(试.html, /class="gt2bar draft gt2-od drag"[^>]*data-g="overdue-n"/, '正常段保持原状态色的条身');
+  assert.match(试.html, /class="gt2overdue" data-g="overdue-n"[^>]*title="超期 3 天（服务端判定）"[^>]*width:1440\.0px/, '超期 3 天应出现 1440px 红段');
+  // 无判定、0 天、已完成：全部回原条，红段为 0 个，既不造数也不产 NaN/负宽。
+  for (const id of ['no-verdict', 'zero-days', 'completed']) {
+    assert.doesNotMatch(试.html, new RegExp(`class="gt2overdue" data-g="${id}"`), `${id} 不得画红段`);
+  }
+  assert.doesNotMatch(试.html, /(?:NaN|-\d+(?:\.\d+)?)px/, '四态渲染不得产 NaN 或负数条宽');
+  assert.match(试.图例, /红条＝超期（服务端判定）/, '图例要说明红条来自服务端超期判定');
+  assert.match(试.图例, /gt2legend-overdue/, '图例红条要有可见色块主');
+});
+
 await t('② 启动页债数吃 /api/attn，逾期出数，取不到就说「读数中」', async () => {
   const 项目 = { 项目: { 注册: { TK: { 单号前缀: 'TK' }, Ticketflow: { 单号前缀: 'TF' } }, 默认: 'TK' } };
   const 板 = { states: ['待派', '完成', '待处理'],
