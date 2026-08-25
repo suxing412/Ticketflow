@@ -1647,8 +1647,9 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 /* 滚动视口＋画布：虚拟化底座（固定行高 30px，只画可视行） */
 .gt2wrap { position:relative; overflow:auto; max-height:640px; border:1px solid var(--line);
   border-radius:12px; background:var(--card); scrollbar-width:thin; }
-/* 岛专属细滚条：8px 圆拇指贴主题、轨透明（原生粗默认滚条与暗色卡面打架——2026-08-24 制作人验收所指） */
-.gt2wrap::-webkit-scrollbar { width:8px; height:8px; }
+/* 岛专属细滚条：纵向 8px 圆拇指贴主题、轨透明（2026-08-24 制作人验收所指）；
+   横滚条撤销（2026-08-25 制作人拍板）——横向平移走鼠标中键拖拽，纵滚条保留定位感 */
+.gt2wrap::-webkit-scrollbar { width:8px; height:0; }
 .gt2wrap::-webkit-scrollbar-thumb { background:var(--chip); border-radius:8px; border:2px solid transparent; background-clip:padding-box; }
 .gt2wrap::-webkit-scrollbar-thumb:hover { background:var(--ink3); background-clip:padding-box; }
 .gt2wrap::-webkit-scrollbar-track, .gt2wrap::-webkit-scrollbar-corner { background:transparent; }

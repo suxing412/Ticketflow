@@ -543,4 +543,29 @@ t('⑧ 拖拽补给：拖拽中转不可见→取消（旗清+DOM 回滚+不分�
    r3（DS 终审二轮 2026-08-24）：
    r3a 可拖判/行HTML 撤掉 !超长 排除 → ② 红（超长条手柄出/试拖启动）；
    r3b visibilitychange 处理器删掉取消分支 → ⑧ 红（转不可见后 _gt2Dragging 悬 true）；
-   r3c 离屏端点 删掉 _行窗 null 兜底 → ⑤ 红（边表清空后调离屏端点 TypeError）。 */
+   r3c 离屏端点 删掉 _行窗 null 兜底 → ⑤ 红（边表清空后调离屏端点 TypeError）。
+   r4（2026-08-25 中键平移）：中键 mousedown 分支删掉 → ⑨ 红（scrollLeft 不动、光标不变）。 */
+
+t('⑨ 中键平移：button=1 按下→grabbing→mousemove 全向平移 scroll；左键同轨迹不平移（拖条专用）', () => {
+  const 数据 = 造台账();
+  const { ctx, 容器 } = 画(数据);
+  const 根 = 容器.firstElementChild;
+  const wrap = 容器.querySelector('.gt2wrap');
+  wrap.scrollLeft = 0; wrap.scrollTop = 0;
+  const 调 = (h, ev) => { if (h) (Array.isArray(h) ? h : [h]).forEach((f) => f(ev)); }; // _听=数组、_文听=单函数，两制兼容
+  const 按 = (btn, x, y) => 调(根._听 && 根._听.mousedown, { button: btn, clientX: x, clientY: y,
+    target: wrap, preventDefault() {}, stopPropagation() {} });
+  const 动 = (x, y) => 调(ctx._文听 && ctx._文听.mousemove, { clientX: x, clientY: y, preventDefault() {} });
+  const 松 = () => 调(ctx._文听 && ctx._文听.mouseup, { preventDefault() {} });
+  按(1, 500, 400);
+  assert.equal(wrap.style.cursor, 'grabbing', '中键按下光标须变 grabbing');
+  动(380, 340);
+  assert.equal(wrap.scrollLeft, 120, '向左拖 120px → scrollLeft +120（全向平移·横）');
+  assert.equal(wrap.scrollTop, 60, '向上拖 60px → scrollTop +60（全向平移·纵）');
+  松();
+  assert.ok(!wrap.style.cursor, '松手光标还原');
+  // 左键同起手：平移不启动（左键归拖条/点击）。沙箱 removeEventListener 为空操作，
+  // 中键松手后旧 移 监听残留 _文听——故不用 scroll 断，用「按下光标不变 grabbing」断启动与否。
+  按(0, 500, 400);
+  assert.ok(!wrap.style.cursor, '左键按下不启动平移（光标不变 grabbing）——中键专属，与拖条改期零冲突');
+});

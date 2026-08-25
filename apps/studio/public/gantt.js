@@ -1007,6 +1007,28 @@
     });
     // #10 拖拽起手：条身=平移、端点手柄(.gt2h)=改起/讫；只读态（#11）在 起拖 里不启动
     岛.根el.addEventListener('mousedown', (e) => 起拖(岛, e));
+    // 中键平移（2026-08-25 制作人拍板：横滚条去掉，中键拖拽——游戏编辑器的母语，同 TK-50 镜头手感）。
+    // 全向（横+纵），左键拖条/右键菜单零冲突；preventDefault 阻 Windows 中键 autoscroll。
+    岛.根el.addEventListener('mousedown', (e) => {
+      if (e.button !== 1) return;
+      const wrap = 岛.wrap; if (!wrap) return;
+      e.preventDefault();
+      const 起 = { x: e.clientX, y: e.clientY, l: wrap.scrollLeft, t: wrap.scrollTop };
+      let 动过 = false;
+      wrap.style.cursor = 'grabbing';
+      const 移 = (ev) => {
+        const dx = ev.clientX - 起.x, dy = ev.clientY - 起.y;
+        if (Math.abs(dx) + Math.abs(dy) > 3) 动过 = true;
+        wrap.scrollLeft = 起.l - dx; wrap.scrollTop = 起.t - dy;
+      };
+      const 收 = () => {
+        document.removeEventListener('mousemove', 移); document.removeEventListener('mouseup', 收);
+        wrap.style.cursor = '';
+        if (动过) { const 拦 = (ce) => { ce.preventDefault(); ce.stopPropagation(); };
+          document.addEventListener('auxclick', 拦, { once: true, capture: true }); } // 拖过就不算中键点击（防误开树列链接）
+      };
+      document.addEventListener('mousemove', 移); document.addEventListener('mouseup', 收);
+    });
     // #12：视口尺寸一变可视窗跟着变，行与依赖线同步重绘（DS-11）。
     // 单例分发（终审 T8）：模块级只挂**一个** resize 监听，事件时经 找岛() 分发到活岛——
     // 原先每建一岛挂一个匿名闭包且无注销口，反复进出页面积攒已脱离的岛与整份台账（内存漏）；
