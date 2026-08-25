@@ -1089,6 +1089,20 @@ function viewAgentsDispatch(d, all) {
   }).join('') || '<p class="dim" style="margin:26px 0;text-align:center">当前无在跑执行者 —— 派发制下没有常备军，就绪单一到即拉起，完成即销毁。</p>';
   // 外项目：席位账号级共享，本项目语境下不列他项目的单号，但也不谎称「待命」（施工令-012）
   const judges = (d.判官 || d.审检 || []).map((j) => `<span class="pill sm ${j.忙 ? 'ok' : 'mut'}">${esc(j.id)}${j.忙 ? ' · 审 ' + esc(j.当前 || '') : (j.外项目 ? ' · 忙于他项目单' : ' · 待命')}</span>`).join(' ') || '<span class="dim">（未配置）</span>';
+  // 审检驻留队列（2026-08-26 制作人起夜案：核查里排着 3 张，席位却只写「待命」——
+  // 「没有会话在跑」和「没有活等着审」是两回事，只画前者就是假空闲）。分桶按审检链次序：
+  // 候初检=无初检章；候核查=初检过未深检；候人裁=初检不过（返修或人工裁）；候实证=门禁停闸；仲裁=候裁。
+  const 审桶 = { 候初检: [], 候深检: [], 候人裁: [], 候实证: [], 候仲裁: [] };
+  for (const t of all) {
+    if (t.state === '核查') {
+      if (t.待引擎实证) 审桶.候实证.push(t.id);
+      else if (t.初检结论 === '不过') 审桶.候人裁.push(t.id);
+      else if (t.初检结论 === '过' && !t.代核结论) 审桶.候深检.push(t.id);
+      else if (!t.初检结论) 审桶.候初检.push(t.id);
+    } else if (t.state === '仲裁') 审桶.候仲裁.push(t.id);
+  }
+  const 审驻 = Object.entries(审桶).filter(([, v]) => v.length)
+    .map(([k, v]) => `<span class="pill sm ${k === '候人裁' || k === '候实证' ? 'warn' : 'mut'}" title="${esc(v.join('、'))}">${k} <b>${v.length}</b>${v.length <= 3 ? ' · ' + esc(v.join(' ')) : ''}</span>`).join(' ');
   const ready = (d.就绪队列 || []).map((q) => `<span class="pill sm mut mono">${esc(q.id || q)}</span>`).join(' ') || '<span class="dim">空 —— 无就绪待派单</span>';
   // 已跑计时秒级跳动（与领单视图同款：离开视图自动停）
   setTimeout(function tickTm() {
@@ -1143,8 +1157,8 @@ function viewAgentsDispatch(d, all) {
   return busyBanner + lockCard + `<div class="sec-h" style="margin-top:26px"><h3 class="h17">在跑执行者</h3>
       <span class="subnote">派发制 · 因单而生、完成即销毁 · 并发 codex ≤${lim.codex != null ? lim.codex : '—'} / claude ≤${lim.claude != null ? lim.claude : '—'}（项管调配 · 代码硬顶 3）</span></div>
     <div id="ag-cards">${cards}</div>
-    <div class="sec-h" style="margin-top:26px"><h3 class="h17">审检三席</h3><span class="subnote">初检 / 核查 / 仲裁 · 唯一常驻岗（H68）</span></div>
-    <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${judges}</div>
+    <div class="sec-h" style="margin-top:26px"><h3 class="h17">审检三席</h3><span class="subnote">初检 / 核查 / 仲裁 · 唯一常驻岗（H68）· 驻留队列随席呈报（候人裁/候实证=白班人闸）</span></div>
+    <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${judges}${审驻 ? '<span style="flex-basis:100%"></span>' + 审驻 : ''}</div>
     <div class="sec-h" style="margin-top:26px"><h3 class="h17">就绪队列</h3><span class="subnote">依赖已齐、等槽位或额度（项管台账）</span></div>
     <div id="ag-stall" class="subnote" style="color:var(--warn)" hidden></div>
     <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${ready}</div>

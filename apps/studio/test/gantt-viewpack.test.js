@@ -272,4 +272,18 @@ t('⑦ 覆盖三态定格（2026-08-26 拍板）：提前完露底无溢出段�
   assert.ok(/拖期 2 小时（盖满右溢）/.test(卡迟), '悬浮卡要报超时');
 });
 
+t('⑧ 骑线收窄（制作人起夜案 185/203）：审检驻留单定格在交付时刻，不随今时线拉长；无交付不造条', () => {
+  const d = 台账();
+  d.单册['TK-901'] = { 态: '核查', 大态: '在途', 领单: iso(今ms - 3 * 时), 交付: iso(今ms - 1 * 时), 主办: null, 执行池: null };
+  const { 岛 } = 画(d);
+  const n = 岛.st.键表.get('TK-901');
+  assert.ok(n.实段 && n.实段.定格 && !n.实段.活, '核查驻留＝定格非活');
+  assert.equal(n.实段.讫, 今ms - 1 * 时, '右缘＝交付时刻，不骑今时线（把排队等审画成还在干活正是本案病）');
+  assert.ok(/gt2real set/.test(岛.body.innerHTML) && !/gt2real living/.test(岛.body.innerHTML), '定格条 set 类、无 living 脉冲');
+  const d2 = 台账();
+  d2.单册['TK-901'] = { 态: '核查', 大态: '在途', 领单: iso(今ms - 3 * 时), 交付: null, 主办: null, 执行池: null };
+  const { 岛: 岛2 } = 画(d2);
+  assert.ok(!岛2.st.键表.get('TK-901').实段, '驻留却无交付时刻＝数据残，不造条（红线）');
+});
+
 console.log('全部通过：' + passed + ' 项');

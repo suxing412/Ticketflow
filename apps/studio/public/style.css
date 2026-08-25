@@ -1724,23 +1724,21 @@ a.gt2nm:hover, a.gt2nm:focus-visible { background:var(--sect); color:var(--accen
 /* 2026-08-26 覆盖式实况条（制作人拍板）：计划底=深色低饱和 · 实际覆盖=浅色高饱和 ·
    living 带脉冲（动画只给正在改变的东西）· 溢出段同色加深（红仍是服务端超期判定专色） */
 .gt2planbase { position:absolute; top:7px; height:13px; border-radius:4px; pointer-events:none;
-  background:var(--ink3); opacity:.35; filter:saturate(.4); }
+  background:var(--ink3); opacity:.3; filter:saturate(.4); border:1px dashed var(--ink3); box-sizing:border-box; }
 .gt2bar.gt2real { background:var(--accent); filter:saturate(1.35) brightness(1.22); opacity:.95; }
 .gt2bar.gt2real.hist { cursor:default; opacity:.8; }
 .gt2bar.gt2real.hist:hover { filter:saturate(1.35) brightness(1.35); }
-.gt2bar.gt2real.living { cursor:pointer; animation:gt2breathe 2.2s ease-in-out infinite; }
-.gt2bar.gt2real.living::after { content:''; position:absolute; right:0; top:0; bottom:0; width:3px; border-radius:0 4px 4px 0;
-  background:var(--warn); animation:gt2pulse 1.6s ease-in-out infinite; }
-@keyframes gt2pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
-@keyframes gt2breathe { 0%,100% { filter:saturate(1.35) brightness(1.22); } 50% { filter:saturate(1.5) brightness(1.38); } }
-@media (prefers-reduced-motion: reduce) {
-  .gt2bar.gt2real.living, .gt2bar.gt2real.living::after { animation:none; }
-}
+/* living 脉冲＝左→右扫光（2026-08-26 制作人起夜纠偏：不是整条呼吸，是行进感） */
+.gt2bar.gt2real.living { cursor:pointer; overflow:hidden; }
+.gt2bar.gt2real.living::before { content:''; position:absolute; top:0; bottom:0; left:0; width:38%;
+  background:linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent);
+  animation:gt2sweep 1.8s linear infinite; }
+@keyframes gt2sweep { 0% { transform:translateX(-110%); } 100% { transform:translateX(390%); } }
+.gt2bar.gt2real.set { cursor:default; opacity:.88; } /* 审检驻留定格：静态高饱和，无动画 */
+@media (prefers-reduced-motion: reduce) { .gt2bar.gt2real.living::before { animation:none; display:none; } }
 .gt2real-over { position:absolute; top:7px; height:13px; border-radius:0 4px 4px 0; pointer-events:auto;
   background:var(--accent); filter:saturate(1.35) brightness(.78); }
-.gt2real-over.living { animation:gt2overpulse 2.2s ease-in-out infinite; }
-@keyframes gt2overpulse { 0%,100% { filter:saturate(1.35) brightness(.78); } 50% { filter:saturate(1.5) brightness(.92); } }
-@media (prefers-reduced-motion: reduce) { .gt2real-over.living { animation:none; } }
+/* 溢出段不另做动画（行进感由 living 扫光承担，溢出是事实呈现不是过程） */
 .gt2grp button.on { background:var(--accent); color:#fff; }
 .gt2search { font-size:12px; padding:4px 8px; border:none; background:transparent; color:var(--ink); width:150px; }
 .gt2search:focus { outline:none; background:var(--sect); }
