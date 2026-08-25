@@ -3,6 +3,21 @@
 const fs = require('fs');
 const path = require('path');
 
+const 事件流存档默认 = Object.freeze({
+  开: true,
+  根路径: '事件流存档',
+  保留天数: 30,
+  总体积上限字节: 1024 * 1024 * 1024,
+});
+
+function 补事件流存档默认(cfg) {
+  const old = (cfg.事件流存档 && typeof cfg.事件流存档 === 'object') ? cfg.事件流存档 : {};
+  const next = { ...事件流存档默认, ...old };
+  const changed = !cfg.事件流存档 || Object.keys(事件流存档默认).some((key) => !(key in old));
+  if (changed) cfg.事件流存档 = next;
+  return changed;
+}
+
 function resolveRoot(from) {
   if (process.env.STUDIO_ROOT) return path.resolve(process.env.STUDIO_ROOT);
   let dir = from || process.env.PORTABLE_EXECUTABLE_DIR || path.resolve(__dirname, '..', '..', '..');
@@ -23,7 +38,11 @@ function load(root) {
   // 编制去岗位化迁移（H85 补章）：旧 config.agents（程序-A/程序-B 岗位册）→ 新 config.编制
   // （每职能一行 + 池序）。读盘即迁移、迁移即落盘——生产配置的实际改形由运行时完成，不手改。
   // 幂等：已是新形态则 migrate 返回 false，不产生多余写盘。写失败不拦启动（内存态已是新形态）。
-  try { if (require('../roster').migrate(cfg)) save(root, cfg); } catch { /* 只读盘/权限不足：本次内存迁移照常生效 */ }
+  try {
+    const rosterChanged = require('../roster').migrate(cfg);
+    const archiveChanged = 补事件流存档默认(cfg);
+    if (rosterChanged || archiveChanged) save(root, cfg);
+  } catch { /* 只读盘/权限不足：本次内存迁移照常生效 */ }
   return cfg;
 }
 
@@ -32,4 +51,4 @@ function save(root, cfg) {
   fs.writeFileSync(path.join(root, 'studio.config.json'), JSON.stringify(cfg, null, 2) + '\n', 'utf8');
 }
 
-module.exports = { load, save, resolveRoot };
+module.exports = { load, save, resolveRoot, 事件流存档默认, 补事件流存档默认 };
