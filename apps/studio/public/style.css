@@ -1650,8 +1650,8 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
   /* 滚条外观：壳已禁 Fluent 滚条（main.js disable-features——Fluent 不吃 ::-webkit-scrollbar，
      0.30.1 起的细滚条在制作人机器从未生效、页面上是带箭头原生粗条，0.30.5 验收「并没有哇」案）。
      现制：纵向 8px 圆拇指细条（细滚条版供制作人过目），横向 0（中键平移）。全藏改一行 width:0。 */
-/* 纵向细滚条 8px 圆拇指贴主题；横滚条撤（横向=中键拖拽平移） */
-.gt2wrap::-webkit-scrollbar { width:8px; height:0; }
+/* 滚条全撤（2026-08-25 制作人过目细条后拍板去掉）：纵=滚轮+中键、横=中键平移 */
+.gt2wrap::-webkit-scrollbar { width:0; height:0; }
 .gt2wrap::-webkit-scrollbar-thumb { background:var(--chip); border-radius:8px; border:2px solid transparent; background-clip:padding-box; }
 .gt2wrap::-webkit-scrollbar-thumb:hover { background:var(--ink3); background-clip:padding-box; }
 .gt2wrap::-webkit-scrollbar-track, .gt2wrap::-webkit-scrollbar-corner { background:transparent; }

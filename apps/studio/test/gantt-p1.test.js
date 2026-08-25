@@ -215,8 +215,8 @@ t('② 聚焦投影：聚焦 S-1 可见行集合=祖先链+子孙（集合相等
   const main25 = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   assert.ok(/disable-features[^)]*FluentScrollbar/.test(main25),
     'main.js 须禁 Fluent 滚条——不禁则样式表对滚条完全失权（0.30.6 案）');
-  assert.ok(/\.gt2wrap::-webkit-scrollbar \{ width:8px; height:0/.test(css25),
-    '甘特滚条现制：纵 8px 细条+横 0');
+  assert.ok(/\.gt2wrap::-webkit-scrollbar \{ width:0; height:0/.test(css25),
+    '甘特滚条现制：全撤（制作人 08-25 过目细条后拍板）——纵=滚轮+中键、横=中键平移');
   // 折叠正交：聚焦默认折叠支（S-2）里的叶子——祖先链强制展开、旁支兄弟不显、折叠集不被聚焦改写
   const 三 = 画(数据);
   三.ctx.GanttIsland.聚焦('g-环1');
