@@ -3578,7 +3578,9 @@ function 挂甘特岛(数据) {
 function 欠账区Html(没排, 未归属) {
   const 未排 = 没排.length
     ? `<div class="gtun"><div class="gtunh">未排期 <b>${没排.length}</b> 条 —— 没有日期就画不出条，它们不在图上，但活还在
-        <span class="subnote">点任一条排期（写账署名 ${esc(排期署名)}）</span></div>
+        <span class="subnote">点任一条排期（写账署名 ${esc(排期署名)}）</span>
+        <button class="newdraft" style="margin-left:auto" onclick="tqPmPlan()"
+          title="一键把全部未排期粒打包成项管排期作业：项管按今时线制（刻钟对齐/依赖先后/错峰）产出计划，逐粒走重排写口落账（操作者=项管），回执落项管信道">⚙ 委托项管排期</button></div>
       <div class="gtunl">${没排.map((g) => `<button class="gtunrow" onclick="tqReplan('${qesc(g.粒ID)}')"
         title="${esc(`${g.题 || ''}\n来源：${g.来源 || '（未注明）'}\n状态：${g.状态 || ''}`)}">
         <i class="gts mono">${esc(上级名(g.上级))}${g.序 ? '·' + g.序 : ''}</i><b>${esc(g.题 || '')}</b>
@@ -3978,6 +3980,17 @@ window.tqEditDepsGo = async (粒ID, 预期版本, btn) => {
 // 预填（甘特 P2 #10 拖拽两路分流）：岛松手后带 {计划开始,计划完成,拖拽:true} 进来——
 // 两格预填新计划（刻钟形 YYYY-MM-DDTHH:mm，后端 规范计划时刻 同一形），确认前可改；
 // 取消＝原位回滚（岛数据没动过，图上的条本来就没挪账）。不带预填＝原样人工重排口。
+// 委托项管排期（2026-08-25 制作人拍板常驻 UI）：一键发排期作业，项管产合同→服务端落账，
+// 回执看项管信道；甘特 30s 轮询自动长条。409=项管忙（一次一作业）。
+window.tqPmPlan = async () => {
+  try {
+    const r = await fetch('/api/pm/schedule-plan', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) toast(`排期作业已受理（${j.已受理} 粒）——项管作业中，回执看项管信道，排完甘特自动上条`);
+    else toast(j.error || '委托失败');
+  } catch (e) { toast('委托失败：' + e.message); }
+};
+
 window.tqReplan = async (粒ID, 预填) => {
   const g = await 取待办(粒ID);
   if (!g) return toast('这条待办已不在现态（可能刚成单或被撤销）');

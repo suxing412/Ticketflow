@@ -479,6 +479,58 @@ function answer(root, cfg, question, cb) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
+// 排期作业（2026-08-25「委托项管排期」键）：制作人一键把全部未排期粒打包委托项管。
+// 照 adjudicateReferral 的 JSON 合同模式：会话只产计划合同，落账由 schedule.消化排期合同 代执行
+// （操作者=项管，逐粒 CAS）——模型不碰写口，排期判断权与写口纪律两全（H57/H112）。
+function schedulePlan(root, cfg, cb) {
+  const schedule = require('./schedule');
+  const 全 = schedule.现态(root);
+  const 未排 = schedule.未排期粒(root);
+  if (!未排.length) return cb({ ok: false, error: '没有未排期粒——无事可排' });
+  const 已排 = 全.filter((g) => (g.计划开始 || g.计划完成) && !schedule.终态.includes(g.状态));
+  const now = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  const 今 = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}T${p(now.getHours())}:${p(now.getMinutes())}`;
+  const 粒行 = (g) => JSON.stringify({ 粒ID: g.粒ID, 题: g.题, 上级: g.上级, 序: g.序, 预估单元: g.预估单元, 依赖: g.依赖, 优先级: g.优先级, 状态: g.状态 });
+  const prompt = [
+    '你是单流的「项目管理」职能。制作人按下「委托项管排期」——把下列全部未排期粒按今时线制排出计划（H112）。',
+    '排期纪律：①计划时刻用 YYYY-MM-DDTHH:mm，分钟只许 00/15/30/45（刻钟制）②一律排在今时之后 ③尊重依赖先后（前置的计划完成 ≤ 后继的计划开始）④单粒工期按预估单元估算（1 单元≈1-2 小时），尽量不超 24 小时——超长任务在制度上不受欢迎 ⑤同上级的粒按 序 排先后 ⑥与已排粒错峰，不无谓并行。',
+    '输出契约：先一段 100 字内排期思路说明，然后一个 ```json 代码块——数组，每元素：',
+    '{"粒ID":"（原样）","计划开始":"YYYY-MM-DDTHH:mm","计划完成":"YYYY-MM-DDTHH:mm","因":"一句排期理由"}',
+    '每个未排期粒都要出现；实在排不了的（如依赖悬空）也要出现，计划两格给 null 并在 因 里说明。',
+    '',
+    '=== 今时 ===', 今,
+    '=== 未排期粒（' + 未排.length + ' 条）===', 未排.map(粒行).join('\n'),
+    '=== 已排在场（错峰参照）===', 已排.map((g) => JSON.stringify({ 粒ID: g.粒ID, 题: g.题, 计划开始: g.计划开始, 计划完成: g.计划完成 })).join('\n') || '（无）',
+  ].join('\n');
+  const cmd = cli();
+  const model = (cfg.模型 || {}).项管 || 'fable';
+  setWorking({ 用途: '排期作业' });
+  const child = spawn(cmd, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'],
+    { cwd: root, env: { ...process.env }, windowsHide: true, shell: String(cmd).endsWith('.cmd') });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; if (out.length > 400000) out = out.slice(-200000); });
+  const timer = setTimeout(() => { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch { /**/ } }, 5 * 60000);
+  if (timer.unref) timer.unref();
+  child.on('close', () => {
+    setWorking(null);
+    clearTimeout(timer);
+    billFee(root, '排期作业', out);
+    const text = require('../runner').extractClaudeText(out).trim();
+    const m = text.match(/```json\s*([\s\S]*?)```/);
+    if (!m) return cb({ ok: false, error: '项管未按契约出 JSON 合同', text: text.slice(0, 400) });
+    let items;
+    try { items = JSON.parse(m[1]); } catch (e) { return cb({ ok: false, error: 'JSON 合同解析失败：' + e.message, text: text.slice(0, 400) }); }
+    const 排 = (Array.isArray(items) ? items : []).filter((it) => it.计划开始 || it.计划完成);
+    const 弃 = (Array.isArray(items) ? items : []).filter((it) => !it.计划开始 && !it.计划完成);
+    const r = schedule.消化排期合同(root, 排);
+    const 思路 = text.slice(0, text.indexOf('```')).trim().slice(0, 200);
+    cb({ ok: true, 成: r.成.length, 败: r.败, 弃: 弃.map((x) => ({ 粒ID: x.粒ID, 因: x.因 })), 思路,
+      text: `排期作业收官：落账 ${r.成.length} 粒` + (r.败.length ? `，失败 ${r.败.length}（${r.败.map((x) => x.error).join('；').slice(0, 120)}）` : '') + (弃.length ? `，未排 ${弃.length}（${弃.map((x) => x.因).join('；').slice(0, 120)}）` : '') + '。' + 思路 });
+  });
+  try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
+}
+
 // 评估回呈裁决（H61，2026-08-05 用户拍板）：执行会话判定做不了 → 项管裁决 改单/改池/上呈。
 // 三轮封顶由 runner 把关（≥3 直接上呈总监不再进此函数）。
 function adjudicateReferral(root, cfg, id, cb) {
@@ -615,5 +667,5 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
-module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, buildCutPrompt, buildDraftPrompt,
+module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, schedulePlan, buildCutPrompt, buildDraftPrompt,
   parseTickets, parse拒切, childFm, draftFm, getWorking, 历史样本, 备校准, 校准落fm, 容器, 前缀Of, 下一号 };

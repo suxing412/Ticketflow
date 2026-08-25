@@ -729,6 +729,22 @@ function 挂钩派发(root, 单号, 粒ID) {
   return 转移(root, { 粒ID: g.粒ID, 目标: '已成单', 预期版本: g.版本号, 操作者: '系统·派发', 单号: 单号 || g.单号, 说明: `派发 ${单号 || ''}` });
 }
 
+// 排期合同消化（2026-08-25「委托项管排期」键）：项管作业会话产 JSON 合同（逐粒计划），
+// 本函数代为逐粒走 重排 公开写口落账（操作者=项管）——模型只产计划不碰账，写口纪律不破。
+// 逐粒 CAS（消化时现取版本号），单粒失败不回滚如实报（与清算 38 条同口径）。
+function 消化排期合同(root, items) {
+  const 成 = [], 败 = [];
+  for (const it of (Array.isArray(items) ? items : [])) {
+    const g = 取(root, String(it.粒ID || ''));
+    if (!g) { 败.push({ 粒ID: it.粒ID, error: '粒不存在' }); continue; }
+    const r = 重排(root, { 粒ID: g.粒ID, 预期版本: g.版本号,
+      计划开始: it.计划开始 || null, 计划完成: it.计划完成 || null, 工期天: it.工期天 != null ? it.工期天 : null,
+      因: String(it.因 || '项管排期作业'), 操作者: '项管' });
+    if (r.ok) 成.push(g.粒ID); else 败.push({ 粒ID: g.粒ID, error: r.error });
+  }
+  return { ok: 败.length === 0, 成, 败 };
+}
+
 module.exports = { 型集,
   DIR, LOG, 转移表, 状态全集, 终态, 依赖规则集, 操作域, 转移域,
   事件流, 折叠, 现态, 取, 判重键, 规范粒, 规范依赖, 建引用检,
@@ -737,4 +753,5 @@ module.exports = { 型集,
   重排类别集, 表态, 未排期粒,        // H112/H113：越线表态写口（二选一）+ 重排五类 + 未排期清单（DS-12）
   越线待表态判,                      // G23 唯一谓词（终审 T2/T3）：gatereg 判据与 /api/schedule 待表态 下发共用
   登记, 转移, 调整, 重排, 挂钩起草, 挂钩派发,
+  消化排期合同,                      // 「委托项管排期」：合同→逐粒重排落账（操作者=项管）
 };

@@ -1067,6 +1067,24 @@ app.post('/api/relay', (req, res) => {
   });
   res.json(r);
 });
+// 委托项管排期（2026-08-25 制作人拍板常驻 UI）：一键把全部未排期粒打包成项管排期作业。
+// 会话产 JSON 合同→schedule.消化排期合同 落账（操作者=项管），回执落项管信道，pmBusy 互斥同答话。
+app.post('/api/pm/schedule-plan', (req, res) => {
+  if (!ready(res)) return;
+  if (pmBusy) return res.status(409).json({ error: '项管手头有活（一次一作业），稍候再委托' });
+  const 未排数 = require('./lib/pm/schedule').未排期粒(ROOT).length;
+  if (!未排数) return res.status(400).json({ error: '没有未排期粒——无事可排' });
+  pmBusy = true;
+  relay.append(ROOT, '制作人', `【排期作业】委托项管排期：未排期 ${未排数} 粒（甘特欠账区一键委托）`);
+  journal.append(ROOT, `排期作业发起：未排期 ${未排数} 粒 → 项管`);
+  require('./lib/pm/brain').schedulePlan(ROOT, cfg, (a) => {
+    pmBusy = false;
+    relay.append(ROOT, '项管', a.text || a.error || '（排期作业无应答）');
+    journal.append(ROOT, `排期作业收官：${String(a.text || a.error || '').slice(0, 80)}`);
+  });
+  res.json({ ok: true, 已受理: 未排数 });
+});
+
 // 远程配置（参数页卡片）：开关 + 令牌重生成（仅本机可改——远程端不许给自己续权）
 app.post('/api/config/remote', (req, res) => {
   if (!ready(res)) return;
