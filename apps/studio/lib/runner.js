@@ -26,6 +26,13 @@ const running = new Map();
 let loopTimer = null;
 let lastTick = null;
 let 滞留拒签 = ''; // 派发滞留 journal 去重签（2026-08-26 TK-201 案：15 秒一拍不去重就是一夜刷屏）
+const 孤儿失败已留痕 = new Set(); // 核查孤儿补链失败留痕去重（同上：失败态每拍重试但只喊一次）
+// 核查孤儿判据面（纯读，2026-08-26 案）：代核不过章在、边没走、还赖在核查目录的单。
+// 正常路径（代核 kind 处理）成功送仲裁后单已离目录，扫不到——只有断在缝上的孤儿会命中。
+function 核查孤儿们(root) {
+  return require('./core/store').list(root, '核查')
+    .filter((x) => x.fm.代核 && x.fm.代核.结论 === '不过' && !x.fm.挂起);
+}
 let 滞留首见 = 0;  // 同签滞留的起点毫（评审补：流水一条单行不算「出声」，滞留超阈值要升急件）
 let 滞留已急件 = false;
 const 滞留急件阈毫 = 30 * 60000; // 同一滞留面挂 30 分钟未解 → inbox 急件（TK-201 案 7h 静默的止血线）
@@ -591,6 +598,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       } else {
         const r = lifecycle.送仲裁(root, t.id, '核查不过'); // H108 推进边（A 组 lifecycle 提供）：核查→仲裁
         if (r.ok) journal.append(root, `核查不过 ${t.id} → 送仲裁（核验报告已入回执，H108 审检链）`);
+        else journal.append(root, `核查不过 ${t.id} 送仲裁失败：${r.error}——孤儿补链下拍自愈（2026-08-26 案：这条静默曾造出 12h 滞留）`);
         // H65 同活同号語义保留：仲裁裁「上呈」后落 待处理，制作人点「返修」同号改写
       }
     } else {
@@ -1085,6 +1093,20 @@ async function tick(root, cfg, opts = {}) {
     }
   };
 
+  // 核查孤儿补链（2026-08-26 巡检案：TK-183/186/188/192 滞留 12h+）：代核章落盘与 送仲裁
+  // 是两步不原子——中断在缝上即孤儿（章在→审检挑单不再挑它，边没走→永滞留核查），
+  // 且原 送仲裁 失败分支静默。每拍补扫：代核不过还赖在核查目录的，补推仲裁；失败出声（签去重防刷屏）。
+  for (const x of 核查孤儿们(root)) {
+    if (!busyTickets().has(x.id)) {
+      const r = lifecycle.送仲裁(root, x.id, '核查不过（孤儿补链自愈）');
+      if (r.ok) journal.append(root, `核查孤儿补链 ${x.id} → 仲裁（代核不过章在而边未走——自愈，2026-08-26 案）`);
+      else {
+        const 签 = x.id + '|' + (r.error || '');
+        if (!孤儿失败已留痕.has(签)) { 孤儿失败已留痕.add(签); journal.append(root, `核查孤儿补链失败 ${x.id}：${r.error}——送仲裁边不通，请人工查`); }
+      }
+    }
+  }
+
   // ④a 两检制·初检（H67，2026-08-05 用户拍板）：便宜模型先核格式与规范（回执契约/禁语/报数存在性），
   // 不过直接打回不烧 opus；过了才进 ④b 深检。开关与池在 config.执行器.两检。
   const 两检 = (cfg.执行器 || {}).两检 || {};
@@ -1200,4 +1222,4 @@ function killTicket(root, id, 因) {
   return false;
 }
 
-module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi, 计量回灌, 流分拣器, 流尾, 人闸升格Tick, start升格环, stop升格环 };
+module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi, 计量回灌, 流分拣器, 流尾, 人闸升格Tick, start升格环, stop升格环, 核查孤儿们 };
