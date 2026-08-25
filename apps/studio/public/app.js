@@ -3720,14 +3720,20 @@ async function viewRelay() {
     const 大态of = {};
     for (const [大, 列] of Object.entries(板口.大态 || {})) for (const s of ([].concat(列 || []))) 大态of[s] = 大;
     const 默项 = (_cfg && _cfg.项目 && _cfg.项目.默认) || '';
+    // 完成粒计划区间回挂（2026-08-26 覆盖式实况条拍板）：完成态粒被 上图（在排）滤掉，其计划
+    // 起讫只剩台账里有——按单号回挂到史单，岛才画得出「计划底被实际条覆盖」的提前/拖期证据。
+    const 完粒 = new Map();
+    for (const g of 全粒) if (g.状态 === '完成' && g.单号) 完粒.set(String(g.单号), g);
     for (const s of (板口.states || [])) for (const t of (板口.board[s] || [])) {
       板归属[t.id] = { 特性: t.特性 || null, 专项: t.专项 || null, 管线: t.管线 || null };
       单册[t.id] = { 态: s, 大态: 大态of[s] || '', 领单: t.领单时间 || null, 交付: t.交付时间 || null,
         主办: t.主办 || null, 执行池: t.执行池 || null };
       if (s === '完成' || s === '归档') {
         const 归 = t.项目 || 默项;
+        const pg = 完粒.get(t.id);
         if (!p || 归 === p) 史单.push({ 单号: t.id, 题: t.title || '', 领单: t.领单时间 || null, 交付: t.交付时间 || null,
-          特性: t.特性 || null, 专项: t.专项 || null, 管线: t.管线 || null, 态: s, 归档原因: t.归档原因 || null });
+          特性: t.特性 || null, 专项: t.专项 || null, 管线: t.管线 || null, 态: s, 归档原因: t.归档原因 || null,
+          ...(pg ? { 计划开始: pg.计划开始 || null, 计划完成: pg.计划完成 || null } : {}) });
       }
     }
   }

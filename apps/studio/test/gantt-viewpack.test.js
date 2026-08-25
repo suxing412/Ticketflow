@@ -155,20 +155,22 @@ const 画 = (数据, 存储) => {
   return { ctx, 容器, 岛: 容器._gt2 };
 };
 
-t('① 活条制：在途单主条骑今时线（右缘=X(今)），计划退幽灵框；单册不标在途则回计划条（变异自证）', () => {
+t('① 活条制（覆盖式）：在途单＝计划深底+实际浅盖骑今时线，living 脉冲类在；退在途回计划条（变异自证）', () => {
   const { 岛 } = 画(台账());
   const html = 岛.body.innerHTML;
-  assert.ok(/gt2bar run live/.test(html), '在途单必须出活条');
-  assert.ok(/gt2plan-ghost/.test(html), '计划承诺退成幽灵框仍可见');
+  assert.ok(/gt2bar gt2real living/.test(html), '在途单必须出 living 覆盖条（脉冲只给正在改变的东西）');
+  assert.ok(/gt2planbase/.test(html), '计划承诺退成深色低饱和底层，仍可见');
   const st = 岛.st;
   const n = st.键表.get('TK-901');
   assert.ok(n && n.实段 && n.实段.活, '活条节点必须带实段.活');
-  assert.equal(n.实段.讫, st.今ms, '活条右缘＝今时线毫（骑线随拍长）');
-  assert.equal(n.实段.起, Date.parse(台账().单册['TK-901'].领单), '活条左缘＝真实领单时刻（Date.parse 真毫，不走钟面正则）');
-  // 变异：抽掉在途标记 → 活条消失、回普通计划条
+  assert.equal(n.实段.讫, st.今ms, '覆盖条右缘＝今时线毫（走到哪盖到哪）');
+  assert.equal(n.实段.起, Date.parse(台账().单册['TK-901'].领单), '覆盖条左缘＝真实领单时刻（Date.parse 真毫，不走钟面正则）');
+  // TK-901 计划讫 11:00 < 今 12:00：已在拖期中——溢出加深段随活条出现且同为 living
+  assert.ok(/gt2real-over living/.test(html), '实况已越计划讫：溢出加深段要在且带脉冲');
+  // 变异：抽掉在途标记 → 覆盖层消失、回普通计划条
   const d2 = 台账(); d2.单册['TK-901'].大态 = '结束';
   const { 岛: 岛2 } = 画(d2);
-  assert.ok(!/gt2bar run live/.test(岛2.body.innerHTML), '不在途就没有活条——判据能红');
+  assert.ok(!/gt2real living/.test(岛2.body.innerHTML), '不在途就没有覆盖条——判据能红');
 });
 
 t('② 史条：真实区间入图（领单→交付）＋悬浮卡「实际/现状」；缺时单计数不画（为图造数红线）', () => {
@@ -177,7 +179,7 @@ t('② 史条：真实区间入图（领单→交付）＋悬浮卡「实际/现
   const n = st.键表.get('TK-903');
   assert.ok(n && n.史 && n.实段, '近完史单必须入树带实段');
   assert.equal(n.实段.起, 今ms - 8 * 时); assert.equal(n.实段.真讫, 今ms - 4 * 时);
-  assert.ok(/gt2bar done hist/.test(岛.body.innerHTML), '史条画 done hist 只读条');
+  assert.ok(/gt2bar gt2real hist/.test(岛.body.innerHTML), '史条画 gt2real hist 只读覆盖条（无计划底的老单只有覆盖层）');
   assert.ok(!st.键表.get('TK-905'), '缺时史单不入树（不拿创建日冒充执行区间）');
   assert.deepEqual(st.史况.缺时, ['TK-905'], '缺时单挂账可指认');
   const 注 = 岛.根el.querySelector('.gt2histnote');
@@ -242,6 +244,32 @@ t('⑥ 编依赖入口迁菜单（待办队列拆除随迁）：粒行菜单产 
   assert.ok(/m-editdeps/.test(菜活), '在排粒行的右键菜单必须有编依赖项（队列入口拆除后的唯一入口）');
   const 菜史 = ctx.GanttIsland.菜单Html('行', 'TK-904');
   assert.ok(!/m-editdeps/.test(菜史), '史条（已落袋伪粒）不给编依赖——改完活再改计划是改史');
+});
+
+t('⑦ 覆盖三态定格（2026-08-26 拍板）：提前完露底无溢出段；拖期完盖满右溢＋超用数；悬浮卡报省/超', () => {
+  const 存 = 造存储(); 存.setItem('gt2-done', '全');
+  const d = 台账();
+  d.史单 = [
+    // 计划 04:00→10:00，实际 04:00→08:00 → 提前 2h：右侧露出计划底，不出溢出段
+    { 单号: 'TK-910', 题: '提前完', 领单: iso(今ms - 8 * 时), 交付: iso(今ms - 4 * 时), 专项: 'S-1', 态: '归档',
+      计划开始: '2026-08-25T04:00', 计划完成: '2026-08-25T10:00' },
+    // 计划 04:00→06:00，实际 04:00→08:00 → 拖期 2h：盖满并右溢，溢出段加深＋超用 2 小时
+    { 单号: 'TK-911', 题: '拖期完', 领单: iso(今ms - 8 * 时), 交付: iso(今ms - 4 * 时), 专项: 'S-1', 态: '归档',
+      计划开始: '2026-08-25T04:00', 计划完成: '2026-08-25T06:00' },
+  ];
+  const { 岛, ctx } = 画(d, 存);
+  const st = 岛.st;
+  const 早 = st.键表.get('TK-910'), 迟 = st.键表.get('TK-911');
+  assert.ok(早.段 && 早.实段 && 早.段.真讫 > 早.实段.真讫, '提前完：计划底右缘在实际条之右（露底）');
+  assert.ok(迟.段 && 迟.实段 && 迟.实段.真讫 > 迟.段.真讫, '拖期完：实际条右缘越过计划底（右溢）');
+  const html = 岛.body.innerHTML;
+  const 早行 = html.slice(html.indexOf('史:TK-910'), html.indexOf('史:TK-911'));
+  assert.ok(/gt2planbase/.test(早行) && !/gt2real-over/.test(早行), '提前完的行：有计划底、无溢出段');
+  assert.ok(/超用 2 小时/.test(html), '拖期完的溢出段要报超用小时数（实况呈现，非判定）');
+  const 卡早 = ctx.GanttIsland._测.卡HTML(早, st);
+  const 卡迟 = ctx.GanttIsland._测.卡HTML(迟, st);
+  assert.ok(/提前 2 小时（右侧露底）/.test(卡早), '悬浮卡要报省时（实得：' + /对计划[^<]*/.exec(卡早) + '）');
+  assert.ok(/拖期 2 小时（盖满右溢）/.test(卡迟), '悬浮卡要报超时');
 });
 
 console.log('全部通过：' + passed + ' 项');
