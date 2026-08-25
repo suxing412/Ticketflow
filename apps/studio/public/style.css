@@ -1646,7 +1646,10 @@ html[data-theme="glass"] .cd-lg span[data-a="策划"]   { --cd-c:#4CC3E0; }
 
 /* 滚动视口＋画布：虚拟化底座（固定行高 30px，只画可视行） */
 .gt2wrap { position:relative; overflow:auto; max-height:640px; border:1px solid var(--line);
-  border-radius:12px; background:var(--card); scrollbar-width:thin; }
+  border-radius:12px; background:var(--card); scrollbar-width:none; }
+  /* ↑ 必须用标准属性 none：exe 壳（Chromium 124 + Win11）开着 Fluent 滚条，::-webkit-scrollbar
+     自定义整段被无视（0.30.1 起的细滚条在制作人机器上从未生效过——0.30.5 验收「并没有哇」案）。
+     scrollbar-width:none 对 Fluent 同样生效；下面的 webkit 段留作旧环境兜底。 */
 /* 滚条全撤（2026-08-25 制作人拍板「要么优化要么取消」→ 取消）：
    横向=中键拖拽平移，纵向=滚轮+中键，甘特区不再画任何滚动条 */
 .gt2wrap::-webkit-scrollbar { width:0; height:0; }
