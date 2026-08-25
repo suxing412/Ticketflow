@@ -285,8 +285,21 @@ function extractClaudeText(raw) {
     } catch { /* 非 JSON 行忽略 */ }
   }
   if (!sawJson) return String(raw);
-  const like = texts.filter((t) => /完工报告|QA 核验|核验报告|结论[:：]/.test(t));
-  if (like.length) return like[like.length - 1];
+  // 回执保全（2026-08-26 截头四案：TK-185/190/204、TF-4 全倒在「缺自测结果章」）：
+  // 旧样「取匹配关键词的最后一段」默认报告只占一条消息——长回执被会话切成多条时，
+  // 只有含「结论：」的尾段幸存，头段（产出/做了什么/自测结果）整段丢弃，落盘的回执
+  // 从代码块中段起头。现改：从**第一个**带报告语汇的段起拼到末尾——过程闲聊仍被剪，
+  // 报告跨段不再截头；草稿+终稿场景宁冗勿缺（初检抓的是章存在性，多料不红）。
+  const 标 = /完工报告|QA 核验|核验报告|结论[:：]/;
+  const 起 = texts.findIndex((t) => 标.test(t));
+  if (起 >= 0) {
+    const 段 = texts.slice(起);
+    // 尾闲聊剪除（TK-35 案兼容）：末段若是无结构短散文（无章头/围栏/编号/结论）不算报告续体——
+    // 报告续段必带结构（## 章、``` 围栏、编号条目），四案的被吞段全是结构段，剪不到它们。
+    while (段.length > 1 && 段[段.length - 1].length < 80
+      && !/^#|```|^\d+[.、]|结论[:：]|^[-*] /m.test(段[段.length - 1])) 段.pop();
+    return 段.join('\n\n');
+  }
   return texts.join('\n\n');
 }
 
