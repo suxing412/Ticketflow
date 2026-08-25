@@ -5,6 +5,9 @@ dist/
 .studio-state.json
 .studio-state.lock
 .studio.lock
+# 值守心跳节拍器的运行态（TK-210）：每 5 分钟改写一次 seq/在位水位，跟踪进库＝工作区每拍都脏。
+.值守心跳.json
+.值守心跳.lock
 *.log
 # 运行态与密钥（2026-08-22 体检 #76）：AI-GameStudio 那边 监制台/.studio-state.json
 # 被手工 add 过一次，从此工作区永远脏、记账每一拍都在提交噪声。

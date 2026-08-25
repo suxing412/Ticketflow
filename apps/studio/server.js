@@ -1943,6 +1943,19 @@ function start() {
         const 巡检拍 = require('./lib/pm/patroltick').造巡检拍(() => ROOT, () => cfg, { 保存: saveCfg });
         setInterval(巡检拍, 15 * 60000).unref();
       }
+      // 值守心跳节拍器（TK-210）：每 5 分钟往当月 journal 追加一行带单调 seq 的心跳，
+      // 供值守会话那条只订阅「值守心跳」的 Monitor(persistent) 当**自造脉冲**用——
+      // watch-rearm 附则的验活法「近 10 分钟内应有事件是否收到通知」在安静时段不成立，
+      // 没有真实事件时「没事发生」与「监视器已死」长得一模一样，这条脉冲就是拿来分辨这两者的。
+      // 同一拍顺带对账在位回执：连续 3 拍无 ack 判「静默阵亡」→ 急件 + G25 + journal。
+      // **挂在既有定时器族里，不另起常驻进程**（多一根常驻就多一处崩溃恢复要管）。
+      // 桩台不拍：STUB 起-测-关的短命进程往测试仓 journal 里落心跳行，会把「流水应干净」类判据
+      // 全部打脏（budget-接线实测）；桩台本无值守会话，脉冲发给谁都是噪声。
+      if (!initError && !STUB) {
+        const 心跳拍 = require('./lib/pm/watchpulse').造心跳拍(() => ROOT, () => cfg);
+        心跳拍(); // 开机先拍一次：重启后的首拍带 restart=1，塔据此知道自己该重挂一轮
+        setInterval(心跳拍, require('./lib/pm/watchpulse').周期毫秒).unref();
+      }
       // 执行器随服务自动开工（D30 修订：开 exe 即开工厂，无需手动点启动）；
       // 停止按钮只管本次会话，"别干活"的常设语义交给暂停闸门/额度锁
       if (!initError) { try { require('./lib/runner').start(ROOT, () => cfg); } catch (e) { console.error('执行器启动失败：' + e.message); } }

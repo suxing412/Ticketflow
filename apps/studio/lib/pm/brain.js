@@ -192,20 +192,38 @@ function buildCutPrompt(root, cfg, parent, projPath, 校准块) {
   ].join('\n');
 }
 
-// 解析输出契约 → 子单数组
+// 解析输出契约 → 子单数组。
+// 围栏配对状态机（2026-08-26 截断病根因案：TF-3 断「主口：」、TF-6 断「协议固定：」，
+// TK-196/213/182 同因）：旧样非贪婪正则 /```ticket\n([\s\S]*?)```/ 撞上正文里的嵌套代码块——
+// 模型一开 ```js 示例围栏，那个 ``` 就被当成 ticket 块收尾，后半正文整段静默吞掉。
+// 症状酷似「输出未完即落盘」，真凶是解析器。现改逐行配对：块内遇 ```lang 记嵌套入栈、
+// 裸 ``` 先出栈，**栈空时的裸 ``` 才是 ticket 收尾**；无嵌套时逐字节等价旧行为。
 function parseTickets(text) {
   const out = [];
-  const re = /```ticket\n([\s\S]*?)```/g;
-  let m;
-  while ((m = re.exec(text))) {
-    const [head, ...bodyParts] = m[1].split(/^---$/m);
+  const lines = String(text == null ? '' : text).split('\n');
+  let 收 = null; let 深 = 0;
+  const 落一张 = (体) => {
+    const [head, ...bodyParts] = 体.split(/^---$/m);
     const fm = {};
     for (const line of head.split('\n')) {
       const mm = line.match(/^([\w一-鿿]+):\s*(.*)$/);
       if (mm) fm[mm[1]] = mm[2].trim();
     }
     out.push({ fm, body: bodyParts.join('---').trim() });
+  };
+  for (const ln of lines) {
+    if (收 === null) {
+      if (/^```ticket\s*$/.test(ln)) { 收 = []; 深 = 0; }
+      continue;
+    }
+    if (/^```[^`\s]/.test(ln.trim()) && /^```/.test(ln)) { 深++; 收.push(ln); continue; } // ```js 等带语言标记＝嵌套开栏
+    if (/^```\s*$/.test(ln)) {
+      if (深 > 0) { 深--; 收.push(ln); continue; } // 嵌套收栏
+      落一张(收.join('\n') + '\n'); 收 = null; continue; // 栈空裸 ``` ＝ ticket 真收尾
+    }
+    收.push(ln);
   }
+  // 未闭合的 ticket 块（模型输出被上游截停）不落盘半张——宁缺毋残（残单正是本案病灶）
   const brief = (text.match(/## 拆单简报[\s\S]*$/) || [''])[0].trim();
   return { tickets: out, brief };
 }
