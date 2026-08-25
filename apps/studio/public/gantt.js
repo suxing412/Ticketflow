@@ -70,14 +70,21 @@
   // 时间窗＝计划/基线极值 ∪ 今，整日取齐（表头日界与 4h 网格因此天然对齐），两侧各留 1h 再取整。
   // 取齐用**本地午夜**（T9：轴是本地墙钟毫秒，按 天毫 取整会齐到 UTC 午夜、把日界画到本地 08:00）。
   const 整日下 = (ms) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
-  function 算窗(点们) {
+  function 算窗(点们, 最少小时) {
     const 点 = 点们.filter((x) => x != null);
     if (!点.length) return { 空: true };
     const t0 = 整日下(Math.min.apply(null, 点) - 时毫);
     const 顶 = Math.max.apply(null, 点) + 时毫;
     let t1 = 整日下(顶);
     if (t1 < 顶) { const d = new Date(t1); t1 = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime(); }
-    const 小时 = Math.round((t1 - t0) / 时毫);
+    let 小时 = Math.round((t1 - t0) / 时毫);
+    // 窗宽下限＝铺满视口（2026-08-25 制作人所指：数据窄时窗缩到一天 480px，宽屏右侧大片无刻度
+    // 死白、表头深色半途截止，看着像断裂）。不足则按整日扩 t1，刻度一路画到右缘。
+    if (最少小时 && 小时 < 最少小时) {
+      const 补日 = Math.ceil((最少小时 - 小时) / 24);
+      const d = new Date(t1); t1 = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 补日).getTime();
+      小时 = Math.round((t1 - t0) / 时毫);
+    }
     return { 空: false, t0, t1, 小时, 宽: 小时 * HW };
   }
   const X = (ms, 窗) => ((ms - 窗.t0) / 时毫) * HW;
@@ -431,7 +438,7 @@
 
   /* ═══ 状态装配（纯，无 DOM——判据面：_测.试渲染 走的就是这一条）═══ */
   // 聚焦键（#9）：可选。有效时投影＝祖先链+聚焦节点+子孙；键在数据里找不到（粒被删/改名）即失焦回全量。
-  function 建状态(数据, 聚焦键) {
+  function 建状态(数据, 聚焦键, 最少小时) {
     const { 根, 键表 } = 拼树(数据);
     const 今点 = 解时(数据.今);
     const 今ms = 今点 ? 今点.ms : null;
@@ -454,10 +461,10 @@
     })({ 子: 根 });
     if (今ms != null) 点.push(今ms);
     // 窗按全树算不按投影算（#9「全局树不销毁只淡出」）：聚焦切换时时间轴不跳
-    return { 数据, 根, 键表, 行, 折叠, 默认, 今ms, 停表: !!数据.停表, 窗: 算窗(点), 聚焦: 聚 };
+    return { 数据, 根, 键表, 行, 折叠, 默认, 今ms, 停表: !!数据.停表, 窗: 算窗(点, 最少小时), 聚焦: 聚 };
   }
   function 试渲染(数据, 视口, 选项) {
-    const st = 建状态(规范数据(数据, 选项));
+    const st = 建状态(规范数据(数据, 选项), null, 选项 && 选项.视口 && 选项.视口.宽小时);
     const v = 视口 || { 滚: 0, 高: Infinity };
     const [a, b] = 可视范围(v.滚, v.高, st.行.length);
     return { 状态: st, 可视: [a, b], 表头: 表头HTML(st), html: st.行.slice(a, b).map((r) => 行HTML(r, st)).join('') };
@@ -522,7 +529,10 @@
   function 重排(岛) {
     const 焦 = 记焦点(岛);
     关菜单(岛); // 数据/结构一变，悬着的菜单就是对着旧图开的——先收
-    岛.st = 建状态(岛.数据, 岛.聚焦);
+    // 铺满视口下限：真浏览器量 wrap 可用宽（headless 沙箱 clientWidth 恒 0 → 不扩，判据经 选项.视口.宽小时 注入）
+    const 满 = (岛.选项 && 岛.选项.视口 && 岛.选项.视口.宽小时) ||
+      (岛.wrap && 岛.wrap.clientWidth ? Math.ceil((岛.wrap.clientWidth - 树宽) / HW) : 0);
+    岛.st = 建状态(岛.数据, 岛.聚焦, 满);
     if (岛.聚焦 && !岛.st.聚焦) 岛.聚焦 = null; // 聚焦的节点已不在数据里：失焦回全量（会话态，不持久化）
     const st = 岛.st, 空 = !st.行.length || st.窗.空;
     岛.根el.querySelector('.gt2stopband').hidden = !st.停表;
