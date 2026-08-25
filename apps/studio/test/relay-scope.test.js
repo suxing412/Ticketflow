@@ -64,6 +64,13 @@ t('项管页三处读数是同一个数：页头 / 队列卡 / 传给后端滤�
   const 甘特口 = 叫过.filter((u) => /^\/api\/schedule(\?|$)/.test(u));
   assert.ok(甘特口.length >= 1 && 甘特口.every((u) => u.includes('项目=TK')),
     '甘特读口必须带 ?项目=（终审 T1：边集/边统计要在服务端按视界生成）。实叫：' + JSON.stringify(甘特口));
+  // 四层树三口带项目视界（2026-08-25 制作人「各项目只显示自己的」：S-4/S-5 是 Ticketflow 专项
+  // 曾串进 TK 树）：管线/特性/专项三口一律 ?项目=，过滤发生在服务端源头（同报表 ③b 一把尺）。
+  for (const 口名 of ['/api/pipelines', '/api/features', '/api/specials']) {
+    const 叫 = 叫过.filter((u) => u.startsWith(口名));
+    assert.ok(叫.length >= 1 && 叫.every((u) => decodeURIComponent(u).includes('项目=TK')),
+      口名 + ' 必须带 ?项目=（树的三层实体不滤就串项目）。实叫：' + JSON.stringify(叫));
+  }
   const 队列口 = 叫过.filter((u) => u.startsWith('/api/schedule/队列'));
   assert.equal(队列口.length, 1, '项管页该正好叫一次队列口，实叫：' + JSON.stringify(队列口));
   assert.ok(队列口[0].includes('项目=TK'),

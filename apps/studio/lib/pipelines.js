@@ -28,12 +28,13 @@ function find(root, id) {
 }
 
 // 开线（人闸）：名称必填；阶段默认 L0；规格正文可空（后补）。
-function create(root, 名称, 阶段, 规格) {
+function create(root, 名称, 阶段, 规格, 项目) {
   if (!String(名称 || '').trim()) return { ok: false, error: '管线名称必填' };
   ensure(root);
   const mx = list(root).reduce((m, p) => Math.max(m, Number(p.id.slice(2))), 0);
   const id = `P-${mx + 1}`;
-  const fm = { id, 名称: String(名称).trim(), 阶段: String(阶段 || 'L0'), 状态: '活跃', 开线时间: new Date().toISOString() };
+  // 项目归属（2026-08-25 多项目视界案）：新线必带项目——历史 22 件已由总监补齐 项目: TK
+  const fm = { id, 名称: String(名称).trim(), 阶段: String(阶段 || 'L0'), 状态: '活跃', 项目: String(项目 || 'TK'), 开线时间: new Date().toISOString() };
   fs.writeFileSync(path.join(DIR(root), `${id}.md`), matter.stringify(String(规格 || ''), fm), 'utf8');
   return { ok: true, id, fm };
 }

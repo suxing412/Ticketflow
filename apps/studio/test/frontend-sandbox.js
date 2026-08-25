@@ -37,7 +37,7 @@ function 装载前端() {
     location: { hash: '', href: '', search: '' },
     navigator: mk(), history: mk(),
     matchMedia: () => mk({ matches: false }),
-    CustomEvent: function () {}, Notification: function () {},
+    CustomEvent: function () {}, Notification: function () {}, URLSearchParams,
   };
   ctx.window = new Proxy(ctx, {
     get: (t, k) => (k in t ? t[k] : noop),

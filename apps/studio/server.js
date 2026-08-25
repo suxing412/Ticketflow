@@ -13,6 +13,7 @@ const life = require('./lib/lifecycle');
 const trace = require('./lib/trace');
 const quota = require('./lib/quota');
 const journal = require('./lib/journal');
+const rootlock = require('./lib/rootlock');
 const dialogscan = require('./lib/dialogscan'); // 原生对话框哑弹扫描（施工令-012），/api/env 自检用
 
 // ROOT 可变（2026-08-08 首次运行向导）：没有 studio.config.json 时不再是死局——
@@ -460,16 +461,23 @@ app.post('/api/codoc', (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 
+// 项目视界过滤（2026-08-25 制作人「各项目只显示自己的东西」）：三层实体口统一 ?项目= 服务端过滤
+// （切在源头纪律，同报表 ③b 先例）。无 项目 字段的实体回落默认项目视图（防将来漏写时静默消失）。
+const 按项目滤 = (rows, q, 默认项目) => {
+  const p = String(q || '').trim();
+  if (!p) return rows;
+  return rows.filter((r) => String(r.项目 || 默认项目 || '') === p);
+};
 app.get('/api/pipelines', (req, res) => {
   if (!ready(res)) return;
   const ps = pipelines.list(ROOT).map((p) => ({ id: p.id, ...p.fm }));
-  res.json({ 管线: ps });
+  res.json({ 管线: 按项目滤(ps, req.query.项目, (cfg.项目 || {}).默认) });
 });
 app.post('/api/pipelines', (req, res) => {
   if (!ready(res)) return;
   if (!isLocalReq(req)) return res.status(403).json({ error: '开线是人闸，只能在本机操作' });
-  const { 名称, 阶段, 规格 } = req.body || {};
-  const r = pipelines.create(ROOT, 名称, 阶段, 规格);
+  const { 名称, 阶段, 规格, 项目 } = req.body || {};
+  const r = pipelines.create(ROOT, 名称, 阶段, 规格, 项目 || (cfg.项目 || {}).默认);
   if (r.ok) journal.append(ROOT, `开线 ${r.id}「${名称}」（H51 人闸）`);
   res.status(r.ok ? 200 : 400).json(r);
 });
@@ -495,7 +503,7 @@ app.get('/api/features', (req, res) => {
   const F = require('./lib/features');
   const 快照 = store.snapshot(ROOT);
   const 专项表 = require('./lib/specials').list(ROOT);
-  res.json({ 特性: F.list(ROOT).map((f) => F.聚合(ROOT, f, { 快照, 专项表 })) });
+  res.json({ 特性: 按项目滤(F.list(ROOT).map((f) => F.聚合(ROOT, f, { 快照, 专项表 })), req.query.项目, (cfg.项目 || {}).默认) });
 });
 app.get('/api/features/:id', (req, res) => {
   if (!ready(res)) return;
@@ -533,7 +541,7 @@ app.post('/api/features/:action', (req, res) => {
 app.get('/api/specials', (req, res) => {
   if (!ready(res)) return;
   const 快照 = store.snapshot(ROOT); // 一次扫盘喂全部聚合：一个专项扫一遍会让十条专项扫十遍
-  res.json({ 专项: specials.list(ROOT).map((s) => specials.聚合(ROOT, s, { 快照 })) });
+  res.json({ 专项: 按项目滤(specials.list(ROOT).map((s) => specials.聚合(ROOT, s, { 快照 })), req.query.项目, (cfg.项目 || {}).默认) });
 });
 app.get('/api/specials/:id', (req, res) => {
   if (!ready(res)) return;
@@ -1893,7 +1901,18 @@ function start() {
       console.log(initError ? `监制台启动但未就绪：${initError}` : `监制台已启动：http://127.0.0.1:${port}${bindAddr === '0.0.0.0' ? '（远程监听已开，令牌把门）' : ''}`);
       // 醒目一行：桩台与实弹台长得一模一样，唯一区别就是这行日志——起错台是 037 事故的第一步
       if (STUB) console.log('★★ 桩台模式（STUDIO_STUB=1）：零派发零计费 —— 执行器派发面已硬关，额度查询与连通探测已停用 ★★');
-      巡检();
+      const 写者锁 = ROOT ? rootlock.占(ROOT) : { 得: false, 因: '数据根尚未就绪' };
+      if (!写者锁.得) {
+        // 第二进程仍提供界面和只读接口；唯独会写数据根的启动拍都不许挂。
+        if (ROOT) {
+          try { journal.append(ROOT, '数据根已有单写者，定时拍全部不起'); }
+          catch (e) { console.error('单写者锁留痕失败：' + e.message); }
+        }
+      } else {
+        setInterval(() => rootlock.续期(ROOT), 200 * 1000).unref();
+        process.once('exit', () => { rootlock.放(ROOT); });
+
+        巡检();
       if (!initError) setInterval(巡检, 30 * 60000).unref();
       // 自动记账（D35）：定期把工单流转/回执/journal git commit 落袋，间隔读 config（0=关）
       if (!initError) {
@@ -1942,6 +1961,7 @@ function start() {
         // 单一出队（派发/落袋）债当拍消解、单一回队（收回/验收不过）当拍立债，不等 60s 班车。
         // 钩子异常 store.触移动 已兜（try 包住不打断转移），这里不必再包一层。
         store.on移动(() => 拍今时线());
+      }
       }
       resolve({ port, server: srv, initError });
     });

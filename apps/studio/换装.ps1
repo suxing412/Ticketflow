@@ -49,6 +49,7 @@ while ($true) {
 
 # 2) 停旧 → 拷贝 → 起新
 Get-Process | Where-Object { $_.Name -like '*监制台*' } | Stop-Process -Force -Confirm:$false -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $DeployDir '.studio.lock') -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 Copy-Item $exe (Join-Path $DeployDir "监制台 $Version.exe") -Force
 Start-Process (Join-Path $DeployDir "监制台 $Version.exe") -WorkingDirectory $DeployDir

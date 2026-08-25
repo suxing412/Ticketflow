@@ -4,6 +4,7 @@ dist/
 *.zip
 .studio-state.json
 .studio-state.lock
+.studio.lock
 *.log
 # 运行态与密钥（2026-08-22 体检 #76）：AI-GameStudio 那边 监制台/.studio-state.json
 # 被手工 add 过一次，从此工作区永远脏、记账每一拍都在提交噪声。

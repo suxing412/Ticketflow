@@ -3741,9 +3741,11 @@ async function viewRelay() {
     // 甘特岛四层树 feed（P0-0 契约②：四口并发前端拼装，不新开树端点）。
     // board 只借归属三格（特性/专项/管线）做无上级粒的回落认亲——fm.特性 由并行工程在 server 补格，
     // 老部署缺格时对应回落自然落空，树照画（孤儿契约⑤：渲染期不修数据）。
-    api('/api/pipelines').catch(() => null),
-    api('/api/features').catch(() => null),
-    api('/api/specials').catch(() => null),
+    // 项目视界（2026-08-25 制作人「各项目只显示自己的」）：三层实体口带 ?项目= 服务端过滤
+    // （切在源头纪律，同报表 ③b）——S-4/S-5 是 Ticketflow 专项曾串进 TK 树的病例。
+    api('/api/pipelines' + (projActive() ? '?' + new URLSearchParams({ 项目: projActive() }) : '')).catch(() => null),
+    api('/api/features' + (projActive() ? '?' + new URLSearchParams({ 项目: projActive() }) : '')).catch(() => null),
+    api('/api/specials' + (projActive() ? '?' + new URLSearchParams({ 项目: projActive() }) : '')).catch(() => null),
     api('/api/board').catch(() => null),
   ]);
   const now = Date.now();
