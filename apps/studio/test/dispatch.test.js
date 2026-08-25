@@ -103,12 +103,15 @@ t('池序即优先级：首位未冻结就走首位，第二位不抢跑', () =>
   assert.deepEqual(反.map((p) => p.池), ['codex']);
 });
 
-t('死局自愈边界：池章直通单不自愈（工程单钉死 deepseek 是刻意的成本选择）', () => {
+t('死局自愈边界：钉池单不自愈（工程单钉死 deepseek 是刻意的成本选择；2026-08-26 分家后钉章字段=钉池）', () => {
   const cfg = { 执行池: { codex: {}, claude: {}, deepseek: {} },
     编制: [{ 职能: '程序', 池序: [{ 池: 'codex', 档: '' }] }] };
-  const ready = [{ id: 'e1', 职能: '程序', 优先级: 'P1', 红链: false, 创建时间: '1', 执行池: 'deepseek' }];
+  const ready = [{ id: 'e1', 职能: '程序', 优先级: 'P1', 红链: false, 创建时间: '1', 钉池: 'deepseek' }];
   const gi = { deepseek: { fivePct: 10, locked: true }, claude: { fivePct: 10 }, codex: { fivePct: 10 } };
   assert.deepEqual(D.pickNext(cfg, ready, {}, gi, { deepseek: 2, claude: 2 }), []);
+  // 分家反向自证：同样的钉法若只落在 执行池（运行章残迹）——路由必须无视，照走编制 codex
+  const 残 = [{ id: 'e1', 职能: '程序', 优先级: 'P1', 红链: false, 创建时间: '1', 执行池: 'deepseek' }];
+  assert.deepEqual(D.pickNext(cfg, 残, {}, gi, { deepseek: 2, claude: 2, codex: 2 }).map((p) => p.池), ['codex']);
 });
 
 t('死局自愈边界：零编制职能不臆造路由（照旧滞留）', () => {

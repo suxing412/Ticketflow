@@ -1116,6 +1116,17 @@ function viewAgentsDispatch(d, all) {
   // 百分比与分段条活体刷新（施工令-004）：只换右列与段条，不整页重画；
   // 在跑张数变了才整页重画（新单派发/收工），否则永远原地更新。
   const 在跑数 = (d.在跑 || []).length;
+  // 派发拒因出声（2026-08-26 评审补：拒因此前只到 /api/runner 为止，前端零渲染——TK-201 案
+  // 四单滞留 7h 在页面上长得跟「正常排队」一模一样）。上轮 tick 一条不落如实列出。
+  const 画滞留 = async () => {
+    const r = await api('/api/runner').catch(() => null);
+    const el = $('ag-stall'); if (!el) return;
+    const 拒 = (r && r.上轮 && r.上轮.拒因) || [];
+    el.hidden = !拒.length;
+    el.innerHTML = 拒.length ? `⚠ 上轮派发拒因 ${拒.length} 项：${esc(拒.join('；'))}` : '';
+  };
+  画滞留();
+  pollLoop('ag-stall', 20000, 画滞留);
   pollLoop('ag-cards', 15000, async () => {
     const nd = agentsScoped(await api('/api/agents'), all); // 与首屏同一道项目闸，否则张数永远对不上→无限整页重画
     if ((nd.在跑 || []).length !== 在跑数) { repaint('在跑张数变'); return; }
@@ -1151,6 +1162,7 @@ function viewAgentsDispatch(d, all) {
     <div class="sec-h" style="margin-top:26px"><h3 class="h17">审检三席</h3><span class="subnote">初检 / 核查 / 仲裁 · 唯一常驻岗（H68）</span></div>
     <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${judges}</div>
     <div class="sec-h" style="margin-top:26px"><h3 class="h17">就绪队列</h3><span class="subnote">依赖已齐、等槽位或额度（项管台账）</span></div>
+    <div id="ag-stall" class="subnote" style="color:var(--warn)" hidden></div>
     <div class="card r14" style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${ready}</div>
     ${timelineHtml([], all, { byFn: true })}`;
 }
@@ -3781,14 +3793,29 @@ async function viewRelay() {
   // 甘特岛数据包（渲染在 public/gantt.js；/api/schedule 的 边/边统计/判定 随 sch 原样携带——
   // P2 #12 依赖线与冲突角标只按这两格着色报数，前端不自算）
   const 板归属 = {};
+  // 单册＋史单（2026-08-26 优化包）：
+  //   单册 = 单号→{态/大态/领单/交付/主办/执行池}，岛的活条制与悬浮卡「现状」都吃它（/api/board 全态映射）；
+  //   史单 = 完成/归档 单的真实执行区间（领单→交付），历史全量入图——缺时刻的岛内计数不画（红线：不造时间）。
+  //   项目视界：单 fm 无 项目 的老单按 cfg.项目.默认 归户（早期单没这一格，全属默认项目 TK 是事实不是推断）。
+  const 单册 = {}; const 史单 = [];
   if (板口 && 板口.board) {
+    const 大态of = {};
+    for (const [大, 列] of Object.entries(板口.大态 || {})) for (const s of ([].concat(列 || []))) 大态of[s] = 大;
+    const 默项 = (_cfg && _cfg.项目 && _cfg.项目.默认) || '';
     for (const s of (板口.states || [])) for (const t of (板口.board[s] || [])) {
       板归属[t.id] = { 特性: t.特性 || null, 专项: t.专项 || null, 管线: t.管线 || null };
+      单册[t.id] = { 态: s, 大态: 大态of[s] || '', 领单: t.领单时间 || null, 交付: t.交付时间 || null,
+        主办: t.主办 || null, 执行池: t.执行池 || null };
+      if (s === '完成' || s === '归档') {
+        const 归 = t.项目 || 默项;
+        if (!p || 归 === p) 史单.push({ 单号: t.id, 题: t.title || '', 领单: t.领单时间 || null, 交付: t.交付时间 || null,
+          特性: t.特性 || null, 专项: t.专项 || null, 管线: t.管线 || null, 态: s, 归档原因: t.归档原因 || null });
+      }
     }
   }
   const 岛数据 = {
     管线: (管线口 && 管线口.管线) || [], 特性: (特性口 && 特性口.特性) || [], 专项: (专项口 && 专项口.专项) || [],
-    粒: 上图, 名册, 板归属, 边: (sch && sch.边) || null, 边统计: (sch && sch.边统计) || null, 今: 现在, 停表,
+    粒: 上图, 名册, 板归属, 单册, 史单, 边: (sch && sch.边) || null, 边统计: (sch && sch.边统计) || null, 今: 现在, 停表,
     债: (attn && Array.isArray(attn.债)) ? attn.债 : [], 项目: p,
   };
   // 壳落地（innerHTML/morph 都是同步收尾）后喂岛。用 setTimeout 不用 rAF：rAF 在窗口不可见时

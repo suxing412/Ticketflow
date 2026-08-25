@@ -67,6 +67,20 @@
   }
   const 计划段 = (g) => 段(g && g.计划开始, g && g.计划完成);
   const 基线段 = (g) => 段(g && g.基线开始, g && g.基线完成);
+  // 真时刻（2026-08-26 优化包）：领单/交付是完整 ISO（带秒带 Z），解时 的钟面正则会把 UTC 字面
+  // 当本地钟读——时区整移八小时。真实执行时刻一律走 Date.parse 落真毫。
+  const 实时毫 = (v) => { const t = Date.parse(String(v == null ? '' : v)); return Number.isNaN(t) ? null : t; };
+  // 三档已完视野（2026-08-26 制作人拍板：全部保留 / 保留最近若干（默认近完 24h）/ 不保留）。
+  // 纯函数（判据面）：档∈{全,近,无}；近档卡交付时刻 ≥ 今−24h。缺时单不归它管（画不出，由 史况 挂账）。
+  function 史过滤(史单, 档, 今ms) {
+    const 全 = Array.isArray(史单) ? 史单 : [];
+    if (档 === '无') return [];
+    if (档 === '全') return 全;
+    const 底 = (今ms == null ? Date.now() : 今ms) - 24 * 时毫;
+    return 全.filter((h) => { const t = 实时毫(h.交付); return t == null || t >= 底; }); // 缺时不在此滤（进 缺时账 不进图）
+  }
+  const 完档读 = () => { try { const v = localStorage.getItem('gt2-done'); return v === '全' || v === '无' ? v : '近'; } catch { return '近'; } };
+  const 完档写 = (v) => { try { localStorage.setItem('gt2-done', v); } catch { /* 隐私模式：会话内照切 */ } };
   // 时间窗＝计划/基线极值 ∪ 今，整日取齐（表头日界与 4h 网格因此天然对齐），两侧各留 1h 再取整。
   // 取齐用**本地午夜**（T9：轴是本地墙钟毫秒，按 天毫 取整会齐到 UTC 午夜、把日界画到本地 08:00）。
   const 整日下 = (ms) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
@@ -152,6 +166,19 @@
       const n = 造('工单', g.粒ID, g.题); n.粒 = g;
       (亲 ? 亲.子 : 伪组.子).push(n);
     }
+    // 史条（2026-08-26 优化包·历史全量接入）：已了结工单按**真实执行区间**（领单→交付）入树。
+    // 缺任一真时刻＝计数不画（为图造数红线：不许拿创建日/归档日冒充执行区间）——
+    // 缺时单在 建状态.史况.缺时 里挂账，工具栏挂「史缺时 N」角标如实报数。
+    // 归属走单 fm 三格认亲（特性/专项/管线，同 板归属 口径）；认不到照伪组，不修数据。
+    const 已画 = new Set();
+    for (const h of (数据.史单 || [])) {
+      const 号 = String(h.单号 || ''); if (!号 || 已画.has(号)) continue; 已画.add(号);
+      if (实时毫(h.领单) == null || 实时毫(h.交付) == null) continue; // 缺时：计数不画（史况 在 建状态 里统计）
+      const n = 造('工单', '史:' + 号, h.题); n.史 = h;
+      n.粒 = { 粒ID: '史:' + 号, 单号: 号, 题: h.题, 状态: '完成' }; // 伪粒：显号/色点/终态判共用工单行通路
+      const 亲 = S表.get(String(h.专项 || '')) || F表.get(String(h.特性 || '')) || P表.get(String(h.管线 || '')) || null;
+      (亲 ? 亲.子 : 伪组.子).push(n);
+    }
     if (伪组.子.length) 根.push(伪组);   // 根级尾部：伪组永远排在所有管线之后
     // 闸债 → 节点（数据源 /api/attn，路由随债下发，本层不猜跳哪儿）；顺手记 父键（#9 聚焦要走祖先链）
     const 索 = new Map();
@@ -161,14 +188,30 @@
   }
 
   // 聚合区间（括号条/汇总条）与活跃分支（DS-15：分支内存在 未完成∧计划开始≤今 的工单）——自底向上一趟
-  function 铺算(根, 今ms) {
+  function 铺算(根, 今ms, 单册) {
+    const 册 = 单册 || {};
     (function 走(n) {
       let a = Infinity, b = -Infinity, 活 = false, 叶数 = 0;
       const 并 = (s) => { if (s) { a = Math.min(a, s.起); b = Math.max(b, s.讫); } };
       if (n.粒) {
-        n.段 = 计划段(n.粒); n.基 = 基线段(n.粒); 并(n.段);
+        n.段 = 计划段(n.粒); n.基 = 基线段(n.粒);
+        // 实段（2026-08-26 优化包·活条制+史条）：真实执行区间，与计划段并存。
+        // 史条＝领单→交付（拼树已卡缺时不进）；活条＝在途单 领单→今，右缘骑今时线随拍长。
+        if (n.史) {
+          const a2 = 实时毫(n.史.领单), b2 = 实时毫(n.史.交付);
+          n.实段 = a2 != null && b2 != null
+            ? { 起: a2, 讫: Math.max(b2, a2 + 刻毫), 真讫: Math.max(b2, a2 + 刻毫), 单端: false, 超长: false } : null;
+        } else {
+          const 单 = n.粒.单号 ? 册[String(n.粒.单号)] : null;
+          if (单 && 单.大态 === '在途' && 今ms != null) {
+            const 领 = 实时毫(单.领单);
+            const a2 = 领 != null ? 领 : (n.段 ? n.段.起 : 今ms - 刻毫);
+            n.实段 = { 起: Math.min(a2, 今ms), 讫: Math.max(今ms, a2 + 刻毫), 真讫: Math.max(今ms, a2 + 刻毫), 单端: false, 超长: false, 活: true };
+          } else n.实段 = null;
+        }
+        并(n.段); 并(n.实段);
         叶数 = 1;
-        活 = !!(n.段 && 今ms != null && n.段.起 <= 今ms && !终态.includes(n.粒.状态));
+        活 = !!(n.段 && 今ms != null && n.段.起 <= 今ms && !终态.includes(n.粒.状态)) || !!(n.实段 && n.实段.活);
       }
       if (n.自粒) { n.自段 = 计划段(n.自粒); 并(n.自段); }
       for (const k of n.子) { 走(k); 并(k.聚 ? { 起: k.聚.起, 讫: k.聚.讫 } : null); 活 = 活 || k.活; 叶数 += k.叶数; }
@@ -303,7 +346,7 @@
     // 树列轻量字段（#20/DS-5）：工单行＝状态色点（按粒状态着色，越线加红点纹）＋工期徽章（Nh）；
     // 聚合行＝子单计数照旧（不挂工期徽章——聚合区间在括号条与悬浮卡，树列不重复报数）
     const 轻 = n.型 === '工单'
-      ? `<i class="gt2dot ${状态类[n.粒.状态] || ''}${越行 ? ' xline' : ''}" title="${esc(越行 ? '越线待重判' : n.粒.状态 || '')}"></i>${n.段 ? `<b class="gt2dur">${工期文(n.段)}</b>` : ''}`
+      ? `<i class="gt2dot ${状态类[n.粒.状态] || ''}${越行 ? ' xline' : ''}" title="${esc(越行 ? '越线待重判' : n.粒.状态 || '')}"></i>${n.段 ? `<b class="gt2dur">${工期文(n.段)}</b>` : n.实段 ? `<b class="gt2dur">${工期文(n.实段)}</b>` : ''}`
       : (n.子.length ? `${n.叶数} 单` : '');
     const 树格 = `<div class="gt2t" style="padding-left:${8 + r.深 * 16}px">${tri}
       <span class="gt2id mono">${esc(显号)}${n.型 === '专项' ? ' ◈' : ''}</span>${名链(n)}
@@ -314,11 +357,11 @@
       if (折) {
         // 折叠投影（#17）：聚合条完全退场，子孙工单迷你条显影在各自时间位
         const 叶 = [];
-        (function 走(x) { if (x.粒 && x.段) 叶.push(x); for (const k of x.子) 走(k); })(n);
-        const { 分配, 块 } = 泳道(叶.map((x) => ({
-          键: x.键, 起: x.段.起, 讫: x.段.讫,
-          越线: 越线判(x.粒), 完成: x.粒.状态 === '完成',
-        })));
+        (function 走(x) { if (x.粒 && (x.段 || x.实段)) 叶.push(x); for (const k of x.子) 走(k); })(n);
+        const { 分配, 块 } = 泳道(叶.map((x) => {
+          const s0 = x.实段 && x.实段.活 ? x.实段 : (x.段 || x.实段); // 活条投影同骑今时线；史条投影用实区间
+          return { 键: x.键, 起: s0.起, 讫: s0.讫, 越线: 越线判(x.粒), 完成: x.粒.状态 === '完成' };
+        }));
         条 = 分配.map((m) => `<i class="gt2mini${m.越线 ? ' xline' : ''}${m.完成 ? ' done' : ''}" data-tid="${esc(m.键)}" data-act="bar" data-g="${esc(m.键)}"${m.越线 ? ' data-x="1"' : ''}
             data-gid="${esc(m.键)}" data-道="${m.道}" style="left:${px(X(m.起, 窗))};width:${条宽(m)};top:${5 + m.道 * 7}px"></i>`).join('')
           + 块.map((b) => `<button class="gt2dens gt2dense" data-act="dens" data-k="${esc(n.键)}" style="left:${px(X(b.起, 窗))};width:${条宽(b)}"
@@ -331,8 +374,25 @@
       } else if (n.粒) {
         const g = n.粒, s = n.段, j = g.判定 || null;
         const 越 = 越行;
+        const 活条 = n.实段 && n.实段.活;
         if (n.基) 条 += `<i class="gt2base" style="left:${px(X(n.基.起, 窗))};width:${条宽(n.基)}"></i>`;
-        if (s) {
+        // 史条（2026-08-26 优化包）：已了结单的真实执行区间，只读——无手柄、无判定记号、无拖拽
+        if (!s && n.实段 && !活条) {
+          条 += `<i class="gt2bar done hist" data-tid="${esc(n.键)}" data-g="${esc(g.粒ID)}" tabindex="0"
+              aria-label="${esc((g.题 || '') + '：已落袋，实际 ' + 毫文(n.实段.起) + ' → ' + 毫文(n.实段.讫))}"
+              style="left:${px(X(n.实段.起, 窗))};width:${条宽(n.实段)}"></i>`;
+        }
+        // 活条制（2026-08-26 制作人拍板「正在做的任务条随今时线顺延」）：在途单主条＝领单→今，
+        // 右缘骑今时线逐拍生长，落袋后由史条定格在实际完成时刻；原计划段退成幽灵框（承诺仍可见）。
+        if (活条) {
+          if (s) 条 += `<i class="gt2plan-ghost" style="left:${px(X(s.起, 窗))};width:${条宽(s)}" title="计划承诺区间（执行实况见活条）"></i>`;
+          条 += `<i class="gt2bar run live" data-tid="${esc(n.键)}" data-act="bar" data-g="${esc(g.粒ID)}" tabindex="0" role="button"
+              aria-label="${esc((g.题 || '') + '：执行中，实况 ' + 毫文(n.实段.起) + ' → 今')}"
+              style="left:${px(X(n.实段.起, 窗))};width:${条宽(n.实段)}"></i>`;
+          const 尾活 = px(X(n.实段.讫, 窗) + 4);
+          if (!越 && j && j.需重排) 条 += `<em class="gt2flag od" style="left:${尾活}" title="已超期${j.超期天 != null ? ' ' + j.超期天 + ' 天' : ''}未了结：该重排了">该重排</em>`;
+        }
+        if (s && !活条) {
           // 越线灰显不标红（重判前不算超期事故）；不越线才按服务端判定挂延期/超期记号
           const 红 = 越 ? '' : `${j && j.超期 ? ' gt2-od' : ''}${j && j.延期 ? ' gt2-late' : ''}`;
           // 红段只消费服务端给出的「超期 + 超期天」：N 天直接换成固定小时轴的 N*24*HW 像素，
@@ -389,7 +449,21 @@
     if (n.型 === '工单') {
       const g = n.粒, s = n.段, j = g.判定 || null;
       const 越 = 越线判(g);
-      const 态 = 越 ? ['late', '越线待重判'] : g.状态 === '完成' ? ['ok', '完成'] : ['run', g.状态 || ''];
+      // 单现状（2026-08-26 制作人「覆盖上去只知道已成单，其它都不知道」）：工单态/主办/池 随卡下发，
+      // 数据源＝宿主传的 单册（/api/board 全态映射）；查不到如实显缺，不猜。
+      const 册 = (st.数据 && st.数据.单册) || {};
+      const 单 = g.单号 ? 册[String(g.单号)] : null;
+      if (n.史) {
+        const 实 = n.实段;
+        行('实际', 实 ? `${毫文(实.起)} → ${毫文(实.讫)}` : '—');
+        if (实) 行('实工期', ((实.真讫 - 实.起) / 时毫).toFixed(1).replace(/\.0$/, '') + ' 小时');
+        行('现状', 单 ? `${单.态}${单.主办 ? ' · ' + 单.主办 : ''}${单.执行池 ? ' · ' + 单.执行池 : ''}` : (n.史.态 || '已落袋'));
+        return `<div class="th"><span class="id mono">${esc(显号于(n))}</span><span class="st ok">${esc(单 ? 单.态 : '已落袋')}</span></div>
+          <div class="tt">${esc(g.题 || '')}</div><div class="kv">${kv.join('')}</div>`;
+      }
+      const 态 = 越 ? ['late', '越线待重判'] : g.状态 === '完成' ? ['ok', '完成'] : ['run', (单 && 单.态) || g.状态 || ''];
+      if (单) 行('现状', `${单.态}${单.主办 ? ' · ' + 单.主办 : ''}${单.执行池 ? ' · ' + 单.执行池 : ''}`, 单.大态 === '在途' ? 'warn' : '');
+      if (n.实段 && n.实段.活) 行('实况', `${毫文(n.实段.起)} → 今（已 ${((n.实段.讫 - n.实段.起) / 时毫).toFixed(1).replace(/\.0$/, '')} 小时）`);
       行('计划', `${时点文(g.计划开始)} → ${时点文(g.计划完成)}`);
       if (s) 行('工期', ((s.真讫 - s.起) / 时毫).toFixed(1).replace(/\.0$/, '') + ' 小时' + (s.单端 ? '（单端）' : ''));
       行('基线', g.基线开始 || g.基线完成 ? `${时点文(g.基线开始)} → ${时点文(g.基线完成)}` : '未立');
@@ -447,10 +521,17 @@
   /* ═══ 状态装配（纯，无 DOM——判据面：_测.试渲染 走的就是这一条）═══ */
   // 聚焦键（#9）：可选。有效时投影＝祖先链+聚焦节点+子孙；键在数据里找不到（粒被删/改名）即失焦回全量。
   function 建状态(数据, 聚焦键, 最少小时) {
-    const { 根, 键表 } = 拼树(数据);
     const 今点 = 解时(数据.今);
     const 今ms = 今点 ? 今点.ms : null;
-    铺算(根, 今ms);
+    // 史况（2026-08-26 优化包）：三档过滤在拼树前做——藏档的史条根本不进树；
+    // 缺时单永不进图，单独挂账（总/画/藏/缺时 四数工具栏如实报，无声截断是判过死刑的病）。
+    const 全史 = Array.isArray(数据.史单) ? 数据.史单 : [];
+    const 缺时 = 全史.filter((h) => 实时毫(h.领单) == null || 实时毫(h.交付) == null);
+    const 可画 = 全史.filter((h) => 实时毫(h.领单) != null && 实时毫(h.交付) != null);
+    const 档 = 完档读();
+    const 入图史 = 史过滤(可画, 档, 今ms);
+    const { 根, 键表 } = 拼树(全史.length ? { ...数据, 史单: 入图史 } : 数据);
+    铺算(根, 今ms, 数据.单册);
     const { 折叠, 默认 } = 生效折叠(根, 键表);
     let 聚 = null;
     if (聚焦键 != null && 键表.has(String(聚焦键))) {
@@ -463,13 +544,14 @@
     const 行 = 展平(根, 折叠, 聚);
     const 点 = [];
     (function 走(x) {
-      if (x.粒) { if (x.段) 点.push(x.段.起, x.段.讫); if (x.基) 点.push(x.基.起, x.基.讫); }
+      if (x.粒) { if (x.段) 点.push(x.段.起, x.段.讫); if (x.基) 点.push(x.基.起, x.基.讫); if (x.实段) 点.push(x.实段.起, x.实段.讫); }
       if (x.自段) 点.push(x.自段.起, x.自段.讫);
       for (const k of x.子) 走(k);
     })({ 子: 根 });
     if (今ms != null) 点.push(今ms);
     // 窗按全树算不按投影算（#9「全局树不销毁只淡出」）：聚焦切换时时间轴不跳
-    return { 数据, 根, 键表, 行, 折叠, 默认, 今ms, 停表: !!数据.停表, 窗: 算窗(点, 最少小时), 聚焦: 聚 };
+    return { 数据, 根, 键表, 行, 折叠, 默认, 今ms, 停表: !!数据.停表, 窗: 算窗(点, 最少小时), 聚焦: 聚,
+      史况: { 总: 全史.length, 画: 入图史.length, 藏: 可画.length - 入图史.length, 缺时: 缺时.map((h) => String(h.单号 || '')), 档 } };
   }
   function 试渲染(数据, 视口, 选项) {
     const st = 建状态(规范数据(数据, 选项), null, 选项 && 选项.视口 && 选项.视口.宽小时);
@@ -501,6 +583,10 @@
       <div class="gt2bar-tools" role="toolbar" aria-label="甘特工具">
         <span class="gt2grp"><i class="gt2lab">折到</i><button data-act="fold" data-lv="1">1 管线</button><button data-act="fold" data-lv="2">2 特性</button><button data-act="fold" data-lv="3">3 专项</button><button data-act="fold" data-lv="4">4 工单</button></span>
         <span class="gt2grp"><button data-act="today" title="快捷键 T：横滚到今时线并闪一下">◎ 回到今天</button></span>
+        <span class="gt2grp"><i class="gt2lab">已完</i><button data-act="done" data-v="近" title="只画最近 24 小时内落袋的史条（默认档）">近完24h</button><button data-act="done" data-v="全" title="项目开始至今全部史条">全部</button><button data-act="done" data-v="无" title="图上不画史条">不留</button></span>
+        <span class="gt2grp"><input class="gt2search mono" type="search" placeholder="单号 / YYYY-MM-DD" aria-label="搜索定位"
+          title="回车或点定位：单号→展开滚到该行并高亮；日期→横滚到那一天"><button data-act="search" title="定位单号或日期在图上的位置">定位</button></span>
+        <span class="gt2histnote subnote" hidden></span>
         <button class="gt2xbadge" data-act="xnext" hidden title="越线待重判计数（#19）——点击滚到下一张越线行，逐个处置">越线 0</button>
         <button class="gt2cbadge" data-act="cnext" hidden title="依赖冲突计数（#12/DS-7，服务端 边统计.冲突）——点击定位下一条冲突线，逐个处置">冲突 0</button>
         ${图例HTML()}
@@ -568,6 +654,20 @@
     const 冲数 = 统 && 统.冲突 != null ? Number(统.冲突) : 0;
     const c标 = 岛.根el.querySelector('.gt2cbadge');
     if (c标) { c标.hidden = !冲数; c标.setAttribute('data-数', String(冲数)); c标.textContent = '冲突 ' + 冲数; }
+    // 三档已完视野按钮态 + 史况角标（2026-08-26 优化包）：画/藏/缺时如实报数——
+    // 藏是档位选的（可切回），缺时是数据缺真时刻（计数不画，为图造数红线的挂账面）。
+    岛.根el.querySelectorAll('[data-act="done"]').forEach((b) => { // className 直赋不走 classList（minidom 判据沙箱无它，成例同 关菜单 的 className 正则）
+      b.className = b.dataset.v === (st.史况 && st.史况.档) ? 'on' : '';
+    });
+    const 史注 = 岛.根el.querySelector('.gt2histnote');
+    if (史注) {
+      const 况 = st.史况 || { 总: 0, 画: 0, 藏: 0, 缺时: [] };
+      const 缺 = (况.缺时 || []).length;
+      史注.hidden = !况.总 && !缺;
+      史注.textContent = (况.总 || 缺) ? `史 ${况.画}/${况.总}${况.藏 ? ` · 藏 ${况.藏}` : ''}${缺 ? ` · 缺时 ${缺}` : ''}` : '';
+      史注.setAttribute('data-画', String(况.画)); 史注.setAttribute('data-缺时', String(缺));
+      史注.title = 缺 ? '缺真实起讫时刻、计数不画（不拿创建日冒充执行区间）：' + 况.缺时.slice(0, 12).join('、') + (缺 > 12 ? '…' : '') : '';
+    }
     const 空框 = 岛.根el.querySelector('.gt2empty');
     空框.hidden = !空;
     岛.wrap.hidden = 空;
@@ -749,6 +849,52 @@
   }
 
   /* ═══ 越线定位（#19 角标）：点一下滚到下一张越线行（折叠行里的越线显影也算靶）═══ */
+  /* ═══ 搜索定位（2026-08-26 优化包·制作人「搜工单号和日期看在甘特图上的位置」）═══
+     单号/节点键 → 展开祖先链滚到该行并闪；日期（YYYY-MM-DD）→ 横滚到那天并闪今线族同款高亮。
+     返回 {中:'行'|'日'} 或 null（无命中——输入框抖一下如实报没有，不静默）。 */
+  function 定位(岛, 词) {
+    const st = 岛.st; if (!st) return null;
+    const q = String(词 == null ? '' : 词).trim();
+    if (!q) return null;
+    // 滚动兜底：判据沙箱（minidom）无 scrollTo 方法，直赋 scrollTop/Left（真浏览器走 smooth）
+    const 滚 = (o) => { if (岛.wrap.scrollTo) 岛.wrap.scrollTo({ ...o, behavior: 'smooth' });
+      else { if (o.top != null) 岛.wrap.scrollTop = o.top; if (o.left != null) 岛.wrap.scrollLeft = o.left; } };
+    const n = st.键表.get(q) || st.键表.get(q.toUpperCase());
+    if (n) {
+      // 祖先链强制展开（否则行不在投影里滚不到）；写差异同 折切 纪律
+      let 改 = false;
+      for (let p = n; p && p.父键 != null && st.键表.has(p.父键);) { p = st.键表.get(p.父键); if (st.折叠.delete(p.键)) 改 = true; }
+      if (改) 存重画(岛); // 存重画 会重建 st——按键重找行索引
+      const st2 = 岛.st;
+      const 键 = n.键;
+      const i = st2.行.findIndex((r) => r.节点.键 === 键);
+      if (i < 0) return null;
+      const m = st2.行[i].节点;
+      const s = m.实段 || m.段 || m.聚 || m.自段;
+      滚({ top: Math.max(0, i * 行高 - 120),
+        left: s && !st2.窗.空 ? Math.max(0, 树宽 + X(s.起, st2.窗) - 240) : 岛.wrap.scrollLeft });
+      const el = document.getElementById('gt2-row-' + m.键);
+      if (el && el.animate) el.animate([{ background: 'rgba(255,200,60,.35)' }, { background: 'transparent' }], { duration: 1400 });
+      return { 中: '行', 键: m.键 };
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(q)) {
+      const p = 解时(q); if (!p || st.窗.空) return null;
+      if (p.ms < st.窗.t0 || p.ms > st.窗.t1) return null; // 窗外日期＝图上没有这一天，如实无命中
+      滚({ left: Math.max(0, 树宽 + X(p.ms + 12 * 时毫, st.窗) - 岛.wrap.clientWidth / 2) });
+      岛.根el.querySelectorAll('.gt2hd-日').forEach((d) => {
+        if (d.textContent === q.slice(5) && d.animate) d.animate([{ opacity: 1 }, { opacity: .1 }, { opacity: 1 }], { duration: 900 });
+      });
+      return { 中: '日', 日: q };
+    }
+    return null;
+  }
+  function 搜一把(岛) {
+    const 框 = 岛.根el.querySelector('.gt2search');
+    if (!框) return;
+    const r = 定位(岛, 框.value);
+    if (!r && 框.animate) 框.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-4px)' }, { transform: 'translateX(4px)' }, { transform: 'translateX(0)' }], { duration: 240 });
+  }
+
   function 越线定位(岛) {
     const st = 岛.st; if (!st) return;
     const 有越 = (x) => (x.粒 && 越线判(x.粒)) || x.子.some(有越);
@@ -996,6 +1142,8 @@
       else if (act === 'dens') { 岛.st.折叠.delete(b.dataset.k); 存重画(岛); }
       else if (act === 'fold') 折到层(岛, +b.dataset.lv || 4);
       else if (act === 'today') 回今(岛);
+      else if (act === 'done') { 完档写(b.dataset.v); 重排(岛); } // 三档已完视野（2026-08-26 优化包）
+      else if (act === 'search') 搜一把(岛);
       else if (act === 'xnext') 越线定位(岛);
       else if (act === 'cnext') 冲突定位(岛);
       else if (act === 'gem') { e.stopPropagation(); if (b.dataset.r) location.hash = b.dataset.r; }
@@ -1096,6 +1244,11 @@
         return;
       }
       if (e.key === 'Enter' && e.target.dataset && (e.target.dataset.act === 'bar' || e.target.dataset.act === 'stance')) { e.preventDefault(); e.target.click(); return; }
+      // 搜索框护栏（2026-08-26 优化包）：框内敲「TK-201」的数字不许被 1-4 折层快捷键劫走；回车＝定位
+      if (e.target && e.target.classList && e.target.classList.contains('gt2search')) {
+        if (e.key === 'Enter') { e.preventDefault(); 搜一把(岛); }
+        return;
+      }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key >= '1' && e.key <= '4') { e.preventDefault(); 折到层(岛, +e.key); }
       else if (e.key === 't' || e.key === 'T') { e.preventDefault(); 回今(岛); }
@@ -1145,6 +1298,7 @@
     试拖, // P2 程序口：鼠标松手（收拖）分流的同一条产线，判据②③直调不模拟鼠标
     // 判据面（H104：验行为不 grep 源码）：纯函数出口，node 沙箱直调断结构
     _测: { 拼树, 铺算, 建状态, 试渲染, 展平, 默认折叠, 可视范围, 泳道, 段, 算窗, 行HTML, 表头HTML, 走今, 行高, HW, 树宽, 头高,
-      吸附, 像素毫, 毫钟面, 拖几何, 可拖判, 贝塞尔, 锚点集, 线HTML, 刻毫 }, // P2 判据①④⑤的纯函数面
+      吸附, 像素毫, 毫钟面, 拖几何, 可拖判, 贝塞尔, 锚点集, 线HTML, 刻毫,
+      史过滤, 实时毫, 完档读, 定位, 卡HTML }, // 2026-08-26 优化包判据面：三档/活条/史条/搜索/悬浮现状
   };
 })();

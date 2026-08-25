@@ -72,7 +72,9 @@ function readySet(root, crit) {
     if (!depsDone(root, t)) continue;
     if (!到点(t)) continue;    // 排期节拍器（H115）：已排期的单也要等计划开始到点
     const g = t.fm.粒ID && 粒表 ? 粒表.get(String(t.fm.粒ID)) : null;
-    out.push({ id: t.id, 态: st, 职能: t.fm.职能, 优先级: t.fm.优先级 || 'P2', 执行池: t.fm.执行池 || null, // 池章直通（0.22.2：兼容池评测单盖章曾被 poolFor 覆盖）
+    out.push({ id: t.id, 态: st, 职能: t.fm.职能, 优先级: t.fm.优先级 || 'P2',
+      钉池: t.fm.钉池 || null, // 刻意钉池（2026-08-26 分家）：routePool 只认这一格
+      执行池: t.fm.执行池 || null, // 运行记录，随行下发只供呈现——路由不再读它（0.22.2 池章直通已废）
       红链: crit ? crit.has(t.id) : false, 创建时间: t.fm.创建时间 || '',
       计划开始: (g && g.计划开始) || '' });
   }
@@ -146,14 +148,16 @@ function 降级Of(cfg, 原池, 新池) {
 }
 
 function routePool(cfg, r, gatesInfo, 拒因) {
-  if (r.执行池) {
-    // 池章直通仅限章池活着（2026-08-26 TK-201 案）：回队单残留上次派发的 执行池 章，
-    // 旧代码无条件直通 → pickNext 撞冻结闸静默跳过，H85 自愈全程旁路，claude 有空槽
-    // 而四单滞留 7h、journal 零字。回队五路自此清运行章（lifecycle/runner/specials），
-    // 存活的章即故意钉池（池评测单）——钉池撞冻结不借调（借调=毁评测口径），
-    // 走死局路留 拒因，由 runner 出声，不许再静默。
-    if (!poolFrozen(cfg, gatesInfo, r.执行池)) return { 池: r.执行池 };
-    if (拒因) 拒因.push(`${r.id} 池章 ${r.执行池} 冻结：钉池单不借调，歇至池解冻`);
+  // 钉池/运行章分家（2026-08-26 TK-201 案 + 同日对抗评审返工）：
+  // 案发是回队单残留派发运行章（fm.执行池）被旧代码硬直通钉死在冻结的 codex，四单静默滞留 7h。
+  // 首修「回队清章」被评审击中一字段两义：故意钉池（池评测单/裁决改池/工程单成本钉）与运行章
+  // 共用 fm.执行池，无差别清章会把钉池决定一并销掉。故分家：
+  //   fm.钉池   = 刻意的路由指令（起草盖章/裁决改池），回队永不清，路由认它；撞冻结不借调
+  //               （借调=毁评测/成本口径），走死局留拒因由 runner 出声，不许静默。
+  //   fm.执行池 = 纯运行记录（派发时盖，回队即清），**从此不参与路由**——残章漏清也只是账面尘埃。
+  if (r.钉池) {
+    if (!poolFrozen(cfg, gatesInfo, r.钉池)) return { 池: r.钉池 };
+    if (拒因) 拒因.push(`${r.id} 钉池 ${r.钉池} 冻结：钉池单不借调，歇至池解冻`);
     return null;
   }
   const 池序 = rosterPools(cfg, r.职能);

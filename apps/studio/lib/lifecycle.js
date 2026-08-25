@@ -163,7 +163,7 @@ function 定夺(root, id, 决定, 方向, 裁决人) {
   const to = map[决定];
   if (!to) return { ok: false, error: `未知决定：${决定}（接受/给方向/废弃）` };
   const patch = 决定 === '废弃' ? (fm) => { fm.废弃因 = '定夺废弃'; }
-    : 决定 === '给方向' ? (fm) => { fm.自修次数 = 0; } : null;
+    : 决定 === '给方向' ? (fm) => { fm.自修次数 = 0; delete fm.执行池; } : null; // 运行章随会话销毁（2026-08-26 评审补：回队第六路）
   const r = store.move(root, id, '待处理', to, patch, nowIso());
   if (r.ok) {
     if (决定 === '给方向' && 方向) {
@@ -189,7 +189,7 @@ function 验收(root, id, 通过, 因) {
   const to = 通过 ? '归档' : '待重派';
   const r = store.move(root, id, '完成', to, (fm) => {
     if (通过) fm.归档原因 = fm.归档原因 || '验收通过';
-    else fm.返修因 = String(因 || '验收不过').replace(/\s+/g, ' ').trim().slice(0, 200);
+    else { fm.返修因 = String(因 || '验收不过').replace(/\s+/g, ' ').trim().slice(0, 200); delete fm.执行池; } // 运行章随会话销毁（2026-08-26 评审补：与 specials 验收打回 同判）
     delete fm.待引擎实证; // 走完人闸的单不留失效候检印（施工令-032② 原义顺延）
   }, nowIso());
   if (r.ok) journal.append(root, `验收 ${id}：${通过 ? '通过→归档（落袋）' : `不过→待重派${因 ? `（${String(因).slice(0, 60)}）` : ''}`}`);

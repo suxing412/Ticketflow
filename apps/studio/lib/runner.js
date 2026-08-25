@@ -26,6 +26,9 @@ const running = new Map();
 let loopTimer = null;
 let lastTick = null;
 let 滞留拒签 = ''; // 派发滞留 journal 去重签（2026-08-26 TK-201 案：15 秒一拍不去重就是一夜刷屏）
+let 滞留首见 = 0;  // 同签滞留的起点毫（评审补：流水一条单行不算「出声」，滞留超阈值要升急件）
+let 滞留已急件 = false;
+const 滞留急件阈毫 = 30 * 60000; // 同一滞留面挂 30 分钟未解 → inbox 急件（TK-201 案 7h 静默的止血线）
 
 const busyTickets = () => new Set([...running.values()].map((e) => e.id));
 function isOn(root) { return !!state.read(root).执行器?.运行; }
@@ -966,8 +969,14 @@ async function tick(root, cfg, opts = {}) {
       if (派拒.length) {
         for (const x of 派拒) result.拒因.push(x);
         const 签 = 派拒.join('|');
-        if (签 !== 滞留拒签) { 滞留拒签 = 签; journal.append(root, `派发滞留 ${派拒.length} 项：${派拒.join('；')}`); }
-      } else 滞留拒签 = '';
+        if (签 !== 滞留拒签) { 滞留拒签 = 签; 滞留首见 = Date.now(); 滞留已急件 = false; journal.append(root, `派发滞留 ${派拒.length} 项：${派拒.join('；')}`); }
+        else if (!滞留已急件 && 滞留首见 && Date.now() - 滞留首见 >= 滞留急件阈毫) {
+          // 升格（2026-08-26 评审：流水一条单行在忙线上很快滚出视区，7h 级滞留不许只有它）——
+          // 同面挂满阈值升 inbox 急件，一签一次；面一变（解了/换单）计时重置。
+          滞留已急件 = true;
+          try { inbox.post(root, '急', '派发滞留', `滞留 ${派拒.length} 项超 ${Math.round(滞留急件阈毫 / 60000)} 分钟未解：${派拒.join('；').slice(0, 200)}`); } catch { /* 出声失败不阻断派发 */ }
+        }
+      } else { 滞留拒签 = ''; 滞留首见 = 0; 滞留已急件 = false; }
       for (const p of picks) {
         const t0 = store.find(root, p.id);
         if (!t0 || !['已排期', '待派', '待重派'].includes(t0.state)) continue; // H108：待投/池并入 待派；待重派=重投/复活回队；H116：已排期=排期到点的主派发态（readySet 同盘三态）
