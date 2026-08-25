@@ -3799,7 +3799,36 @@ async function viewRelay() {
   const working = d.作业;
   const on = !!d.值守;
   const stateColor = working ? 'var(--warn)' : (on ? 'var(--ok)' : 'var(--ink3)');
-  const stateText = working ? `作业中 · ${esc(working.用途)}${working.对象 ? ' ' + esc(working.对象) : ''}` : (on ? '在线值守' : '离线（执行器停）');
+  // 项管动态位（2026-08-25 制作人「想知道它到底有没有在干活有没有在重做排期」）：
+  // 作业行带已用分钟；空闲时给最近一条项管消息的时间+摘要——「现在在干什么」与「刚才干了什么」
+  // 都答得上。数据两口都已在下发（/api/relay 的 作业=brain.getWorking() 与 消息 尾巴），只缺呈现。
+  const 作业行 = (w) => {
+    if (!w) return null;
+    const 分 = w.起时 ? Math.max(0, Math.round((Date.now() - new Date(w.起时).getTime()) / 60000)) : null;
+    return `作业中 · ${esc(w.用途)}${w.对象 ? ' ' + esc(w.对象) : ''}${分 != null ? ` · 已 ${分} 分` : ''}`;
+  };
+  const 近讯 = (() => {
+    const 末 = ((d && d.消息) || []).filter((m) => m.from === '项管').slice(-1)[0];
+    if (!末) return '';
+    const t = String(末.t || '').slice(11, 16);
+    return `最近 ${t}：${esc(String(末.text || '').slice(0, 46))}${String(末.text || '').length > 46 ? '…' : ''}`;
+  })();
+  const stateText = 作业行(working) || (on ? '在线值守 · 空闲' : '离线（执行器停）');
+  // 项管动态位 15s 活体：只改 rl-dutyline/rl-dutylast 两个文本节点（作业开始/结束/分钟跳动
+  // 不等 30s 大轮询）；文本一致时一字不碰。
+  pollLoop('rl-dutyline', 15000, async () => {
+    const nd = await api('/api/relay?limit=8').catch(() => null);
+    if (!nd) return;
+    const el = $('rl-dutyline'); if (!el) return;
+    const 新行 = 作业行(nd.作业) || (nd.值守 ? '在线值守 · 空闲' : '离线（执行器停）');
+    if (el.textContent !== 新行.replace(/<[^>]+>/g, '')) el.innerHTML = 新行;
+    const 尾 = ((nd.消息) || []).filter((m) => m.from === '项管').slice(-1)[0];
+    const el2 = $('rl-dutylast');
+    if (el2 && 尾) {
+      const 文 = `最近 ${String(尾.t || '').slice(11, 16)}：${esc(String(尾.text || '').slice(0, 46))}${String(尾.text || '').length > 46 ? '…' : ''}`;
+      if (el2.innerHTML !== 文) el2.innerHTML = 文;
+    }
+  });
   // 15s 活体（与在途页同一口径）：只在「卡片构成或态/徽/链长度变了」时重画关键汇报区，
   // 平稳期一个字都不动——每 15s 无脑重刷 innerHTML 会把文本选择和展开动画打断。
   let sig0 = kSig(kc && kc.链);
@@ -3825,9 +3854,9 @@ async function viewRelay() {
   return `<div class="rlpage">
     <div class="card r16 rlstate">
       <span class="rldot" style="background:${stateColor};${on && !working ? 'animation:breathe 2.4s var(--ease-out) infinite;' : ''}${working ? 'animation:breathe-warn 1.6s var(--ease-out) infinite;' : ''}"></span>
-      <div style="flex:1;min-width:0"><b style="font-size:16px">${stateText}</b>
+      <div style="flex:1;min-width:0"><b style="font-size:16px" id="rl-dutyline">${stateText}</b>
         <p class="dim" style="margin:4px 0 0;font-size:12.5px">项管 ${esc(模型档)} · 在跑 ${Object.keys(L.在跑 || {}).length} 项 · 就绪队列 ${(L.就绪队列 || []).length} 单
-          · 待办 ${在排.length} 条在排（另 ${了结数} 条已了结）</p></div>
+          · 待办 ${在排.length} 条在排（另 ${了结数} 条已了结）${近讯 ? `<br><span id="rl-dutylast">${近讯}</span>` : `<span id="rl-dutylast"></span>`}</p></div>
       <button class="btn h32" onclick="rlToggle('编制')" title="编制快照：每职能一行，池序即路由优先级">编制快照</button>
     </div>
     <div class="rlroster${rlFold.编制 ? ' fold' : ''}" id="rl-编制">

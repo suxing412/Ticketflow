@@ -41,6 +41,12 @@ function 排程桩(叫过) {
         计数: {}, 名册: {},
       });
     }
+    if (url.startsWith('/api/relay')) {
+      // 项管动态位桩（2026-08-25 制作人「想知道它有没有在干活/在不在重排」）
+      return J({ 值守: true, 项管忙: true,
+        作业: { 用途: '排期作业', 起时: new Date(Date.now() - 3 * 60000).toISOString() },
+        消息: [{ t: '2026-08-25T22:30:00.000Z', from: '项管', text: '排期作业收官：落账 30 粒，未排 2' }] });
+    }
     if (url.startsWith('/api/schedule/队列')) {
       const p = (url.split('项目=')[1] || '').split('&')[0];
       const 全 = [
@@ -96,6 +102,9 @@ t('项管页三处读数是同一个数：页头 / 队列卡 / 传给后端滤�
   assert.ok(喂粒.includes('g5'), '已成单粒必须上图');
   assert.match(html, /成单中 1/, '孵化管道以「成单中 N」计数呈报——意向不画条但不许从账上消失');
   assert.match(html, /待办 \d+ 条在排/, '页头按 项目 算在排数');
+  // 项管动态位（08-25 制作人「有没有在干活/在不在重排」）：作业行带用途+已用分钟、近讯带时刻+摘要
+  assert.match(html, /作业中 · 排期作业 · 已 3 分/, '作业行须带用途与已用分钟——「在不在重排」一眼可答');
+  assert.ok(html.includes('rl-dutylast') && /排期作业收官/.test(html), '近讯行须带最近一条项管消息摘要——「刚才干了什么」也答得上');
   assert.match(html, /1 批 · 1 项未完/, '队列卡必须报同一个数——两个数就是两把尺');
 });
 
