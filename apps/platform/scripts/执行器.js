@@ -417,7 +417,50 @@ function 拉起(调用, 提示词, 工作目录, 回调) {
   const 起时 = Date.now();
   const 落 = (文) => { if (调用.落块) { try { 调用.落块(文); } catch { /* 落盘失败绝不打断真跑 */ } } };
   let 输出 = ''; let 错出 = ''; let 末次输出时 = 起时; let 已杀 = false;
-  const p = spawn(调用.cmd, 调用.args, { cwd: 工作目录, env: { ...process.env, ...(调用.env || {}) } });
+
+  // ——— spawn 会**同步抛**，而这里此前一点防护都没有（协-032）———
+  //
+  // 2026-08-25 实测：制作人 npm 装了 codex，适配器随即解析到 `%APPDATA%\npm\codex.cmd`。
+  // 而 **Node ≥20 在 Windows 上拒绝 spawn 一个 .cmd 而不带 shell**（CVE-2024-27980 的修复），
+  // 于是 `spawn EINVAL` 直接抛出来——连 p.on('error') 都进不去，未捕获异常**掀了整个执行器进程**。
+  // （守护把它 1 秒后重起了，那是协-019 第一次在真事故里生效；但一次派活就这么没了，
+  //   而调用方拿到的是 ECONNRESET——最难查的那种：看起来像网络问题，其实是进程没了。）
+  //
+  // 两条一起补：
+  //   ① .cmd/.bat 走 shell（这类包装脚本本来就得靠 cmd.exe 解释）。
+  //      本仓的 args 全是 `--flag value` 形式、提示词走 stdin，没有带空格的参数，shell 拼接是安全的；
+  //   ② 无论如何都把 spawn 包起来——**拉不起来是一种结局，不是一场事故**，
+  //      它该走回调、进回执、落进工单，跟退出码非 0 一个待遇。
+  const 是脚本 = process.platform === 'win32' && /\.(cmd|bat)$/i.test(String(调用.cmd || ''));
+
+  // 走 shell 就意味着 args 是**拼接**进命令行的，不转义（Node 自己会为此发 DEP0190 警告）。
+  // 而本仓的 args 里有一个来自请求体：`--model <体.model>`。
+  // 一个叫 `x & calc` 的模型名在 shell 模式下就是任意命令执行——服务虽然绑 127.0.0.1
+  // 且有令牌，但「带令牌的调用方能执行任意命令」不是这个产品打算给出的能力。
+  // 所以走 shell 之前逐个查：只放行常规 flag 与值，见到 shell 元字符就**拒跑**，不猜、不转义。
+  if (是脚本) {
+    const 坏 = (调用.args || []).find((a) => !/^[A-Za-z0-9_.,:@=\/\\+-]+$/.test(String(a)));
+    if (坏 != null) {
+      const 说 = `拒跑：命令是 .cmd 包装脚本（要走 shell），而参数里有 shell 元字符：${JSON.stringify(坏)}。`
+        + '走 shell 时参数是拼接不转义的，放行等于任意命令执行。'
+        + '改用真正的可执行文件（.exe），或把这个参数去掉。';
+      回调({ 退出码: -2, 输出: '', 错出: 说, 耗时毫秒: Date.now() - 起时, 验尸: 说, 活尾巴: null });
+      return;
+    }
+  }
+
+  let p;
+  try {
+    p = spawn(调用.cmd, 调用.args, {
+      cwd: 工作目录, env: { ...process.env, ...(调用.env || {}) }, ...(是脚本 ? { shell: true } : {}),
+    });
+  } catch (e) {
+    const 说 = `拉不起来：${e.code || ''} ${e.message}`
+      + (e.code === 'EINVAL' && 是脚本 ? '（.cmd 包装脚本需要 shell，本该已自动带上——看看 调用.cmd 是不是别的形状）' : '')
+      + `\n命令：${调用.cmd}`;
+    回调({ 退出码: -2, 输出: '', 错出: 说, 耗时毫秒: Date.now() - 起时, 验尸: 说, 活尾巴: null });
+    return;
+  }
 
   const 计时 = setInterval(() => {
     const 判 = 加固.软超时判定({ 现在: Date.now(), 起时, 末次输出时, 上限毫秒, 静默毫秒 });
