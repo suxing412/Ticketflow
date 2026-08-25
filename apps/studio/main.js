@@ -8,6 +8,10 @@ const { app, BrowserWindow, shell, dialog, ipcMain, Notification } = require('el
 // 也照样先对数据根动过一次手——锁写在下面，而副作用发生在上面。
 const start = (...a) => require('./server').start(...a);
 
+// Win11 Fluent 滚条不吃 ::-webkit-scrollbar 自定义（0.30.6 案：细滚条样式在壳里从未生效过，
+// 页面上永远是带箭头的原生粗条）——关掉该特性，滚条外观交还给样式表。
+app.commandLine.appendSwitch('disable-features', 'FluentScrollbar,FluentOverlayScrollbar');
+
 let win = null;
 
 async function createWindow() {
