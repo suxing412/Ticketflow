@@ -8,6 +8,7 @@ const { spawn } = require('child_process');
 const store = require('../core/store');
 const ledger = require('./ledger');
 const estimate = require('./estimate');
+const dependencyCycle = require('../dependency-cycle');
 
 /* ===================== 估时自校准接线（H101 · 施工令-050）=====================
  * 章程「估时校准步」四步：①取历史（历史样本）→②算偏差 ③校估值（pm/estimate 纯函数）
@@ -329,6 +330,12 @@ function draftFm(tk, { id, 项目, 粒ID, 依赖 }) {
 
 // 切单主流程：调 fable → 解析 → 建单（落待审态）挂容器 → 简报落台账待审
 // parentId 吃两形（见 容器()）：专项号 S-n（施工令-058 新路）或存量战役父单号。
+// TK-188：所有起草落盘均先将待落盘依赖并入未收口工单图进行判环。
+// 检测模块只读单库；命中真环时由既有 inbox 急件通道上呈，且不会调用 store.create。
+function 起草依赖闸(root, pending) {
+  return dependencyCycle.beforePersist(root, pending);
+}
+
 function cut(root, cfg, parentId, projPath, cb) {
   const parent = 容器(root, parentId, cfg);
   if (!parent) return cb({ ok: false, error: parentId && String(parentId).startsWith('S-') ? '专项不存在' : '父单不存在' });
@@ -366,14 +373,21 @@ function cut(root, cfg, parentId, projPath, cb) {
       if (mm && mm[1] === px) mx = Math.max(mx, Number(mm[2]));
     }
     const ids = tickets.map(() => `${px}-${++mx}`);
+    const pending = tickets.map((tk, i) => ({
+      id: ids[i],
+      fm: childFm(tk, { id: ids[i], ids, parentId, 项目: parent.fm.项目, 挂链: parent.挂链, 容器管线: parent.fm.管线 }),
+      body: tk.body,
+    }));
+    const gate = 起草依赖闸(root, pending);
+    if (!gate.ok) return cb(gate);
     const created = [];
     const 校痕 = [];
-    tickets.forEach((tk, i) => {
-      const fm = childFm(tk, { id: ids[i], ids, parentId, 项目: parent.fm.项目, 挂链: parent.挂链, 容器管线: parent.fm.管线 });
-      const 记 = 校准落fm(root, ids[i], fm, 校.表); // H101 机器兜底：落盘前用同一张表复核估值
-      if (记) 校痕.push(ids[i] + ' ' + estimate.记录一行(记));
-      const r = store.create(root, ids[i], fm, tk.body);
-      if (r.ok) created.push(ids[i]);
+    pending.forEach((ticket) => {
+      const { id, fm } = ticket;
+      const 记 = 校准落fm(root, id, fm, 校.表); // H101 机器兜底：落盘前用同一张表复核估值
+      if (记) 校痕.push(id + ' ' + estimate.记录一行(记));
+      const r = store.create(root, id, fm, ticket.body);
+      if (r.ok) created.push(id);
     });
     // 简报落台账，事件=待审（Claude 制作人层审批后放行）
     const briefPath = path.join(ledger.DIR(root), `拆单简报-${parentId}.md`);
@@ -546,6 +560,58 @@ function schedulePlan(root, cfg, opts, cb) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
+// 排期复判（H115 增补，2026-08-25 制作人拍板）：工单落袋或产线空转时，项管判断要不要重排。
+// 规则预筛免 token（值得问才起会话）由调用方（runner）做；本函数=项管小会话：
+// 注入盘面 → 契约输出 {决定:'维持'|'重排', 因} → 重排则续调 schedulePlan(含已排) 一气呵成。
+function replanReview(root, cfg, 触因, cb) {
+  const schedule = require('./schedule');
+  const 全 = schedule.现态(root);
+  const 在排 = 全.filter((g) => g.状态 !== '完成' && g.状态 !== '撤销' && (g.计划开始 || g.计划完成));
+  const now = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  const 今 = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}T${p(now.getHours())}:${p(now.getMinutes())}`;
+  const prompt = [
+    '你是单流的「项目管理」职能。产线触发了排期复判（H115）——判断现有排期还成不成立、要不要重排。',
+    '触因：' + String(触因 || '').slice(0, 200),
+    '只答判断，输出契约：一段 80 字内理由，然后一个 ```json 代码块：{"决定":"维持|重排","因":"一句话"}',
+    '「重排」的门槛：排期与现实的偏差已影响后续单的可信度（整体前移/滞后超 2 小时、依赖链错位、产线将长时间空转）。小偏差维持——排期不是秒表。',
+    '',
+    '=== 今时 ===', 今,
+    '=== 在排粒（计划 vs 现状）===',
+    在排.map((g) => JSON.stringify({ 粒ID: g.粒ID.slice(0, 8), 题: (g.题 || '').slice(0, 20), 状态: g.状态, 计划: (g.计划开始 || '') + '→' + (g.计划完成 || ''), 单号: g.单号 })).join('\n') || '（无）',
+  ].join('\n');
+  const cmd = cli();
+  const model = (cfg.模型 || {}).项管 || 'fable';
+  setWorking({ 用途: '排期复判' });
+  const child = spawn(cmd, ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'],
+    { cwd: root, env: { ...process.env }, windowsHide: true, shell: String(cmd).endsWith('.cmd') });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; if (out.length > 200000) out = out.slice(-100000); });
+  const timer = setTimeout(() => { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch { /**/ } }, 3 * 60000);
+  if (timer.unref) timer.unref();
+  child.on('close', () => {
+    setWorking(null);
+    clearTimeout(timer);
+    billFee(root, '排期复判', out);
+    const text = require('../runner').extractClaudeText(out).trim();
+    const 判 = parse复判(text);
+    if (!判) return cb({ ok: false, error: '复判未按契约出 JSON', text: text.slice(0, 200) });
+    if (判.决定 === '重排') {
+      schedulePlan(root, cfg, { 含已排: true }, (a) => cb({ ok: true, 决定: '重排', 因: 判.因, 重排结果: a.text || a.error }));
+    } else {
+      cb({ ok: true, 决定: '维持', 因: 判.因 });
+    }
+  });
+  try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
+}
+// 复判契约解析（纯函数，可单测）：```json {决定,因}```，决定 只认 维持/重排
+function parse复判(text) {
+  const m = String(text || '').match(/```json\s*([\s\S]*?)```/);
+  if (!m) return null;
+  try { const j = JSON.parse(m[1]); return ['维持', '重排'].includes(j.决定) ? { 决定: j.决定, 因: String(j.因 || '') } : null; }
+  catch { return null; }
+}
+
 // 评估回呈裁决（H61，2026-08-05 用户拍板）：执行会话判定做不了 → 项管裁决 改单/改池/上呈。
 // 三轮封顶由 runner 把关（≥3 直接上呈总监不再进此函数）。
 function adjudicateReferral(root, cfg, id, cb) {
@@ -660,6 +726,8 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
     const 粒ID = ((opts || {}).粒ID) || null;
     // P0-7：委托方（/api/pm/draft）解析好的依赖单号串，直落 fm——不依赖模型转述。
     const fm = draftFm(tk, { id: nid, 项目, 粒ID, 依赖: ((opts || {}).依赖) || null });
+    const gate = 起草依赖闸(root, { id: nid, fm, body: tk.body });
+    if (!gate.ok) return cb(gate);
     const 记 = 校准落fm(root, nid, fm, 校.表); // H101 机器兜底：落盘前复核估值
     const r = store.create(root, nid, fm, tk.body);
     if (!r.ok) return cb(r);
@@ -682,5 +750,5 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
-module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, schedulePlan, buildCutPrompt, buildDraftPrompt,
-  parseTickets, parse拒切, childFm, draftFm, getWorking, 历史样本, 备校准, 校准落fm, 容器, 前缀Of, 下一号 };
+module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, schedulePlan, replanReview, parse复判, buildCutPrompt, buildDraftPrompt,
+  parseTickets, parse拒切, childFm, draftFm, 起草依赖闸, getWorking, 历史样本, 备校准, 校准落fm, 容器, 前缀Of, 下一号 };

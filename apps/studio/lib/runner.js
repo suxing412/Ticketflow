@@ -9,6 +9,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { randomUUID } = require('crypto');
 const { spawn } = require('child_process');
 const store = require('./core/store');
 const state = require('./core/state');
@@ -17,6 +18,7 @@ const roster = require('./roster');
 const lifecycle = require('./lifecycle');
 const journal = require('./journal');
 const inbox = require('./inbox');
+const eventarchive = require('./eventarchive');
 
 // 内存态：正在执行的工作（agentId → { id, kind, startedAt, timer, child }）。
 // exe 重启即清空，tick 为"在途/质检有主办但无执行记录"的单重新拉起（断点恢复）。
@@ -496,7 +498,7 @@ function 计量回灌(root, o = {}, bd) {
 async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   if (!agentId || running.has(agentId) || busyTickets().has(t.id)) return false;
   const rc = cfg.执行器 || {};
-  const entry = { id: t.id, kind, startedAt: opts.nowIso || new Date().toISOString(), 池: kind === '执行' ? (t.fm.执行池 || null) : 'claude' };
+  const entry = { id: t.id, kind, startedAt: opts.nowIso || new Date().toISOString(), 池: kind === '执行' ? (t.fm.执行池 || null) : 'claude', runId: randomUUID() };
   running.set(agentId, entry);
   const finishOk = (note, verdict) => {
     try { finishOkInner(note, verdict); } catch (e) {
@@ -767,7 +769,8 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       // 一刀切剥掉会让需要代理的机器上 *-key 池必死（2026-08-08 死代理案的反向教训）。
       if (compat.base) { delete env.HTTPS_PROXY; delete env.HTTP_PROXY; delete env.https_proxy; delete env.http_proxy; }
     }
-    child = spawn(cmd, args, { cwd: proj.path, env, windowsHide: true, shell: cmd.endsWith('.cmd'), stdio: ['pipe', 'pipe', 'pipe'] });
+    // opts.spawn 仅供离线测试把假的 CLI 流喂进**同一条**收线逻辑；生产调用从不传，仍是原 spawn。
+    child = (opts.spawn || spawn)(cmd, args, { cwd: proj.path, env, windowsHide: true, shell: cmd.endsWith('.cmd'), stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (e) { failLocal('CLI 启动失败：' + e.message); return true; }
   entry.child = child;
   // 凭据来源入流水（施工令-029）：迁移后要看得见「这一发到底是从托管取的还是从 config 兜底取的」。
@@ -775,8 +778,17 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name} · 超时闸 ${rc.执行超时分钟 ?? 30}m 派发时快照${compat ? ' · 凭据' + compat.来源 : ''}）`); // 夜班推演 #3：热改超时不作用于在跑会话，快照值写明防误判
   let out = '', errout = '', 计量流 = '', 活片 = '';
   const 分拣 = stream ? 流分拣器() : null;
+  // 只接已经在此处消费的 stream-json stdout；存档模块不能另开 reader 或改动本回调顺序。
+  const 存档 = stream ? eventarchive.打开(root, cfg, { 单号: t && t.id, runId: entry.runId }) : null;
+  let 存档已收尾 = false;
+  const 收尾存档 = () => {
+    if (!存档 || 存档已收尾) return;
+    存档已收尾 = true;
+    存档.收尾();
+  };
   child.stdout.on('data', (d) => {
     entry.收字节 = (entry.收字节 || 0) + d.length; // 活性字节（施工令-010）：零输出看门狗的判据 = stdout∪stderr
+    if (存档) 存档.写(d); // 原始字节逐行落盘；失败由模块吞掉并仅留一行告警
     // 活尾巴：stream-json 走行分拣（整块文本 + 增量片），纯文本流走 tailFrom（stdout 优先、stderr 兜底）
     if (!分拣) {
       out += d; if (out.length > 800000) out = out.slice(-400000);
@@ -830,11 +842,12 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   };
   killer = setTimeout(checkDeadline, timeoutMs);
   if (killer.unref) killer.unref();
-  child.on('error', (e) => { clearTimeout(killer); failLocal('CLI 错误：' + e.message); });
+  child.on('error', (e) => { clearTimeout(killer); 收尾存档(); failLocal('CLI 错误：' + e.message); });
   child.on('close', (code) => {
     clearTimeout(killer);
-    if (!running.has(agentId)) return; // 已被超时处理
     if (分拣) { const r = 分拣.收尾(); out += r.主; 计量流 += r.计量; } // 末行（常无换行符）也要进账
+    收尾存档(); // 清理收尾时把当前 run 显式列为活跃，绝不自删
+    if (!running.has(agentId)) return; // 已被超时处理
     // 预算记账（施工令-021 → 047 流计量回灌）：口径与落账全在 计量回灌 里，它永不抛——
     // 交单这条路上不许有第二个可能崩的点（信 §四.3：保险丝坏了不该顺带炸掉产线）。
     计量回灌(root, { 池: cliPool, 单: t.id, 流: 计量流, 流式: !!stream });
@@ -845,6 +858,44 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
 }
 
 // 一轮扫描。所有闸都复用既有路径（pool.claim / gates），执行器不自带门。
+/* ---- 排期复判触发（H115 增补）：两个触发点＝①有单新落袋（完成/归档 计数涨）②产线空转
+   （在途 0 且就绪池空 且 存在未到点排期粒——节拍器把活拦在门外，此刻正该问「排期还准不准」）。
+   规则预筛（零 token）命中才起项管小会话；防抖 15 分钟；pmBusy（brain 有活）时让路。 ---- */
+let 复判上次 = 0;
+let 复判落袋签 = null;
+function 排期复判Tick(root, cfg, sim) {
+  if (sim) return;
+  try {
+    const now = Date.now();
+    if (now - 复判上次 < 15 * 60000) return;
+    if (require('./pm/brain').getWorking()) return;      // 项管手头有活，让路
+    const 落袋数 = store.list(root, '完成').length + store.list(root, '归档').length;
+    const 在途数 = store.list(root, '在途').length;
+    const 签 = String(落袋数);
+    const 有新落袋 = 复判落袋签 != null && 签 !== 复判落袋签;
+    复判落袋签 = 签;
+    let 触因 = null;
+    if (有新落袋) 触因 = '有单落袋（完成/归档合计 ' + 落袋数 + '）——校一校后续排期还准不准';
+    else if (在途数 === 0) {
+      const D = require('./pm/dispatch');
+      const 就绪 = D.readySet(root, null);
+      if (!就绪.length) {
+        const S = require('./pm/schedule');
+        const 未到点 = S.现态(root).filter((g) => g.状态 === '已成单' && g.计划开始 &&
+          S.计划毫秒(g.计划开始) > now).length;
+        if (未到点 > 0) 触因 = '产线空转：在途 0、就绪 0，而 ' + 未到点 + ' 粒排期未到点——排期是否过于保守';
+      }
+    }
+    if (!触因) return;
+    复判上次 = now;
+    require('./journal').append(root, `排期复判触发（H115）：${触因}`);
+    require('./pm/brain').replanReview(root, cfg, 触因, (a) => {
+      require('./journal').append(root, `排期复判收官：${a.ok ? a.决定 + '——' + (a.因 || '') : '失败 ' + a.error}`.slice(0, 160));
+      try { require('./relay').append(root, '项管', `排期复判（${触因.slice(0, 40)}…）：${a.ok ? a.决定 + '。' + (a.因 || '') + (a.重排结果 ? ' ' + a.重排结果 : '') : '失败：' + a.error}`); } catch { /* 信道不通不阻塞 */ }
+    });
+  } catch (e) { try { require('./journal').append(root, '排期复判触发异常：' + e.message); } catch { /* 双失稳不再叠 */ } }
+}
+
 async function tick(root, cfg, opts = {}) {
   // 人闸升格放在 isOn 早退**之前**（2026-08-21 体检纠正）：
   // 原先放在早退之后，于是「执行器一停，升格就整个停」——而注释写着「人欠的债不因产线停摆而消失」。
@@ -865,6 +916,10 @@ async function tick(root, cfg, opts = {}) {
   // 反转后：缺键＝派发制（立宪态），要回退旧路必须**显式写 false**——退回旧制是需要留下意图的动作。
   // 发行侧两份模板同批补了这一格（lib/setup.js 内置模板 + 套件模板），此处是最后一道兜底。
   const dispatchMode = !(cfg.执行器 && cfg.执行器.派发制 === false);
+
+  // 排期复判触发（H115 增补，2026-08-25 制作人拍板）：单落袋或产线空转时项管判断要不要重排。
+  // 规则预筛免 token，命中才起小会话（brain.replanReview → 维持/重排+含已排作业）。防抖 15 分钟。
+  排期复判Tick(root, cfg, sim);
 
   // ① 断点恢复 + 在途执行（待复核单不起工，D36）
   for (const t of store.list(root, '在途')) {
@@ -1077,6 +1132,7 @@ function stop升格环() { if (升格Timer) { clearInterval(升格Timer); 升格
 function start(root, getCfg) {
   state.update(root, (s) => { s.执行器 = { ...(s.执行器 || {}), 运行: true }; delete s.执行器.试跑; delete s.执行器.实弹解锁; });
   journal.append(root, '执行器启动（实弹：运行即真调 CLI，停手闸=暂停总闸）');
+  eventarchive.清理(root, getCfg());
   startLoop(root, getCfg);
 }
 function stop(root) {

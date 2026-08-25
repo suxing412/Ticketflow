@@ -45,24 +45,44 @@ function readySet(root, crit) {
   // 落在这里而不是 runner：readySet 是派发制唯一的就绪入口，堵住它就堵住整条派发路；
   // 且巡检的零派发看门狗走同一函数，熔断期它读到空队列，不会再叠一条「该派没派」的误报。
   if (require('../sentinel').熔断(root).熔断) return [];
+  // 排期节拍器（H115 候补，2026-08-25 制作人拍板 A 案「图=现实」）：有粒挂钩的单，
+  // 粒.计划开始 未到点不入就绪——甘特上的条从此就是真实执行承诺，产线按排期节奏走。
+  // 散单（无 粒ID）不受节拍约束（排期外的杂活照旧容量驱动）；粒查不到（挂钩悬空）同散单——
+  // 宁可派了也不许一张单因台账残缺被永久卡死（悬空已有 journal 留痕路）。
+  let 粒表 = null;
+  const 到点 = (t) => {
+    const gid = t.fm && t.fm.粒ID;
+    if (!gid) return true;
+    if (!粒表) {
+      const S = require('./schedule');
+      粒表 = new Map(S.现态(root).map((g) => [g.粒ID, g]));
+    }
+    const g = 粒表.get(String(gid));
+    if (!g || !g.计划开始) return true;
+    return require('./schedule').计划毫秒(g.计划开始) <= Date.now();
+  };
   const out = [];
   for (const st of ['待派', '待重派']) for (const t of store.list(root, st)) {
     if (!t.fm.放行) continue;
     if (t.fm.待复核) continue; // 挂起旗同样拦派发（2026-08-05 推演补漏：此前只拦断点续跑）
     if (t.fm.挂起) continue;   // H108 挂起已是目录态（住 挂起 目录的单根本不在本表）；旧 fm.挂起 标记过渡期兼认
     if (!depsDone(root, t)) continue;
+    if (!到点(t)) continue;    // 排期节拍器（H115）
+    const g = t.fm.粒ID && 粒表 ? 粒表.get(String(t.fm.粒ID)) : null;
     out.push({ id: t.id, 态: st, 职能: t.fm.职能, 优先级: t.fm.优先级 || 'P2', 执行池: t.fm.执行池 || null, // 池章直通（0.22.2：兼容池评测单盖章曾被 poolFor 覆盖）
-      红链: crit ? crit.has(t.id) : false, 创建时间: t.fm.创建时间 || '' });
+      红链: crit ? crit.has(t.id) : false, 创建时间: t.fm.创建时间 || '',
+      计划开始: (g && g.计划开始) || '' });
   }
   return out;
 }
 
-// 排序（H43⑤ 沿用）：优先级 > 红链 > 创建时间
+// 排序（H43⑤ 沿用 + H115 排期次序）：优先级 > 红链 > 计划开始（排期先后即派发先后）> 创建时间
 function sortReady(list) {
   const P = { P0: 0, P1: 1, P2: 2, P3: 3 };
   return [...list].sort((a, b) =>
     (P[a.优先级] ?? 9) - (P[b.优先级] ?? 9)
     || (b.红链 ? 1 : 0) - (a.红链 ? 1 : 0)
+    || String(a.计划开始 || '9999').localeCompare(String(b.计划开始 || '9999'))
     || String(a.创建时间).localeCompare(String(b.创建时间)));
 }
 
