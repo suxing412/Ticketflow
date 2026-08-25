@@ -10,7 +10,7 @@ const start = (...a) => require('./server').start(...a);
 
 // Win11 Fluent 滚条不吃 ::-webkit-scrollbar 自定义（0.30.6 案：细滚条样式在壳里从未生效过，
 // 页面上永远是带箭头的原生粗条）——关掉该特性，滚条外观交还给样式表。
-app.commandLine.appendSwitch('disable-features', 'FluentScrollbar,FluentOverlayScrollbar');
+if (app && app.commandLine) app.commandLine.appendSwitch('disable-features', 'FluentScrollbar,FluentOverlayScrollbar'); // 测试桩的 app 无此面
 
 let win = null;
 
