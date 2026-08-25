@@ -142,7 +142,9 @@ function 仲裁定(root, id, 决定, 说明) {
   if (!to) return { ok: false, error: `未知决定：${决定}（裁过/上呈/打回）` };
   const patch = 决定 === '上呈'
     ? (fm) => { fm.上呈原因 = 记上呈原因(`仲裁裁不了上呈${t.fm.仲裁因 ? `：${t.fm.仲裁因}` : ''}${说明 ? ` · ${说明}` : ''}——需总监分诊`); }
-    : null;
+    // 打回=回炉重做：旧审检章一并销（2026-08-26 TK-197 案：给方向回在途后旧 代核:不过 章残留，
+    // 新产出交回核查时被孤儿补链按旧章再送仲裁成循环；章是对上一版产出的判断，回炉即失效）
+    : 决定 === '打回' ? (fm) => { delete fm.代核; delete fm.核查; delete fm.初检; } : null;
   const r = store.move(root, id, '仲裁', to, patch, nowIso());
   if (r.ok) {
     journal.append(root, `仲裁定 ${id}：${决定}（仲裁→${to}${说明 ? ` · ${String(说明).slice(0, 60)}` : ''}）`);
@@ -163,7 +165,7 @@ function 定夺(root, id, 决定, 方向, 裁决人) {
   const to = map[决定];
   if (!to) return { ok: false, error: `未知决定：${决定}（接受/给方向/废弃）` };
   const patch = 决定 === '废弃' ? (fm) => { fm.废弃因 = '定夺废弃'; }
-    : 决定 === '给方向' ? (fm) => { fm.自修次数 = 0; delete fm.执行池; } : null; // 运行章随会话销毁（2026-08-26 评审补：回队第六路）
+    : 决定 === '给方向' ? (fm) => { fm.自修次数 = 0; delete fm.执行池; delete fm.代核; delete fm.核查; delete fm.初检; } : null; // 运行章随会话销毁＋旧审检章随回炉销（2026-08-26 TK-197 案同判）
   const r = store.move(root, id, '待处理', to, patch, nowIso());
   if (r.ok) {
     if (决定 === '给方向' && 方向) {
