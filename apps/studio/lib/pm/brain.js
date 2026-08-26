@@ -333,6 +333,24 @@ function childFm(tk, { id, ids, parentId, 项目, 挂链, 容器管线 }) {
   };
 }
 
+// 重排集（2026-08-26 复判空转案，抽出供判据直调）：含已排模式下哪些粒可以重想。
+// 原样只收「计划」态，而卡产线的粒早已**已成单**（工单在待派/已排期候到点，一行没执行），
+// 前移它们正是复判想要的动作——于是「复判判重排 → schedulePlan 回无事可排 → 空转照旧」
+// 连转三轮（17:32/17:47 两判，最近一次真重排停在昨日 18:46）。
+// 收口：已成单粒**只要工单未了结**就可重排；已进在途/审检的不动（那时改计划是改历史）。
+function _重排集(root, opts, 全) {
+  const 表 = 全 || require('./schedule').现态(root); // schedule 在各调用点是局部量，这里就地取
+  const 未了结 = (g) => {
+    if (!g.单号 || !/^[A-Za-z]+-\d+$/.test(String(g.单号))) return true; // 悬空粒按可排处理
+    try {
+      const t = require('../core/store').find(root, String(g.单号));
+      return !t || ['待审', '待派', '待重派', '已排期'].includes(t.state);
+    } catch { return false; }
+  };
+  return 表.filter((g) => (g.计划开始 || g.计划完成)
+    && (g.状态 === '计划' || (g.状态 === '已成单' && 未了结(g))));
+}
+
 // 归属自上级（2026-08-26 假 100% 案）：排程粒的 上级（F-n/S-n/P-n）翻成工单的直接归属档。
 // 案发：受托起草只透传了 粒ID/依赖，归属三档一档不落 → 孵化的 ~29 张单在工单页管线聚合里
 // 集体失踪，分母只剩老单，四条管线齐报 99-100% 落袋。工单只记直接上级（同 H 系口径），
@@ -564,7 +582,12 @@ function schedulePlan(root, cfg, opts, cb) {
   const 未排 = schedule.未排期粒(root);
   // 含已排（2026-08-25 制作人「项管要有自我思考」）：整批重排模式——计划态已排粒也入作业，
   // 项管可推翻自己的旧计划重想；默认只排欠账。
-  const 重排集 = opts.含已排 ? 全.filter((g) => g.状态 === '计划' && (g.计划开始 || g.计划完成)) : [];
+  // 重排集口径（2026-08-26 修：复判判重排却三轮「无事可排」案）——原样只收「计划」态粒，
+  // 而卡产线的粒早已**已成单**（工单在待派/已排期候到点，一行代码都没执行），前移它们的计划
+  // 正是复判想要的动作。于是出现「复判判重排 → schedulePlan 回无事可排 → 空转照旧」的死循环
+  // （17:32/17:47 连判两轮，最近一次真重排还停在昨日 18:46）。
+  // 收口：已成单粒**只要工单未了结**就可重排；已进在途/审检的不动（那时改计划是改历史）。
+  const 重排集 = opts.含已排 ? _重排集(root, opts, 全) : [];
   const 作业粒 = [...未排, ...重排集];
   if (!作业粒.length) return cb({ ok: false, error: '没有可排粒——无事可排' });
   const 已排 = opts.含已排 ? [] : 全.filter((g) => (g.计划开始 || g.计划完成) && !schedule.终态.includes(g.状态));
@@ -815,5 +838,5 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
 
-module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, schedulePlan, replanReview, parse复判, 归属自上级, draftFm, buildCutPrompt, buildDraftPrompt,
+module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, schedulePlan, replanReview, parse复判, 归属自上级, _重排集, draftFm, buildCutPrompt, buildDraftPrompt,
   parseTickets, parse拒切, childFm, draftFm, 起草依赖闸, 项目落点闸, getWorking, 历史样本, 备校准, 校准落fm, 容器, 前缀Of, 下一号 };

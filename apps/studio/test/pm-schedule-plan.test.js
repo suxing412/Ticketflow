@@ -86,6 +86,28 @@ await t('④ 路由行为：无未排期粒 400 不受理（STUB 真服务）', 
   assert.match(String(j.error), /无事可排/, '拒因如实');
 });
 
+
+await t('③ 重排集口径（2026-08-26 复判空转案）：已成单但工单未了结的粒可重排；已在途的不动', () => {
+  const store = require('../lib/core/store');
+  const B = require('../lib/pm/brain');
+  const 根 = fs.mkdtempSync(path.join(os.tmpdir(), 'replan-'));
+  store.ensureDirs(根);
+  fs.writeFileSync(path.join(根, 'studio.config.json'), JSON.stringify({ 项目: { 注册: { TK: {} }, 默认: 'TK' } }));
+  const 造 = (id, 态, fm) => fs.writeFileSync(path.join(根, 态, id + '.md'),
+    '---' + String.fromCharCode(10) + Object.entries({ id, title: id, 职能: '程序', ...fm }).map(([k, v]) => k + ': ' + JSON.stringify(v)).join(String.fromCharCode(10)) + String.fromCharCode(10) + '---' + String.fromCharCode(10) + '正文' + String.fromCharCode(10));
+  S.登记(根, [{ 题: '候派粒', 预估单元: 1, 来源: '判据', 计划开始: '2026-08-26T20:15', 计划完成: '2026-08-26T21:15', 因: 'x' },
+    { 题: '在途粒', 预估单元: 1, 来源: '判据', 计划开始: '2026-08-26T22:15', 计划完成: '2026-08-26T23:15', 因: 'x' }], '项管');
+  const [g1, g2] = S.现态(根);
+  S.挂钩起草(根, g1.粒ID, 'TK-901'); S.挂钩起草(根, g2.粒ID, 'TK-902');
+  造('TK-901', '已排期', { 放行: true }); 造('TK-902', '在途', { 主办: '程序·TK-902' });
+  for (const g of S.现态(根)) {
+    const c = S.取(根, g.粒ID);
+    S.转移(根, { 粒ID: g.粒ID, 预期版本: c.版本号, 目标: '已成单', 操作者: '总监', 说明: '判据' });
+  }
+  const 号 = B._重排集(根, { 含已排: true }).map((g) => g.单号).sort();
+  assert.deepEqual(号, ['TK-901'], '已排期候派的可重排、在途的不动（实得 ' + JSON.stringify(号) + '）');
+});
+
 console.log('全部通过：' + passed + ' 项');
 process.exitCode = 0; setTimeout(() => process.exit(0), 150).unref();
 })().catch((e) => { console.error('  不通过：' + (e && e.message)); console.error(e && e.stack); process.exit(1); });
