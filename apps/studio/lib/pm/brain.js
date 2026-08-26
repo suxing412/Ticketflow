@@ -203,7 +203,14 @@ function parseTickets(text) {
   const lines = String(text == null ? '' : text).split('\n');
   let 收 = null; let 深 = 0;
   const 落一张 = (体) => {
-    const [head, ...bodyParts] = 体.split(/^---$/m);
+    // 前置空段跳过（2026-08-26 fm 错位案 TF-8/TF-12）：模型偶尔在 frontmatter 前多打一个 ---，
+    // 于是 split 的第一段是空白、真 fm 落到第二段——head 空则 fm 全取兜底值（title=起草单/
+    // 单型=修复单/预计时间=0.25），假估值一路进排期与预检。取**第一个含 key: value 的段**当 head。
+    const 段 = 体.split(/^---$/m);
+    let hi = 0;
+    while (hi < 段.length - 1 && !/^[\w一-鿿]+:\s*\S/m.test(段[hi])) hi++;
+    const head = 段[hi];
+    const bodyParts = 段.slice(hi + 1);
     const fm = {};
     for (const line of head.split('\n')) {
       const mm = line.match(/^([\w一-鿿]+):\s*(.*)$/);
@@ -436,7 +443,7 @@ function cut(root, cfg, parentId, projPath, cb) {
     ledger.event(root, '待审', { 父单: parentId, 子单: created, 简报: briefPath });
     // 0.23.3：拆单简报本体主动贴进项管信道——制作人不该去翻台账文件（用户实测困惑）
     try { require('../relay').发(root, '项管', '拆单完成：' + parentId + ' → ' + created.join('、') + '（简报呈 Claude 审批后放行）' + String.fromCharCode(10) + String.fromCharCode(10) + (brief || '（无简报正文）')); } catch { /* 信道失败不阻塞 */ }
-    cb({ ok: true, 子单: created, 简报: briefPath });
+    cb({ ok: true, 子单: created, 简报: briefPath, 依赖异常: gate.report.anomalies });
   });
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }
@@ -785,7 +792,7 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
         + (记 ? String.fromCharCode(10) + String.fromCharCode(10) + '估时校准（机器复核）：' + estimate.记录一行(记) : ''));
     } catch { /**/ }
     ledger.event(root, '待审', { 单: nid, 起草: '单张' }); // 不写父单/子单：夜班推演 #7——伪装拆单结构会污染 H53 收口/成本归集
-    cb({ ok: true, 单: nid });
+    cb({ ok: true, 单: nid, 依赖异常: gate.report.anomalies });
   });
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 兜底 */ }
 }

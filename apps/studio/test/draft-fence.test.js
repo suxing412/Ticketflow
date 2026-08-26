@@ -47,4 +47,20 @@ t('④ 未闭合 ticket 块（上游真截停）：宁缺毋残，不落半张',
   assert.equal(r.tickets.length, 0, '残块不成单——半张残单正是本案病灶，宁可空手触发重试');
 });
 
+t('⑤ fm 前多打一个 ---（TF-8/TF-12 错位案）：真 fm 仍进 fm，不落兜底值', () => {
+  // 案发：模型在 frontmatter 前多打 ---，split 首段为空 → head 空 → fm 全取兜底
+  // （title=起草单 / 单型=修复单 / 预计时间=0.25），假估值一路进排期与切单预检。
+  const 体 = '\n---\ntitle: OAuth拒派去重自证\n单型: 工程单\n预计时间: 0.75h\n---\n## 背景\n正文在此';
+  const r = B.parseTickets('```ticket\n' + 体 + '\n```');
+  assert.equal(r.tickets.length, 1);
+  assert.equal(r.tickets[0].fm.title, 'OAuth拒派去重自证', '真 fm 必须进 fm（实得 ' + JSON.stringify(r.tickets[0].fm).slice(0, 60) + '）');
+  assert.equal(r.tickets[0].fm.单型, '工程单');
+  assert.equal(r.tickets[0].fm.预计时间, '0.75h');
+  assert.ok(/## 背景/.test(r.tickets[0].body) && !/单型/.test(r.tickets[0].body), 'fm 不许残留在正文里');
+  // 正常形态零回归
+  const r2 = B.parseTickets('```ticket\ntitle: 正常单\n单型: 实现单\n---\n## 背景\n文\n```');
+  assert.equal(r2.tickets[0].fm.title, '正常单');
+  assert.ok(/## 背景/.test(r2.tickets[0].body));
+});
+
 console.log('全部通过：' + passed + ' 项');
