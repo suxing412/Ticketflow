@@ -91,6 +91,46 @@ function 装依赖(工作路径, 工单, 超时毫秒) {
   return 记;
 }
 
+// 还有哪些包没装上（协-035）——`需要依赖` 是**手写**的，写漏了不会有任何提前告警。
+//
+// 案源：2026-08-26 HW-4。协-034 刚让判官跑得动命令，第一次真判就又是「验不了」，
+// 理由换成了：typecheck 挂在 apps/agent 的 vitest/globals、一个测试文件挂在 linkedom。
+// 单子上写的是 `需要依赖: ["tooling","services/api"]`——**它只列了这张单改到的目录**，
+// 而这个仓的 typecheck / unit 是扫全部 workspace 的。少一个包，整条命令就跑不完。
+//
+// 代价是实的：这个错要烧掉一整轮判官真跑（约 3.5 分钟 + token）才看得见，
+// 而它本可以在**派活之前**用一次目录扫描说出来。所以扫。
+//
+// 两条纪律：
+//   ① **只在工单声明了 需要依赖 时才报**。什么都没声明的单不打算跑命令，
+//      对它报「这十个包没装」纯属噪音——绝大多数单都是这一类。
+//   ② **只报不拦**。这是诊断不是闸：真有仓就是只装一部分照样能验，
+//      替人断言「你漏了」然后拦下来，会拦掉正确的单。判断留给人。
+//
+// 不递归进 node_modules（那里面全是带 package.json 的目录，扫进去既慢又全是废话），
+// 也不递归太深：monorepo 的包基本都在 apps/* services/* packages/* 这一层。
+const 跳过目录 = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage']);
+function 缺依赖目录(工作路径, 工单, 上限深度 = 3) {
+  if (!依赖目录表(工单).length) return [];      // 纪律①：没声明就不报
+  const 缺 = [];
+  const 走 = (绝对, 深) => {
+    let 项;
+    try { 项 = fs.readdirSync(绝对, { withFileTypes: true }); } catch { return; }
+    if (fs.existsSync(path.join(绝对, 'package.json'))
+      && !fs.existsSync(path.join(绝对, 'node_modules'))
+      && 绝对 !== 工作路径) {
+      缺.push(path.relative(工作路径, 绝对).replace(/\\/g, '/'));
+    }
+    if (深 >= 上限深度) return;
+    for (const 子 of 项) {
+      if (!子.isDirectory() || 跳过目录.has(子.name) || 子.name.startsWith('.')) continue;
+      走(path.join(绝对, 子.name), 深 + 1);
+    }
+  };
+  走(path.resolve(工作路径), 0);
+  return 缺;
+}
+
 function configOf(cfg) {
   const value = cfg.workspace || cfg.工作区 || {};
   return {
@@ -454,6 +494,10 @@ function prepare(monitorRoot, cfg, ticket, project, options = {}) {
   // 先装再合的话装的是旧的那一份。
   const 装 = 装依赖(workPath, ticket, wc.装依赖超时毫秒);
   if (装) result.依赖 = 装;
+  // 装完再扫（协-035）：漏声明的包在这一刻才看得出来，而这里仍在拉起 agent **之前**，
+  // 说出来零成本。只报不拦——见 缺依赖目录 的纪律②。
+  const 缺 = 缺依赖目录(workPath, ticket);
+  if (缺.length) result.可能缺依赖 = 缺;
   return result;
 }
 
@@ -574,6 +618,11 @@ function 审阅区(monitorRoot, cfg, project, 单号, commit, 工单) {
     const 装 = 装依赖(path.resolve(target), 工单, wc.装依赖超时毫秒);
     if (装) 出.依赖 = 装;
   } catch (e) { 出.依赖失败 = String(e.message).split(/\r?\n/)[0]; }
+  // 判官这一侧是这条诊断最该出现的地方（协-035）：审阅区漏装一个包，
+  // 判官就只能给「验不了」，而人拿到的原话是「多半是工单要声明 需要依赖」——
+  // **该声明哪个** 全靠猜。扫一遍就不用猜了。
+  const 缺 = 缺依赖目录(path.resolve(target), 工单);
+  if (缺.length) 出.可能缺依赖 = 缺;
   return 出;
 }
 
@@ -677,7 +726,7 @@ function 遗留工作区(monitorRoot, cfg, project, 工单表) {
 }
 
 module.exports = {
-  装依赖, 依赖目录表,
+  装依赖, 依赖目录表, 缺依赖目录,
   收工, 遗留工作区, 审阅区,
   configOf, isGitRepo, repoTop, workspaceRoot, worktreeList,
   prepare, integrate, checkpoint, dependencyTickets, publish, changedFiles, 变更分类, enforceWriteScope,
