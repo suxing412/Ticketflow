@@ -33,6 +33,12 @@ function 核查孤儿们(root) {
   return require('./core/store').list(root, '核查')
     .filter((x) => x.fm.代核 && x.fm.代核.结论 === '不过' && !x.fm.挂起);
 }
+// 仲裁孤儿（2026-08-26 第二现场）：代裁章在（给方向/上呈）却还赖在仲裁目录的单。
+// 正常路成功仲裁定后单已离目录；「裁过」结论直落完成不经此形。
+function 仲裁孤儿们(root) {
+  return require('./core/store').list(root, '仲裁')
+    .filter((x) => x.fm.代裁 && ['给方向', '上呈'].includes(x.fm.代裁.结论) && !x.fm.挂起);
+}
 let 滞留首见 = 0;  // 同签滞留的起点毫（评审补：流水一条单行不算「出声」，滞留超阈值要升急件）
 let 滞留已急件 = false;
 const 滞留急件阈毫 = 30 * 60000; // 同一滞留面挂 30 分钟未解 → inbox 急件（TK-201 案 7h 静默的止血线）
@@ -404,8 +410,8 @@ function buildQaPrompt(root, t, proj, receiptPath) {
     '对照工单验收标准逐条核验主办的产出与回执，按章程格式输出核验结论。',
     // 保留单三振案（TK-46）：判官对着签字项写不出通过/不过，结论散文化三轮判读失败
     '报告倒数第二行输出「质量分：N」（N=1-5：产出工艺+回执诚实度，H69 仪表盘用，独立于结论）。',
-    '【结论体裁铁律】报告最后一行必须是且只能是「结论：通过」或「结论：不过」，禁止任何其它措辞（如「有保留」「无法判定」）。',
-    '【保留项豁免】标注【保留】的验收条目是制作人签字位，不在你的核验范围——跳过它们，只裁可核项；可核项全过即「结论：通过」，保留项未签不构成不过的理由。',
+    '【质检结论体裁铁律】报告末尾必须单独一行输出且只能输出：`【质检结论】通过`、`【质检结论】不通过` 或 `【质检结论】待人工判`。',
+    '【保留项豁免】标注【保留】的验收条目是制作人签字位，不在你的核验范围——跳过它们，只裁可核项；可核项全过即「通过」，保留项未签不构成不通过的理由。',
     代劳条款规则,
     '', '=== 工单正文 ===', t.body || '', '', '=== 主办回执 ===', receipt,
   ].filter(Boolean).join('\n');
@@ -442,7 +448,34 @@ function buildPrecheckPrompt(root, t, receiptPath) {
 // 会话种类名与目录态名分家（2026-08-24 H108 后）：kind='质检' 是判官会话类型与模型档配置键
 // （cfg.模型.质检），**不是目录态**——目录态已改 初检/核查/仲裁。键名不动是为了不碰生产 config。
 const JUDGE_KINDS = new Set(['质检', '代核', '代裁', '初检']);
-function settleClose(kind, code, out, errout, ticketId, finishOk, failLocal) {
+const QA_SAME_SESSION_FOLLOW_UP_LIMIT = 1;
+// 质检结论的消费端兼容层。新协议只接受末尾独行的【质检结论】；旧报告在升级窗口
+// 仍会出现「结论：通过」、Markdown 标题后另起一行、加粗值等形态，故在这里统一归一。
+// 不从勾选表或散文语气推断通过与否：没有显式结论就是未知，交给同会话补问或人工判。
+function parseQaConclusion(text) {
+  const raw = String(text || '');
+  const normalize = (v) => (v === '不过' ? '不通过' : v);
+  const line = /^\s*(?:[-*>]\s*)?(?:#{1,6}\s*)?(?:\*{1,3}\s*)?(?:【\s*)?(?:质检\s*)?结论(?:\s*】)?\s*[:：]?\s*(?:\*{1,3}\s*)?(不通过|不过|通过|待人工判)(?:\s*\*{1,3})?\s*$/gmi;
+  const block = /^\s*(?:#{1,6}\s*)?(?:\*{1,3}\s*)?(?:质检\s*)?结论(?:\s*\*{1,3})?\s*[:：]?\s*\r?\n\s*(?:[-*>]\s*)?(?:\*{1,3}\s*)?(不通过|不过|通过|待人工判)(?:\s*\*{1,3})?(?:\s*[（(][^\r\n）)]*[）)])?\s*$/gmi;
+  let hit = null;
+  for (const m of raw.matchAll(line)) hit = normalize(m[1]);
+  if (!hit) for (const m of raw.matchAll(block)) hit = normalize(m[1]);
+  return hit ? { 结论: hit, 通过: hit === '通过' } : null;
+}
+
+function extractClaudeSessionId(raw) {
+  let id = null;
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    try {
+      const e = JSON.parse(line);
+      const candidate = e.session_id || (e.message && e.message.session_id);
+      if (typeof candidate === 'string' && candidate.trim()) id = candidate.trim();
+    } catch { /* 非 JSON 行不是 stream 会话元数据 */ }
+  }
+  return id;
+}
+
+function settleClose(kind, code, out, errout, ticketId, finishOk, failLocal, opts = {}) {
   const text = String(out).trim();
   if (code !== 0) {
     // 失败原因优先 stderr，空则兜底 stdout 尾部——claude CLI 的 "API Error: ..." 打在 stdout，
@@ -470,14 +503,16 @@ function settleClose(kind, code, out, errout, ticketId, finishOk, failLocal) {
   // 代核结论机器可读行：找不到"结论：通过"一律按不过处理（保守，不误自动完成）
   if (kind === '代核') return finishOk(tail, /结论[:：]\s*通过/.test(tail));
   if (kind === '质检') {
-    // QA 报告是散文体（"## 结论\n**通过**"之类）：取最后一个「结论」标记后的近文判定；
-    // 找不到结论标记＝报告没写完 → 按判官失败重试，绝不默认放行（曾硬编码 true 酿成 TK-31/33 案）
-    const i = text.lastIndexOf('结论');
-    if (i < 0) { failLocal('质检报告无结论标记——不作数，按判官失败重试'); return; }
-    const seg = text.slice(i, i + 80);
-    if (/不过|不通过/.test(seg)) return finishOk(tail, false);
-    if (/通过/.test(seg)) return finishOk(tail, true);
-    failLocal('质检结论无法判读——按判官失败重试');
+    const parsed = parseQaConclusion(text);
+    if (parsed && parsed.结论 === '待人工判') {
+      if (typeof opts.待人工判 === 'function') return opts.待人工判('质检报告明确标为待人工判', text);
+      failLocal('质检报告标为待人工判');
+      return;
+    }
+    if (parsed) return finishOk(tail, parsed.通过);
+    // 无标记不再走判官失败重试；同会话只补问一次，仍不可判再停在待人工判。
+    if (typeof opts.无结论 === 'function') return opts.无结论('质检报告无可判结论标记', text);
+    failLocal('质检报告无可判结论标记');
     return;
   }
   finishOk(tail, true);
@@ -524,6 +559,67 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   const rc = cfg.执行器 || {};
   const entry = { id: t.id, kind, startedAt: opts.nowIso || new Date().toISOString(), 池: kind === '执行' ? (t.fm.执行池 || null) : 'claude', runId: randomUUID() };
   running.set(agentId, entry);
+  let qa补问次数 = 0;
+  let cliEnv = null;
+  const 置待人工判 = (why, report) => {
+    running.delete(agentId);
+    const cur = store.find(root, t.id);
+    if (!cur || cur.state !== '初检') return;
+    const now = new Date().toISOString();
+    const r = store.move(root, t.id, '初检', '待处理', (fm) => {
+      fm.质检结论 = '待人工判';
+      fm.待人工判 = { 原因: String(why).slice(0, 160), 补问次数: qa补问次数, 时间: now };
+      delete fm.质检失败次数;
+    }, now);
+    if (!r.ok) return;
+    const receipt = path.join(root, '回执', `${t.id}.md`);
+    try { fs.appendFileSync(receipt, `\n\n## 质检（待人工判）\n${String(report || why).slice(0, 6000)}\n`, 'utf8'); } catch { /* 回执保全失败不倒人工挂起 */ }
+    journal.append(root, `质检待人工判 ${t.id}（${String(why).slice(0, 100)}；同会话补问 ${qa补问次数}/${QA_SAME_SESSION_FOLLOW_UP_LIMIT}）——不重派`);
+    try { inbox.post(root, '急', '质检待人工判', `${t.id}：${String(why).slice(0, 120)}`, { 单号: t.id }); } catch { /* 提醒失败不回退状态 */ }
+  };
+  const 同会话补问 = (sessionId, why, firstReport) => {
+    if (qa补问次数 >= QA_SAME_SESSION_FOLLOW_UP_LIMIT || !sessionId || !cliEnv) {
+      置待人工判(sessionId ? why : `${why}（原始事件流缺 session_id，无法同会话补问）`, firstReport);
+      return;
+    }
+    qa补问次数++;
+    store.update(root, t.id, (fm) => { fm.质检补问次数 = qa补问次数; });
+    journal.append(root, `质检同会话补问 ${t.id} 第 ${qa补问次数}/${QA_SAME_SESSION_FOLLOW_UP_LIMIT} 次（${String(why).slice(0, 80)}）`);
+    let follow;
+    try {
+      // --resume 带首轮 stream-json 的 session_id，补问仍在原质检会话内，不另派整轮 QA。
+      follow = (opts.spawn || spawn)(cmd, [...args, '--resume', sessionId], { cwd: proj.path, env: cliEnv, windowsHide: true, shell: cmd.endsWith('.cmd'), stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (e) { 置待人工判('同会话补问启动失败：' + e.message, firstReport); return; }
+    entry.child = follow;
+    let out2 = '', err2 = '';
+    const timer = setTimeout(() => {
+      try { spawn('taskkill', ['/pid', String(follow.pid), '/T', '/F'], { windowsHide: true }); } catch { /* 尽力 */ }
+      置待人工判('同会话补问超时', firstReport);
+    }, timeoutMs);
+    if (timer.unref) timer.unref();
+    follow.stdout.on('data', (d) => { out2 += d; if (out2.length > 800000) out2 = out2.slice(-400000); });
+    follow.stderr.on('data', (d) => { err2 += d; if (err2.length > 20000) err2 = err2.slice(-10000); });
+    follow.on('error', (e) => { clearTimeout(timer); 置待人工判('同会话补问 CLI 错误：' + e.message, firstReport); });
+    follow.on('close', (code) => {
+      clearTimeout(timer);
+      if (!running.has(agentId)) return;
+      const text = stream ? extractClaudeText(out2) : out2;
+      if (code !== 0 || !String(text).trim()) {
+        const tail = String(err2).trim() || String(text).trim() || `退出码 ${code}`;
+        置待人工判(`同会话补问未产出结论：${tail.slice(0, 120)}`, firstReport);
+        return;
+      }
+      计量回灌(root, { 池: cliPool, 单: t.id, 流: out2, 流式: !!stream });
+      const parsed = parseQaConclusion(text);
+      if (!parsed || parsed.结论 === '待人工判') {
+        置待人工判(parsed ? '同会话补问明确标为待人工判' : '同会话补问后仍无可判结论标记', text);
+        return;
+      }
+      finishOk(String(text).slice(-8000), parsed.通过);
+    });
+    const prompt2 = '你刚才的质检报告没有机器可判结论。不要重写报告；请只在本次会话最后单独一行输出 `【质检结论】通过`、`【质检结论】不通过` 或 `【质检结论】待人工判`。';
+    try { follow.stdin.write(prompt2, 'utf8'); follow.stdin.end(); } catch { 置待人工判('同会话补问写入失败', firstReport); }
+  };
   const finishOk = (note, verdict) => {
     try { finishOkInner(note, verdict); } catch (e) {
       // 定时器回调里的异常会成为主进程未捕获异常 → 整个 app 弹窗崩掉（0.9.1 YAML 实测）。
@@ -795,6 +891,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       if (compat.base) { delete env.HTTPS_PROXY; delete env.HTTP_PROXY; delete env.https_proxy; delete env.http_proxy; }
     }
     // opts.spawn 仅供离线测试把假的 CLI 流喂进**同一条**收线逻辑；生产调用从不传，仍是原 spawn。
+    cliEnv = env;
     child = (opts.spawn || spawn)(cmd, args, { cwd: proj.path, env, windowsHide: true, shell: cmd.endsWith('.cmd'), stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (e) { failLocal('CLI 启动失败：' + e.message); return true; }
   entry.child = child;
@@ -876,7 +973,12 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     // 预算记账（施工令-021 → 047 流计量回灌）：口径与落账全在 计量回灌 里，它永不抛——
     // 交单这条路上不许有第二个可能崩的点（信 §四.3：保险丝坏了不该顺带炸掉产线）。
     计量回灌(root, { 池: cliPool, 单: t.id, 流: 计量流, 流式: !!stream });
-    settleClose(kind, code, stream ? extractClaudeText(out) : out, errout, t.id, finishOk, failLocal);
+    const report = stream ? extractClaudeText(out) : out;
+    const sessionId = stream ? extractClaudeSessionId(out) : null;
+    settleClose(kind, code, report, errout, t.id, finishOk, failLocal, kind === '质检' ? {
+      无结论: (why, text) => 同会话补问(sessionId, why, text),
+      待人工判: (why, text) => 置待人工判(why, text),
+    } : undefined);
   });
   try { child.stdin.write(prompt, 'utf8'); child.stdin.end(); } catch { /* close 事件兜底 */ }
   return true;
@@ -1119,6 +1221,19 @@ async function tick(root, cfg, opts = {}) {
       }
     }
   }
+  // 仲裁孤儿补链（2026-08-26 制作人 12:11 抓的第二现场：TK-183/186 代裁「给方向」章在而
+  // 打回边未走，滞留仲裁 15h+）——章边不原子在代裁 kind 处理同样存在。按章补推：
+  // 给方向→打回回炉（方向文本已随代裁写入正文），上呈→上呈待处理。失败出声同核查孤儿。
+  for (const x of 仲裁孤儿们(root)) {
+    if (busyTickets().has(x.id)) continue;
+    const 决 = x.fm.代裁.结论 === '给方向' ? '打回' : '上呈';
+    const r = lifecycle.仲裁定(root, x.id, 决, `仲裁孤儿补链自愈（代裁章 ${String(x.fm.代裁.时间 || '').slice(0, 16)} 在而边未走）`);
+    if (r.ok) journal.append(root, `仲裁孤儿补链 ${x.id} → ${决}（代裁${x.fm.代裁.结论}章在而边未走——自愈，2026-08-26 案）`);
+    else {
+      const 签 = '仲' + x.id + '|' + (r.error || '');
+      if (!孤儿失败已留痕.has(签)) { 孤儿失败已留痕.add(签); journal.append(root, `仲裁孤儿补链失败 ${x.id}：${r.error}——请人工查`); }
+    }
+  }
 
   // ④a 两检制·初检（H67，2026-08-05 用户拍板）：便宜模型先核格式与规范（回执契约/禁语/报数存在性），
   // 不过直接打回不烧 opus；过了才进 ④b 深检。开关与池在 config.执行器.两检。
@@ -1235,4 +1350,4 @@ function killTicket(root, id, 因) {
   return false;
 }
 
-module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi, 计量回灌, 流分拣器, 流尾, 人闸升格Tick, start升格环, stop升格环, 核查孤儿们 };
+module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, parseQaConclusion, extractClaudeSessionId, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi, 计量回灌, 流分拣器, 流尾, 人闸升格Tick, start升格环, stop升格环, 核查孤儿们, 仲裁孤儿们 };

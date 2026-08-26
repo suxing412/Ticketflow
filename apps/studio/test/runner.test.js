@@ -138,7 +138,11 @@ const 流水 = (root) => {
     assert.ok((r.代裁 || []).includes('S-20'));
     const cur = store.find(root, 'S-20');
     assert.equal(cur.state, '在途', '给方向回在途');
-    assert.equal(cur.fm.代裁.结论, '给方向');
+    // 代裁章随回炉销（2026-08-26 TK-197 循环案 + 12:11 仲裁孤儿案）：章是「对上一版产出的判断」，
+    // 回炉即失效；留着会被孤儿扫描当成「裁完没流转」再推一次，单在仲裁↔在途之间打转。
+    // 裁决历史归 journal 与回执，不归 fm——故此处断言反转为「章已清」。
+    assert.equal(cur.fm.代裁, undefined, '给方向回炉必须销代裁章（留着会被孤儿扫描误判成滞留单）');
+    assert.match(流水(root), /仲裁定 S-20：打回/, '裁决历史落流水，不落 fm');
     assert.equal(cur.fm.自修次数, 0, '回炉是新起点，计数清零（TK-97）');
     assert.ok(cur.body.includes('## 定夺方向'), '方向写入正文');
     assert.ok(fs.readFileSync(path.join(root, '回执', 'S-20.md'), 'utf8').includes('## 仲裁'));
@@ -146,8 +150,11 @@ const 流水 = (root) => {
     const root2 = makeRoot(); on(root2);
     seed(root2, '仲裁', { id: 'S-21', 职能: '程序', 主办: '程序-A', 代裁: { 结论: '上呈', 时间: 'x' } });
     const r2 = await runner.tick(root2, CFG, UN);
-    assert.ok(!(r2.代裁 || []).length, '已裁过不重复');
-    assert.equal(store.find(root2, 'S-21').state, '仲裁');
+    assert.ok(!(r2.代裁 || []).length, '已裁过不重复（不起第二次会话，不烧 token）');
+    // 但「不重裁」≠「不流转」（2026-08-26 12:11 仲裁孤儿案：TK-183/186 带「给方向」章
+    // 在仲裁躺了 15h，旧口径把这个状态当正常，正是滞留的温床）：章在边未走的按章补推。
+    assert.equal(store.find(root2, 'S-21').state, '待处理', '上呈章在而边未走 → 孤儿补链推到分诊台');
+    assert.match(流水(root2), /仲裁孤儿补链 S-21/, '补链要留痕，不许静默搬单');
   });
 
   await t('H108 仲裁上呈：仲裁→待处理（原「留待定夺」改为真挪到分诊台），上呈原因落 fm', async () => {
