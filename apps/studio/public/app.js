@@ -1565,27 +1565,48 @@ window.themeSet = (v) => {
 };
 if (window.studio && window.studio.setThemeBg) window.studio.setThemeBg(THEME_BG[window.curTheme()]);
 
+/* ---- P6 折叠区（TF-8 参数页瘦身 · 2026-08-26）----
+   案情：参数页一次性平铺 31 张卡、零折叠结构，高频看的态势卡（额度双池/执行器状态/探针）
+   与一次性配置卡（端口/主题/模型档/项目注册）平权铺开，首屏找态势要在三十张卡里扫。
+   做法：**只改位置与默认可见性**——卡本身一张不删，DOM 结构、id、data-* 属性与 onclick 写口一个字不动，
+   一次性配置收进原生 <details>（不引第三方件），默认闭合。
+   summary 必须带该区**当前真值**摘要：折起来还看得见现值，才不用为了确认一个数把区展开。
+   摘要一律取 viewParams 已经拿到的 c/run 入参，不另外发请求（多一个请求就多一条首屏阻塞路径）。
+   展开态记本机 localStorage（studio-p6fold-<区>）——常调某一区的人不必每次重开；无记忆＝闭合。 */
+const P6FOLD = 'studio-p6fold-';
+const p6FoldOpen = (id) => { try { return localStorage.getItem(P6FOLD + id) === '1'; } catch { return false; } };
+window.p6FoldToggle = (id, on) => { try { localStorage.setItem(P6FOLD + id, on ? '1' : '0'); } catch { /* 隐私模式等拿不到就算了 */ } };
+const p6Fold = (id, 标题, 摘要, 内容) => `<details class="p6fold" data-fold="${id}"${p6FoldOpen(id) ? ' open' : ''} ontoggle="p6FoldToggle('${id}',this.open)">
+    <summary class="p6fold-h"><span class="p6fold-t">${esc(标题)}</span><span class="p6fold-s">${esc(摘要)}</span></summary>
+    <div class="p6fold-b">${内容}</div></details>`;
+
 async function viewParams() {
   const [c, run, models] = await Promise.all([api('/api/config'), api('/api/runner'), api('/api/models').catch(() => ({}))]);
   window._p6cfg = c;
   window._models = models;
   // 执行器：派发调度循环的仪表与开关（H49）
   const rcfg = c.执行器 || {};
-  const runCards = `<div class="paramcard card" id="run-card"><h4><i class="${dotCls(run)}" id="run-dot"></i>执行器 <span id="run-state">${run.运行 ? '运行中' : '已停'}</span></h4>
+  // 常驻：执行器状态卡（态势——它是这一页最该一眼看见的东西，永不进折叠）
+  const runCard = `<div class="paramcard card" id="run-card"><h4><i class="${dotCls(run)}" id="run-dot"></i>执行器 <span id="run-state">${run.运行 ? '运行中' : '已停'}</span></h4>
       <p class="pmeta" id="run-meta" title="${esc(runMetaFull(run))}">${esc(runMeta(run))}</p>
-      <div class="runbtn"><button class="btn h32 ${run.运行 ? '' : 'primary'}" id="run-toggle" onclick="runToggle()">${run.运行 ? '停止' : '启动'}</button></div></div>
-    ${[['间隔秒', run.间隔秒, 5], ['执行超时分钟', rcfg.执行超时分钟 ?? 30, 5], ['记账间隔分钟', rcfg.记账间隔分钟 ?? 10, 5]].map(([k, v, st]) => `<div class="paramcard card" data-runkey="${k}"><h4>${P6NAMES[k]}</h4><p class="pmeta">${esc(P6META[k].replace('N', v))}</p>
+      <div class="runbtn"><button class="btn h32 ${run.运行 ? '' : 'primary'}" id="run-toggle" onclick="runToggle()">${run.运行 ? '停止' : '启动'}</button></div></div>`;
+  const 间隔秒 = run.间隔秒; const 超时分 = rcfg.执行超时分钟 ?? 30; const 记账分 = rcfg.记账间隔分钟 ?? 10;
+  const 刷新秒 = (c.quota && c.quota.claudeMinIntervalSeconds) || 300;
+  // 折叠「执行器细调」：调好就不用天天看的四个数
+  const tuneCards = `${[['间隔秒', 间隔秒, 5], ['执行超时分钟', 超时分, 5], ['记账间隔分钟', 记账分, 5]].map(([k, v, st]) => `<div class="paramcard card" data-runkey="${k}"><h4>${P6NAMES[k]}</h4><p class="pmeta">${esc(P6META[k].replace('N', v))}</p>
       <div class="stepper"><button onclick="rrStep('${k}',-${st})">−</button><span class="val">${v}</span><button onclick="rrStep('${k}',${st})">＋</button></div></div>`).join('')}
-    <div class="paramcard card" data-qk><h4>${P6NAMES.额度刷新秒}</h4><p class="pmeta">${esc(P6META.额度刷新秒.replace('N', (c.quota && c.quota.claudeMinIntervalSeconds) || 300))}</p>
-      <div class="stepper"><button onclick="qtStep(-60)">−</button><span class="val">${(c.quota && c.quota.claudeMinIntervalSeconds) || 300}</span><button onclick="qtStep(60)">＋</button></div></div>
-    <div class="paramcard card"><h4>服务端口</h4><p class="pmeta">重启监制台后生效</p>
+    <div class="paramcard card" data-qk><h4>${P6NAMES.额度刷新秒}</h4><p class="pmeta">${esc(P6META.额度刷新秒.replace('N', 刷新秒))}</p>
+      <div class="stepper"><button onclick="qtStep(-60)">−</button><span class="val">${刷新秒}</span><button onclick="qtStep(60)">＋</button></div></div>`;
+  // 折叠「服务与访问」：装机时设一次的两张
+  const svcCards = `<div class="paramcard card"><h4>服务端口</h4><p class="pmeta">重启监制台后生效</p>
       <div class="runbtn"><input id="port-in" class="mono" style="width:84px;height:32px;padding:0 10px;font-size:12px" value="${(c.server && c.server.port) || 4270}"/>
       <button class="btn h32" style="margin-left:8px" onclick="portSave()">保存</button></div></div>
     <div class="paramcard card"><h4>远程访问</h4><p class="pmeta">手机/其它设备访问监制台（令牌把门 · 重启生效监听）· 只能在本机改</p>
       <div class="runbtn"><button class="btn h32 ${(c.网络 && c.网络.远程 && c.网络.远程.开) ? 'accent' : ''}" onclick="remoteToggle(${!(c.网络 && c.网络.远程 && c.网络.远程.开)})">${(c.网络 && c.网络.远程 && c.网络.远程.开) ? '已开启 · 点击关闭' : '已关闭 · 点击开启'}</button>
       <button class="btn h32" style="margin-left:8px" onclick="remoteToggle(null,true)">重生成令牌</button></div>
-      ${(c.网络 && c.网络.远程 && c.网络.远程.令牌) ? `<p class="pmeta mono" style="margin-top:8px;word-break:break-all">手机访问：http://本机IP:${(c.server && c.server.port) || 4270}/?t=${esc(c.网络.远程.令牌)}</p>` : ''}</div>
-    <div class="paramcard card" data-theme-card><h4>外观主题</h4><p class="pmeta">暖纸=日间纸感；玻璃=夜间暗色 · 即点即切，本机记忆</p>
+      ${(c.网络 && c.网络.远程 && c.网络.远程.令牌) ? `<p class="pmeta mono" style="margin-top:8px;word-break:break-all">手机访问：http://本机IP:${(c.server && c.server.port) || 4270}/?t=${esc(c.网络.远程.令牌)}</p>` : ''}</div>`;
+  // 折叠「外观」：切完主题就没人再看这张
+  const themeCard = `<div class="paramcard card" data-theme-card><h4>外观主题</h4><p class="pmeta">暖纸=日间纸感；玻璃=夜间暗色 · 即点即切，本机记忆</p>
       <div class="egtoggle"><button class="egbtn ${curTheme() === 'glass' ? '' : 'on'}" data-th="paper" onclick="themeSet('paper')">暖纸</button><button class="egbtn ${curTheme() === 'glass' ? 'on' : ''}" data-th="glass" onclick="themeSet('glass')">玻璃</button></div></div>`;
   // 兼容池（0.22.1）：Anthropic 兼容厂商——异厂对抗第三池的密钥与模型管理（仅本机可改）
   const compatPools = Object.entries(c.执行池 || {}).filter(([, v]) => v.兼容);
@@ -1661,20 +1682,33 @@ async function viewParams() {
   setTimeout(() => { if ($('env-card')) window.envProbe(null); }, 0);
   setTimeout(() => { if ($('creds-card')) window.credsLoad(); }, 0);
   setTimeout(() => { if ($('pb-card')) window.pbLoad(); }, 0); // 池衡矩阵：外呼一次额度/余额，不阻塞首屏
+  // 折叠区摘要：一律取上面已算好的真值，折起来也看得见现值（不另发请求）
+  const 已配档 = ['claude默认', 'codex默认', '质检', '代核', '代裁', '项管'].filter((k) => mc[k]).length;
+  const 项目数 = Object.keys((c.项目 && c.项目.注册) || {}).length;
+  const 池阈 = (pool) => ((c.执行池 && c.执行池[pool] && c.执行池[pool].阈值) || 70);
+  const 摘要 = {
+    tune: `间隔 ${间隔秒}s · 超时 ${超时分} 分 · 记账 ${记账分} 分 · 额度刷新 ${刷新秒}s`,
+    svc: `端口 ${(c.server && c.server.port) || 4270} · 远程${(c.网络 && c.网络.远程 && c.网络.远程.开) ? '已开' : '已关'}`,
+    look: `当前 ${curTheme() === 'glass' ? '玻璃' : '暖纸'}`,
+    model: `已配 ${已配档}/6 档 · 兼容池 ${compatPools.length} 个`,
+    proj: `已注册 ${项目数} 个项目 · codex 阈值 ${池阈('codex')}% · claude 阈值 ${池阈('claude')}%`,
+  };
   return `<div class="p6grid"><div>
-      <div class="sec-h"><h3 class="h17">执行器</h3><span class="subnote">派发调度循环 · 开 exe 即开工厂</span></div>${runCards}
+      <div class="sec-h"><h3 class="h17">执行器</h3><span class="subnote">派发调度循环 · 开 exe 即开工厂</span></div>${runCard}
+      ${p6Fold('tune', '执行器细调', 摘要.tune, tuneCards)}
+      ${p6Fold('svc', '服务与访问', 摘要.svc, svcCards)}
+      ${p6Fold('look', '外观', 摘要.look, themeCard)}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">参数闸值</h3><span class="subnote">监制台可调</span></div>${params}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">模型档</h3><span class="subnote">贵裁判 · 贱体力（D38）</span></div>${modelCards}${compatCards}</div>
+      ${p6Fold('model', '模型档', 摘要.model, modelCards + compatCards)}</div>
     <div><div class="sec-h"><h3 class="h17">环境探针</h3><span class="subnote">实弹前置检查</span></div>${envCard}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">凭据</h3></div><div id="creds-card" class="card credcard"><p class="dim">读取中…</p></div>
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">项目注册</h3><span class="subnote">执行 agent 的目标仓库（D32）</span></div>${projCard}
-      <div class="sec-h" style="margin-top:26px"><h3 class="h17">执行池阈值</h3><span class="subnote">额度锁的杆（D26）</span></div>${poolCards}
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">额度双池</h3></div>
       <div id="budget-dead"></div>
       <div class="poolcard card" id="pool-codex">${poolCardHtml('codex', null, c.执行池 && c.执行池.codex)}</div>
       <div class="poolcard card" id="pool-claude">${poolCardHtml('claude', null, c.执行池 && c.执行池.claude)}</div>
       <div class="sec-h" style="margin-top:26px"><h3 class="h17">池位矩阵</h3><span class="subnote">H99 项管池衡 · 职能×池×档</span></div>
-      <div class="card pbcard" id="pb-card"><p class="dim">读取中…</p></div></div></div>`;
+      <div class="card pbcard" id="pb-card"><p class="dim">读取中…</p></div>
+      ${p6Fold('proj', '项目与池阈值', 摘要.proj, projCard + poolCards)}</div></div>`;
 }
 // 编制步进：POST 后原地更新该职能人数、在途上限推导值、右侧编制表——视图保持渲染，不整页重载
 // sStep（编制步进）已随拉取制退役（0.23.11）；编制管理区整体归项管（H85）

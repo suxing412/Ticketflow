@@ -23,6 +23,15 @@ const NUM_RE = new RegExp(`^\\d+(?:[.,]\\d+)?(?:\\s*[/／]\\s*\\d+(?:[.,]\\d+)?)
 // 编辑器菜单路径：说的是「从哪打开」，不是「交了什么」。带扩展名的（Assets/Create/x.asset）不在此列
 const MENU_RE = /^(?:Tools|SLG|Window|GameObject|Component|Assets\/Create|Edit|Help)\//;
 
+// 过形闸（TF-7，案源 TK-203）：**带合法扩展名 ≠ 指向某个具体文件**。
+// H97 引擎门禁要求验收标准写成「谁跑哪条命令、回执里贴哪几个数字」，回执因此普遍引用命令产物的
+// 通配与占位路径：`Assets/**/*.unity` 说的是一族文件，`enginectl-baselines/results-….xml` 说的是
+// 一个省略了时间戳的样例。两者都过得了 051 的四道噪声闸、被 EXT_RE 判成真路径，随即 statSync 必然
+// 扑空、扣红「缺失」。红色是「回执声称交了、仓里却没有」的专用信号——声称本身就不是一个具体文件时，
+// 它没有资格出现。故在扩展名放行与磁盘实测**之前**先问一句「这串指得出唯一一个文件吗」。
+const GLOB_RE = /[*?[\]{}]/;                                            // 通配元字符
+const PLACEHOLDER_RE = /…|\.{3}|<[^<>]*>|\$\{[^}]*\}|\{\{[^}]*\}\}|%s/; // 省略号／尖括号／${}／{{}}／%s 占位
+
 // 路径解析 + 越界防护（同 stylelib 铁律：越出项目仓 → null）
 function resolveIn(root, rel) {
   if (!root || !rel) return null;
@@ -39,6 +48,9 @@ function isArtifactPath(s, projRoot) {
   if (URL_RE.test(k) || DRIVE_RE.test(k)) return false;
   if (NUM_RE.test(k)) return false;
   if (MENU_RE.test(k) && !EXT_RE.test(k)) return false;
+  // 过形闸必须压在 EXT_RE 放行与 resolveIn/statSync 之前：既省无谓磁盘 IO，
+  // 也不让 `Assets/**/*.unity` 这种串被当相对路径去解析
+  if (GLOB_RE.test(k) || PLACEHOLDER_RE.test(k)) return false;
   if (EXT_RE.test(k)) return true;
   // 无扩展名：只有磁盘实测存在才认（LICENSE、Dockerfile、无后缀脚本这类真交付物）
   const abs = resolveIn(projRoot, k);

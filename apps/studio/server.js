@@ -1690,7 +1690,8 @@ app.post('/api/draft', (req, res) => {
   if (!gate.ok) return res.status(400).json({ ok: false, error: gate.error });
   const r = store.create(ROOT, b.id, fm, b.body || '## 范围\n\n## 不要做\n\n## 验收标准\n\n## 完工要求\n');
   if (r.ok) journal.append(ROOT, `起草 ${b.id}（${fm.职能}）`);
-  res.status(r.ok ? 200 : 400).json(r);
+  // 异常边不阻断，但必须随成功响应显式上报，不能被预检闸静默吞掉。
+  res.status(r.ok ? 200 : 400).json({ ...r, 依赖异常: gate.report.anomalies });
 });
 
 // ---- 锚号迁移（R5）：改编号广播全局，更新所有引用旧锚号的工单 ----

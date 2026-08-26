@@ -267,6 +267,7 @@ input:focus, select:focus, textarea:focus { outline:2px solid var(--ink); outlin
   .vin, .gsr, .modal2, .bump, #run-dot.on, #run-dot.on.live, .ghosting, .tlseg, .dot.breathe-warn, .dot.breathe-err { animation:none; }
   .bcard2:hover, .inbox-row:hover, .hubcard:hover, .gear:active, .backbtn:active, .paramcard .stepper button:active { transform:none; }
   .snav a, .btn, .gear, .backbtn, .paramcard .egbtn, .paramcard .stepper button, .bcard2, .inbox-row, .hubcard, .searchbox input { transition-duration:.01s; }
+  .p6fold > .p6fold-h::before { transition-duration:.01s; }
 }
 
 /* ===== P0 项目启动页（D42 多项目视界）===== */
@@ -810,6 +811,24 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 
 /* ===== P6 参数与额度 ===== */
 .p6grid { display:grid; grid-template-columns:680fr 636fr; gap:40px; margin-top:24px; align-items:start; }
+/* 折叠区（TF-8 参数页瘦身）：一次性配置默认收起，首屏只留态势卡。
+   summary 那行必带该区**当前真值**摘要——折起来也看得见现值，不必为了确认一个数把区展开；
+   摘要一行截断＋省略号，不许把折叠头撑成两行（它得比它收起来的那几张卡都矮才有意义）。
+   只用既有令牌（--line/--card/--ink*/--sect/--ease-out），暖纸/玻璃两主题各自可读。 */
+.p6fold { border:1px solid var(--line); border-radius:12px; background:var(--card); margin-bottom:14px; box-shadow:var(--shadow-sm); }
+.p6fold > .p6fold-h { display:flex; align-items:baseline; gap:12px; padding:15px 22px; cursor:pointer;
+  list-style:none; user-select:none; border-radius:11px; }
+.p6fold > .p6fold-h::-webkit-details-marker { display:none; } /* Safari 的默认三角，换成下面自绘的那颗 */
+.p6fold > .p6fold-h::before { content:'▸'; flex-shrink:0; font-size:11px; color:var(--ink3);
+  transition:transform 150ms var(--ease-out); }
+.p6fold[open] > .p6fold-h::before { transform:rotate(90deg); }
+.p6fold > .p6fold-h:hover { background:var(--sect); }
+.p6fold > .p6fold-h:hover .p6fold-t { color:var(--ink); }
+.p6fold-t { font-size:14px; font-weight:600; color:var(--ink2); flex-shrink:0; }
+.p6fold-s { flex:1 1 0; width:0; min-width:0; font-size:11.5px; color:var(--ink3);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; }
+.p6fold[open] > .p6fold-h { border-bottom:1px solid var(--line); border-radius:11px 11px 0 0; }
+.p6fold-b { padding:14px 16px 0; }
 /* 施工令-012 / 巡礼 P2-2：原 height:88px 是定高，说明文字一换行就越过下边界压到下一张卡
    （实测下溢 14–51px，而卡间距只有 14px）。改 min-height 自适应；说明文字再加两行截断兜底，
    悬停 title 看全文。等宽的 .mono 说明（兼容池端点 / 手机访问地址）不截断——那两行本身就是要看全的。 */
