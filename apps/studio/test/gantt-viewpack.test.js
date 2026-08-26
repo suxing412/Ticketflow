@@ -236,6 +236,18 @@ t('⑤ 窗与聚合吃实段：史条端点撑窗（全档窗起 ≤ 72h 前）�
   assert.ok(/gt2mini done/.test(mini), '折叠投影里史单以完成迷你条显影');
 });
 
+t('⑨ 行名单题优先（185 案：粒题「旧笔」vs 单题「身份」两把尺）：单册带题则树列显单题', () => {
+  const d = 台账();
+  d.单册['TK-901'].题 = '成单后的真题';
+  const { 岛 } = 画(d);
+  const n = 岛.st.键表.get('TK-901');
+  assert.equal(n.名, '成单后的真题', '树列行名必须是单题——粒题是排期意图的旧笔');
+  const d2 = 台账(); // 无单册题（散粒/未成单）：回落粒题
+  delete d2.单册['TK-901'];
+  const { 岛: 岛2 } = 画(d2);
+  assert.equal(岛2.st.键表.get('TK-901').名, '活条单', '查不到单题回落粒题，不显空白');
+});
+
 t('⑥ 编依赖入口迁菜单（待办队列拆除随迁）：粒行菜单产 m-editdeps 项；史条/终态不产', () => {
   const 存 = 造存储(); 存.setItem('gt2-done', '全');
   const { 岛, ctx } = 画(台账(), 存);
@@ -280,6 +292,15 @@ t('⑧ 骑线收窄（制作人起夜案 185/203）：审检驻留单定格在�
   assert.ok(n.实段 && n.实段.定格 && !n.实段.活, '核查驻留＝定格非活');
   assert.equal(n.实段.讫, 今ms - 1 * 时, '右缘＝交付时刻，不骑今时线（把排队等审画成还在干活正是本案病）');
   assert.ok(/gt2real set/.test(岛.body.innerHTML) && !/gt2real living/.test(岛.body.innerHTML), '定格条 set 类、无 living 脉冲');
+  // 双画封死（制作人 10:54 抓的 185 案）：定格行不许再走普通计划条分支——红段/计划实条不许并存。
+  // 断言切到本行片段（同图其它普通计划行照画 made 条，不受本案约束）
+  const 全 = 岛.body.innerHTML;
+  const 起 = 全.indexOf('gt2-row-g-活');
+  const 止 = 全.indexOf('gt2-row-', 起 + 10);
+  const 定格行 = 止 > 起 ? 全.slice(起, 止) : 全.slice(起);
+  assert.ok(/gt2real set/.test(定格行), '切片抓到的确是定格行');
+  assert.ok(!/gt2overdue/.test(定格行), '定格行不画服务端超期红段——已交付候审不是「超期在拖」，两个语义画一起是误导');
+  assert.ok(!/gt2bar made/.test(定格行), '定格行不画普通计划实条（planbase 底已代表承诺）');
   const d2 = 台账();
   d2.单册['TK-901'] = { 态: '核查', 大态: '在途', 领单: iso(今ms - 3 * 时), 交付: null, 主办: null, 执行池: null };
   const { 岛: 岛2 } = 画(d2);

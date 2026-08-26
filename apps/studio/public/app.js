@@ -3741,7 +3741,7 @@ async function viewRelay() {
     for (const s of (板口.states || [])) for (const t of (板口.board[s] || [])) {
       板归属[t.id] = { 特性: t.特性 || null, 专项: t.专项 || null, 管线: t.管线 || null };
       单册[t.id] = { 态: s, 大态: 大态of[s] || '', 领单: t.领单时间 || null, 交付: t.交付时间 || null,
-        主办: t.主办 || null, 执行池: t.执行池 || null };
+        主办: t.主办 || null, 执行池: t.执行池 || null, 题: t.title || null };
       if (s === '完成' || s === '归档') {
         const 归 = t.项目 || 默项;
         const pg = 完粒.get(t.id);
