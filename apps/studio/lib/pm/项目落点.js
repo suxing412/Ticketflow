@@ -1,0 +1,72 @@
+// 项目落点.js — 起草落盘前的「项目落点一查」（TF-13）
+//
+// 案源（2026-08-26 一日六例：TK-183/184/197/205/210 …）：模式一律是「监制台/Ticketflow 自身的活
+// 被开成 TK 号段单」。执行会话的 cwd 由项目字段派生，TK 沙箱够不着 Ticketflow 工作区，
+// 于是必然评估回呈——每例烧一次执行会话 ＋ 一轮裁决。TF-5 就是 TK-184 移编后的替代单，
+// 返工成本已有实例。这一查把错配挡在 store.create 之前：号不消耗、盘不落、账不动。
+//
+// 为什么单独成模块：判定逻辑必须能脱开 spawn 直测（brain.draftTicket 整条链要起假 CLI 才跑得动），
+// 所以这里只留纯函数——不碰盘、不读环境、不看 process.env，输入全从参数来。
+// brain.js 那边只留接线两行。
+//
+// 前缀不写死（施工令-061）：项目名 → 号段前缀的事实源是 cfg.项目.注册，
+// 这里一律走 brain.前缀Of 取。require 放在函数体内是为了避开与 brain.js 的循环加载——
+// brain 在模块体里 require 本模块，本模块若也在模块体里 require brain，拿到的是半成品 exports。
+// 调用时刻 brain 早已加载完毕，惰性取值即可，且 require 有缓存，不构成热路径开销。
+
+// 归一化（规则①）：转小写、反斜杠统一成正斜杠。派单文本里 D:\GitHub\Ticketflow 与
+// d:/github/ticketflow 是同一件事，特征表只维护一种形。
+function 归一(s) { return String(s || '').toLowerCase().replace(/\\/g, '/'); }
+
+// 规则②·强特征（路径形）：这些串出现在需求/正文里，几乎不可能是在说游戏侧的活。
+// 命中任一即判疑似 Ticketflow，且不被 TK 反证豁免（见规则⑤）。
+const 强特征 = ['apps/studio', 'd:/github/ticketflow', 'studio.config.json', 'lib/pm/'];
+
+// 规则③·TK 写区反证：明写了游戏工程的落点，说明作者心里的写区是 TK。
+// 只用来豁免弱特征，压不过强特征。
+const TK反证 = ['d:/github/tk', 'assets/'];
+
+// 规则④·弱特征（名词形）：单个词不作数——TK 单正文写「回执贴进监制台」是日常，
+// 一词即判会把正常单成片误杀。要 ≥2 个**不同**弱词同时出现才判疑似。
+const 弱特征 = ['监制台', '排程台账', '白夜馆'];
+
+// 本项目名：写死的是**项目名**（语义锚），不是前缀——前缀 TF 一律从注册表推。
+// 注册表改前缀、改路径都不影响这一行；改项目名才需要动它。
+const 本项目名 = 'Ticketflow';
+
+// 查落点({ 项目, 文本, cfg }) → { ok:true } | { ok:false, error, 疑似项目, 命中 }
+//   项目 = 本单拟落的项目名（draftTicket 里的 opts.项目 或项目默认）
+//   文本 = 需求原文 + 工单正文，拼一起看（错配特征两处都可能出现）
+//   cfg  = studio.config.json 的内存形，只读 项目.注册
+function 查落点({ 项目, 文本, cfg } = {}) {
+  const t = 归一(文本);
+  const 强命中 = 强特征.filter((w) => t.includes(w));
+  const 反证命中 = TK反证.filter((w) => t.includes(w));
+  const 弱命中 = 弱特征.filter((w) => t.includes(w));
+
+  // 规则⑤·优先级固定：强特征 > TK 反证 > 弱特征。
+  // 强特征命中即判疑似（反证不豁免）；只有在「仅弱特征命中」时，TK 反证才起放行作用。
+  let 命中 = [];
+  if (强命中.length) 命中 = 强命中;
+  else if (弱命中.length >= 2 && !反证命中.length) 命中 = 弱命中;
+  if (!命中.length) return { ok: true };
+
+  // 规则⑥·拒收条件：判为疑似 Ticketflow **且**落点没在 Ticketflow。
+  // 判疑似但项目填对了（Ticketflow）——那是正常的自维护单，照常放行。
+  const { 前缀Of } = require('./brain');
+  const 现前缀 = 前缀Of(cfg, 项目);
+  const 应前缀 = 前缀Of(cfg, 本项目名);
+  if (现前缀 === 应前缀) return { ok: true };
+
+  const 现名 = String(项目 || (cfg && cfg.项目 && cfg.项目.默认) || '（空）').trim();
+  // 报文三要素（供人一眼改正）：命中了什么 / 现在填的是什么 / 该怎么重发。
+  const error = [
+    `项目落点疑似错配：本单需求/正文命中 ${本项目名}（监制台自身）的写区特征，落点却不在 ${本项目名}。`,
+    `命中特征：${命中.join('、')}`,
+    `现填项目：${现名}（号段前缀 ${现前缀}）；应为 ${本项目名}（号段前缀 ${应前缀}）`,
+    `改法：派单时带「项目: ${本项目名}」重发；若本单确是 ${现名} 侧的活，把需求里的上述特征词改写成实际写区再发。`,
+  ].join(String.fromCharCode(10));
+  return { ok: false, error, 疑似项目: 本项目名, 命中 };
+}
+
+module.exports = { 查落点, 归一, 强特征, TK反证, 弱特征, 本项目名 };

@@ -9,6 +9,7 @@ const store = require('../core/store');
 const ledger = require('./ledger');
 const estimate = require('./estimate');
 const dependencyCycle = require('../dependency-cycle');
+const 项目落点 = require('./项目落点');
 
 /* ===================== 估时自校准接线（H101 · 施工令-050）=====================
  * 章程「估时校准步」四步：①取历史（历史样本）→②算偏差 ③校估值（pm/estimate 纯函数）
@@ -379,6 +380,21 @@ function draftFm(tk, { id, 项目, 粒ID, 依赖, 归属 }) {
 // 检测模块只读单库；命中真环时由既有 inbox 急件通道上呈，且不会调用 store.create。
 function 起草依赖闸(root, pending) {
   return dependencyCycle.beforePersist(root, pending);
+}
+
+// 项目落点闸（TF-13，2026-08-26 一日六例错配）：起草落盘的第二道闸，形状照抄 起草依赖闸——
+// 判定全在 lib/pm/项目落点.js 的纯函数里，这里只负责「取文本 → 调 → 留痕」。
+// 位置在 起草依赖闸 **之前**：落点都错了，没必要再替它算一遍依赖环。
+// 留痕（H80③透明化）：拦下来的单不落盘，工单池里查无此单，不记一行就等于没发生过。
+// 留痕失败不阻塞——同 排程挂钩 的待遇，账记不上不能把闸带崩。
+function 项目落点闸(root, nid, 项目, 需求, body, cfg) {
+  const r = 项目落点.查落点({ 项目, 文本: String(需求 || '') + String.fromCharCode(10) + String(body || ''), cfg });
+  if (r.ok) return r;
+  try {
+    require('../journal').append(root, `项目落点闸拦截（拟落 ${nid} · 现填项目 ${项目 || '（空）'}）：`
+      + `疑似 ${r.疑似项目}，命中 ${r.命中.join('、')}——未落盘、号未消耗`);
+  } catch { /* 留痕失败不阻塞 */ }
+  return { ok: false, error: r.error, 疑似项目: r.疑似项目, 命中: r.命中 };
 }
 
 function cut(root, cfg, parentId, projPath, cb) {
@@ -773,6 +789,8 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
     const 粒ID = ((opts || {}).粒ID) || null;
     // P0-7：委托方（/api/pm/draft）解析好的依赖单号串，直落 fm——不依赖模型转述。
     const fm = draftFm(tk, { id: nid, 项目, 粒ID, 依赖: ((opts || {}).依赖) || null, 归属: ((opts || {}).归属) || null });
+    const 落 = 项目落点闸(root, nid, 项目, 需求, tk.body, cfg);
+    if (!落.ok) return cb(落);
     const gate = 起草依赖闸(root, { id: nid, fm, body: tk.body });
     if (!gate.ok) return cb(gate);
     const 记 = 校准落fm(root, nid, fm, 校.表); // H101 机器兜底：落盘前复核估值
@@ -798,4 +816,4 @@ function draftTicket(root, cfg, 需求, projPath, cb, opts) {
 }
 
 module.exports = { cut, closeout, answer, draftTicket, adjudicateReferral, schedulePlan, replanReview, parse复判, 归属自上级, draftFm, buildCutPrompt, buildDraftPrompt,
-  parseTickets, parse拒切, childFm, draftFm, 起草依赖闸, getWorking, 历史样本, 备校准, 校准落fm, 容器, 前缀Of, 下一号 };
+  parseTickets, parse拒切, childFm, draftFm, 起草依赖闸, 项目落点闸, getWorking, 历史样本, 备校准, 校准落fm, 容器, 前缀Of, 下一号 };
