@@ -141,4 +141,26 @@ if (!fs.existsSync(脚本)) {
   });
 }
 
+t('⑥ 排期态兜底扫描（2026-08-26 案）：绕过 lifecycle.放行 直写 fm.放行 的单，下一拍被补迁', () => {
+  const root = makeRoot();
+  const g = 登记一(root, { 题: '兜底粒', 预估单元: 1, 计划开始: '2026-08-26T09:00', 计划完成: '2026-08-26T10:00', 因: '判据' });
+  seed(root, '待派', { id: 'TK-830', 职能: '程序', 粒ID: g.粒ID });
+  S.挂钩起草(root, g.粒ID, 'TK-830'); // 回填单号（同真实已成单粒：桥按 粒.单号 找单）
+  // 模拟项管裁决改单/改池：store.update 直写放行，**不经 lifecycle.放行()** → 桥不触发
+  store.update(root, 'TK-830', (fm) => { fm.放行 = true; });
+  assert.equal(store.find(root, 'TK-830').state, '待派', '直写放行后桥确实没迁——这就是病灶');
+  // 兜底扫描（每拍在 runner.tick 内跑，此处直调同一函数）
+  const 迁 = require('../lib/runner').排期态兜底(root);
+  assert.deepEqual(迁, ['TK-830'], '兜底扫描要补迁并回报单号：' + JSON.stringify(迁));
+  assert.equal(store.find(root, 'TK-830').state, '已排期', '补迁进已排期（否则今时线永远扫不到）');
+  // 幂等：再扫一次不重复动、不刷痕
+  assert.deepEqual(require('../lib/runner').排期态兜底(root), [], '已在已排期的不再计入补迁');
+  // 边界：未放行的不许被兜底带走（放行是项管闸，兜底只补桥的漏，不代开闸）
+  const g2 = 登记一(root, { 题: '未放行粒', 预估单元: 1, 计划开始: '2026-08-26T11:00', 计划完成: '2026-08-26T12:00', 因: '判据' });
+  seed(root, '待派', { id: 'TK-831', 职能: '程序', 粒ID: g2.粒ID, 放行: false });
+  S.挂钩起草(root, g2.粒ID, 'TK-831');
+  assert.deepEqual(require('../lib/runner').排期态兜底(root), [], '未放行单不许被兜底迁走');
+  assert.equal(store.find(root, 'TK-831').state, '待派');
+});
+
 收尾('已排期态', passed);

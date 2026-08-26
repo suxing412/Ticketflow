@@ -33,6 +33,29 @@ function 核查孤儿们(root) {
   return require('./core/store').list(root, '核查')
     .filter((x) => x.fm.代核 && x.fm.代核.结论 === '不过' && !x.fm.挂起);
 }
+// 排期态兜底（2026-08-26 14:1x 案，导出供判据直调——同 核查孤儿们/仲裁孤儿们 的成例）：
+// H116 桥只挂在 lifecycle.放行() 与 schedule 重排路径上，而项管裁决改单/改池带放行走的是
+// store.update，桥不触发——单卡在待派/待重派：有粒有计划却进不了已排期 → 今时线扫不到 →
+// 永不派发（TF-8/TK-183 实证）。与其逐条堵住每个写放行的路口，不如每拍扫一遍补迁。
+// 返回补迁的单号数组（空数组＝无事可做）。
+function 排期态兜底(root) {
+  const 迁 = [];
+  try {
+    const S = require('./pm/schedule');
+    const 粒表 = new Map(S.现态(root).map((g) => [String(g.粒ID), g]));
+    for (const st of ['待派', '待重派']) {
+      for (const x of require('./core/store').list(root, st)) {
+        if (!x.fm.放行 || !x.fm.粒ID || x.fm.挂起) continue;
+        const g = 粒表.get(String(x.fm.粒ID));
+        if (!g || !g.计划开始) continue;
+        S.同步已排期态(root, g); // 桥内自带态校验与留痕，重复调用幂等
+        if (require('./core/store').find(root, x.id).state === '已排期') 迁.push(x.id);
+      }
+    }
+  } catch { /* 台账不可读不阻断派发 */ }
+  return 迁;
+}
+
 // 仲裁孤儿（2026-08-26 第二现场）：代裁章在（给方向/上呈）却还赖在仲裁目录的单。
 // 正常路成功仲裁定后单已离目录；「裁过」结论直落完成不经此形。
 function 仲裁孤儿们(root) {
@@ -1251,6 +1274,12 @@ async function tick(root, cfg, opts = {}) {
       }
     }
   }
+  // 排期态兜底（2026-08-26 14:1x 案）：H116 桥只挂在 lifecycle.放行() 与 schedule 的重排路径上，
+  // 而**项管裁决改单/改池带放行**走的是 store.update——桥不触发，单卡在待派/待重派：
+  // 有粒有计划却进不了已排期 → 今时线扫不到 → 永不派发（TF-8/TK-183 实证）。
+  // 同孤儿补链的取舍：与其逐条堵住每个写放行的路口，不如每拍扫一遍补迁（自愈优于封堵）。
+  排期态兜底(root);
+
   // 仲裁孤儿补链（2026-08-26 制作人 12:11 抓的第二现场：TK-183/186 代裁「给方向」章在而
   // 打回边未走，滞留仲裁 15h+）——章边不原子在代裁 kind 处理同样存在。按章补推：
   // 给方向→打回回炉（方向文本已随代裁写入正文），上呈→上呈待处理。失败出声同核查孤儿。
@@ -1380,4 +1409,4 @@ function killTicket(root, id, 因) {
   return false;
 }
 
-module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, parseQaConclusion, extractClaudeSessionId, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi, 计量回灌, 流分拣器, 分派, 剪闲聊, 流尾, 人闸升格Tick, start升格环, stop升格环, 核查孤儿们, 仲裁孤儿们 };
+module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, parseQaConclusion, extractClaudeSessionId, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi, 计量回灌, 流分拣器, 分派, 剪闲聊, 流尾, 人闸升格Tick, start升格环, stop升格环, 核查孤儿们, 仲裁孤儿们, 排期态兜底 };
