@@ -81,16 +81,32 @@ function 去引(text) {
 
 // 取 markdown 标题下的正文段（到下一个同级或更高级标题为止）。名可为多个别名，任一命中即取。
 // 返回全部命中段（按出现次序），各带行区间——上层据此选「最后一段」或「合并同轮各段」。
+// 围栏遮罩（2026-08-26 TK-197 案）：回执正文里贴 shell/PowerShell 片段是常态，而 `# stdout: 空`
+// 这类注释行长得跟一级标题一模一样——旧法按行扫标题，扫到它就当章节终止，自测节被腰斩成
+// 201 字节（八条应答只读到第一条），初检遂判 0/8 形式性误拦，一批单堵在候人裁。
+// 与同日修的起草围栏吞文（parseTickets）同族：**解析 markdown 结构一律先认围栏**。
+// 返回每行是否落在 ``` 围栏内的布尔表；奇数个围栏（未闭合）之后的行按围栏内算，宁可少切不误切。
+function 围栏遮罩(lines) {
+  const 内 = new Array(lines.length).fill(false);
+  let 开 = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*(```|~~~)/.test(lines[i])) { 内[i] = true; 开 = !开; continue; }
+    内[i] = 开;
+  }
+  return 内;
+}
 function 节段(text, 别名) {
   const lines = String(text || '').split(/\r?\n/);
+  const 遮 = 围栏遮罩(lines);
   const out = [];
   for (let i = 0; i < lines.length; i++) {
+    if (遮[i]) continue;
     const m = lines[i].match(/^(#{1,6})\s*(.+?)\s*$/);
     if (!m) continue;
     if (!别名.some((n) => m[2].includes(n))) continue;
     const 级 = m[1].length;
     let j = i + 1;
-    for (; j < lines.length; j++) { const h = lines[j].match(/^(#{1,6})\s/); if (h && h[1].length <= 级) break; }
+    for (; j < lines.length; j++) { if (遮[j]) continue; const h = lines[j].match(/^(#{1,6})\s/); if (h && h[1].length <= 级) break; }
     out.push({ 起: i + 1, 止: j, 文: lines.slice(i + 1, j).join('\n') });
   }
   return out;
@@ -122,8 +138,10 @@ function 有自测(t) { return 节段(t, 自测别名).length > 0; }
 function 轮段(text) {
   const s = 去引(text);
   const lines = s.split(/\r?\n/);
+  const 遮 = 围栏遮罩(lines); // 同 节段：围栏内的「# 完工报告」是贴出来的示例，不是新一轮（TK-197 同族）
   const 标 = [];
   lines.forEach((ln, i) => {
+    if (遮[i]) return;
     const m = ln.match(/^#{1,6}\s*(.+?)\s*$/);
     if (!m) return;
     if (强轮标.test(m[1])) 标.push({ i, 强: true });
