@@ -278,6 +278,15 @@ t('⑦ 覆盖三态定格（2026-08-26 拍板）：提前完露底无溢出段�
   const 早行 = html.slice(html.indexOf('史:TK-910'), html.indexOf('史:TK-911'));
   assert.ok(/gt2planbase/.test(早行) && !/gt2real-over/.test(早行), '提前完的行：有计划底、无溢出段');
   assert.ok(/超用 2 小时/.test(html), '拖期完的溢出段要报超用小时数（实况呈现，非判定）');
+  // 平角案（制作人 11:36）：TK-911 实开 04:00 早于计划讫 06:00——溢出段接在条中段，左方右圆（无 full）；
+  // 另造整条皆溢的：实开晚于计划讫 → 溢出段带 full 类左端回圆
+  assert.ok(!/gt2real-over hist full/.test(html), '接在条中段的溢出段不带 full（左方角=与计划讫相接的设计语义）');
+  const d3 = 台账();
+  d3.史单 = [{ 单号: 'TK-912', 题: '晚开工', 领单: iso(今ms - 4 * 时), 交付: iso(今ms - 2 * 时), 专项: 'S-1', 态: '归档',
+    计划开始: '2026-08-25T02:00', 计划完成: '2026-08-25T04:00' }]; // 计划讫 04:00 < 实开 08:00（今-4h）→ 整条皆溢
+  const 存3 = 造存储(); 存3.setItem('gt2-done', '全');
+  const { 岛: 岛3 } = 画(d3, 存3);
+  assert.ok(/gt2real-over hist full/.test(岛3.body.innerHTML), '整条皆溢（实开晚于计划讫）必须带 full 类——左端回圆，不吃实条圆角');
   const 卡早 = ctx.GanttIsland._测.卡HTML(早, st);
   const 卡迟 = ctx.GanttIsland._测.卡HTML(迟, st);
   assert.ok(/提前 2 小时（右侧露底）/.test(卡早), '悬浮卡要报省时（实得：' + /对计划[^<]*/.exec(卡早) + '）');

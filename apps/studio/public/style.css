@@ -1738,6 +1738,7 @@ a.gt2nm:hover, a.gt2nm:focus-visible { background:var(--sect); color:var(--accen
 @media (prefers-reduced-motion: reduce) { .gt2bar.gt2real.living::before { animation:none; display:none; } }
 .gt2real-over { position:absolute; top:7px; height:13px; border-radius:0 4px 4px 0; pointer-events:auto;
   background:var(--accent); filter:saturate(1.35) brightness(.78); }
+.gt2real-over.full { border-radius:4px; } /* 整条皆溢（实开晚于计划讫）：左端回圆（11:36 平角案） */
 /* 溢出段不另做动画（行进感由 living 扫光承担，溢出是事实呈现不是过程） */
 .gt2grp button.on { background:var(--accent); color:#fff; }
 .gt2search { font-size:12px; padding:4px 8px; border:none; background:transparent; color:var(--ink); width:150px; }
