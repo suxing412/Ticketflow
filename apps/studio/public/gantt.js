@@ -404,20 +404,19 @@
             : n.实段.定格
               ? (g.题 || '') + '：已交付候审检，实际 ' + 毫文(实.起) + ' → ' + 毫文(实.讫)
               : (g.题 || '') + '：已落袋，实际 ' + 毫文(实.起) + ' → ' + 毫文(实.讫);
-          条 += `<i class="gt2bar gt2real${盖类}" data-tid="${esc(n.键)}"${活条 ? ' data-act="bar" role="button"' : ''} data-g="${esc(g.粒ID)}" tabindex="0"
-              aria-label="${esc(述)}" style="left:${px(X(实.起, 窗))};width:${条宽(实)}"></i>`;
-          // 溢出加深段：实际用时越过计划讫的那一截（真讫对真讫，截断只截图不截事实）
+          // 溢出加深段收编为实条**内部子段**（2026-08-26 制作人 11:50 拍板）：独立叠条会挡断
+          // 父条 living 扫光（脉冲断裂案）、左方角吃实条圆角（11:36 平角案）——子段随父条圆角
+          // 统一裁、扫光 ::before（z:2）在其上连续扫过，两案结构性了断。
+          let 溢内 = '';
           if (s && 实.真讫 > s.真讫) {
             const 溢起 = Math.max(s.真讫, 实.起);
-            // full＝整条皆溢（实际开工晚于计划讫，溢出段与计划讫不相接）：左端也回圆角——
-            // 2026-08-26 制作人 11:36 抓的「实际条左端平角」案：左方角是给「接在条中段」设计的，
-            // 整条溢出时它盖满实条，把底下的圆角吃掉了。
-            const 全溢 = 溢起 <= 实.起;
-            条 += `<i class="gt2real-over${盖类}${全溢 ? ' full' : ''}" data-g="${esc(g.粒ID)}" role="img"
-                aria-label="${esc('超用 ' + ((实.真讫 - s.真讫) / 时毫).toFixed(1).replace(/.0$/, '') + ' 小时（实况，非判定）')}"
-                title="${esc('超用 ' + ((实.真讫 - s.真讫) / 时毫).toFixed(1).replace(/.0$/, '') + ' 小时：实际用时越过计划讫（实况呈现；红条才是服务端超期判定）')}"
-                style="left:${px(X(溢起, 窗))};width:${px(Math.max(2, X(Math.min(实.讫, 实.真讫), 窗) - X(溢起, 窗)))}"></i>`;
+            const 超用 = ((实.真讫 - s.真讫) / 时毫).toFixed(1).replace(/\.0$/, '');
+            溢内 = `<b class="gt2over-in" role="img" aria-label="${esc('超用 ' + 超用 + ' 小时（实况，非判定）')}"
+                title="${esc('超用 ' + 超用 + ' 小时：实际用时越过计划讫（实况呈现；红条才是服务端超期判定）')}"
+                style="left:${px(Math.max(0, X(溢起, 窗) - X(实.起, 窗)))}"></b>`;
           }
+          条 += `<i class="gt2bar gt2real${盖类}" data-tid="${esc(n.键)}"${活条 ? ' data-act="bar" role="button"' : ''} data-g="${esc(g.粒ID)}" tabindex="0"
+              aria-label="${esc(述)}" style="left:${px(X(实.起, 窗))};width:${条宽(实)}">${溢内}</i>`;
           if (活条) {
             const 尾活 = px(X(实.讫, 窗) + 4);
             if (!越 && j && j.需重排) 条 += `<em class="gt2flag od" style="left:${尾活}" title="已超期${j.超期天 != null ? ' ' + j.超期天 + ' 天' : ''}未了结：该重排了">该重排</em>`;

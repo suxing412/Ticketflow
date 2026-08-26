@@ -1736,10 +1736,11 @@ a.gt2nm:hover, a.gt2nm:focus-visible { background:var(--sect); color:var(--accen
 @keyframes gt2sweep { 0% { transform:translateX(-110%); } 100% { transform:translateX(390%); } }
 .gt2bar.gt2real.set { cursor:default; opacity:.88; } /* 审检驻留定格：静态高饱和，无动画 */
 @media (prefers-reduced-motion: reduce) { .gt2bar.gt2real.living::before { animation:none; display:none; } }
-.gt2real-over { position:absolute; top:7px; height:13px; border-radius:0 4px 4px 0; pointer-events:auto;
-  background:var(--accent); filter:saturate(1.35) brightness(.78); }
-.gt2real-over.full { border-radius:4px; } /* 整条皆溢（实开晚于计划讫）：左端回圆（11:36 平角案） */
-/* 溢出段不另做动画（行进感由 living 扫光承担，溢出是事实呈现不是过程） */
+/* 溢出段=实条内部子段（11:50 拍板收编）：黑罩加深不另配色，随父条圆角被裁，
+   永远压在 living 扫光（::before z:2）之下——脉冲连续、圆角统一，两案同了。 */
+.gt2bar.gt2real { overflow:hidden; }
+.gt2real .gt2over-in { position:absolute; top:0; bottom:0; right:0; z-index:1; background:rgba(0,0,0,.30); }
+.gt2bar.gt2real.living::before { z-index:2; }
 .gt2grp button.on { background:var(--accent); color:#fff; }
 .gt2search { font-size:12px; padding:4px 8px; border:none; background:transparent; color:var(--ink); width:150px; }
 .gt2search:focus { outline:none; background:var(--sect); }

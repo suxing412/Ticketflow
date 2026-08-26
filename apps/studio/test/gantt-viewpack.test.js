@@ -165,8 +165,10 @@ t('① 活条制（覆盖式）：在途单＝计划深底+实际浅盖骑今时
   assert.ok(n && n.实段 && n.实段.活, '活条节点必须带实段.活');
   assert.equal(n.实段.讫, st.今ms, '覆盖条右缘＝今时线毫（走到哪盖到哪）');
   assert.equal(n.实段.起, Date.parse(台账().单册['TK-901'].领单), '覆盖条左缘＝真实领单时刻（Date.parse 真毫，不走钟面正则）');
-  // TK-901 计划讫 11:00 < 今 12:00：已在拖期中——溢出加深段随活条出现且同为 living
-  assert.ok(/gt2real-over living/.test(html), '实况已越计划讫：溢出加深段要在且带脉冲');
+  // TK-901 计划讫 11:00 < 今 12:00：已在拖期中——溢出子段在活条**内部**（11:50 收编拍板：
+  // 独立叠条挡断扫光=脉冲断裂案），扫光连续由 CSS z 序保证
+  assert.ok(/gt2real living[^>]*>[\s\S]*?gt2over-in/.test(html), '溢出子段必须在活条内部');
+  assert.ok(!/gt2real-over/.test(html), '独立溢出叠条已废——它挡断扫光还吃圆角');
   // 变异：抽掉在途标记 → 覆盖层消失、回普通计划条
   const d2 = 台账(); d2.单册['TK-901'].大态 = '结束';
   const { 岛: 岛2 } = 画(d2);
@@ -276,17 +278,17 @@ t('⑦ 覆盖三态定格（2026-08-26 拍板）：提前完露底无溢出段�
   assert.ok(迟.段 && 迟.实段 && 迟.实段.真讫 > 迟.段.真讫, '拖期完：实际条右缘越过计划底（右溢）');
   const html = 岛.body.innerHTML;
   const 早行 = html.slice(html.indexOf('史:TK-910'), html.indexOf('史:TK-911'));
-  assert.ok(/gt2planbase/.test(早行) && !/gt2real-over/.test(早行), '提前完的行：有计划底、无溢出段');
-  assert.ok(/超用 2 小时/.test(html), '拖期完的溢出段要报超用小时数（实况呈现，非判定）');
-  // 平角案（制作人 11:36）：TK-911 实开 04:00 早于计划讫 06:00——溢出段接在条中段，左方右圆（无 full）；
-  // 另造整条皆溢的：实开晚于计划讫 → 溢出段带 full 类左端回圆
-  assert.ok(!/gt2real-over hist full/.test(html), '接在条中段的溢出段不带 full（左方角=与计划讫相接的设计语义）');
+  assert.ok(/gt2planbase/.test(早行) && !/gt2over-in/.test(早行), '提前完的行：有计划底、无溢出子段');
+  assert.ok(/超用 2 小时/.test(html), '拖期完的溢出子段要报超用小时数（实况呈现，非判定）');
+  // 收编自证（11:36 平角案+11:50 脉冲断裂案一并了断）：整条皆溢时子段 left=0 贴父条左缘，
+  // 圆角由父条 overflow 裁——不存在独立叠条，也就没有方角可言
   const d3 = 台账();
   d3.史单 = [{ 单号: 'TK-912', 题: '晚开工', 领单: iso(今ms - 4 * 时), 交付: iso(今ms - 2 * 时), 专项: 'S-1', 态: '归档',
-    计划开始: '2026-08-25T02:00', 计划完成: '2026-08-25T04:00' }]; // 计划讫 04:00 < 实开 08:00（今-4h）→ 整条皆溢
+    计划开始: '2026-08-25T02:00', 计划完成: '2026-08-25T04:00' }]; // 计划讫 04:00 < 实开（今-4h）→ 整条皆溢
   const 存3 = 造存储(); 存3.setItem('gt2-done', '全');
   const { 岛: 岛3 } = 画(d3, 存3);
-  assert.ok(/gt2real-over hist full/.test(岛3.body.innerHTML), '整条皆溢（实开晚于计划讫）必须带 full 类——左端回圆，不吃实条圆角');
+  const h3 = 岛3.body.innerHTML;
+  assert.ok(/gt2real hist[^>]*>[\s\S]*?gt2over-in[\s\S]*?left:0(\.0)?px/.test(h3.replace(/\n/g, '')), '整条皆溢：子段 left=0 贴父条左缘（父条圆角统一裁，平角绝根）');
   const 卡早 = ctx.GanttIsland._测.卡HTML(早, st);
   const 卡迟 = ctx.GanttIsland._测.卡HTML(迟, st);
   assert.ok(/提前 2 小时（右侧露底）/.test(卡早), '悬浮卡要报省时（实得：' + /对计划[^<]*/.exec(卡早) + '）');
