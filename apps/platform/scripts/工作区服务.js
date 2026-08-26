@@ -163,8 +163,15 @@ const 服务 = http.createServer((req, res) => {
     const 闸 = 解析仓('dir');
     if (!闸.ok) return 发JSON(res, 400, { ok: false, error: 闸.错误 });
     try {
-      const 文件 = 工作区.changedFiles(闸.路径);
-      return 发JSON(res, 200, { ok: true, 目录: 闸.路径, 条数: 文件.length, 变更: 文件 });
+      // 受管 / 新增 分开报（协-034）：判官篡改检查只认受管改动。
+      // 合成一个清单的话，某个项目的 .gitignore 恰好没盖住 dist，
+      // 判官跑一次 build 就会被自己判成作弊——而它什么坏事都没干。
+      const 分 = 工作区.变更分类(闸.路径);
+      const 文件 = [...new Set([...分.受管, ...分.新增])];
+      return 发JSON(res, 200, {
+        ok: true, 目录: 闸.路径, 条数: 文件.length, 变更: 文件,
+        受管: 分.受管, 新增: 分.新增,
+      });
     } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
   }
 
@@ -252,7 +259,9 @@ const 服务 = http.createServer((req, res) => {
         // 判官拿到的是 detached HEAD，没有分支，交付不了任何东西。
         if (路径 === '/write/审阅区') {
           if (!体.工单 || !体.commit) return 发JSON(res, 400, { ok: false, error: '需要 工单 与 commit' });
-          const r = 工作区.审阅区(平台根, 配置, 项目, String(体.工单), String(体.commit));
+          // 第六个参数是**被审那张单**：审阅区要按它的 需要依赖 装依赖（协-033）。
+          // 判官核的就是这张单的验收标准，要跑的命令跟执行方是同一批。
+          const r = 工作区.审阅区(平台根, 配置, 项目, String(体.工单), String(体.commit), 体.单据 || null);
           return 发JSON(res, r.ok ? 200 : 400, r.ok ? { ok: true, ...r } : { ok: false, error: r.错误 });
         }
         if (路径 === '/write/收工') {
