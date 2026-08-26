@@ -177,13 +177,31 @@ function unresolved(dir) {
   return output ? output.split(/\r?\n/).filter(Boolean) : [];
 }
 
+const 归一 = (值) => [...new Set(
+  (值 || []).flatMap((v) => v ? v.split(/\r?\n/) : []).map((v) => v.replace(/\\/g, '/')).filter(Boolean),
+)];
+
 function changedFiles(dir) {
-  const values = [
-    git(dir, ['diff', '--name-only', 'HEAD']).stdout,
-    git(dir, ['diff', '--cached', '--name-only', 'HEAD']).stdout,
-    git(dir, ['ls-files', '--others', '--exclude-standard']).stdout,
-  ].flatMap((value) => value ? value.split(/\r?\n/) : []);
-  return [...new Set(values.map((value) => value.replace(/\\/g, '/')).filter(Boolean))];
+  const 分 = 变更分类(dir);
+  return 归一([...分.受管, ...分.新增]);
+}
+
+// 受管改动 vs 未跟踪新增（协-034）——判官篡改检查要分得开这两类。
+//
+// 「改了它正在判的那份代码」是受管改动：判词当场作废。
+// 「留下了未跟踪的新文件」多半只是构建产物落在了 .gitignore 没覆盖到的地方
+// （审阅区里判官是可以跑 build / test 的，dist 与临时目录本来就会长出来）。
+// 两类混成一个清单的后果很具体：某个项目的 .gitignore 恰好没写 dist，
+// 于是每一次跑得动的质检都被自己判成「判官作弊」——**一条正确的通过永远出不来**。
+// 所以新增只报不作废，受管才作废。
+function 变更分类(dir) {
+  return {
+    受管: 归一([
+      git(dir, ['diff', '--name-only', 'HEAD']).stdout,
+      git(dir, ['diff', '--cached', '--name-only', 'HEAD']).stdout,
+    ]),
+    新增: 归一([git(dir, ['ls-files', '--others', '--exclude-standard']).stdout]),
+  };
 }
 
 function globRegex(pattern) {
@@ -512,7 +530,25 @@ function publish(project, workspace) {
 //
 // 所以另开一个 detached worktree 落在该单的检查点上。判官看到的正是它要判的那份代码，
 // 而且是历史上那个点的样子——就算主线之后又往前走了，判的也还是这张单交付的东西。
-function 审阅区(monitorRoot, cfg, project, 单号, commit) {
+// 审阅区也要装依赖（协-033）。
+//
+// 协-026 给**执行**工作区补了依赖装配，判官的审阅区是**另一条 prepare 路径**，没跟上。
+// 于是 2026-08-26 HW-4 实测：判官把能静态核对的全核对了（接口、两个 store、
+// service 注入、8 对迁移、参数化 SQL 全对），然后卡在同一句话上——
+//   「三项命令型验收均受环境阻断……这属于『验不了』，不是代码『不通过』」
+// 跟协-026 之前执行侧那次一模一样，只是换了个工作区。
+//
+// 装什么由**被审的那张单**说了算（它的 需要依赖），不由判官自己猜：
+// 判官核的就是这张单的验收标准，它要跑的命令跟执行方跑的是同一批。
+//
+// **依赖是平台替它装的**，不是它自己写的——这条不变。
+//
+// 协-034 追记：光装上依赖还不够。同一轮 HW-4 里，typecheck 因为缺 vitest/globals 挂掉
+// （这条本函数治了），unit 与 build 则是 EPERM——tsc 要写 dist、vitest 要写 .vite-temp，
+// 而判官当时是 --sandbox read-only。装了依赖照样跑不完，结论还是「验不了」。
+// 判官的写权边界因此在 lib/派单.js 的 判官参数 里重画成「只在审阅区内可写 + 事后查篡改」。
+// 那件事不归本函数管，但**装依赖必须先于它发生**：判官进区就该是能跑的。
+function 审阅区(monitorRoot, cfg, project, 单号, commit, 工单) {
   const wc = configOf(cfg);
   const repository = repoTop(path.resolve(project.path));
   const sha = String(commit || '').trim();
@@ -530,7 +566,15 @@ function 审阅区(monitorRoot, cfg, project, 单号, commit) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   // --detach：不建分支。判官不该拥有一条分支——它没有要交付的东西。
   git(repository, ['worktree', 'add', '--detach', target, sha]);
-  return { ok: true, 路径: path.resolve(target), commit: sha, 仓库: repository };
+  const 出 = { ok: true, 路径: path.resolve(target), commit: sha, 仓库: repository };
+  // 装不上**不拦着判**：判官照样能静态核对（接口、迁移、SQL 参数化那些都不需要跑命令），
+  // 只是命令型验收会得出「验不了」——那是个诚实的结论，比因为装不上就不判要好。
+  // 所以这里吞掉异常并把因由带回去，不像执行侧那样抛。
+  try {
+    const 装 = 装依赖(path.resolve(target), 工单, wc.装依赖超时毫秒);
+    if (装) 出.依赖 = 装;
+  } catch (e) { 出.依赖失败 = String(e.message).split(/\r?\n/)[0]; }
+  return 出;
 }
 
 // 收工 —— 一张单干完之后把它的隔离工作区和分支收掉（协-009）。
@@ -636,6 +680,6 @@ module.exports = {
   装依赖, 依赖目录表,
   收工, 遗留工作区, 审阅区,
   configOf, isGitRepo, repoTop, workspaceRoot, worktreeList,
-  prepare, integrate, checkpoint, dependencyTickets, publish, changedFiles, enforceWriteScope,
+  prepare, integrate, checkpoint, dependencyTickets, publish, changedFiles, 变更分类, enforceWriteScope,
   正文写入范围, 冲突残留, 拦冲突标记, 含有,
 };
