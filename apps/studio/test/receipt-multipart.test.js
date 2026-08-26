@@ -79,4 +79,21 @@ t('⑤ TK-35 案兼容：报告后的无结构短散文尾巴照旧剪掉，结�
   assert.ok(/异议/.test(R.extractClaudeText(raw2)), '带章头的续段是报告体，不许被当闲聊剪掉');
 });
 
+t('⑧ 报告细流（截头案真根因）：分派 抽出 assistant 正文，out 被上限丢头也不影响它', () => {
+  // 案发：out 满 800KB 即 slice(-400000) 丢头保尾，且切在字节中间腰斩 JSON 行——那条
+  // assistant 消息整个解析失败，TK-204 的回执从半截 JSON 起头、前三章全灭。两轮下游
+  // 修补（多段保全、保守剪裁）都没治到这里：**报告要在被截之前就另存一份**。
+  const 报告体 = '# 完工报告 TK-204\n\n## 做了什么\n- 双写落件\n\n## 自测结果\n- ✓ 标准 1：在位';
+  const 尾段 = '## 实际消耗\n约 1h\n\n结论：通过';
+  const 行 = (t) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: t }] } });
+  const r = R.分派([行(报告体), '{"type":"stream_event"}', 行(尾段)]);
+  assert.ok(r.报告.includes('## 做了什么') && r.报告.includes('## 自测结果'), '报告细流要抽出正文头段');
+  assert.ok(r.报告.includes('## 实际消耗'), '后续段也进细流');
+  assert.ok(!r.报告.includes('"type":"assistant"'), '细流只存正文，不含 JSON 包装（密度高才装得下整份）');
+  // 致命性自证：同一份数据走 out 路，模拟上限截头后头段确实没了
+  const out = [行(报告体), 行(尾段)].join('\n');
+  const 被截 = out.slice(-Math.floor(out.length / 2)); // 模拟 slice(-N) 丢头且切在行中
+  assert.ok(!R.extractClaudeText(被截).includes('## 做了什么'), '走 out 路被截后头段必失——这就是要另存细流的理由');
+});
+
 console.log('全部通过：' + passed + ' 项');

@@ -227,7 +227,7 @@ function resolveCli(poolName, model, allowedTools) {
 // ——不认它是对的（message_delta 报的是本条消息的累计输出，与随后的 assistant 整条重复），
 // 故增量行不进细流：既不影响账，也不白占上限。
 function 分派(行s) {
-  let 主 = '', 计量 = '';
+  let 主 = '', 计量 = '', 报告 = '';
   const 增 = [];
   for (const l of 行s) {
     // 判增量只认**解析出来的** e.type——不能用「行里出现 stream_event 字样」当判据：
@@ -244,8 +244,21 @@ function 分派(行s) {
     }
     主 += l + '\n';
     if (l.includes('"usage"')) 计量 += l + '\n';
+    // 报告细流（2026-08-26 截头案真根因）：out 满 800KB 即 slice(-400000) **丢头保尾**，
+    // 且切在字节中间会把一行 JSON 腰斩、那条 assistant 消息整个解析失败——TK-204 的
+    // 回执遂从半截 JSON 起头，前三章全灭（两轮下游修补都没治到这里）。
+    // 照仓内既有成例（计量另存细流，注释见上方「out 被上限截头时也不会连带丢掉账」）：
+    // assistant 文本另存一条只含正文的细流，密度远高于 JSON 包装，同样上限下装得下整份报告。
+    if (l.includes('"type":"assistant"')) {
+      try {
+        const e = JSON.parse(l);
+        if (e && e.type === 'assistant' && e.message && Array.isArray(e.message.content)) {
+          for (const b of e.message.content) if (b.type === 'text' && b.text && b.text.trim()) 报告 += b.text.trim() + '\n\n';
+        }
+      } catch { /* 半行/非 JSON：主流里还有一份，extract 会兜 */ }
+    }
   }
-  return { 主, 计量, 增 };
+  return { 主, 计量, 增, 报告 };
 }
 // 有状态分拣器：数据块边界会把一行劈成两半，残段留到下一块再拼（不留残段就会丢 usage 行）。
 function 流分拣器() {
@@ -302,9 +315,18 @@ function extractClaudeText(raw) {
   // 前三章（做了什么/自测结果/实际消耗）全灭。定谳：**默认全留**，只剪两端可确证的闲聊——
   // 首段无任何 markdown 结构（无章头/围栏/列表/编号）且 < 200 字＝开场白；末段同判 < 80 字。
   // 宁可多留过程叙述（初检只查章存在性，多料不红），绝不再丢半份报告。
+  return 剪闲聊(texts.join('\n\n'));
+}
+
+// 两端闲聊剪裁（2026-08-26 定谳，供 extractClaudeText 与报告细流共用一处口径）：
+// **默认全留**，只剪两端可确证的闲聊——无 markdown 结构且首段 <200 字／末段 <80 字。
+// 全无结构段（压根没有报告体）时一个字不剪。宁可多留过程叙述（初检只查章存在性，多料不红），
+// 绝不再丢半份报告（TK-204/185/203/TF-4 四案的教训）。
+function 剪闲聊(文本) {
   const 有结构 = (t) => /^#{1,6}\s|```|^\s*[-*]\s|^\s*\d+[.、)]/m.test(t || '');
-  const 段 = texts.slice();
-  if (!段.some(有结构)) return 段.join('\n\n'); // 全无结构＝没有报告体，一个字都不剪（宁可多留）
+  const 段 = String(文本 || '').split(/\n{2,}/).filter((x) => x.trim());
+  if (!段.length) return String(文本 || '');
+  if (!段.some(有结构)) return 段.join('\n\n');
   while (段.length > 1 && !有结构(段[0]) && 段[0].length < 200) 段.shift();
   while (段.length > 1 && !有结构(段[段.length - 1]) && 段[段.length - 1].length < 80
     && !/结论[:：]/.test(段[段.length - 1])) 段.pop();
@@ -900,7 +922,7 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   // 凭据来源入流水（施工令-029）：迁移后要看得见「这一发到底是从托管取的还是从 config 兜底取的」。
   // 只记来源三个字，key/指纹一律不进流水。
   journal.append(root, `实弹开工 ${t.id}（${agentId} · ${kind} · ${cliPool}${model ? '/' + model : ''} → ${proj.name} · 超时闸 ${rc.执行超时分钟 ?? 30}m 派发时快照${compat ? ' · 凭据' + compat.来源 : ''}）`); // 夜班推演 #3：热改超时不作用于在跑会话，快照值写明防误判
-  let out = '', errout = '', 计量流 = '', 活片 = '';
+  let out = '', errout = '', 计量流 = '', 活片 = '', 报告流 = '';
   const 分拣 = stream ? 流分拣器() : null;
   // 只接已经在此处消费的 stream-json stdout；存档模块不能另开 reader 或改动本回调顺序。
   const 存档 = stream ? eventarchive.打开(root, cfg, { 单号: t && t.id, runId: entry.runId }) : null;
@@ -924,6 +946,9 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
     // 计量细流（施工令-047）：只留含 usage 的整行。out 那条 800KB 上限截的是头，
     // 而 usage 行一旦被截掉就永远补不回来——账不能跟着显示缓冲一起丢。
     if (r.计量) { 计量流 += r.计量; if (计量流.length > 400000) 计量流 = 计量流.slice(-200000); }
+    // 报告细流（2026-08-26 截头案真根因，同 计量 的理由）：out 截的是头，而报告开头
+    // （做了什么/自测结果）一旦被截就永远补不回来。只存 assistant 正文，同上限装得下整份。
+    if (r.报告) { 报告流 += r.报告; if (报告流.length > 400000) 报告流 = 报告流.slice(-200000); }
     // 一条消息吐完（assistant 整行到达）就清增量缓冲：那段字已经以整块形式进 out 了，再拼就是重影
     if (r.主.includes('"type":"assistant"')) 活片 = '';
     if (r.增.length) 活片 = (活片 + r.增.join('')).slice(-400);
@@ -969,13 +994,16 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   child.on('error', (e) => { clearTimeout(killer); 收尾存档(); failLocal('CLI 错误：' + e.message); });
   child.on('close', (code) => {
     clearTimeout(killer);
-    if (分拣) { const r = 分拣.收尾(); out += r.主; 计量流 += r.计量; } // 末行（常无换行符）也要进账
+    if (分拣) { const r = 分拣.收尾(); out += r.主; 计量流 += r.计量; if (r.报告) 报告流 += r.报告; } // 末行（常无换行符）也要进账
     收尾存档(); // 清理收尾时把当前 run 显式列为活跃，绝不自删
     if (!running.has(agentId)) return; // 已被超时处理
     // 预算记账（施工令-021 → 047 流计量回灌）：口径与落账全在 计量回灌 里，它永不抛——
     // 交单这条路上不许有第二个可能崩的点（信 §四.3：保险丝坏了不该顺带炸掉产线）。
     计量回灌(root, { 池: cliPool, 单: t.id, 流: 计量流, 流式: !!stream });
-    const report = stream ? extractClaudeText(out) : out;
+    // 报告细流优先（2026-08-26 截头案真根因收口）：out 被 800KB 上限**丢头保尾**且切在
+    // 字节中间会腰斩 JSON 行，长会话的报告开头就此蒸发（TK-204 实证）。细流只存 assistant
+    // 正文，同上限下装得下整份；细流空（旧版/非流式/解析全败）才回落 out，行为不退化。
+    const report = stream ? (报告流.trim() ? 剪闲聊(报告流) : extractClaudeText(out)) : out;
     const sessionId = stream ? extractClaudeSessionId(out) : null;
     settleClose(kind, code, report, errout, t.id, finishOk, failLocal, kind === '质检' ? {
       无结论: (why, text) => 同会话补问(sessionId, why, text),
@@ -1352,4 +1380,4 @@ function killTicket(root, id, 因) {
   return false;
 }
 
-module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, parseQaConclusion, extractClaudeSessionId, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi, 计量回灌, 流分拣器, 流尾, 人闸升格Tick, start升格环, stop升格环, 核查孤儿们, 仲裁孤儿们 };
+module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, parseQaConclusion, extractClaudeSessionId, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi, 计量回灌, 流分拣器, 分派, 剪闲聊, 流尾, 人闸升格Tick, start升格环, stop升格环, 核查孤儿们, 仲裁孤儿们 };
