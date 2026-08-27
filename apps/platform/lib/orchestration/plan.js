@@ -57,6 +57,50 @@ function resolvePlan(cfg, output, workspacePath) {
   throw new Error(`Orchestrator 计划不可用；${errors.join('；')}`);
 }
 
+// 需要依赖（协-038）—— 隔离工作区要不要 npm ci，以及装哪几个目录。
+//
+// 案源：2026-08-27 真跑 HW-7（编排单）实测。工单里明确要求子单声明 needDeps，
+// 而 plan.js **根本没有这个字段**——模型没地方放，就把它塞进了验收标准当勾选项：
+//   - [ ] needDeps: ["tooling", "services/api", "apps/agent", …]
+// 写下来了，但写在了**没人读**的地方：装依赖那步读的是 frontmatter 的 需要依赖，
+// 不是清单里的一行字。后果很具体——那一批 5 张子单里有 4 张的验收要跑
+// typecheck/unit/build，它们会一张不落地撞上「验不了」，每张烧掉一轮判官。
+//
+// 这正是协-026/033/035 治了三轮的那个病，在编排这条路上原样复发：
+// **信息存在，只是落在了读不到的地方**。所以字段要真的存在，契约块也要说出来。
+//
+// 形状与 lib/workspace/worktree.js 的 依赖目录表 一致：true（仓根）或目录数组。
+// 这里只做**形状**校验（不许绝对路径、不许 ../ 逃逸）；能不能装得上由那边负责——
+// 那是它的职责，重复一遍只会两处各错一次。
+function 归一需要依赖(raw, key, 记错) {
+  const v = raw.needDeps ?? raw.need_deps ?? raw.需要依赖;
+  if (v === undefined || v === null || v === false) return null;
+  if (v === true) return true;
+  const 表 = (Array.isArray(v) ? v : [v]).map(String).map((s) => s.trim()).filter(Boolean);
+  if (!表.length) return null;
+  for (const d of 表) {
+    if (path.isAbsolute(d) || d.replace(/\\/g, '/').split('/').includes('..')) {
+      记错(`子任务 ${key} 的 needDeps 只能是工作区内的相对目录，不许绝对路径或 ../：${d}`);
+      return null;
+    }
+  }
+  return 表;
+}
+
+// 回合上限：正整数，或不写。**不替它猜一个默认值**——
+// 该多少轮取决于这张单要读多少、改多少，plan.js 没有那个信息。
+// 能做的是让它**说得出来**，并在契约里讲清不写的后果（见 lib/编排提示.js）。
+function 归一回合上限(raw, key, 记错) {
+  const v = raw.maxTurns ?? raw.max_turns ?? raw.回合上限;
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0 || Math.floor(n) !== n) {
+    记错(`子任务 ${key} 的 maxTurns 要是正整数（实得 ${JSON.stringify(v)}）`);
+    return null;
+  }
+  return n;
+}
+
 function normalizePlan(cfg, value) {
   const rawTasks = value.tasks || value.任务;
   const maxTasks = Number((cfg.orchestration || {}).maxTasks ?? 20);
@@ -64,20 +108,48 @@ function normalizePlan(cfg, value) {
   if (rawTasks.length > maxTasks) throw new Error(`单次计划最多 ${maxTasks} 张子工单`);
   const roles = new Set(Object.keys(cfg.roles || {}).length ? Object.keys(cfg.roles) : (cfg.职能 || []));
   const seen = new Set();
+
+  // 违规**一次报全**，不是撞见第一条就抛（协-038）。
+  //
+  // 案源同上：HW-7 那次真跑烧了 375 秒，最后只换回一句
+  //   「子任务 key 非法：jobs_postgres_store_and_migrations」
+  // ——34 个字符，上限 32，一个字符废掉六分钟。而且只报这一条：就算人当场改对了它，
+  // 也不知道后面还埋着几条，可能要来回好几轮，每轮都是一次真跑的钱。
+  // 校验本身没错，错在**代价与信息量不匹配**：既然已经花完了，就该把话一次说完。
+  const 错 = [];
+  const 记错 = (s) => 错.push(s);
+
   const tasks = rawTasks.map((raw, index) => {
     const key = String(raw.key || raw.id || raw.键 || `task-${index + 1}`).trim();
-    if (!/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(key)) throw new Error(`子任务 key 非法：${key}`);
-    if (seen.has(key)) throw new Error(`子任务 key 重复：${key}`);
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(key)) {
+      // 超长是最常见的那种，单独说清楚——只讲「非法」的话，人得自己数字符。
+      记错(key.length > 32
+        ? `子任务 key 太长：${key}（${key.length} 字符，上限 32）`
+        : `子任务 key 非法：${key}（须字母开头，只含字母数字下划线短横，最长 32 字符）`);
+    }
+    if (seen.has(key)) 记错(`子任务 key 重复：${key}`);
     seen.add(key);
     const role = String(raw.role || raw.角色 || '').trim();
-    if (!roles.has(role)) throw new Error(`子任务 ${key} 使用未知角色：${role}`);
-    if (role === 'orchestrator' && (cfg.orchestration || {}).allowNested !== true) throw new Error(`子任务 ${key} 不允许递归创建 Orchestrator`);
+    if (!roles.has(role)) 记错(`子任务 ${key} 使用未知角色：${role}（可用：${[...roles].join(' / ')}）`);
+    if (role === 'orchestrator' && (cfg.orchestration || {}).allowNested !== true) 记错(`子任务 ${key} 不允许递归创建 Orchestrator`);
     const title = String(raw.title || raw.标题 || '').trim();
-    if (!title || title.length > 100) throw new Error(`子任务 ${key} 标题为空或超过 100 字`);
+    if (!title || title.length > 100) 记错(`子任务 ${key} 标题为空或超过 100 字`);
     const acceptance = arr(raw.acceptance || raw.验收标准).map(String).map((x) => x.trim()).filter(Boolean);
-    if (!acceptance.length) throw new Error(`子任务 ${key} 缺少客观验收标准`);
+    if (!acceptance.length) 记错(`子任务 ${key} 缺少客观验收标准`);
     const task = {
       key, title, role,
+      needDeps: 归一需要依赖(raw, key, 记错),
+      // 回合上限（协-038 续）——跟 needDeps 是同一族的病，同一次实战里连着撞上。
+      //
+      // 2026-08-27：HW-7-2 与 HW-7-3 并行真跑，**两张都零改动退回待投**，理由一样——
+      //   跑到回合数上限被截断（18 轮 / 26 轮，API 用时 78s / 84s）
+      // 手写的单都自己写了这个数（HW-4 写 80、HW-7 写 60），而**计划里说不出来**，
+      // 于是物化出来的子单一律没有，掉进 CLI 自己的默认值——那个值对「读一圈仓库再改一个模块」
+      // 这种单根本不够。配置里也没有兜底（执行.回合上限 没配）。
+      //
+      // 结果就是：**凡编排生成的实现类子单，都会先白跑一轮才发现**。
+      // 两张单 164 秒，换回来的信息是「你没写这个字段」——而它压根没地方写。
+      maxTurns: 归一回合上限(raw, key, 记错),
       description: String(raw.description || raw.scope || raw.范围 || '').trim(),
       doNot: arr(raw.doNot || raw.不要做).map(String).map((x) => x.trim()).filter(Boolean),
       acceptance,
@@ -91,18 +163,25 @@ function normalizePlan(cfg, value) {
       routing: raw.routing || raw.路由 || null,
     };
     if (role === 'reviewer' && task.writeScope.length) {
-      throw new Error(`子任务 ${key} 的 reviewer 是只读角色，不能声明 writeScope；实现评审功能请用 backend，编写集成测试/报告请用 integrator`);
+      记错(`子任务 ${key} 的 reviewer 是只读角色，不能声明 writeScope；实现评审功能请用 backend，编写集成测试/报告请用 integrator`);
     }
     if (role === 'reviewer' && task.requiredCapabilities.some((cap) => ['coding', 'backend', 'frontend'].includes(cap))) {
-      throw new Error(`子任务 ${key} 的 reviewer 不能要求编码能力；请改用 backend、frontend 或 integrator`);
+      记错(`子任务 ${key} 的 reviewer 不能要求编码能力；请改用 backend、frontend 或 integrator`);
     }
     return task;
   });
 
+  // 单张的形状先过关，再查依赖。
+  // 上面挂了的话 key 本身可能就是坏的，这时候再报「依赖未知 key」全是**连带噪音**——
+  // 一次报全的价值在于「每条都值得改」，掺进派生错误反而更难读。
+  if (错.length) throw new Error(汇总(错));
+
   for (const task of tasks) for (const dep of task.dependsOn) {
-    if (!seen.has(dep)) throw new Error(`子任务 ${task.key} 依赖未知 key：${dep}`);
-    if (dep === task.key) throw new Error(`子任务 ${task.key} 不能依赖自己`);
+    if (!seen.has(dep)) 记错(`子任务 ${task.key} 依赖未知 key：${dep}`);
+    if (dep === task.key) 记错(`子任务 ${task.key} 不能依赖自己`);
   }
+  if (错.length) throw new Error(汇总(错));
+
   const byKey = Object.fromEntries(tasks.map((task) => [task.key, task]));
   const visiting = new Set(); const done = new Set();
   const visit = (key, chain = []) => {
@@ -115,6 +194,11 @@ function normalizePlan(cfg, value) {
   for (const task of tasks) visit(task.key);
   return { summary: String(value.summary || value.摘要 || '').trim(), tasks };
 }
+
+// 一条就照旧原样抛（既有调用方与测试都按单条读），多条才列成清单。
+// 单条时套上「共 1 条」的壳属于为了整齐而制造噪音。
+const 汇总 = (错) => 错.length === 1 ? 错[0]
+  : `计划有 ${错.length} 处不合规（一次全列出来，免得改一条跑一轮）：\n` + 错.map((s) => `  · ${s}`).join('\n');
 
 function bodyOf(task) {
   const checklist = task.acceptance.map((line) => `- [ ] ${line}`).join('\n');
@@ -165,6 +249,12 @@ function materialize(root, cfg, parent, plan, store) {
     if (deps.length) fm.依赖 = deps;
     if (task.requiredCapabilities.length) fm.required_capabilities = task.requiredCapabilities;
     if (task.writeScope.length) fm.write_scope = task.writeScope;
+    // 需要依赖 要真的落进 frontmatter（协-038）——装依赖那步读的就是它。
+    // HW-7 实测：模型没地方放，把 needDeps 塞进了验收标准当勾选项，
+    // 于是「写了等于没写」，4 张要跑命令的子单全都注定「验不了」。
+    if (task.needDeps) fm.需要依赖 = task.needDeps;
+    // 同上：执行器读的是 fm.回合上限（scripts/执行器.js 的 `t.fm.回合上限 || …`）。
+    if (task.maxTurns) fm.回合上限 = task.maxTurns;
     if (task.routing) fm.routing = task.routing;
     const body = bodyOf(task);
     const existing = store.find(root, id);
