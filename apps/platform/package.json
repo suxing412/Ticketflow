@@ -36,12 +36,19 @@
       "scripts/**",
       "config/**",
       "!config/*.local.json",
-      "!config/api-token.txt"
+      "!config/api-token.txt",
+      "SETUP.md"
     ],
     "win": {
       "target": "portable",
       "signAndEditExecutable": false
-    }
+    },
+    "extraFiles": [
+      {
+        "from": "SETUP.md",
+        "to": "SETUP.md"
+      }
+    ]
   },
   "devDependencies": {
     "electron": "^30.5.1",

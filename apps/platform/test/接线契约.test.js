@@ -391,6 +391,99 @@ t('首装脚本走产品自己的落位函数，不在别处再拼一遍配置�
   assert.match(s, /自检\.查\(/, '装完必须打一遍自检——就绪与否由产品自己说，不由安装脚本说');
 });
 
+// ---------- 打包件也得拿得到配置模板（协-036） ----------
+//
+// 翻 2026-08-16 那次真打包留下的 dist/config/：只有 api-token.txt、接口令牌.local.json
+// （都是开机自动生成的）和 工单库.local.json（界面上那个输入框配的）。
+// **四个要手配的一个都没有**，而且不可能有——`.示例` 全锁在只读的 app.asar 里。
+// 源码用户有模板所以一次写对；打包用户连模板都看不见。
+t('打包态第一次开机要把 .示例 播到 exe 同级 config/（协-036）', () => {
+  const os = require('os');
+  const 位置 = require(path.join(平台根, 'lib', '配置位置.js'));
+  // 造一个**两层**的临时结构：<exe目录>/config。
+  // 直接拿 mkdtemp 出来的目录当 config 的话，「exe 目录」就成了 %TEMP% 本身——
+  // 那是共享的，上一轮播下的 SETUP.md 会让这一轮跳过，测试之间互相污染。
+  const exe目录 = fs.mkdtempSync(path.join(os.tmpdir(), '播种-'));
+  const 靶 = path.join(exe目录, 'config');
+  const 原 = process.env.PLATFORM_CONFIG;
+  process.env.PLATFORM_CONFIG = 靶;                     // 模拟「可写配置在别处」
+  try {
+    const r = 位置.播种示例(平台根);
+    assert.ok(r.播.length >= 4, `该播的模板没播够，实得 ${r.播.length}`);
+    assert.ok(r.播.every((n) => n.endsWith('.示例') || n === 'SETUP.md'), '只许播模板与说明书');
+    // 说明书也得播，而且落在 **exe 同级**（配置目录的上一级）。
+    // `extraFiles` 对 portable 目标不管用：它放进 win-unpacked/，而 portable 又把整个
+    // win-unpacked 打成一个自解压 exe——用户拿到的目录里只有那个 exe。实测确认过。
+    assert.ok(r.播.includes('SETUP.md'), '拿到 exe 的人手边得有安装说明');
+    assert.ok(fs.existsSync(path.join(path.dirname(靶), 'SETUP.md')),
+      'SETUP.md 要落在 exe 同级，不是 config/ 里');
+    // 纪律①：绝不播出一份真配置——那等于替人决定业务数据落哪、要不要花钱，
+    // 而那正是自检明说自己不做的事。
+    assert.deepEqual(fs.readdirSync(靶).filter((f) => f.endsWith('.local.json')), [],
+      '播出了真配置——播种只该给模板，不该替人做决定');
+    // 纪律②：绝不覆盖。用户改过的模板必须原样留着。
+    const 一个 = path.join(靶, r.播[0]);
+    fs.writeFileSync(一个, '用户改过的内容');
+    assert.equal(位置.播种示例(平台根).播.length, 0, '第二次不该再播');
+    assert.equal(fs.readFileSync(一个, 'utf8'), '用户改过的内容', '把用户改过的模板覆盖了');
+  } finally {
+    if (原 === undefined) delete process.env.PLATFORM_CONFIG; else process.env.PLATFORM_CONFIG = 原;
+    fs.rmSync(exe目录, { recursive: true, force: true });
+  }
+});
+
+t('打包态自检要去可写配置目录找令牌，别报假红（协-036 实测）', () => {
+  // 真打包件开机后：config\api-token.txt 明明在、令牌也真的能用，
+  // 自检却把「命令行调接口」标红——因为它拿 平台根（asar 内）去拼路径找。
+  // **诊断工具报假红比不报更坏**：人会跑去修一个根本没坏的东西。
+  const os = require('os');
+  const 自检 = require(path.join(平台根, 'lib', '自检.js'));
+  const exe目录 = fs.mkdtempSync(path.join(os.tmpdir(), '自检-'));
+  const 原 = process.env.PLATFORM_CONFIG;
+  process.env.PLATFORM_CONFIG = path.join(exe目录, 'config');
+  try {
+    const 找 = () => (自检.查(平台根, {}, null).find((c) => c.能力 === '命令行调接口') || {}).就绪;
+    assert.equal(找(), false, '可写目录里没有令牌时应当是红的');
+    fs.mkdirSync(path.join(exe目录, 'config'), { recursive: true });
+    fs.writeFileSync(path.join(exe目录, 'config', 'api-token.txt'), 'a'.repeat(64));
+    assert.equal(找(), true, '令牌就在可写目录里，自检还报红 = 假红');
+  } finally {
+    if (原 === undefined) delete process.env.PLATFORM_CONFIG; else process.env.PLATFORM_CONFIG = 原;
+    fs.rmSync(exe目录, { recursive: true, force: true });
+  }
+});
+
+t('开发态播种是 no-op（源和靶同一个目录，播了就是自己覆盖自己）', () => {
+  const 位置 = require(path.join(平台根, 'lib', '配置位置.js'));
+  const 原 = process.env.PLATFORM_CONFIG;
+  delete process.env.PLATFORM_CONFIG;
+  try {
+    const r = 位置.播种示例(平台根);
+    assert.deepEqual(r.播, [], '开发态不该播任何东西');
+  } finally { if (原 !== undefined) process.env.PLATFORM_CONFIG = 原; }
+});
+
+t('server 在读配置之前播种，且把播了什么说出来（协-036）', () => {
+  const s = fs.readFileSync(path.join(平台根, 'server.js'), 'utf8');
+  const 播 = s.indexOf('播种示例(仓根)');
+  const 读 = s.indexOf('本地覆盖.应用(仓根');
+  assert.ok(播 > 0 && 读 > 播, '播种要排在配置解析之前，免得以后被挪进某个懒加载分支');
+  // 播了不说等于没播：打包态用户手边没有 README，这行日志是他唯一的入口。
+  assert.match(s, /已把 \$\{播种结果\.播\.length\} 个配置模板放到/, '播了要在开机日志里说清放哪了');
+});
+
+t('打包配置：SETUP.md 跟着 exe 走，本机配置一个都不许进包（协-036）', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(平台根, 'package.json'), 'utf8'));
+  const extra = JSON.stringify(pkg.build.extraFiles || []);
+  assert.match(extra, /SETUP\.md/, '拿到 exe 的人手边要有安装说明——README 在 asar 里他打不开');
+  // 回归守：2026-08-13 实测那份 exe 里带着开发机的令牌与私仓绝对路径。
+  const files = pkg.build.files || [];
+  assert.ok(files.includes('!config/*.local.json'), '本机配置不许跟着二进制走');
+  assert.ok(files.includes('!config/api-token.txt'), 'API 令牌不许跟着二进制走');
+  // 模板反过来**必须**进包——播种就是从包里往外拷的。
+  assert.ok(files.some((f) => f.startsWith('config/')), 'config/ 要进包，否则没有模板可播');
+});
+
 t('交付皮三件套齐全：部署入口、首装脚本、安装指南（协-036）', () => {
   for (const f of ['部署.bat', 'SETUP.md', path.join('scripts', '首装.js')]) {
     assert.ok(fs.existsSync(path.join(平台根, f)), `缺 ${f}`);
