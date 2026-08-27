@@ -391,6 +391,78 @@ t('首装脚本走产品自己的落位函数，不在别处再拼一遍配置�
   assert.match(s, /自检\.查\(/, '装完必须打一遍自检——就绪与否由产品自己说，不由安装脚本说');
 });
 
+// ---------- 五个开关也能在界面上改（协-037） ----------
+//
+// 到协-036 为止界面只配得了工单库根与项目注册，其余五样得关程序、手改 JSON、重启。
+// 而那五样恰恰最要紧：真跑总开关、预算上限、提交链写权、计费模式、角色写权白名单。
+t('设置只写 本地覆盖.覆盖表 里那几个文件，别的一律拒（协-037）', () => {
+  // 写的是花钱开关与写权白名单。能改什么必须是有限、可枚举、一眼看得完的——
+  // 通用的「任意键路径赋值」接口等于把整份配置暴露成可写的。
+  const 设置落盘 = require(path.join(平台根, 'lib', '设置落盘.js'));
+  const 本地覆盖 = require(path.join(平台根, 'lib', '本地覆盖.js'));
+  const r = 设置落盘.落(平台根, '随便.local.json', { a: 1 });
+  assert.equal(r.ok, false);
+  assert.match(r.错误, /不认识的覆盖文件/);
+  // 白名单必须是**同一张表**——两张迟早对不上，而对不上的表现是
+  // 「界面写进去了、加载时不认」，配了没反应。
+  const 源 = fs.readFileSync(path.join(平台根, 'lib', '设置落盘.js'), 'utf8');
+  assert.match(源, /本地覆盖\.覆盖表\[文件名\]/, '白名单要复用 本地覆盖.覆盖表，不许另起一张');
+  assert.ok(Object.keys(本地覆盖.覆盖表).includes('执行.local.json'));
+});
+
+t('null 要一路带到磁盘才生效——中途任何一次合并都不能消费它（协-037 实测）', () => {
+  // 实测踩到：聚合多条补丁时用了「值为 null 即删」的合并，于是 null 在拼补丁那步
+  // 就被执行掉了，落到写盘那步的补丁里那个键干脆不存在——磁盘上原样留着，
+  // 而回执写着「已取消」。取消 codex 预算上限时返回 ok，文件纹丝不动。
+  const os = require('os');
+  const 设置落盘 = require(path.join(平台根, 'lib', '设置落盘.js'));
+  const 根 = fs.mkdtempSync(path.join(os.tmpdir(), '设置-'));
+  const 原 = process.env.PLATFORM_CONFIG;
+  process.env.PLATFORM_CONFIG = path.join(根, 'config');
+  try {
+    const 读 = (f) => JSON.parse(fs.readFileSync(path.join(根, 'config', f), 'utf8'));
+    设置落盘.应用设置(根, { 预算: { claude: { 日token: 200000 }, codex: { 日token: 50000 } } });
+    assert.deepEqual(Object.keys(读('预算.local.json').池).sort(), ['claude', 'codex']);
+    设置落盘.应用设置(根, { 预算: { codex: null } });
+    assert.deepEqual(Object.keys(读('预算.local.json').池), ['claude'], 'null 没能删掉 codex');
+
+    // 同一个文件的多条补丁要合成**一次**写，否则后写的拿到的是前一次写之前的快照。
+    // 放开 与 允许真跑 都落 执行.local.json，这不是假设性的。
+    设置落盘.应用设置(根, { 允许真跑: true, 放开: ['backend', 'frontend'] });
+    const 执 = 读('执行.local.json');
+    assert.equal(执.允许真跑, true, '两条补丁互相覆盖了');
+    assert.deepEqual(执.权限.放开, ['backend', 'frontend']);
+  } finally {
+    if (原 === undefined) delete process.env.PLATFORM_CONFIG; else process.env.PLATFORM_CONFIG = 原;
+    fs.rmSync(根, { recursive: true, force: true });
+  }
+});
+
+t('坏值一律拒，不许悄悄当成 true（协-037）', () => {
+  const 设置落盘 = require(path.join(平台根, 'lib', '设置落盘.js'));
+  // 花钱开关上，'false' / 'no' / 0 这类真值歧义必须报错而不是猜。
+  for (const 坏 of ['yes', 'true', 1, 0, null]) {
+    assert.equal(设置落盘.应用设置(平台根, { 允许真跑: 坏 }).ok, false, `允许真跑=${JSON.stringify(坏)} 该被拒`);
+  }
+  assert.match(设置落盘.应用设置(平台根, { 计费: { claude: { 模式: '白嫖' } } }).错误, /订阅\/api\/本地/);
+  assert.match(设置落盘.应用设置(平台根, { 预算: { claude: { 日token: -1 } } }).错误, /正数/);
+  assert.match(设置落盘.应用设置(平台根, { 放开: ['../../etc'] }).错误, /非法角色名/);
+  assert.equal(设置落盘.应用设置(平台根, {}).ok, false, '空请求不该算成功');
+});
+
+t('界面改开关，写的仍然只是不入库的 .local.json（协-037 边界）', () => {
+  // 这条守的是**边界没被这次改动松掉**：危险开关依旧不可能被提交进仓，
+  // 入库那份永远是最严默认。变的只是「怎么改它」——从手写文件变成点界面。
+  const 忽略 = fs.readFileSync(path.join(平台根, '..', '..', '.gitignore'), 'utf8')
+    + (fs.existsSync(path.join(平台根, '.gitignore')) ? fs.readFileSync(path.join(平台根, '.gitignore'), 'utf8') : '');
+  assert.match(忽略, /\*\.local\.json/, '.local.json 必须被 gitignore 结构性挡着');
+  const s = fs.readFileSync(path.join(平台根, 'server.js'), 'utf8');
+  // 端点必须走 设置落盘，不许自己拼路径写盘（编制落盘 那条也已经收编）
+  const 段 = s.slice(s.indexOf("'/api/setup/switches'"), s.indexOf("'/api/setup/switches'") + 2500);
+  assert.match(段, /设置落盘\.应用设置\(仓根, 体\)/, '端点要走唯一的写入口');
+  assert.match(段, /自检\.结论/, '改完要把新自检回给人——他点开关就是想知道现在够不够用');
+});
+
 // ---------- 打包件也得拿得到配置模板（协-036） ----------
 //
 // 翻 2026-08-16 那次真打包留下的 dist/config/：只有 api-token.txt、接口令牌.local.json
@@ -496,6 +568,22 @@ t('交付皮三件套齐全：部署入口、首装脚本、安装指南（协-0
 (async () => {
   const { srv, port } = await 起服务();
   try {
+    await ta('GET /api/setup/switches 真起服务打一遍（协-037）', async () => {
+      // 只打 GET。**故意不打 POST**：这个夹具跑在仓内 config/ 上，
+      // 一次真写会改掉跑测试那台机器的真配置（花钱开关、写权），
+      // 而测试绝不该有这种副作用。写的那半在上面用临时目录单测过了。
+      const { 码, 体 } = await 取(port, '/api/setup/switches');
+      assert.equal(码, 200);
+      for (const k of ['允许真跑', '允许写', '放开', '预算', '计费', '池表']) {
+        assert.ok(k in 体, `回执缺 ${k}——界面画不出当前状态`);
+      }
+      assert.equal(typeof 体.允许真跑, 'boolean', '开关要是布尔，界面靠它决定亮不亮');
+      assert.ok(Array.isArray(体.放开) && Array.isArray(体.池表));
+      // 这个夹具带 PLATFORM_NO_LOCAL=1，读到的必然是**入库默认**——
+      // 而入库默认必须是最严的那一档。这条顺带守住「缺配置即最严」。
+      assert.equal(体.允许真跑, false, '入库默认不该是能花钱的');
+    });
+
     await ta('GET /api/routing/rank 返回排名与理由', async () => {
       const r = await 取(port, '/api/routing/rank?role=generalist');
       assert.equal(r.码, 200);

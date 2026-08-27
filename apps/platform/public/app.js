@@ -1140,7 +1140,7 @@ function 切页() {
   // 设置页装的是观测数据（排名/消耗/战绩/Providers/瞭望塔/账本），进去才拉。
   // 常驻驾驶舱时后台每隔几秒把这些接口全打一遍，纯属白费——
   // 而且真跑时这些请求会跟执行抢日志。
-  if (页 === '设置') { 刷自动(); 刷编制(); 填回收项目().then(刷回收); 刷排名(); 刷消耗(); 刷额度(); 刷战绩(); 刷providers(); 刷瞭望塔(); 刷账本(); 刷计费(); }
+  if (页 === '设置') { 刷开关(); 刷自动(); 刷编制(); 填回收项目().then(刷回收); 刷排名(); 刷消耗(); 刷额度(); 刷战绩(); 刷providers(); 刷瞭望塔(); 刷账本(); 刷计费(); }
 }
 window.addEventListener('hashchange', 切页);
 
@@ -1379,6 +1379,160 @@ async function 开登记项目() {
 // 走 Claude Pro / Codex Plus 这类订阅额度时，月费已经付了，跑一次的边际成本是零。
 // 把它标成花钱，会让人不敢走本来就该走的主路径——而真正该拦的是
 // **订阅耗尽之后落到 API 按 token 计费**的那一刻。
+// ══════════════════════════════════════════════════════════════
+// 开关设置页（协-037）
+// ══════════════════════════════════════════════════════════════
+// 到协-036 为止界面只配得了工单库根与项目注册，其余五样得关程序、手改 JSON、重启——
+// 而那五样恰恰最要紧：真跑总开关、预算上限、提交链写权、计费模式、角色写权白名单。
+//
+// 两条界面纪律：
+//   ① **危险的那两个要拦一下**。开真跑＝允许平台花钱，开写权＝允许 AI 往你的仓提交。
+//      这不是「多一次点击」的仪式感：这两个开关的后果发生在别处（账单、你的 git 历史），
+//      而人在设置页里是连着点的，很容易顺手就开了；
+//   ② **改完当场把自检回给人**。他点开关想知道的是「现在够不够用了」，
+//      让他自己再去点一次自检等于把答案藏起来。后端已经把新自检顺回来了，这里只管显示。
+let 开关值 = null;
+
+async function 刷开关() {
+  try {
+    const { 体: j } = await 取JSON('/api/setup/switches');
+    if (!j.ok) throw new Error(j.error || '读不到');
+    开关值 = j;
+    渲开关(); 渲池表();
+  } catch (e) {
+    $('开关体').innerHTML = '<span class="级急">读不到设置</span> ' + 转义(e.message);
+  }
+}
+
+function 渲开关() {
+  const j = 开关值 || {};
+  // 提示语跟着**当前状态**走，说的是「现在是什么后果」，不是「关着会怎样」。
+  // 一个已经打开的开关旁边写着「关着＝只能干跑」，读的人得在脑子里做一次取反——
+  // 而这一行的全部作用就是省掉那次取反。
+  const 关 = (开, 名, 开说, 关说, 动作) => '<button class="btn ' + (开 ? 'ok' : 'mut') + '" onclick="' + 动作 + '">'
+    + (开 ? '● ' : '○ ') + 转义(名) + '：' + (开 ? '开' : '关') + '</button>'
+    + '<span class="淡" style="margin-right:14px"> ' + (开 ? 开说 : 关说) + '</span>';
+  const 角色 = (j.角色表 || []).map((r) => {
+    const 中 = (j.放开 || []).includes(r);
+    return '<button class="btn ' + (中 ? 'accent' : 'mut') + '" onclick="切放开(' + JSON.stringify(r).replace(/"/g, '&quot;') + ')">'
+      + (中 ? '✓ ' : '') + 转义(r) + '</button>';
+  }).join(' ');
+  $('开关体').innerHTML =
+    '<div style="margin-bottom:8px">'
+    + 关(j.允许真跑, '真跑总开关',
+      '派活会真的拉起 AI CLI（仍要过另外三闸）', '只能干跑，零计费', '切真跑()')
+    + '</div><div style="margin-bottom:8px">'
+    + 关(j.允许写, '提交链写权',
+      'agent 的成果能合回已注册的项目仓', 'agent 能干活，但成果回不到你的仓', '切写权()')
+    + '</div><div><span class="淡">角色写权放开（白名单外一律受限＝只读）：</span><br>' + 角色 + '</div>';
+}
+
+async function 存开关(补丁, 提示语) {
+  try {
+    const { 码, 体: j } = await 取JSON('/api/setup/switches', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(补丁),
+    });
+    if (码 !== 200 || !j.ok) { 吐(j.error || ('HTTP ' + 码), '坏'); return false; }
+    吐(提示语 || j.改.join('；'));
+    // 自检当场回显：人点完开关最想知道的就是「现在够不够用了」。
+    if (j.自检) {
+      const s = $('开关自检');
+      if (s) { s.textContent = j.自检.级别 + '：' + j.自检.一句话; }
+    }
+    await 刷开关();
+    刷自检();
+    return true;
+  } catch (e) { 吐('没存上：' + e.message, '坏'); return false; }
+}
+
+async function 切真跑() {
+  const 开 = !(开关值 && 开关值.允许真跑);
+  if (开 && !await 问('打开真跑总开关？',
+    '这是「<b>平台可以花钱</b>」那道闸。打开之后，派活会真的拉起 AI CLI 跑活。<br><br>'
+    + '它<b>不是</b>唯一一道：真跑还要过另外三闸——请求显式关干跑、该池配了上限、'
+    + '落到 API 按 token 计费时还要你显式同意。走订阅额度那一次不产生新开销。',
+    { 危险: true, 确认字: '开真跑' })) return;
+  await 存开关({ 允许真跑: 开 }, 开 ? '真跑已打开' : '真跑已关闭（回到干跑）');
+}
+
+async function 切写权() {
+  const 开 = !(开关值 && 开关值.允许写);
+  if (开 && !await 问('打开提交链写权？',
+    '打开之后，带令牌的调用方可以在<b>已注册的项目仓</b>里建分支、提交、合并。<br><br>'
+    + '范围由项目注册表划定——不在注册表里的仓一律拒绝。'
+    + '两者缺一不可：这个开关给的是<b>能力</b>，注册表划的是<b>范围</b>。',
+    { 危险: true, 确认字: '开写权' })) return;
+  await 存开关({ 允许写: 开 }, 开 ? '提交链写权已打开' : '提交链写权已关闭');
+}
+
+async function 切放开(角色) {
+  const 现 = (开关值 && 开关值.放开) || [];
+  const 中 = 现.includes(角色);
+  if (!中) {
+    const 警 = 角色 === 'reviewer'
+      ? '<br><br>⚠ <b>reviewer 不该进这个名单</b>：它按设计只读，判活时的权限另有一套'
+        + '（只在自己那个一次性审阅区内可写，判完当场查篡改）。放进来等于给它全盘绕过。'
+      : '';
+    if (!await 问('放开「' + 角色 + '」的写权？',
+      '白名单内的角色沿用适配器默认（<b>含权限绕过</b>）＝它能在隔离工作区里改文件。'
+      + '白名单外一律受限＝只读，那种角色跑要落盘的单必然空转。' + 警,
+      { 危险: true, 确认字: '放开' })) return;
+  }
+  const 新 = 中 ? 现.filter((r) => r !== 角色) : [...现, 角色];
+  await 存开关({ 放开: 新 });
+}
+
+function 渲池表() {
+  const j = 开关值 || {};
+  const 池 = [...new Set([...Object.keys(j.预算 || {}), ...Object.keys(j.计费 || {}), ...(j.池表 || [])])];
+  const t = $('池体');
+  if (!池.length) { t.innerHTML = '<tr><td colspan="5" class="淡">还没有池——下面加一个</td></tr>'; return; }
+  t.innerHTML = 池.map((p) => {
+    const 上限 = (j.预算 && j.预算[p] && (j.预算[p].日token ?? j.预算[p].dayToken)) || '';
+    const 计 = (j.计费 && j.计费[p]) || {};
+    const 模 = String(计.模式 || '');
+    const 选 = ['', '订阅', 'api', '本地'].map((m) => '<option value="' + m + '"' + (m === 模 ? ' selected' : '') + '>'
+      + (m || '（未声明）') + '</option>').join('');
+    return '<tr><td><b>' + 转义(p) + '</b></td>'
+      + '<td><input id="上限-' + 转义(p) + '" value="' + 转义(String(上限)) + '" placeholder="没配＝不许真跑" style="width:130px">'
+      + ' <button class="btn" onclick="存上限(' + JSON.stringify(p).replace(/"/g, '&quot;') + ')">存</button></td>'
+      + '<td><select id="计费-' + 转义(p) + '" onchange="存计费(' + JSON.stringify(p).replace(/"/g, '&quot;') + ')">' + 选 + '</select>'
+      + (模 ? '' : ' <span class="级急">未声明＝按会计费对待</span>') + '</td>'
+      + '<td class="淡">' + 转义(计.订阅名 || '') + '</td>'
+      + '<td><button class="btn danger-o" onclick="删池上限(' + JSON.stringify(p).replace(/"/g, '&quot;') + ')">取消上限</button></td></tr>';
+  }).join('');
+}
+
+async function 存上限(池) {
+  const v = ($('上限-' + 池) || {}).value;
+  const n = Number(String(v || '').trim());
+  if (!Number.isFinite(n) || n <= 0) { 吐('日token 要是正数', '坏'); return; }
+  await 存开关({ 预算: { [池]: { 日token: n } } });
+}
+
+async function 删池上限(池) {
+  if (!await 问('取消 ' + 池 + ' 的预算上限？',
+    '取消之后<b>这个池就不许真跑了</b>——没配上限的池过不了第三道闸。'
+    + '这是个安全方向的操作，不是删数据。', { 确认字: '取消上限' })) return;
+  await 存开关({ 预算: { [池]: null } }, 池 + ' 的上限已取消（该池不再允许真跑）');
+}
+
+async function 存计费(池) {
+  const m = ($('计费-' + 池) || {}).value;
+  if (!m) { await 存开关({ 计费: { [池]: null } }, 池 + ' 的计费声明已清空（回到「按会计费对待」）'); return; }
+  await 存开关({ 计费: { [池]: { 模式: m } } });
+}
+
+async function 加池() {
+  const 名 = String(($('新池名') || {}).value || '').trim();
+  const 上 = Number(String(($('新池上限') || {}).value || '').trim());
+  if (!名) { 吐('填个池名', '坏'); return; }
+  if (!Number.isFinite(上) || 上 <= 0) { 吐('日token 要是正数', '坏'); return; }
+  if (await 存开关({ 预算: { [名]: { 日token: 上 } } })) {
+    $('新池名').value = ''; $('新池上限').value = '';
+  }
+}
+
 let 计费表 = {};
 
 async function 刷计费() {

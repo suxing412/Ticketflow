@@ -45,6 +45,7 @@ const 门禁 = require('./lib/门禁');
 // 但它让本进程有了往仓外写文件的能力，三条约束见 lib/工单库.js 头部。
 const 工单库 = require('./lib/工单库');
 const 自检 = require('./lib/自检');
+const 设置落盘 = require('./lib/设置落盘');
 const 工单模板 = require('./lib/工单模板');
 const 流程视图 = require('./lib/流程视图');
 const 知识库 = require('./lib/知识库');
@@ -63,14 +64,12 @@ function 读JSON(p, 缺省) {
 }
 // 编制落盘（协-015）：写 config/routing.local.json。
 // 走本地覆盖那套白名单，与其他可改配置同一个机制——不为一个新功能另开一条写盘路径。
+// 协-037 起改走 lib/设置落盘：本地覆盖的写入口收敛成一个，白名单也只剩一张
+// （本地覆盖.覆盖表）。此前这里自己拼路径写盘，而设置页要写另外四个文件——
+// 两处各写一遍，迟早对不上。
 function 编制落盘(routing) {
-  try {
-    const 位置 = require('./lib/配置位置');
-    const 文件 = path.join(位置.可写配置目录(仓根), 'routing.local.json');
-    fs.mkdirSync(path.dirname(文件), { recursive: true });
-    fs.writeFileSync(文件, JSON.stringify(routing, null, 2) + '\n', 'utf8');
-    return { ok: true, 文件 };
-  } catch (e) { return { ok: false, 错误: `编制写不进去：${e.message}` }; }
+  const r = 设置落盘.落(仓根, 'routing.local.json', routing);
+  return r.ok ? { ok: true, 文件: r.文件 } : { ok: false, 错误: `编制写不进去：${r.错误}` };
 }
 
 // 打包态第一次开机，把 .示例 播到 exe 同级的 config/（协-036）。
@@ -630,6 +629,62 @@ const 服务 = http.createServer((req, res) => {
           说明: '保留的是已开工或已完成的旧计划子单，重规划不覆盖它们',
         });
       } catch (e) { return 发JSON(res, 400, { ok: false, error: e.message }); }
+    });
+  }
+
+  // ——— 设置落盘（协-037）：五个开关也能在界面上改 ———
+  //
+  // 到协-036 为止界面只配得了工单库根与项目注册，其余五样得关程序、手改 JSON、重启。
+  // 而那五样恰恰最要紧：真跑总开关、预算上限、提交链写权、计费模式、角色写权白名单。
+  //
+  // **写的仍然只是 config/*.local.json**——那个后缀被 .gitignore 结构性挡着，
+  // 「危险开关不可能入库」这条原始保证一个字没变。变的只是怎么改它。
+  //
+  // 改完回一份新的自检：人点完开关最想知道的是「现在够不够用了」，
+  // 让他自己再去点一次自检是把答案藏起来。
+  // 读当前值。界面要先知道现在是什么样，才谈得上「改」——
+  // 没有这条的话开关只能画成无状态的按钮，人点之前不知道它现在开着还是关着。
+  if (url路径 === '/api/setup/switches' && req.method === 'GET') {
+    const 执 = 配置.执行 || {};
+    // providers 是**对象**（池名 → 定义），不是数组。第一版当数组 map，
+    // 结果 GET 一打就 TypeError——而这是个读接口，它把整个 server 掀了。
+    // 拿配置的形状当想当然，是这条链上最容易犯的错；顺手都套一层保护。
+    const 取键 = (v) => (v && typeof v === 'object' && !Array.isArray(v)) ? Object.keys(v) : [];
+    const 池表 = [...new Set([
+      ...取键(配置.预算 && 配置.预算.池),
+      ...取键(配置.计费),
+      ...取键(配置.providers),
+    ])];
+    return 发JSON(res, 200, {
+      ok: true,
+      允许真跑: 执.允许真跑 === true,
+      允许写: !!(配置.workspace && 配置.workspace.允许写 === true),
+      放开: Array.isArray(执.权限 && 执.权限.放开) ? 执.权限.放开 : [],
+      预算: (配置.预算 && 配置.预算.池) || {},
+      计费: 配置.计费 || {},
+      池表,
+      // 角色表给界面画勾选框用。写死一份不如从工单模板取——但那是另一条链，
+      // 这里给的是**已知会用到的角色**，界面允许自己加。
+      角色表: [...new Set([...(Array.isArray(执.权限 && 执.权限.放开) ? 执.权限.放开 : []),
+        'backend', 'frontend', 'integrator', 'reviewer', 'planner'])],
+      说明: '这些开关写的是 config/*.local.json（被 .gitignore 挡着，不会入库）。'
+        + '改完当场生效，不用重启。',
+    });
+  }
+
+  if (url路径 === '/api/setup/switches' && req.method === 'POST') {
+    return 收体(req, 16 * 1024, (体) => {
+      if (!体) return 发JSON(res, 400, { ok: false, error: '需要 JSON 体' });
+      const r = 设置落盘.应用设置(仓根, 体);
+      if (!r.ok) return 发JSON(res, 400, { ok: false, error: r.错误 });
+      // 本进程捧着开机时合并好的那份配置，不重读的话人在界面上改完、
+      // 下一次调用还按旧的走——而界面已经显示改好了。项目注册那条踩过同款（协-005）。
+      const 新 = 本地覆盖.应用(仓根, 读JSON(path.join(仓根, 'config', 'platform.config.json'), {})).配置;
+      for (const k of ['执行', '预算', 'workspace', '计费']) 配置[k] = 新[k];
+      // 放宽了哪几处必须看得见——悄悄生效的安全降级比不降级更危险。
+      try { require('./lib/呼叫').常(账本根, '设置变更', r.改.join('；'), { 静默秒: 0 }); } catch { /* 记不下不影响改动 */ }
+      process.stdout.write(`[${平台名}] 设置变更：${r.改.join('；')}\n`);
+      return 发JSON(res, 200, { ok: true, 改: r.改, 落盘: r.落盘, 自检: 自检.结论(自检.查(仓根, 配置, 工单根)) });
     });
   }
 

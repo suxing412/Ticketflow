@@ -163,6 +163,22 @@
     <span class="淡">驾驶舱</span><span class="分">/</span><b>设置与观测</b></div>
   <div class="提示" id="计费提示2"></div>
 
+  <h2>开关<span class="右 淡" id="开关自检"></span></h2>
+  <div class="提示">这几样此前只能关掉程序、手改 <code>config/*.local.json</code> 再重启。
+    改完<b>当场生效</b>，写的仍然是那几个 <code>.local.json</code>——被 <code>.gitignore</code> 挡着，<b>不会入库</b>。</div>
+  <div id="开关体" class="栏"><span class="淡">读取中…</span></div>
+
+  <h2>预算与计费<span class="右 淡" id="计费说明3"></span></h2>
+  <div class="提示"><b>没配上限的池一律不许真跑</b>（那是四闸里的第三道）。
+    计费模式是<b>账号级事实</b>，未声明一律按「会计费」对待——声明成订阅才不会在界面上标花钱。</div>
+  <div class="表盒"><table>
+    <thead><tr><th>池</th><th>日 token 上限</th><th>计费模式</th><th>订阅名</th><th></th></tr></thead>
+    <tbody id="池体"><tr><td colspan="5" class="淡">读取中…</td></tr></tbody>
+  </table></div>
+  <div class="栏"><input id="新池名" placeholder="池名（如 claude）" style="width:160px">
+    <input id="新池上限" placeholder="日token（如 200000）" style="width:160px">
+    <button class="btn" onclick="加池()">加一个池</button></div>
+
   <h2>自动派发<span class="右 淡" id="自动说明"></span></h2>
   <div class="提示">开着它，平台会自己把待投单一张张跑掉——<b>自己花额度</b>。
     它走的是和你点按钮完全同一条路，四闸一条不少；<b>永不代你同意 API 计费</b>，真撞上那一步会停下等人。</div>
