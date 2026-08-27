@@ -87,6 +87,20 @@ function 归一需要依赖(raw, key, 记错) {
   return 表;
 }
 
+// 回合上限：正整数，或不写。**不替它猜一个默认值**——
+// 该多少轮取决于这张单要读多少、改多少，plan.js 没有那个信息。
+// 能做的是让它**说得出来**，并在契约里讲清不写的后果（见 lib/编排提示.js）。
+function 归一回合上限(raw, key, 记错) {
+  const v = raw.maxTurns ?? raw.max_turns ?? raw.回合上限;
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0 || Math.floor(n) !== n) {
+    记错(`子任务 ${key} 的 maxTurns 要是正整数（实得 ${JSON.stringify(v)}）`);
+    return null;
+  }
+  return n;
+}
+
 function normalizePlan(cfg, value) {
   const rawTasks = value.tasks || value.任务;
   const maxTasks = Number((cfg.orchestration || {}).maxTasks ?? 20);
@@ -125,6 +139,17 @@ function normalizePlan(cfg, value) {
     const task = {
       key, title, role,
       needDeps: 归一需要依赖(raw, key, 记错),
+      // 回合上限（协-038 续）——跟 needDeps 是同一族的病，同一次实战里连着撞上。
+      //
+      // 2026-08-27：HW-7-2 与 HW-7-3 并行真跑，**两张都零改动退回待投**，理由一样——
+      //   跑到回合数上限被截断（18 轮 / 26 轮，API 用时 78s / 84s）
+      // 手写的单都自己写了这个数（HW-4 写 80、HW-7 写 60），而**计划里说不出来**，
+      // 于是物化出来的子单一律没有，掉进 CLI 自己的默认值——那个值对「读一圈仓库再改一个模块」
+      // 这种单根本不够。配置里也没有兜底（执行.回合上限 没配）。
+      //
+      // 结果就是：**凡编排生成的实现类子单，都会先白跑一轮才发现**。
+      // 两张单 164 秒，换回来的信息是「你没写这个字段」——而它压根没地方写。
+      maxTurns: 归一回合上限(raw, key, 记错),
       description: String(raw.description || raw.scope || raw.范围 || '').trim(),
       doNot: arr(raw.doNot || raw.不要做).map(String).map((x) => x.trim()).filter(Boolean),
       acceptance,
@@ -228,6 +253,8 @@ function materialize(root, cfg, parent, plan, store) {
     // HW-7 实测：模型没地方放，把 needDeps 塞进了验收标准当勾选项，
     // 于是「写了等于没写」，4 张要跑命令的子单全都注定「验不了」。
     if (task.needDeps) fm.需要依赖 = task.needDeps;
+    // 同上：执行器读的是 fm.回合上限（scripts/执行器.js 的 `t.fm.回合上限 || …`）。
+    if (task.maxTurns) fm.回合上限 = task.maxTurns;
     if (task.routing) fm.routing = task.routing;
     const body = bodyOf(task);
     const existing = store.find(root, id);

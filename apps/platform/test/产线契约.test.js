@@ -434,13 +434,14 @@ t('契约与 plan.js 的实际校验不许漂移', () => {
   // plan.js 认的顶层键
   assert.ok(/value\.tasks \|\| value\.任务/.test(源), 'plan.js 的顶层键契约变了，契约块要同步改');
   // 提示里承诺的字段，plan.js 必须真的读
-  for (const 键 of ['acceptance', 'dependsOn', 'writeScope', 'role', 'key', 'title', 'needDeps']) {
+  for (const 键 of ['acceptance', 'dependsOn', 'writeScope', 'role', 'key', 'title', 'needDeps', 'maxTurns']) {
     assert.ok(块.includes(键), `契约块应说明 ${键}`);
     assert.ok(源.includes(键), `plan.js 应真的读 ${键}——契约里承诺了却不读，等于骗 AI`);
   }
   // 反向也要守：**能读**不等于**读了有用**。needDeps 必须一路落到 frontmatter，
   // 否则就是 HW-7 那种「写了等于没写」——见下面那条端到端断言。
   assert.match(源, /fm\.需要依赖 = task\.needDeps/, 'needDeps 要真的落进 frontmatter，装依赖那步读的是它');
+  assert.match(源, /fm\.回合上限 = task\.maxTurns/, 'maxTurns 同理——执行器读的是 fm.回合上限');
   // key 的长度上限要写进契约：HW-7 就是超了一个字符，白烧 375 秒。
   assert.match(块, /最长 32 字符/, '上限不告诉 AI，它就会写出 34 个字符的 key');
 });
@@ -471,6 +472,37 @@ t('needDeps 一路落到 frontmatter——不是写在验收清单里给人看�
     assert.deepEqual(库.find(根, 'P-1-2').fm.需要依赖, ['tooling', 'services/api']);
     assert.equal(库.find(根, 'P-1-3').fm.需要依赖, true, 'true = 仓根，要原样留住');
   } finally { fs.rmSync(根, { recursive: true, force: true }); }
+});
+
+t('maxTurns 也要一路落到 frontmatter——不写就白跑一轮（协-038 续）', () => {
+  // 2026-08-27 实测：HW-7-2 与 HW-7-3 并行真跑，**两张都零改动退回待投**，
+  // 理由一样——「跑到回合数上限被截断」（18 轮 / 26 轮，各约 80 秒）。
+  // 手写的单都自己写了这个数（HW-4 写 80、HW-7 写 60），而计划里说不出来，
+  // 于是物化出来的子单一律没有，掉进 CLI 自己的默认值；配置里也没兜底。
+  // 结果：凡编排生成的实现类子单，都要先白跑一轮才发现。
+  const os = require('os');
+  const 库 = require(path.join(平台根, 'lib', '工单库.js'));
+  const 根 = fs.mkdtempSync(path.join(os.tmpdir(), 'turns-'));
+  try {
+    库.建目录(根);
+    库.create(根, 'P-1', { title: '父', role: 'orchestrator', 项目: '' }, 'b');
+    const 文 = JSON.stringify({ tasks: [
+      { key: 'a', title: '没写', role: 'backend', acceptance: ['x'] },
+      { key: 'b', title: '写了', role: 'backend', acceptance: ['x'], maxTurns: 80 },
+    ] });
+    const r = 计划模块.consume(根, { roles: { backend: {} } }, { id: 'P-1', fm: 库.find(根, 'P-1').fm }, 文, { store: 库 });
+    assert.equal(库.find(根, r.created[0]).fm.回合上限, undefined, '没写就别凭空造一个——该多少轮 plan.js 没有那个信息');
+    assert.equal(库.find(根, r.created[1]).fm.回合上限, 80);
+  } finally { fs.rmSync(根, { recursive: true, force: true }); }
+  // 契约要讲清不写的后果，否则模型没有理由去写它
+  const 块 = 编排提示.契约块({});
+  assert.match(块, /maxTurns/);
+  assert.match(块, /白花一次真跑|被截断/, '要说清后果：不写会跑到一半被截断、工单零改动退回');
+});
+
+t('maxTurns 坏值当场拒（正整数，别把 "很多" 当成没写）', () => {
+  const 坏 = JSON.stringify({ tasks: [{ key: 'x', title: 't', role: 'backend', acceptance: ['a'], maxTurns: '很多' }] });
+  assert.throws(() => 计划模块.resolvePlan({ roles: { backend: {} } }, 坏, undefined), /maxTurns 要是正整数/);
 });
 
 t('needDeps 不许逃出工作区（frontmatter 是 agent 改得动的）', () => {
