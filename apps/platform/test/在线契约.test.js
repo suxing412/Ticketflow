@@ -388,6 +388,36 @@ T('守护 · 请它收工：三个进程都自己走完，执行器留下停机�
   }
 });
 
+// ---------- 开机横幅说的端口，必须是真绑上的那个（协-036） ----------
+T('改过端口时，开机横幅不许还报默认口', async () => {
+  // 此前 开机.js 写死 4370/4371/4372，而三个子进程各自从配置/环境变量解析真端口。
+  // 于是改过端口的机器上，横幅和子进程自己的那行差着六个字：
+  //   [开机] 起了 3 个进程：server:4370 …        ← 假的
+  //   [AI-DevPlatform] 开机 → http://127.0.0.1:4380  ← 真的
+  // 人当然信头一行，然后打开一个打不开的地址。而 README 给「端口被占」开的药方
+  // **正是**改 server.port——照文档办的人必踩。
+  const 账本 = 临根();
+  const 子 = spawn(process.execPath, [path.join(平台根, 'scripts', '开机.js')], {
+    env: { ...process.env, PORT: '4894', WORKSPACE_PORT: '4895', EXECUTOR_PORT: '4896',
+      PLATFORM_JOURNAL: 账本, PLATFORM_NO_QUOTA_FETCH: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  try {
+    let 出 = '';
+    子.stdout.on('data', (d) => { 出 += String(d); });
+    for (let i = 0; i < 60 && !/\[开机\] 界面/.test(出); i++) await 等(100);
+    assert.match(出, /\[开机\] 界面 → http:\/\/127\.0\.0\.1:4894/, '横幅给的地址得是真能打开的那个');
+    assert.match(出, /server:4894/, '进程清单也要报真端口');
+    assert.match(出, /工作区:4895/);
+    assert.match(出, /执行器:4896/);
+    // 反向断言：默认口一个都不许出现在横幅里，否则就是又写死了一处。
+    const 横幅 = 出.split('\n').filter((l) => l.startsWith('[开机]')).join('\n');
+    for (const 默认 of ['4370', '4371', '4372']) {
+      assert.ok(!横幅.includes(默认), `横幅里还留着写死的 ${默认}`);
+    }
+  } finally { try { 子.kill(); } catch { /* 已经没了 */ } }
+});
+
 // ---------- 跑异步那批 ----------
 (async () => {
   for (const [名, fn] of 异步项) { await fn(); passed++; console.log('  ✓ ' + 名); }

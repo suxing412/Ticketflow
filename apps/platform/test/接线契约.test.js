@@ -352,6 +352,54 @@ const 取 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
   req.end();
 });
 
+// ---------- 交付皮：裸 clone 装得起来吗（协-036） ----------
+//
+// 2026-08-27 实测：`git archive HEAD` 解出来的那份（＝别人 clone 到的样子）自检报**未就绪**，
+// 而七个 .local.json 里只有三个有 .示例。缺模板的那几个里，`workspace.local.json` 的形状
+// 我自己就写错了——写成 { "workspace": {...} }，而**文件名即段名、内容就是段体**。
+// 有 .示例 的那三个一次就对。所以模板不是文档美化，是防错件。
+t('自检点名的每个 .local.json 都要有 .示例（缺模板的那个就是会被写错的那个）', () => {
+  const 自检源 = fs.readFileSync(path.join(平台根, 'lib', '自检.js'), 'utf8');
+  const 点名 = [...new Set([...自检源.matchAll(/config\/([^\s`'"）)]+?\.local\.json)/g)].map((m) => m[1]))];
+  assert.ok(点名.length >= 4, `自检里应点名若干 .local.json，实得 ${点名.length}`);
+  for (const 名 of 点名) {
+    // 接口令牌是**开机自动生成**的（lib/门禁.js 用 'wx' 独占创建定胜负），
+    // 给它配模板反而会诱导人手写一个固定令牌——那是往仓里塞凭据。
+    if (名.includes('接口令牌')) continue;
+    assert.ok(fs.existsSync(path.join(平台根, 'config', `${名}.示例`)),
+      `config/${名} 没有 .示例——没模板的配置就是会被写错形状的那个`);
+  }
+});
+
+t('.示例 的内容是**段体**，不许再套一层段名（我就是这么写错的）', () => {
+  const 目录 = path.join(平台根, 'config');
+  for (const 文件 of fs.readdirSync(目录).filter((f) => f.endsWith('.local.json.示例'))) {
+    const 段 = 文件.replace('.local.json.示例', '');
+    const 内容 = JSON.parse(fs.readFileSync(path.join(目录, 文件), 'utf8'));   // 顺带钉住：必须是合法 JSON
+    assert.ok(!Object.prototype.hasOwnProperty.call(内容, 段),
+      `${文件} 顶层出现了 "${段}" 键——文件名即段名，内容应当直接是段体，套一层会整段失效且不报错`);
+  }
+});
+
+t('首装脚本走产品自己的落位函数，不在别处再拼一遍配置（协-036）', () => {
+  const s = fs.readFileSync(path.join(平台根, 'scripts', '首装.js'), 'utf8');
+  assert.match(s, /工单库\.落位\(/, '工单库根目录要走 工单库.落位');
+  assert.match(s, /项目\.落位\(/, '项目注册要走 项目.落位');
+  // 配置长什么样只该有一处知道。安装脚本自己 JSON.stringify 一份出来，
+  // 主配置一演进它就悄悄过期——而过期的安装脚本装出来的机器是坏的。
+  assert.ok(!/JSON\.stringify\(\s*\{\s*根目录/.test(s), '别在安装脚本里手拼工单库配置');
+  assert.match(s, /自检\.查\(/, '装完必须打一遍自检——就绪与否由产品自己说，不由安装脚本说');
+});
+
+t('交付皮三件套齐全：部署入口、首装脚本、安装指南（协-036）', () => {
+  for (const f of ['部署.bat', 'SETUP.md', path.join('scripts', '首装.js')]) {
+    assert.ok(fs.existsSync(path.join(平台根, f)), `缺 ${f}`);
+  }
+  const bat = fs.readFileSync(path.join(平台根, '部署.bat'), 'utf8');
+  assert.match(bat, /首装\.js/, '部署.bat 得把活交给 首装.js，而不是自己在批处理里配');
+  assert.match(bat, /where node/, '先验 node——本产品零第三方依赖，但它本身是 node 程序');
+});
+
 (async () => {
   const { srv, port } = await 起服务();
   try {
