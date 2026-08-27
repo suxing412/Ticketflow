@@ -434,10 +434,70 @@ t('契约与 plan.js 的实际校验不许漂移', () => {
   // plan.js 认的顶层键
   assert.ok(/value\.tasks \|\| value\.任务/.test(源), 'plan.js 的顶层键契约变了，契约块要同步改');
   // 提示里承诺的字段，plan.js 必须真的读
-  for (const 键 of ['acceptance', 'dependsOn', 'writeScope', 'role', 'key', 'title']) {
+  for (const 键 of ['acceptance', 'dependsOn', 'writeScope', 'role', 'key', 'title', 'needDeps']) {
     assert.ok(块.includes(键), `契约块应说明 ${键}`);
     assert.ok(源.includes(键), `plan.js 应真的读 ${键}——契约里承诺了却不读，等于骗 AI`);
   }
+  // 反向也要守：**能读**不等于**读了有用**。needDeps 必须一路落到 frontmatter，
+  // 否则就是 HW-7 那种「写了等于没写」——见下面那条端到端断言。
+  assert.match(源, /fm\.需要依赖 = task\.needDeps/, 'needDeps 要真的落进 frontmatter，装依赖那步读的是它');
+  // key 的长度上限要写进契约：HW-7 就是超了一个字符，白烧 375 秒。
+  assert.match(块, /最长 32 字符/, '上限不告诉 AI，它就会写出 34 个字符的 key');
+});
+
+t('needDeps 一路落到 frontmatter——不是写在验收清单里给人看的（协-038）', () => {
+  // 案源：2026-08-27 真跑 HW-7。工单要求子单声明 needDeps，而当时 plan.js 没这个字段，
+  // 模型没地方放，就把它塞进 acceptance 当勾选项：
+  //   - [ ] needDeps: ["tooling", "services/api", …]
+  // 写下来了，但装依赖那步读的是 frontmatter，不是清单里的一行字。
+  // 那批 5 张子单里 4 张要跑命令，会一张不落地卡在「验不了」，每张烧一轮判官。
+  const os = require('os');
+  const 库 = require(path.join(平台根, 'lib', '工单库.js'));
+  const 根 = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-'));
+  try {
+    库.建目录(根);
+    库.create(根, 'P-1', { title: '父', role: 'orchestrator', 项目: '' }, 'body');
+    const 文 = JSON.stringify({
+      tasks: [
+        { key: 'iface', title: '接口', role: 'backend', acceptance: ['a'] },
+        { key: 'impl', title: '实现', role: 'backend', acceptance: ['npm run unit 退出码 0'],
+          dependsOn: ['iface'], needDeps: ['tooling', 'services/api'] },
+        { key: 'whole', title: '仓根', role: 'backend', acceptance: ['a'], needDeps: true },
+      ],
+    });
+    const r = 计划模块.consume(根, { roles: { backend: {} } }, { id: 'P-1', fm: 库.find(根, 'P-1').fm }, 文, { store: 库 });
+    assert.deepEqual(r.created, ['P-1-1', 'P-1-2', 'P-1-3']);
+    assert.equal(库.find(根, 'P-1-1').fm.需要依赖, undefined, '没声明的就不该凭空长出来');
+    assert.deepEqual(库.find(根, 'P-1-2').fm.需要依赖, ['tooling', 'services/api']);
+    assert.equal(库.find(根, 'P-1-3').fm.需要依赖, true, 'true = 仓根，要原样留住');
+  } finally { fs.rmSync(根, { recursive: true, force: true }); }
+});
+
+t('needDeps 不许逃出工作区（frontmatter 是 agent 改得动的）', () => {
+  const 坏 = JSON.stringify({ tasks: [{ key: 'x', title: 't', role: 'backend', acceptance: ['a'], needDeps: ['../../etc'] }] });
+  assert.throws(() => 计划模块.resolvePlan({ roles: { backend: {} } }, 坏, undefined), /不许绝对路径或/);
+});
+
+t('违规一次报全，别让人改一条跑一轮（协-038）', () => {
+  // HW-7 实测：烧了 375 秒，只换回一句「子任务 key 非法：<34 个字符>」。
+  // 就算人当场改对了它，也不知道后面还埋着几条——可能要来回好几轮，每轮都是一次真跑的钱。
+  const 坏 = JSON.stringify({
+    tasks: [
+      { key: 'a_key_far_far_too_long_to_be_accepted_here', title: 'x', role: 'backend', acceptance: ['a'] },
+      { key: 'b', title: 'y', role: '没这个角色', acceptance: ['a'] },
+      { key: 'c', title: 'z', role: 'backend', acceptance: [] },
+    ],
+  });
+  let 报 = '';
+  try { 计划模块.resolvePlan({ roles: { backend: {} } }, 坏, undefined); assert.fail('该抛没抛'); }
+  catch (e) { 报 = e.message; }
+  assert.match(报, /3 处不合规/, '三条毛病要一次全说');
+  assert.match(报, /太长/); assert.match(报, /未知角色/); assert.match(报, /缺少客观验收标准/);
+  assert.match(报, /45 字符|上限 32/, '超长要报出实际字符数——只说「非法」的话人得自己数');
+  // 单条时不许套「共 1 条」的壳：为了整齐而制造噪音，既有调用方也按单条读。
+  const 一条 = JSON.stringify({ tasks: [{ key: 'b', title: 'y', role: '没这个', acceptance: ['a'] }] });
+  try { 计划模块.resolvePlan({ roles: { backend: {} } }, 一条, undefined); assert.fail('该抛没抛'); }
+  catch (e) { assert.ok(!/处不合规/.test(e.message), '只有一条毛病时应当原样抛：' + e.message); }
 });
 
 t('只给 orchestrator 附加契约，别的角色不受污染', () => {
