@@ -45,6 +45,7 @@ const 门禁 = require('./lib/门禁');
 // 但它让本进程有了往仓外写文件的能力，三条约束见 lib/工单库.js 头部。
 const 工单库 = require('./lib/工单库');
 const 自检 = require('./lib/自检');
+const 设置落盘 = require('./lib/设置落盘');
 const 工单模板 = require('./lib/工单模板');
 const 流程视图 = require('./lib/流程视图');
 const 知识库 = require('./lib/知识库');
@@ -63,15 +64,24 @@ function 读JSON(p, 缺省) {
 }
 // 编制落盘（协-015）：写 config/routing.local.json。
 // 走本地覆盖那套白名单，与其他可改配置同一个机制——不为一个新功能另开一条写盘路径。
+// 协-037 起改走 lib/设置落盘：本地覆盖的写入口收敛成一个，白名单也只剩一张
+// （本地覆盖.覆盖表）。此前这里自己拼路径写盘，而设置页要写另外四个文件——
+// 两处各写一遍，迟早对不上。
 function 编制落盘(routing) {
-  try {
-    const 位置 = require('./lib/配置位置');
-    const 文件 = path.join(位置.可写配置目录(仓根), 'routing.local.json');
-    fs.mkdirSync(path.dirname(文件), { recursive: true });
-    fs.writeFileSync(文件, JSON.stringify(routing, null, 2) + '\n', 'utf8');
-    return { ok: true, 文件 };
-  } catch (e) { return { ok: false, 错误: `编制写不进去：${e.message}` }; }
+  const r = 设置落盘.落(仓根, 'routing.local.json', routing);
+  return r.ok ? { ok: true, 文件: r.文件 } : { ok: false, 错误: `编制写不进去：${r.错误}` };
 }
+
+// 打包态第一次开机，把 .示例 播到 exe 同级的 config/（协-036）。
+//
+// 不播的话，拿到 exe 的人只能配「工单库」那一个（界面上有输入框），
+// 真跑 / 预算 / 写权 / 项目注册**无路可走**——模板全锁在只读的 app.asar 里，
+// 文件管理器打不开，也没地方放改好的文件。翻 2026-08-16 那次真打包留下的
+// dist/config/ 就是这样：只有自动生成的令牌两件 + 界面配的工单库。
+//
+// 播在读配置**之前**：让「模板在那儿」这件事先于任何一次配置解析成立，
+// 免得以后有人把播种挪到某个懒加载分支里、结果第一次开机反而没播。
+const 播种结果 = require('./lib/配置位置').播种示例(仓根);
 
 // 危险开关只能从 config/*.local.json 打开——那些文件被 .gitignore 结构性挡住。
 // server 侧也要走同一套合并，否则它看到的配置与执行器不一致（比如工作区写开关），
@@ -622,6 +632,62 @@ const 服务 = http.createServer((req, res) => {
     });
   }
 
+  // ——— 设置落盘（协-037）：五个开关也能在界面上改 ———
+  //
+  // 到协-036 为止界面只配得了工单库根与项目注册，其余五样得关程序、手改 JSON、重启。
+  // 而那五样恰恰最要紧：真跑总开关、预算上限、提交链写权、计费模式、角色写权白名单。
+  //
+  // **写的仍然只是 config/*.local.json**——那个后缀被 .gitignore 结构性挡着，
+  // 「危险开关不可能入库」这条原始保证一个字没变。变的只是怎么改它。
+  //
+  // 改完回一份新的自检：人点完开关最想知道的是「现在够不够用了」，
+  // 让他自己再去点一次自检是把答案藏起来。
+  // 读当前值。界面要先知道现在是什么样，才谈得上「改」——
+  // 没有这条的话开关只能画成无状态的按钮，人点之前不知道它现在开着还是关着。
+  if (url路径 === '/api/setup/switches' && req.method === 'GET') {
+    const 执 = 配置.执行 || {};
+    // providers 是**对象**（池名 → 定义），不是数组。第一版当数组 map，
+    // 结果 GET 一打就 TypeError——而这是个读接口，它把整个 server 掀了。
+    // 拿配置的形状当想当然，是这条链上最容易犯的错；顺手都套一层保护。
+    const 取键 = (v) => (v && typeof v === 'object' && !Array.isArray(v)) ? Object.keys(v) : [];
+    const 池表 = [...new Set([
+      ...取键(配置.预算 && 配置.预算.池),
+      ...取键(配置.计费),
+      ...取键(配置.providers),
+    ])];
+    return 发JSON(res, 200, {
+      ok: true,
+      允许真跑: 执.允许真跑 === true,
+      允许写: !!(配置.workspace && 配置.workspace.允许写 === true),
+      放开: Array.isArray(执.权限 && 执.权限.放开) ? 执.权限.放开 : [],
+      预算: (配置.预算 && 配置.预算.池) || {},
+      计费: 配置.计费 || {},
+      池表,
+      // 角色表给界面画勾选框用。写死一份不如从工单模板取——但那是另一条链，
+      // 这里给的是**已知会用到的角色**，界面允许自己加。
+      角色表: [...new Set([...(Array.isArray(执.权限 && 执.权限.放开) ? 执.权限.放开 : []),
+        'backend', 'frontend', 'integrator', 'reviewer', 'planner'])],
+      说明: '这些开关写的是 config/*.local.json（被 .gitignore 挡着，不会入库）。'
+        + '改完当场生效，不用重启。',
+    });
+  }
+
+  if (url路径 === '/api/setup/switches' && req.method === 'POST') {
+    return 收体(req, 16 * 1024, (体) => {
+      if (!体) return 发JSON(res, 400, { ok: false, error: '需要 JSON 体' });
+      const r = 设置落盘.应用设置(仓根, 体);
+      if (!r.ok) return 发JSON(res, 400, { ok: false, error: r.错误 });
+      // 本进程捧着开机时合并好的那份配置，不重读的话人在界面上改完、
+      // 下一次调用还按旧的走——而界面已经显示改好了。项目注册那条踩过同款（协-005）。
+      const 新 = 本地覆盖.应用(仓根, 读JSON(path.join(仓根, 'config', 'platform.config.json'), {})).配置;
+      for (const k of ['执行', '预算', 'workspace', '计费']) 配置[k] = 新[k];
+      // 放宽了哪几处必须看得见——悄悄生效的安全降级比不降级更危险。
+      try { require('./lib/呼叫').常(账本根, '设置变更', r.改.join('；'), { 静默秒: 0 }); } catch { /* 记不下不影响改动 */ }
+      process.stdout.write(`[${平台名}] 设置变更：${r.改.join('；')}\n`);
+      return 发JSON(res, 200, { ok: true, 改: r.改, 落盘: r.落盘, 自检: 自检.结论(自检.查(仓根, 配置, 工单根)) });
+    });
+  }
+
   // ——— 自检（协-005）：这台机器现在能干什么、不能干什么、为什么 ———
   // 免令牌？不。它会吐出配置路径与已注册项目——那些不该给未授权者看。
   if (url路径 === '/api/selfcheck' && req.method === 'GET') {
@@ -1038,6 +1104,13 @@ const 服务 = http.createServer((req, res) => {
     + `（浏览器打开首页无需手工填；curl 需带 Authorization: Bearer <令牌>；`
     + `/api/health 免令牌，供瞭望塔心跳探测）\n`);
   if (registry错误) process.stderr.write(`[${平台名}] 警告：${registry错误}\n`);
+  // 播了模板要说出来——不说的话，那排文件对用户是不存在的（协-036）。
+  // 打包态用户没有 README 在手边，这行日志就是他知道「去哪儿改配置」的唯一入口。
+  if (播种结果 && 播种结果.播 && 播种结果.播.length) {
+    process.stdout.write(`[${平台名}] 已把 ${播种结果.播.length} 个配置模板放到 ${播种结果.目录}`
+      + `（把 xxx.local.json.示例 去掉「.示例」即生效，里面写了每个字段干什么）\n`);
+  }
+  if (播种结果 && 播种结果.错) process.stderr.write(`[${平台名}] 配置模板没播成：${播种结果.错}\n`);
 
   // 开机自检进呼叫信箱（协-019）。无人值守时**没有人会去点自检页**——
   // 配置坏了的表现是「界面开着、看板空着」，而那跟「今天没建单」长得一模一样。

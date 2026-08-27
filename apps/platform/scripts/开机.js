@@ -6,6 +6,8 @@
 //   :4370  server.js         只转发。闭包里没有 child_process，物理上起不了 CLI 进程
 //   :4371  工作区服务.js      只碰 git
 //   :4372  执行器.js          唯一被允许拉起 AI CLI 的地方
+// （以上是**默认**端口。三个都可以在配置里改，本文件按下面 端口表 那段跟着解析——
+//   写死过一次，代价见那段注释。）
 //
 // 本文件是**监工**，不是第四种能力：它只负责起进程和收尸，不处理任何业务请求，
 // 不监听端口。child_process 住在这里不破坏上面那条保证——server.js 的模块闭包
@@ -25,10 +27,36 @@ const 账本根 = process.env.PLATFORM_JOURNAL || 平台根;
 
 const 无执行器 = String(process.env.PLATFORM_NO_EXECUTOR || '') === '1';
 
+// 端口要**跟子进程读同一份**（协-036）。
+//
+// 此前这里写死 4370/4371/4372，而三个子进程各自从配置解析真端口。改过端口的机器上：
+//   [开机] 起了 3 个进程：server:4370 …      ← 假的
+//   [AI-DevPlatform] 开机 → http://127.0.0.1:4380   ← 真的
+// 两行差着六个字，人当然信头一行——然后打开一个打不开的地址。
+// 而 README 给「端口被占」开的药方**正是**改 server.port，也就是说照文档办的人必踩。
+// 端口冲突提示（`${条.口} 端口已被占用`）报的也是错号，把人指去查一个没被占的端口。
+//
+// 解析口径逐字抄子进程那三行（server.js:82-85 等）：环境变量 → 配置 → 默认值。
+// 少抄一段就是新的分叉——这个 bug 本身就是「同一件事在两处各写一遍」的产物。
+const fs = require('fs');
+const 本地覆盖 = require(path.join(平台根, 'lib', '本地覆盖.js'));
+const 端口表 = (() => {
+  let 配置 = {};
+  try {
+    const 主 = JSON.parse(fs.readFileSync(path.join(平台根, 'config', 'platform.config.json'), 'utf8'));
+    配置 = 本地覆盖.应用(平台根, 主).配置;
+  } catch { /* 读不到就退回默认值，跟子进程的兜底一致 */ }
+  return {
+    server: Number(process.env.PORT || (配置.server && 配置.server.port) || 4370),
+    工作区: Number(process.env.WORKSPACE_PORT || (配置.workspace && 配置.workspace.port) || 4371),
+    执行器: Number(process.env.EXECUTOR_PORT || (配置.执行 && 配置.执行.port) || 4372),
+  };
+})();
+
 const 名单 = [
-  { 名: 'server', 脚本: path.join(平台根, 'server.js'), 口: 4370, 色: 36 },
-  { 名: '工作区', 脚本: path.join(平台根, 'scripts', '工作区服务.js'), 口: 4371, 色: 32 },
-  ...(无执行器 ? [] : [{ 名: '执行器', 脚本: path.join(平台根, 'scripts', '执行器.js'), 口: 4372, 色: 33 }]),
+  { 名: 'server', 脚本: path.join(平台根, 'server.js'), 口: 端口表.server, 色: 36 },
+  { 名: '工作区', 脚本: path.join(平台根, 'scripts', '工作区服务.js'), 口: 端口表.工作区, 色: 32 },
+  ...(无执行器 ? [] : [{ 名: '执行器', 脚本: path.join(平台根, 'scripts', '执行器.js'), 口: 端口表.执行器, 色: 33 }]),
 ];
 
 const 孩子 = [];
@@ -196,7 +224,7 @@ for (const 条 of 名单) 起(条);
 process.stdout.write(
   `[开机] 起了 ${名单.length} 个进程：${名单.map((x) => `${x.名}:${x.口}`).join('  ')}\n`
   + (无执行器 ? '[开机] PLATFORM_NO_EXECUTOR=1，执行器没起——只能干跑。\n' : '')
-  + '[开机] 界面 → http://127.0.0.1:4370 　停止 → Ctrl-C\n');
+  + `[开机] 界面 → http://127.0.0.1:${端口表.server} 　停止 → Ctrl-C\n`);
 
 for (const 信号 of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(信号, () => 收摊(0));
 // 监工自己也收 IPC 停机。两个用处：被别的东西托管时（计划任务、测试夹具）能请它体面地走；

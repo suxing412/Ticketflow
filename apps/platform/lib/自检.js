@@ -18,6 +18,17 @@ const path = require('path');
 function 查(平台根, 配置, 工单根) {
   const 条 = [];
   const 有 = (p) => fs.existsSync(path.join(平台根, p));
+  // 可写那一份要去**可写配置目录**找，不能拿 平台根 拼（协-036）。
+  //
+  // 打包态 平台根 落在 app.asar 里，而 .local.json 与 api-token.txt 全在 exe 同级
+  // （lib/配置位置.js 的分法）。拿 平台根 去找它们，打包态**永远找不到**——
+  // 实测：真打包件开机后 config\api-token.txt 明明在、令牌也真的能用，
+  // 自检却一直把「命令行调接口」标红。诊断工具报假红比不报更坏：
+  // 人会跑去修一个根本没坏的东西。
+  const 有可写 = (名) => {
+    try { return fs.existsSync(path.join(require('./配置位置').可写配置目录(平台根), 名)); }
+    catch { return 有(`config/${名}`); }
+  };
   // 参数缺了也得出表，不能抛。自检是**出事之后才会被跑**的东西——
   // 一个在环境不全时自己先崩掉的诊断工具，正好在最需要它的时刻掉链子。
   配置 = 配置 || {};
@@ -116,8 +127,8 @@ function 查(平台根, 配置, 工单根) {
   // 令牌是自动生成的，但明文副本可能因为老装机而缺失
   条.push({
     能力: '命令行调接口',
-    就绪: 有('config/api-token.txt'),
-    ...(有('config/api-token.txt') ? { 现值: 'config/api-token.txt' } : {
+    就绪: 有可写('api-token.txt'),
+    ...(有可写('api-token.txt') ? { 现值: 'config/api-token.txt' } : {
       缺: 'config/api-token.txt',
       后果: 'PowerShell 5.1 读不了带中文键的 JSON 令牌文件（GBK 解 UTF-8 整份失败），命令行没法调接口',
       补法: '重启服务会自动补写这份明文副本，令牌值不变',
