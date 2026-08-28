@@ -167,4 +167,91 @@ function 收尾说因(收尾) {
   return `CLI 自报 is_error${收尾.子类 ? `（subtype=${收尾.子类}）` : ''}`;
 }
 
-module.exports = { 抽正文, 抽claude, 抽codex, 逐行JSON, 抽收尾, 收尾说因, 错名于 };
+// ——— 子进程起不来（2026-08-28 HW-9 实测）———
+//
+// codex 的沙箱 helper 在这台机器上突然给每一次 exec 都判了拒绝：
+//   ERROR codex_core::tools::router: error=exec_command failed for `"…powershell.exe" -Command Get-Location`:
+//     CreateProcess { message: "Rejected(\"Failed to create unified exec process: helper_unknown_error: apply deny-read ACLs\")" }
+// PowerShell、cmd.exe、Git Bash 三种壳全中，**都是启动前失败**，不是命令本身报错。
+// 后果是 agent 读不到任何文件、跑不了任何命令，却照样输出了一段完整的结论——
+// 而**进程退出码是 0**。也就是说：
+//   · 执行侧：加固.成败判定 看退出码 0 + 有输出 → 记成功，一次零证据的空跑被当成干完了；
+//   · 质检侧：判官这次说了「验不了」所以没出事，但它同样可能说「不过」或「通过」，
+//     那就是拿零证据把一张好单打回、或者把一张坏单放行。
+// 这不是模型的问题，模型工作正常；坏的只有子进程创建。所以判据不能问模型，要问**流水**：
+// 这一趟到底有没有一条命令真的跑起来过。
+//
+// 只认两个通道，**不看 agent 自己说的话**：agent_message 里常常原样引用这句错误
+// （HW-9 的判词第一条就是），拿它当判据等于「谁提到这个错谁就算故障」。
+//   ① JSONL 里的 command_execution 事件：aggregated_output 带 helper 字样的算起不来；
+//   ② stderr 里 codex router 的 exec_command failed 行。
+const 起不来标记 = /Failed to create unified exec process|helper_unknown_error|orchestrator_helper_launch_failed|windows sandbox:|CreateProcess \{/i;
+
+// 从一段错误文本里取一个能印的死因名。取不到就原样截一段——别返回空，
+// 空会让上游把「起不来」印成一句没有内容的话。
+function 死因于(文) {
+  const s = String(文 || '');
+  const m = s.match(/(helper_unknown_error[^"\)]*|orchestrator_helper_launch_failed[^"\,]*|windows sandbox:\s*[a-z_]+)/i);
+  // 尾巴上常挂着 Rust 那串转义的收尾（`ACLs\")`），原样印出来像是死因的一部分。
+  return (m ? m[1] : s.split(/\r?\n/)[0] || '').replace(/[\\"\s]+$/, '').trim().slice(0, 200) || null;
+}
+
+function 抽进程故障(输出, 错出) {
+  const 起不来 = []; const 见过 = new Set(); let 跑起来了 = 0;
+  const 记 = (命令, 因) => {
+    const 键 = String(命令 || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+    if (键 && 见过.has(键)) return;                    // stderr 与 JSONL 常常说的是同一次
+    if (键) 见过.add(键);
+    起不来.push({ 命令: 键.slice(0, 200), 因: 死因于(因) });
+  };
+
+  for (const 行 of String(输出 || '').split(/\r?\n/)) {
+    const s = 行.trim();
+    if (!s || s[0] !== '{') continue;
+    let e = null;
+    try { e = JSON.parse(s); } catch { continue; }
+    const it = e && e.item;
+    if (!it || it.type !== 'command_execution' || e.type !== 'item.completed') continue;
+    const 出 = String(it.aggregated_output || '');
+    if (起不来标记.test(出)) 记(it.command, 出);
+    else 跑起来了 += 1;                                 // 真跑过——退出码非 0 也算跑过，那是命令自己的事
+  }
+
+  // stderr：这一路里 codex 把连 item 都没建起来的失败也印了出来（HW-9 就是这种，
+  // 四次调用一个 command_execution 事件都没有）。不读它就等于这一趟看上去「一条命令都没调用过」。
+  for (const 行 of String(错出 || '').split(/\r?\n/)) {
+    const s = 行.replace(/^\[stderr\]\s*/, '');
+    if (!/exec_command failed for/.test(s) || !起不来标记.test(s)) continue;
+    const m = s.match(/exec_command failed for `([\s\S]*?)`:/);
+    记(m ? m[1] : '(命令未记录)', s);
+  }
+
+  if (!起不来.length) return null;
+  return {
+    起不来: 起不来.length,
+    跑起来了,
+    全灭: 跑起来了 === 0,                               // 一条都没跑起来 = 这一趟的结论建立在零证据上
+    死因: 起不来[0].因,
+    例: 起不来.slice(0, 3),
+  };
+}
+
+// 翻成一句人话。**全灭与偶发要分开说**：偶发一条命令起不来是噪声，
+// 全灭意味着这一趟根本没有证据——两者的处置完全不同。
+function 进程故障说因(故障) {
+  if (!故障) return null;
+  const 例 = 故障.例.map((e) => `  - ${e.命令}`).join('\n');
+  if (!故障.全灭) {
+    return `⚠ 这一趟有 ${故障.起不来} 次命令**没能起进程**（${故障.死因 || '死因不明'}），`
+      + `另有 ${故障.跑起来了} 次跑起来了。结论未必受影响，但证据是缺的一块：\n${例}`;
+  }
+  return `**沙箱起不了子进程**：这一趟 ${故障.起不来} 次命令调用全部在**进程创建阶段**失败`
+    + `（${故障.死因 || '死因不明'}），一条都没跑起来。\n${例}\n`
+    + 'agent 读不到文件、跑不了命令，**它这次说的任何结论都建立在零证据上**——'
+    + '而 CLI 的退出码仍是 0，光看退出码会把它当成一次成功。\n'
+    + '这不是被评审方的问题，也不是模型的问题（模型正常出话），坏的是执行环境：'
+    + '去查 codex 的沙箱 helper（Windows ACL / 杀软策略 / 组策略在这台机器上的变化），'
+    + '或把这个角色暂时派给别家。**改沙箱档位没用**——失败在进程创建，不在写权限。';
+}
+
+module.exports = { 抽正文, 抽claude, 抽codex, 逐行JSON, 抽收尾, 收尾说因, 错名于, 抽进程故障, 进程故障说因 };
