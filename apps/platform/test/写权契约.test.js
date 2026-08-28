@@ -361,4 +361,117 @@ t('装不上就抛——抛在 prepare 里零成本，一个 token 都没花', (
   assert.match(段, /slice\(-8\)/, '要带 npm 的尾巴，不然又是一句「装失败了」等于没说');
 });
 
+
+// ---------- 一条命令都没跑起来 ≠ 跑过了（2026-08-28 HW-9 实测）----------
+//
+// codex 的沙箱 helper 在这台机器上给每一次 exec 都判了拒绝：进程创建阶段就失败，
+// PowerShell / cmd.exe / Git Bash 三种壳全中。agent 读不到文件、跑不了命令，
+// 却照样输出了一段完整的判词，而 **CLI 退出码是 0**。
+// 这一趟判官恰好说的是「验不了」所以没出事；说「不过」就是白白打回一张好单，
+// 说「通过」就是放行一个没验过的东西——而平台此前看不出区别。
+const 质检 = require('../lib/质检');
+const 拒行 = (exe, 参 = '-Command Get-Location') => '[stderr] 2026-08-28T12:12:25.850793Z ERROR codex_core::tools::router: '
+  + `error=exec_command failed for \`"${exe}" ${参}\`: CreateProcess { message: "Rejected(\\"Failed to create unified `
+  + 'exec process: helper_unknown_error: apply deny-read ACLs\\")" }';
+const 跑过 = (id, 码) => JSON.stringify({
+  type: 'item.completed',
+  item: { id, type: 'command_execution', command: 'git status --short', aggregated_output: 'M a.ts', exit_code: 码, status: 码 === 0 ? 'completed' : 'failed' },
+});
+
+t('起不来的命令要从 stderr 里读出来（那一路连 item 都没建）', () => {
+  const 故 = 提.抽进程故障('{"type":"turn.started"}', [
+    拒行('C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'),
+    拒行('C:\\WINDOWS\\system32\\cmd.exe', '/c cd'),
+    拒行('C:\\Program Files\\Git\\usr\\bin\\bash.exe', '-c pwd'),
+  ].join('\n'));
+  assert.equal(故.起不来, 3);
+  assert.equal(故.跑起来了, 0);
+  assert.equal(故.全灭, true, '一条都没跑起来 = 这一趟的结论建立在零证据上');
+  assert.match(故.死因, /helper_unknown_error: apply deny-read ACLs/);
+  assert.doesNotMatch(故.死因, /[\\"]$/, 'Rust 那串转义的收尾不是死因的一部分');
+  assert.match(提.进程故障说因(故), /退出码仍是 0/, '光看退出码会把它当成一次成功——这句必须说出来');
+  assert.match(提.进程故障说因(故), /改沙箱档位没用/, '失败在进程创建，不在写权限');
+});
+
+t('JSONL 里 helper 失败的 command_execution 同样算起不来', () => {
+  const 流 = [
+    JSON.stringify({ type: 'item.completed', item: { id: 'i1', type: 'command_execution', command: 'powershell -NoProfile -Command Get-Location', aggregated_output: 'execution error: Io(Custom { kind: Other, error: "windows sandbox: orchestrator_helper_launch_failed: setup refresh failed to launch helper" })', exit_code: -1, status: 'failed' } }),
+  ].join('\n');
+  const 故 = 提.抽进程故障(流, '');
+  assert.equal(故.全灭, true);
+  assert.match(故.死因, /orchestrator_helper_launch_failed|windows sandbox/);
+});
+
+t('agent 自己引用这句错误**不算**故障（判词里天天写它）', () => {
+  // HW-9 的判词第一条就原样引用了这段错误。拿 agent 说的话当判据，
+  // 等于「谁提到这个错谁就算故障」——那会把一次正常的运行判成环境坏了。
+  const 流 = JSON.stringify({
+    type: 'item.completed',
+    item: { id: 'i2', type: 'agent_message', text: '结论：验不了\n沙箱无法创建进程：Failed to create unified exec process: helper_unknown_error: apply deny-read ACLs' },
+  });
+  assert.equal(提.抽进程故障(流, ''), null, '只认 command_execution 与 codex router 的 stderr 行');
+});
+
+t('偶发一条起不来不作废——跑起来过就有证据', () => {
+  const 故 = 提.抽进程故障([跑过('i1', 0), 跑过('i2', 1)].join('\n'), 拒行('C:\\WINDOWS\\system32\\cmd.exe', '/c cd'));
+  assert.equal(故.全灭, false);
+  assert.equal(故.跑起来了, 2, '退出码非 0 也算跑过——那是命令自己的事，不是环境的事');
+  assert.match(提.进程故障说因(故), /⚠/);
+  const 判 = { 结论: '通过', 下一步: '完成' };
+  assert.equal(质检.零证据作废(判, 故, 'x'), 判, '一次瞬时失败不许推翻一句站得住的判词');
+});
+
+t('全灭时判词一律作废，归「验不了」而不是「不过」', () => {
+  const 故 = 提.抽进程故障('', 拒行('C:\\WINDOWS\\system32\\cmd.exe', '/c cd'));
+  for (const 原 of ['通过', '不过', '验不了']) {
+    const 判 = 质检.零证据作废({ 结论: 原, 下一步: 原 === '通过' ? '完成' : '待投', 意见: { x: 1 } }, 故, '（说因）');
+    assert.equal(判.结论, '验不了', '被评审方没有任何过错，打回去返工是冤枉它');
+    assert.equal(判.下一步, null, '不流转：工单留在质检，要修的是机器');
+    assert.equal(判.原结论, 原, '它当时说了什么要留着——说「通过」和说「验不了」，事后复盘分量不同');
+    assert.ok(判.进程故障, '证据要跟着判词走');
+  }
+  assert.equal(质检.零证据作废({ 结论: '通过' }, null, null).结论, '通过', '没故障就别动判词');
+});
+
+t('执行侧同样不许把零证据的空跑记成功', () => {
+  // 退出码 0 + 输出不空 → 加固.成败判定 的两条判据都过得去，
+  // 于是一次什么都没跑起来的空跑会被记成功：工单往下走、路由还给这个池记一笔虚假战绩。
+  const 源 = fs.readFileSync(path.join(平台根, 'scripts', '执行器.js'), 'utf8');
+  assert.match(源, /const 判 = \(进程故障 && 进程故障\.全灭\)\s*\n\s*\? \{ 成: false/,
+    '成败判定 之前要先问一句「有没有一条命令真跑起来过」');
+  assert.match(源, /const 进程故障 = 输出提取\.抽进程故障\(r\.输出, r\.错出\);[\s\S]{0,400}?质检\.零证据作废\(判, 进程故障, 进程故障说\)/,
+    '质检侧也要作废——判官说什么不作数，判据只看流水');
+  assert.match(源, /呼叫\.急\(账本根, '判官跑不动（沙箱起不了子进程）'/,
+    '不能走「可能缺依赖」那条话术：补依赖一百遍也修不好一台起不了子进程的机器');
+});
+
+t('自检要在开跑之前就看出 codex 沙箱坏了（零成本，不必先烧一趟真跑）', () => {
+  // 断电那次把 deny_read_acl_state.json 变成了 22 个 \0（健康时它正好也是 22 字节）。
+  // codex 从此拒绝创建任何子进程，而退出码仍是 0——零证据闸能接住，但那要先花掉一趟真跑。
+  const os = require('os');
+  const 真 = os.homedir;
+  const 家 = fs.mkdtempSync(path.join(os.tmpdir(), 'codex家-'));
+  const 沙 = path.join(家, '.codex', '.sandbox');
+  fs.mkdirSync(沙, { recursive: true });
+  try {
+    os.homedir = () => 家;
+    const 名 = 'codex 沙箱';
+    const 查 = () => 自检.查(平台根, {}, { ok: false }).find((x) => x.能力.startsWith(名));
+    assert.equal(查().就绪, true, '没有状态文件是正常的——codex 首次施加 ACL 时才建');
+
+    fs.writeFileSync(path.join(沙, 'deny_read_acl_state.json'), Buffer.alloc(22));
+    const 坏 = 查();
+    assert.equal(坏.就绪, false);
+    assert.match(坏.后果, /起不了任何子进程/);
+    assert.match(坏.后果, /退出码仍是 0/, '最坏的那种：照常出话、照常 0，只是读不到任何文件');
+    assert.match(坏.补法, /改沙箱档位.*没用|没用/, '失败在进程创建，不在写权限');
+
+    fs.writeFileSync(path.join(沙, 'deny_read_acl_state.json'), '{ "principals": {} }');
+    assert.equal(查().就绪, true, '重建之后就该恢复——自检只报事实，不替人删别人产品的状态文件');
+  } finally {
+    os.homedir = 真;
+    fs.rmSync(家, { recursive: true, force: true });
+  }
+});
+
 console.log('全部通过：' + passed + ' 项');

@@ -135,6 +135,48 @@ function 查(平台根, 配置, 工单根) {
     }),
   });
 
+  // codex 的沙箱状态文件（2026-08-28 实测，一次断电就复现）。
+  //
+  // 案源：10:19:54 一次 Kernel-Power 41（非正常关机）把
+  // `~/.codex/.sandbox/deny_read_acl_state.json` 变成了 22 个 \0——文件长度进了 NTFS 日志，
+  // 内容没来得及刷盘，这是断电最典型的产物（健康时它正好也是 22 字节：`{"principals":{}}`）。
+  // 从那一刻起 codex 的沙箱 setup helper 每次都在 JSON 解析上失败，于是它
+  // **拒绝创建任何子进程**：PowerShell / cmd.exe / Git Bash 三种壳全中，都是启动前失败。
+  //
+  // 而 codex 报给上层的只有一句 `helper_unknown_error: apply deny-read ACLs`，
+  // 不说是哪个文件、也不说底层错是什么。表现是最坏的那种：agent 照常出结论、
+  // **退出码照常是 0**，只是它读不到任何文件——判官那一趟的判词建立在零证据上
+  // （执行器已经有零证据闸接住，见 输出提取.抽进程故障，但那要先烧掉一趟真跑）。
+  //
+  // 所以在这儿先看一眼：这是**开跑之前零成本就能发现**的事。
+  // 只读不修：删别人产品的状态文件不该由一个自检函数拍板。
+  条.push((() => {
+    const 能力 = 'codex 沙箱（它能不能起子进程）';
+    let 文件 = null;
+    try {
+      文件 = path.join(require('os').homedir(), '.codex', '.sandbox', 'deny_read_acl_state.json');
+      if (!fs.existsSync(文件)) {
+        // 没有这个文件是**正常**的：codex 第一次要施加 ACL 时才建。
+        return { 能力, 就绪: true, 说明: '没有状态文件（codex 首次施加 ACL 时才建），不是问题' };
+      }
+      JSON.parse(fs.readFileSync(文件, 'utf8'));
+      return { 能力, 就绪: true, 现值: 文件, 说明: '状态文件解析正常' };
+    } catch (e) {
+      return {
+        能力,
+        就绪: false,
+        现值: 文件,
+        缺: `${文件} 解析不了（${(e && e.message) || e}）`,
+        后果: '**codex 起不了任何子进程**（三种壳全中，都是进程创建阶段失败），'
+          + '而它的退出码仍是 0、模型照常出话：派给 codex 的活会读不到一个文件就交结论，'
+          + '判官那一趟的判词建立在零证据上。多半是刚经历过一次非正常关机（事件 ID 41）',
+        补法: '把这个文件挪走（`Move-Item` 到 .bad 备份，别直接删，留着当证据），'
+          + 'codex 下次跑会重建成 `{ "principals": {} }`。'
+          + '**改沙箱档位（workspace-write → read-only）没用**——失败在进程创建，不在写权限',
+      };
+    }
+  })());
+
   return 条;
 }
 
