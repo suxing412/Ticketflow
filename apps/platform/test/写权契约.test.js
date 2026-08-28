@@ -445,4 +445,33 @@ t('执行侧同样不许把零证据的空跑记成功', () => {
     '不能走「可能缺依赖」那条话术：补依赖一百遍也修不好一台起不了子进程的机器');
 });
 
+t('自检要在开跑之前就看出 codex 沙箱坏了（零成本，不必先烧一趟真跑）', () => {
+  // 断电那次把 deny_read_acl_state.json 变成了 22 个 \0（健康时它正好也是 22 字节）。
+  // codex 从此拒绝创建任何子进程，而退出码仍是 0——零证据闸能接住，但那要先花掉一趟真跑。
+  const os = require('os');
+  const 真 = os.homedir;
+  const 家 = fs.mkdtempSync(path.join(os.tmpdir(), 'codex家-'));
+  const 沙 = path.join(家, '.codex', '.sandbox');
+  fs.mkdirSync(沙, { recursive: true });
+  try {
+    os.homedir = () => 家;
+    const 名 = 'codex 沙箱';
+    const 查 = () => 自检.查(平台根, {}, { ok: false }).find((x) => x.能力.startsWith(名));
+    assert.equal(查().就绪, true, '没有状态文件是正常的——codex 首次施加 ACL 时才建');
+
+    fs.writeFileSync(path.join(沙, 'deny_read_acl_state.json'), Buffer.alloc(22));
+    const 坏 = 查();
+    assert.equal(坏.就绪, false);
+    assert.match(坏.后果, /起不了任何子进程/);
+    assert.match(坏.后果, /退出码仍是 0/, '最坏的那种：照常出话、照常 0，只是读不到任何文件');
+    assert.match(坏.补法, /改沙箱档位.*没用|没用/, '失败在进程创建，不在写权限');
+
+    fs.writeFileSync(path.join(沙, 'deny_read_acl_state.json'), '{ "principals": {} }');
+    assert.equal(查().就绪, true, '重建之后就该恢复——自检只报事实，不替人删别人产品的状态文件');
+  } finally {
+    os.homedir = 真;
+    fs.rmSync(家, { recursive: true, force: true });
+  }
+});
+
 console.log('全部通过：' + passed + ' 项');
