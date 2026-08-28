@@ -22,6 +22,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const 输出提取 = require('./输出提取');          // 纯计算模块，零 IO，不会带出循环依赖
 
 const 运行根 = (账本根) => path.join(账本根, 'journal', '运行');
 const 单目录 = (账本根, 单) => path.join(运行根(账本根), 安全名(单));
@@ -169,9 +170,15 @@ function 渲染(内容, 格式) {
         }
       }
     } else if (o.type === 'result') {
+      // terminal_reason / error 要跟 stop_reason 并排出现：只印后两个的话，
+      // 一次认证失败在这一行看起来跟「回合数用光」一模一样（见 输出提取.收尾说因）。
+      const 错名 = 输出提取.错名于(o.error);
       出.push(`— 收尾：${o.is_error ? '出错' : '正常'}`
         + (o.num_turns != null ? ` · ${o.num_turns} 轮` : '')
         + (o.stop_reason ? ` · stop_reason=${o.stop_reason}` : '')
+        + (o.terminal_reason && o.terminal_reason !== 'completed' ? ` · terminal_reason=${o.terminal_reason}` : '')
+        + (错名 ? ` · error=${错名}` : '')
+        + (o.api_error_status != null ? ` · HTTP ${o.api_error_status}` : '')
         + (o.duration_api_ms ? ` · API ${Math.round(o.duration_api_ms / 1000)}s` : ''));
     }
   }
