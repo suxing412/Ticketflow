@@ -609,7 +609,10 @@ const 服务 = http.createServer((req, res) => {
     // async：要 await 工作区服务建审阅区（协-011）。/run 那边本来就是 async，
     // 这边一直是同步的——加 await 之前先把签名对齐，否则 node 直接语法报错。
     return 收体(req, 64 * 1024, async (体) => {
-      const 干跑 = !(体 && (体.干跑 === false || 体.dry_run === false));
+      // dry_run 是 干跑 的 ASCII 别名（中文键的请求体在命令行里传不可靠，见 README）。
+      // 取值口径跟 /run 对齐：两个键都在时以中文键为准，别让同一个别名在两条路上讲两套话。
+      const 干跑值 = 体 && (体.干跑 !== undefined ? 体.干跑 : 体.dry_run);
+      const 干跑 = !(干跑值 === false);
       const t = 工单库.find(工单根.根, id);
       if (!t) return 发JSON(res, 404, { ok: false, error: `工单不存在：${id}` });
       if (t.state !== '质检') {

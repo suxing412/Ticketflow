@@ -269,13 +269,17 @@ const 起服务 = async () => {
 };
 
 const 取 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
-  const 头 = { Authorization: 'Bearer ' + 门禁令牌(), ...(选项.体 ? { 'Content-Type': 'application/json' } : {}) };
+  const 头 = {
+    Authorization: 'Bearer ' + 门禁令牌(),
+    ...((选项.体 || 选项.原始体 !== undefined) ? { 'Content-Type': 'application/json' } : {}),
+  };
   const req = http.request({ host: '127.0.0.1', port, path: 路径, method: 选项.method || 'GET', headers: 头 }, (res) => {
     let s = ''; res.on('data', (d) => s += d);
     res.on('end', () => { try { resolve({ 码: res.statusCode, 体: JSON.parse(s) }); } catch (e) { reject(new Error('非 JSON：' + s.slice(0, 200))); } });
   });
   req.on('error', reject);
-  if (选项.体) req.write(JSON.stringify(选项.体));
+  if (选项.原始体 !== undefined) req.write(选项.原始体);
+  else if (选项.体) req.write(JSON.stringify(选项.体));
   req.end();
 });
 
@@ -356,6 +360,37 @@ const 取 = (port, 路径, 选项 = {}) => new Promise((resolve, reject) => {
       assert.equal(好.码, 200);
       const 查 = await 取(port, '/api/tickets/API-1');
       assert.equal(查.体.状态, '待投');
+    });
+
+    // 中文键的请求体在命令行里传不过去——不止 PS 5.1，git bash 的
+    // curl -d '{"到":"待投"}' 同样解不出来。/run 早有 dry_run，/move 一直没有别名，
+    // 于是「一句 curl 挪张单」在两种 shell 里都做不到。
+    await ta('POST /api/tickets/:id/move 认 to 这个 ASCII 别名', async () => {
+      const r = await 取(port, '/api/tickets/API-1/move', { method: 'POST', 体: { to: '在途' } });
+      assert.equal(r.码, 200, JSON.stringify(r.体));
+      assert.equal((await 取(port, '/api/tickets/API-1')).体.状态, '在途');
+      // 两个键都在时以中文键为准——别名给的是键，不是新语义。
+      const 回 = await 取(port, '/api/tickets/API-1/move', { method: 'POST', 体: { 到: '待投', to: '完成' } });
+      assert.equal(回.码, 200, JSON.stringify(回.体));
+      assert.equal((await 取(port, '/api/tickets/API-1')).体.状态, '待投');
+    });
+
+    await ta('体解不开时要说「解不开」，不能说成「你没带体」', async () => {
+      // 两种处置完全不同：没带体是自己漏了，解不开是 shell 把字节弄坏了。
+      // ① 键是 GBK 字节：JSON.parse 照样成功，只是那个键谁也不认识。这一种最坑。
+      const 乱 = await 取(port, '/api/tickets/API-1/move', { method: 'POST', 原始体: Buffer.from('{"µ½":"´ýÍ¶"}', 'binary') });
+      assert.equal(乱.码, 400);
+      assert.match(乱.体.error, /体里的键是/, '要把实际收到的键摆出来：' + 乱.体.error);
+      assert.match(乱.体.error, /data-binary/, '要给出路：' + 乱.体.error);
+      // ② 整份解不开。
+      const 坏 = await 取(port, '/api/tickets/API-1/move', { method: 'POST', 原始体: '{"到":' });
+      assert.equal(坏.码, 400);
+      assert.match(坏.体.error, /解不成 JSON/, '要说清体来过但坏了：' + 坏.体.error);
+      assert.match(坏.体.error, /data-binary/, '要给出路：' + 坏.体.error);
+      const 空 = await 取(port, '/api/tickets/API-1/move', { method: 'POST', 原始体: '' });
+      assert.equal(空.码, 400);
+      assert.doesNotMatch(空.体.error, /解不成 JSON|体里的键是/, '真没带体就别乱指方向');
+      assert.match(空.体.error, /"to"/, '缺参时要把 ASCII 别名摆出来：' + 空.体.error);
     });
 
     await ta('POST /api/plan/materialize 落盘子单并幂等', async () => {

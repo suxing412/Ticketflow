@@ -80,6 +80,26 @@ function 抽正文(输出, 格式) {
 // 「退出码 1」把这三件完全不同的事说成同一件，而处置方式南辕北辙：
 // 截断该调大回合上限或拆单，崩溃该看栈，限流该等窗口。
 // 判据就摆在输出的最后一行，只是从来没人读它。
+//
+// 补（2026-08-28）：同一行里还写着 API 层的死因，此前没解出来。
+//   {"type":"result","is_error":true,"stop_reason":"stop_sequence","num_turns":1,
+//    "is_api_error_message":true,"error":"authentication_failed","terminal_reason":"api_error"}
+// 认证挂掉的那一趟同样是 stop_sequence、同样带 num_turns——只是等于 1，而且四秒就退。
+// 只看 (stop_reason, num_turns) 会把它读成「回合数用光」，于是回执教人去调大回合上限；
+// 而回合上限调到 800 也还是四秒挂掉。**API 错的那三个字段优先级高于回合数**：
+// terminal_reason 说的是这一趟为什么终止，回合数只是顺带的计数。
+
+// error 字段各版本形状不一：有时是字符串，有时是 {type,message}。取一个能印出来的名字。
+function 错名于(e) {
+  if (!e) return null;
+  if (typeof e === 'string') return e.trim() || null;
+  if (typeof e === 'object') {
+    const s = e.type || e.code || e.name || e.message;
+    return typeof s === 'string' && s.trim() ? s.trim() : null;
+  }
+  return null;
+}
+
 function 抽收尾(输出, 格式) {
   const 原 = String(输出 || '');
   if (格式 !== 'claude-stream-json') return null;      // 只认已知形状，不替别的厂商猜
@@ -95,6 +115,12 @@ function 抽收尾(输出, 格式) {
       停因: o.stop_reason || null,
       回合数: Number.isFinite(回合) ? 回合 : null,
       api毫秒: Number(o.duration_api_ms) || null,
+      // API 层的死因。比 (stop_reason, num_turns) 靠谱得多——
+      // 后者在认证失败时长得跟「回合数用光」一模一样。
+      终因: o.terminal_reason || null,                 // completed / api_error / …
+      是api错: o.is_api_error_message === true,
+      错名: 错名于(o.error),                            // "authentication_failed" 之类
+      api状态: o.api_error_status != null ? o.api_error_status : null,
       // 订阅池跑一次不产生新开销（协-008 的口径），但 CLI 照样报一个名义金额。
       // 原样带出来当**规模的量度**，别把它当账单——它不是。
       名义成本美元: typeof o.total_cost_usd === 'number' ? o.total_cost_usd : null,
@@ -107,12 +133,38 @@ function 抽收尾(输出, 格式) {
 // **猜错原因比不说原因更坏**：它会把人送到错误的方向上去查。
 function 收尾说因(收尾) {
   if (!收尾 || !收尾.是错) return null;
-  if (收尾.回合数 != null && 收尾.停因 === 'stop_sequence') {
-    return `跑到**回合数上限**被截断（${收尾.回合数} 轮，API 用时 ${Math.round((收尾.api毫秒 || 0) / 1000)}s）`
+  const 秒 = Math.round((收尾.api毫秒 || 0) / 1000);
+
+  // ① API 层先判。认证失败的那一趟也是 stop_sequence + 带 num_turns，
+  //    先看回合数就会把它说成「回合数上限被截断」——而那条建议（调大上限 / 拆小单）
+  //    在认证挂掉时一条都不成立。
+  if (收尾.是api错 || 收尾.终因 === 'api_error' || 收尾.错名) {
+    const 名 = 收尾.错名 || '未具名';
+    const 尾 = `（error=${名}${收尾.api状态 != null ? `，HTTP ${收尾.api状态}` : ''}`
+      + `${收尾.终因 ? `，terminal_reason=${收尾.终因}` : ''}，${秒}s 就退）`;
+    if (/auth|credential|unauthorized|401|403/i.test(名) || 收尾.api状态 === 401 || 收尾.api状态 === 403) {
+      return `**API 认证失败**${尾}——CLI 这一侧根本没跑起来，跟单子大小、回合上限都无关。`
+        + '去查这个池的登录态/密钥（重新登录或换池），别改单。';
+    }
+    if (/rate|quota|limit|overload|429/i.test(名) || 收尾.api状态 === 429) {
+      return `**API 被限流或额度用尽**${尾}——不是活干砸了。等窗口或换池，原样重跑即可。`;
+    }
+    return `**API 出错收场**${尾}——照 error 的名字去查这个池，别按「活干砸了」处理。`;
+  }
+
+  // ② 回合数上限。只有真绕了好几圈才配这么说：num_turns=1 意味着它连第二轮都没开始，
+  //    那不是「上限用光」，是开头就死了——原因得另找，硬套上限会把人送到错误的方向上去。
+  if (收尾.停因 === 'stop_sequence' && 收尾.回合数 != null && 收尾.回合数 > 1) {
+    return `跑到**回合数上限**被截断（${收尾.回合数} 轮，API 用时 ${秒}s）`
       + '——活没干完，不是干砸了。要么调大回合上限，要么把这张单拆小。';
   }
-  if (收尾.停因) return `CLI 报错收场（stop_reason=${收尾.停因}${收尾.回合数 != null ? `，${收尾.回合数} 轮` : ''}）`;
+
+  if (收尾.停因) {
+    return `CLI 报错收场（stop_reason=${收尾.停因}${收尾.回合数 != null ? `，${收尾.回合数} 轮` : ''}`
+      + `${收尾.终因 && 收尾.终因 !== 'completed' ? `，terminal_reason=${收尾.终因}` : ''}，${秒}s）`
+      + (收尾.回合数 === 1 ? '——只跑了 1 轮就退，不是回合数用光；去翻流水开头那几行。' : '');
+  }
   return `CLI 自报 is_error${收尾.子类 ? `（subtype=${收尾.子类}）` : ''}`;
 }
 
-module.exports = { 抽正文, 抽claude, 抽codex, 逐行JSON, 抽收尾, 收尾说因 };
+module.exports = { 抽正文, 抽claude, 抽codex, 逐行JSON, 抽收尾, 收尾说因, 错名于 };

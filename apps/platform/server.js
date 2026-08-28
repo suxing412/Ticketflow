@@ -147,10 +147,39 @@ function 发JSON(res, 码, 体) {
   res.writeHead(码, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(s);
 }
+// 解析失败时第二个参数带上「体到底来了没有」。
+// 为什么要分：命令行内联中文键的 JSON 在 Windows 上常态传丢——
+// git bash 的 curl -d '{"到":"待投"}' 与 PS 5.1 的 -Body 都会把字节弄坏，
+// 服务端拿到的要么是空体、要么是解不开的乱码。两种情况都回一句「需要 JSON 体」，
+// 人只会以为自己忘了带体，然后把同一条命令再敲一遍。
 function 收体(req, 上限, 完成) {
   let 体 = '';
   req.on('data', (c) => { 体 += c; if (体.length > 上限) { req.destroy(); } });
-  req.on('end', () => { try { 完成(体 ? JSON.parse(体) : {}); } catch { 完成(null); } });
+  req.on('end', () => {
+    if (!体) return 完成({}, { 空: true });
+    try { return 完成(JSON.parse(体)); } catch {
+      return 完成(null, { 空: false, 字节: Buffer.byteLength(体), 预览: 体.slice(0, 120) });
+    }
+  });
+}
+
+// 体来了但没能用上时补一句诊断。**只在体确实来过时才说**——真没带体就是没带，别乱指方向。
+// 中文键传丢有两种长相，回执要分得开：
+//   ① 整份解不成 JSON —— 字节被 shell 弄坏得连结构都不剩；
+//   ② 解得开、但键是乱码 —— UTF-8 字节按别的码页走了一遭，非法字节被换成 U+FFFD，
+//      `{"到":…}` 变成 `{"??":…}`，JSON.parse 照样成功。这一种最坑：
+//      体明明到了、格式也没错，只是那个键谁也不认识。
+const 传丢提示 = '命令行内联中文键在 Windows 上常态传丢——git bash 与 PowerShell 5.1 都会。'
+  + '把体写进文件再 curl --data-binary @体.json，或改用 ASCII 别名。）';
+
+function 体伤(详情, 体) {
+  if (详情 && 详情.空 === false) {
+    return `（收到 ${详情.字节} 字节但解不成 JSON：${JSON.stringify(详情.预览)}。`
+      + 传丢提示;
+  }
+  const 键 = 体 && typeof 体 === 'object' ? Object.keys(体) : [];
+  if (键.length) return `（体里的键是 ${JSON.stringify(键)}，没有认识的。` + 传丢提示;
+  return '';
 }
 
 // 主动向工作区服务发一次请求（不同于 /api/workspace/* 的透传：那条是把浏览器的请求
@@ -561,12 +590,21 @@ const 服务 = http.createServer((req, res) => {
     const 迁移 = url路径.match(/^\/api\/tickets\/([^/]+)\/move$/);
     if (迁移 && req.method === 'POST') {
       const id = decodeURIComponent(迁移[1]);
-      return 收体(req, 64 * 1024, (体) => {
-        if (!体 || !体.到) return 发JSON(res, 400, { ok: false, error: '需要 JSON 体 { "到": "<目标状态>" }' });
+      return 收体(req, 64 * 1024, (体, 详情) => {
+        // to 是 到 的 ASCII 别名（与 /run 的 dry_run 同一档口径）。
+        // 中文键的请求体在命令行里传不可靠：不止 PS 5.1，git bash 的
+        // curl -d '{"到":"待投"}' 同样解不出来。别名让「一句 curl 挪张单」重新成立。
+        const 到 = 体 && (体.到 !== undefined ? 体.到 : 体.to);
+        if (!到) {
+          return 发JSON(res, 400, {
+            ok: false,
+            error: '需要 JSON 体 { "到": "<目标状态>" }（ASCII 别名：{ "to": "<目标状态>" }）' + 体伤(详情, 体),
+          });
+        }
         try {
           const 当前 = 工单库.find(根, id);
           if (!当前) return 发JSON(res, 404, { ok: false, error: `工单不存在：${id}` });
-          const r = 工单库.move(根, id, 当前.state, String(体.到));
+          const r = 工单库.move(根, id, 当前.state, String(到));
           return 发JSON(res, r.ok ? 200 : 409, r.ok ? { ok: true, ...r } : { ok: false, error: r.error });
         } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
       });

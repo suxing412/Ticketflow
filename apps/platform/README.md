@@ -166,8 +166,40 @@ $T = Get-Content config\api-token.txt
 Invoke-RestMethod http://127.0.0.1:4370/api/providers -Headers @{ Authorization = "Bearer $T" }
 ```
 
-请求体里的中文键同理有 ASCII 别名：`{"dry_run": false}` 等价于 `{"干跑": false}`
-（PS 5.1 传中文键要先 `[Encoding]::UTF8.GetBytes` 绕一圈）。
+### 请求体里的中文键：命令行内联传不过去
+
+**这不是 PowerShell 独有的坑**。下面这条在 git bash 里同样不通——服务端收到空体或解不开的
+乱码，回一句「需要 JSON 体」：
+
+```bash
+curl -X POST .../api/tickets/T-1/move -d '{"到":"待投"}'      # ✗ 传不过去
+```
+
+两条出路，任选：
+
+```bash
+# ① 体写进文件再发（哪个 shell 都通，中文键原样保留）
+printf '{"到":"待投"}' > /tmp/move.json
+curl -X POST .../api/tickets/T-1/move -H 'Content-Type: application/json' --data-binary @/tmp/move.json
+
+# ② 用 ASCII 别名（不碰中文，内联就行）
+curl -X POST .../api/tickets/T-1/move -H 'Content-Type: application/json' -d '{"to":"待投"}'
+```
+
+（值里的中文没问题——坏的是**键**。②里的 `待投` 照样是中文，照样通。）
+
+已有的 ASCII 别名：
+
+| 接口 | 中文键 | ASCII 别名 |
+|---|---|---|
+| `POST /api/tickets/:id/move` | `到` | `to` |
+| `POST /run/:id`（执行器） | `干跑` | `dry_run` |
+| `POST /qa/:id`（执行器） | `干跑` | `dry_run` |
+
+别名给的是键，不是新语义：两个键都在时以中文键为准。别的接口暂无别名，用 `--data-binary @文件`。
+
+体解不开时回执会明说收到了多少字节、前 120 字符长什么样——「需要 JSON 体」看起来像
+「你忘了带体」，而实际常常是带了、被 shell 弄坏了，两者的处置完全不同。
 
 `/api/health` 免令牌——瞭望塔守护要探它，而守护住在 `packages/`（双签共建），
 没法单方面让它带令牌。免令牌名单只此一条，契约测试钉死了。

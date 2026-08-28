@@ -230,6 +230,37 @@ t('CLI 自报的收尾事件要被读出来（「退出码 1」把三件事说�
   assert.match(提.收尾说因(收), /回合数上限/, '截断、崩溃、限流三者处置南辕北辙，不能都叫「退出码 1」');
 });
 
+// 认证失败长得跟「回合数用光」一模一样：都是 is_error + stop_sequence + 有 num_turns。
+// 只看后两个就会教人去调大回合上限——而回合上限调到 800 也还是四秒挂掉。
+t('API 错的三个字段优先级高于回合数（认证失败不许说成「回合数上限」）', () => {
+  const 收 = 提.抽收尾(收尾行({
+    is_error: true, stop_reason: 'stop_sequence', num_turns: 1, duration_api_ms: 4000,
+    is_api_error_message: true, error: 'authentication_failed', terminal_reason: 'api_error',
+  }), 'claude-stream-json');
+  assert.equal(收.是api错, true);
+  assert.equal(收.错名, 'authentication_failed');
+  assert.equal(收.终因, 'api_error');
+  const 因 = 提.收尾说因(收);
+  assert.match(因, /认证失败/);
+  assert.doesNotMatch(因, /回合数上限|拆小/, '照这话去做，回合上限调到 800 也还是四秒挂掉');
+});
+
+t('限流与其它 API 错各归各的，别都塞进「活干砸了」', () => {
+  const 说 = (o) => 提.收尾说因(提.抽收尾(收尾行({ is_error: true, stop_reason: 'stop_sequence', num_turns: 1, ...o }), 'claude-stream-json'));
+  assert.match(说({ terminal_reason: 'api_error', api_error_status: 429 }), /限流|额度/);
+  // error 有时是 {type,message} 不是字符串——两种形状都要认出来。
+  assert.match(说({ terminal_reason: 'api_error', error: { type: 'overloaded_error', message: 'x' } }), /限流|额度/);
+  assert.match(说({ terminal_reason: 'api_error', error: 'invalid_request_error' }), /API 出错收场/);
+});
+
+t('num_turns=1 不叫「回合数用光」——它连第二轮都没开始', () => {
+  const 因 = 提.收尾说因(提.抽收尾(收尾行({
+    is_error: true, stop_reason: 'stop_sequence', num_turns: 1, duration_api_ms: 4000,
+  }), 'claude-stream-json'));
+  assert.doesNotMatch(因, /回合数上限/, '开头就死了，硬套上限会把人送到错误的方向上去');
+  assert.match(因, /1 轮/);
+});
+
 t('翻不出来就不猜——猜错原因比不说原因更坏', () => {
   assert.equal(提.抽收尾('随便什么东西', 'claude-stream-json'), null);
   assert.equal(提.抽收尾(收尾行({ is_error: true }), 'codex-jsonl'), null, '只认已知形状，不替别的厂商猜');
