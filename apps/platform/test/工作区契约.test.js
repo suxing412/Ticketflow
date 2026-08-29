@@ -405,4 +405,50 @@ t('带「待集成」的工单，工作区不许被当陈账收掉', () => {
   } finally { 清(仓, wt); }
 });
 
+// ——— 沙箱写权预授（协-036）———
+//
+// 案源：2026-08-28 HW-2 真跑质检。判官已经是 workspace-write 了，仍然
+//   EPERM: operation not permitted, mkdir '…\审阅-HW-2\tooling\node_modules\.vite-temp'
+// 探针复现出来的机制是：codex 在 Windows 上靠 ACL 实现 workspace-write，
+// **一棵此前没授过权的大目录树第一次进沙箱时授权落不上**（连 workdir 根都写不了），
+// 第二次跑同一个目录就好了。审阅区每次都是新建的，所以判官每次都是「第一次」。
+t('默认要预授一个沙箱组——不配置也得有，缺配置不能等于不授', () => {
+  assert.equal(工作区.configOf({}).沙箱写权组, 'CodexSandboxUsers');
+  assert.ok(工作区.configOf({}).沙箱写权超时毫秒 > 0);
+});
+
+t('空组名 = 显式关掉（换了别家沙箱的机器不该被强按一次 icacls）', () => {
+  assert.equal(工作区.configOf({ 工作区: { 沙箱写权组: '' } }).沙箱写权组, '');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-acl-off-'));
+  try { assert.equal(工作区.预授沙箱写权(d, '', 5000), null); } finally { 清(d); }
+});
+
+t('授不上要把因由带回来，不许抛——授权失败不该拦着判官静态核对', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-acl-'));
+  try {
+    // 这台机器上没有这个组（也不该有）。最常见的真实形态就是这个：
+    // 没装过 codex、或换了别家沙箱，那时不该报成故障，只该把话留下。
+    const r = 工作区.预授沙箱写权(d, 'NoSuchSandboxGroup-协036', 30000);
+    if (process.platform !== 'win32') {
+      assert.equal(r, null, 'ACL 是 Windows 的事，别的平台不该动手');
+      return;
+    }
+    assert.equal(r.ok, false);
+    assert.ok(r.因 && r.因.length, '「授不上」三个字没用，人要知道是哪一步、为什么');
+  } finally { 清(d); }
+});
+
+if (process.platform === 'win32') {
+  t('授得上时，返回里要留下耗时——这笔账从判官的真跑挪到了平台这一侧', () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-acl-ok-'));
+    try {
+      // BUILTIN\Users（S-1-5-32-545）本机一定存在，且它本来就有读权——
+      // 拿它验的是「这条 icacls 走得通」，不是去放宽谁的权限。
+      const r = 工作区.预授沙箱写权(d, '*S-1-5-32-545', 60000);
+      assert.equal(r.ok, true, r && r.因);
+      assert.ok(typeof r.耗时毫秒 === 'number');
+    } finally { 清(d); }
+  });
+}
+
 console.log(`全部通过：${passed} 项`);

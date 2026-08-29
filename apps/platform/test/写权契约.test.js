@@ -474,4 +474,66 @@ t('自检要在开跑之前就看出 codex 沙箱坏了（零成本，不必先�
   }
 });
 
+// ——— 「写不了」不许再被说成「缺依赖」（协-036）———
+//
+// 2026-08-28 HW-2 真跑：判官说「验不了」，平台给的话术是「多半是工单要声明 需要依赖」。
+// 而实际病因是审阅区里写不动——包一个不缺。补依赖补一百遍也没用，
+// 这句猜测唯一的作用是把人送去查错方向，再烧一轮真跑撞同一堵墙。
+const 输出提取 = require('../lib/输出提取');
+
+const 区 = 'D:\\Ticketflow\\apps\\platform\\workspaces\\project-f359de02\\审阅-HW-2';
+// HW-2 那条的形状：命令跑起来了（有 command_execution），是跑到一半写不动。
+const 写不动行 = JSON.stringify({
+  type: 'item.completed',
+  item: {
+    type: 'command_execution',
+    status: 'failed',
+    exit_code: 1,
+    command: "powershell.exe -NoProfile -Command 'npm.cmd --prefix tooling run unit'",
+    aggregated_output: "failed to load config\nError: EPERM: operation not permitted, mkdir "
+      + `'${区}\\tooling\\node_modules\\.vite-temp'\n    at async Object.mkdir`,
+  },
+});
+
+t('HW-2 那条：EPERM 认得出来，现场路径也要留下', () => {
+  const r = 输出提取.抽写权阻断(写不动行, 区);
+  assert.ok(r, '这正是被说成「缺依赖」的那一条');
+  assert.equal(r.次数, 1);
+  assert.equal(r.区内, 1, '落在审阅区里 —— 这是「不是被评审方的问题」的判据');
+  assert.match(r.例[0].路径, /\.vite-temp$/);
+  assert.match(r.例[0].命令, /run unit/, '要说得出是哪条命令撞的墙');
+});
+
+t('判词里引用一句 EPERM 不算数——判据只看流水，不看它说了什么', () => {
+  const 引用 = JSON.stringify({
+    type: 'item.completed',
+    item: { type: 'agent_message', text: `我看到 EPERM: operation not permitted, mkdir '${区}\\x'` },
+  });
+  assert.equal(输出提取.抽写权阻断(引用, 区), null, '谁提到这个错谁就算故障，那是把话当证据');
+});
+
+t('光出现 EPERM 三个字母、没有权限动作的行不算', () => {
+  const 行 = JSON.stringify({
+    type: 'item.completed',
+    item: { type: 'command_execution', status: 'completed', command: 'rg EPERM', aggregated_output: 'EPERM 在 3 个文件里出现过' },
+  });
+  assert.equal(输出提取.抽写权阻断(行, 区), null);
+});
+
+t('说因必须把人指向权限，且**明说补依赖没用**', () => {
+  const 说 = 输出提取.写权阻断说因(输出提取.抽写权阻断(写不动行, 区));
+  assert.match(说, /写不了，不是缺依赖/);
+  assert.match(说, /需要依赖.*(毫无作用|没用)/, '不点破这句，人还是会去补依赖');
+  assert.match(说, /沙箱写权|判官模式/, '要给出下一步该看哪里，不能只下判词');
+});
+
+t('没有写权阻断时不许无中生有', () => {
+  const 好 = JSON.stringify({
+    type: 'item.completed',
+    item: { type: 'command_execution', status: 'completed', command: 'npm test', aggregated_output: '175 passed' },
+  });
+  assert.equal(输出提取.抽写权阻断(好, 区), null);
+  assert.equal(输出提取.写权阻断说因(null), null);
+});
+
 console.log('全部通过：' + passed + ' 项');

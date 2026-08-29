@@ -91,6 +91,50 @@ function 装依赖(工作路径, 工单, 超时毫秒) {
   return 记;
 }
 
+// ——— 沙箱写权预授（协-036）———
+//
+// 案源：2026-08-28 HW-2 真跑质检。判官（codex，--sandbox workspace-write）在审阅区里
+// 跑 `npm --prefix tooling run unit`，**在 Vitest 启动之前**就挂了：
+//   EPERM: operation not permitted, mkdir '…\审阅-HW-2\tooling\node_modules\.vite-temp'
+// 协-034 明明已经把判官从 read-only 放到了 workspace-write，写还是写不了。
+//
+// 2026-08-28 实测复现（四轮探针，见本次会话）：codex 在 Windows 上是靠 **ACL** 实现
+// workspace-write 的——它把工作目录授权给本机的 `CodexSandboxUsers` 组，agent 以该组
+// 的沙箱用户身份跑。而这次授权对**首次遇到的大目录树不生效**：
+//   · 小目录（手搓的空 node_modules）：授权落上，写得动；
+//   · 同一棵树、事先没授过权、带 135MB / 7000+ 文件的 node_modules：
+//     **workdir 根目录本身都写不了**（连 mkdir probe-root-dir 都 EPERM），
+//     事后看 ACL 只有继承来的 RX，没有 M——授权根本没落上；
+//   · 同一个目录第二次跑 codex：立刻可写。
+// 也就是「第一次进这棵树的沙箱写不了，第二次就好了」。而审阅区**每次都是新建的**
+// （上一轮 --force 摘掉重开 + npm ci 重装），所以判官**每次都是第一次**——
+// 命令型验收因此长期是掷骰子：HW-4 的 dist、HW-2 的 .vite-temp 都是同一个病。
+// 执行方撞不上，是因为它跑在 `--dangerously-bypass-approvals-and-sandbox` 下，根本没有沙箱。
+//
+// 所以在**判官进区之前**把这一步替它做掉：给审阅区整棵树授一次 M。
+//   · 这不是放宽边界。授的对象是 codex 自己的沙箱组，范围就是这个一次性 detached
+//     worktree——跟协-034 画的「只在审阅区内可写」是同一条线，只是由平台确保它真的生效；
+//   · 成本落在平台这一侧：实测 7171 个文件 3.6 秒。以前这笔账是判官用一整轮
+//     真跑（分钟级 + token）来付的，还未必付得出结果；
+//   · **不拦着判**：授不上就把因由带回去（跟装依赖失败同一档），判官照样能静态核对。
+// 验收：同一棵没授过权的大树，预授之后首条命令即可写（三个 mkdir 全 OK）。
+function 预授沙箱写权(目录, 组, 超时毫秒) {
+  if (process.platform !== 'win32' || !组) return null;   // ACL 是 Windows 的事；空组名=显式关掉
+  const 起 = Date.now();
+  // /T 整棵树、/C 单个文件失败不中断（node_modules 里偶有占用中的文件）、/Q 不逐个刷成功行。
+  const r = spawnSync('icacls', [目录, '/grant', `${组}:(OI)(CI)(M)`, '/T', '/C', '/Q'], {
+    encoding: 'utf8', windowsHide: true, timeout: 超时毫秒, maxBuffer: 4 * 1024 * 1024,
+  });
+  const 耗时毫秒 = Date.now() - 起;
+  if (r.error || r.status !== 0) {
+    // 最常见的一种：这台机器上没有这个组（没装过 codex，或换了别家沙箱）。
+    // 那就不该有任何动作，也不该报成故障——只把话留下。
+    const 尾 = String(r.stderr || r.stdout || (r.error && r.error.message) || '').trim().split(/\r?\n/).slice(-2).join(' ');
+    return { ok: false, 组, 耗时毫秒, 因: 尾 || `icacls 退出码 ${r.status}` };
+  }
+  return { ok: true, 组, 耗时毫秒 };
+}
+
 // 还有哪些包没装上（协-035）——`需要依赖` 是**手写**的，写漏了不会有任何提前告警。
 //
 // 案源：2026-08-26 HW-4。协-034 刚让判官跑得动命令，第一次真判就又是「验不了」，
@@ -150,6 +194,11 @@ function configOf(cfg) {
     // 装依赖的超时。monorepo 冷装几分钟是常态，给足；超了会带着 npm 的尾巴抛出来。
     装依赖超时毫秒: Number(value.装依赖超时毫秒 || value.installTimeoutMs) > 0
       ? Number(value.装依赖超时毫秒 || value.installTimeoutMs) : 15 * 60 * 1000,
+    // 沙箱写权预授（协-036）。空串关掉；改组名是为了别家沙箱，不是为了放宽。
+    沙箱写权组: value.沙箱写权组 === undefined && value.sandboxWriteGroup === undefined
+      ? 'CodexSandboxUsers' : String(value.沙箱写权组 || value.sandboxWriteGroup || '').trim(),
+    沙箱写权超时毫秒: Number(value.沙箱写权超时毫秒 || value.sandboxGrantTimeoutMs) > 0
+      ? Number(value.沙箱写权超时毫秒 || value.sandboxGrantTimeoutMs) : 3 * 60 * 1000,
   };
 }
 
@@ -618,6 +667,10 @@ function 审阅区(monitorRoot, cfg, project, 单号, commit, 工单) {
     const 装 = 装依赖(path.resolve(target), 工单, wc.装依赖超时毫秒);
     if (装) 出.依赖 = 装;
   } catch (e) { 出.依赖失败 = String(e.message).split(/\r?\n/)[0]; }
+  // 授权必须排在装依赖**之后**：要授的正是 npm 刚铺出来的那几万个文件
+  // （EPERM 就是在 node_modules 里出的），先授后装等于白授（协-036）。
+  const 授 = 预授沙箱写权(path.resolve(target), wc.沙箱写权组, wc.沙箱写权超时毫秒);
+  if (授) 出.沙箱写权 = 授;
   // 判官这一侧是这条诊断最该出现的地方（协-035）：审阅区漏装一个包，
   // 判官就只能给「验不了」，而人拿到的原话是「多半是工单要声明 需要依赖」——
   // **该声明哪个** 全靠猜。扫一遍就不用猜了。
@@ -726,7 +779,7 @@ function 遗留工作区(monitorRoot, cfg, project, 工单表) {
 }
 
 module.exports = {
-  装依赖, 依赖目录表, 缺依赖目录,
+  装依赖, 依赖目录表, 缺依赖目录, 预授沙箱写权,
   收工, 遗留工作区, 审阅区,
   configOf, isGitRepo, repoTop, workspaceRoot, worktreeList,
   prepare, integrate, checkpoint, dependencyTickets, publish, changedFiles, 变更分类, enforceWriteScope,
