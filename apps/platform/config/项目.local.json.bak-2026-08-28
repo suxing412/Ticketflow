@@ -1,0 +1,14 @@
+{
+  "_说明": [
+    "项目注册表（不入库，路径机器相关）。"
+  ],
+  "注册": {
+    "靶仓": {
+      "路径": "C:/Users/Sanxing/AppData/Local/Temp/claude/D--Ticketflow/124eada0-e8c8-4e0c-92eb-0ff51256c42d/scratchpad/靶仓"
+    },
+    "海投王": {
+      "路径": "D:\\Github\\海投王"
+    }
+  },
+  "默认": "靶仓"
+}
