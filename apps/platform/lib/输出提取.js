@@ -254,4 +254,62 @@ function 进程故障说因(故障) {
     + '或把这个角色暂时派给别家。**改沙箱档位没用**——失败在进程创建，不在写权限。';
 }
 
-module.exports = { 抽正文, 抽claude, 抽codex, 逐行JSON, 抽收尾, 收尾说因, 错名于, 抽进程故障, 进程故障说因 };
+// ——— 写不了（2026-08-28 HW-2 实测）———
+//
+// 判官报「验不了」时，平台此前只会给一句猜测：「多半是工单要声明 需要依赖」。
+// 这次的实际病因是**审阅区里写不了**：
+//   EPERM: operation not permitted, mkdir '…\审阅-HW-2\tooling\node_modules\.vite-temp'
+// 补依赖补一百遍也没用——包全在，是权限。把人送去查 需要依赖 是把他送反方向，
+// 而这条错自己已经把病因和现场路径都写在脸上了，只是没人读。
+//
+// 跟「起不来」（协-035，进程创建阶段失败）分开：那条是一条命令都跑不起来，
+// 这条是命令跑起来了、跑到一半写不动。两者的处置不同，不能混成一句「环境阻断」。
+const 写权码 = /\b(EPERM|EACCES)\b[^\n]{0,200}/g;
+const 写权动作 = /operation not permitted|permission denied|拒绝访问|Access is denied/i;
+
+function 抽写权阻断(输出, 区路径) {
+  const 例 = []; const 见过 = new Set();
+  const 区 = String(区路径 || '').replace(/\\/g, '/').toLowerCase();
+  for (const 行 of String(输出 || '').split(/\r?\n/)) {
+    const s = 行.trim();
+    if (!s || s[0] !== '{') continue;
+    let e = null;
+    try { e = JSON.parse(s); } catch { continue; }
+    const it = e && e.item;
+    if (!it || it.type !== 'command_execution' || e.type !== 'item.completed') continue;
+    const 出 = String(it.aggregated_output || '');
+    for (const m of 出.match(写权码) || []) {
+      if (!写权动作.test(m)) continue;                  // 光出现 EPERM 三个字母不算（判词里常引用）
+      const 路径 = (m.match(/'([^']{3,300})'/) || [])[1] || null;
+      const 键 = (路径 || m).slice(0, 300);
+      if (见过.has(键)) continue;
+      见过.add(键);
+      例.push({
+        命令: String(it.command || '').replace(/\s+/g, ' ').trim().slice(0, 160),
+        路径,
+        说: m.trim().slice(0, 200),
+        区内: !!(区 && 路径 && 路径.replace(/\\/g, '/').toLowerCase().startsWith(区)),
+      });
+    }
+  }
+  if (!例.length) return null;
+  return { 次数: 例.length, 区内: 例.filter((e) => e.区内).length, 例: 例.slice(0, 3) };
+}
+
+function 写权阻断说因(阻断) {
+  if (!阻断) return null;
+  const 例 = 阻断.例.map((e) => `  - ${e.路径 || e.说}${e.命令 ? `\n    （${e.命令}）` : ''}`).join('\n');
+  return `**写不了，不是缺依赖**：这一趟有 ${阻断.次数} 处命令因为权限被拒（EPERM/EACCES），`
+    + `其中 ${阻断.区内} 处就落在审阅区里：\n${例}\n`
+    + '包是齐的——补 需要依赖 对这条毫无作用。要查的是审阅区的写权：\n'
+    + '  · Windows 上 codex 的 workspace-write 是靠 ACL 实现的，'
+    + '**新建的大目录树第一次进沙箱时授权可能没落上**（协-036 已在建审阅区时预授一次，'
+    + '看回执里的 `沙箱写权`：ok:false 就是没授上）；\n'
+    + '  · 也可能是判官这次压根没拿到「区内可写」（看回执里的 判官模式，'
+    + '「只读」时 tsc 写不了 dist、vitest 写不了 .vite-temp，命令型验收必然验不了）。';
+}
+
+module.exports = {
+  抽正文, 抽claude, 抽codex, 逐行JSON, 抽收尾, 收尾说因, 错名于,
+  抽进程故障, 进程故障说因, 抽写权阻断, 写权阻断说因,
+};
