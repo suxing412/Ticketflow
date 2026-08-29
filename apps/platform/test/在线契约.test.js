@@ -418,6 +418,110 @@ T('改过端口时，开机横幅不许还报默认口', async () => {
   } finally { try { 子.kill(); } catch { /* 已经没了 */ } }
 });
 
+// ---------- 同机两份 platform：认得出人，且不留空壳（协-038） ----------
+//
+// 实录：一份用仓内 config/，另一份用 PLATFORM_CONFIG 指到 output/ 下的 QA 目录，
+// 后者先起占住 4370，前者反复 EADDRINUSE、5 分钟连崩 5 次熔断，整台起不来。
+// 而 /api/health 一直答 `ok: true`——因为答话的是**另一份**。取证靠 netstat + 读进程命令行。
+
+T('/api/health 自报身份：pid / 启动时间 / 配置目录及其来源', async () => {
+  const 配置目录 = fs.mkdtempSync(path.join(os.tmpdir(), '身份-'));
+  const 子 = spawn(process.execPath, [path.join(平台根, 'server.js')], {
+    env: { ...process.env, PORT: '4898', PLATFORM_CONFIG: 配置目录 },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  try {
+    assert.ok(await 等就绪(4898), 'server 没在 4898 起来');
+    const [码, 体] = await 打(4898, '/api/health');
+    assert.equal(码, 200);
+    assert.ok(体.pid > 0, '没有 pid 就还得去 netstat 反查');
+    assert.match(String(体.启动于), /^\d{4}-\d\d-\d\dT/, '要能看出这份是什么时候起来的');
+    assert.equal(path.resolve(体.配置目录), path.resolve(配置目录),
+      '健康检查报的配置目录必须是它真在用的那个——这是分辨「端口上是哪一份」的唯一凭据：' + 体.配置目录);
+    assert.equal(体.配置来源, 'PLATFORM_CONFIG', '来源要说清是环境变量指的还是仓内默认');
+  } finally {
+    try { if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(子.pid), '/T', '/F'], { stdio: 'ignore' }); else 子.kill('SIGKILL'); } catch { /* 已经没了 */ }
+    fs.rmSync(配置目录, { recursive: true, force: true });
+  }
+});
+
+T('撞端口时说清对方是谁（pid + 配置目录），而不是泛泛猜「多半没关干净」', async () => {
+  const 甲 = spawn(process.execPath, [path.join(平台根, 'server.js')], {
+    env: { ...process.env, PORT: '4899' }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const 配置目录 = fs.mkdtempSync(path.join(os.tmpdir(), '撞口-'));
+  let 乙 = null;
+  try {
+    assert.ok(await 等就绪(4899), '第一份没在 4899 起来');
+    const [, 甲体] = await 打(4899, '/api/health');
+    乙 = spawn(process.execPath, [path.join(平台根, 'server.js')], {
+      env: { ...process.env, PORT: '4899', PLATFORM_CONFIG: 配置目录 }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let 出 = '';
+    乙.stdout.on('data', (d) => { 出 += String(d); });
+    乙.stderr.on('data', (d) => { 出 += String(d); });
+    let 退 = null;
+    乙.on('exit', (c) => { 退 = c == null ? 0 : c; });
+    for (let i = 0; i < 100 && 退 === null; i++) await 等(100);
+    assert.notEqual(退, null, '端口被占时不该吊着不动，该说明白然后退出');
+    // 保留 EADDRINUSE 字样：scripts/开机.js 靠正则认它判端口冲突（退出码在 Windows 上分不出来）
+    assert.match(出, /EADDRINUSE/, '监工靠这几个字判端口冲突，删了它守护就认不出来了');
+    assert.ok(出.includes(String(甲体.pid)), '要报出占着端口那位的 pid，省掉一趟 netstat：' + 出);
+    assert.ok(出.includes(甲体.配置目录), '要报出对方的配置目录——那才是「这是哪一份」的答案：' + 出);
+    assert.match(出, /PLATFORM_CONFIG 只换配置目录、不换端口/, '必须拆掉「换配置目录就能并行跑一份」这个错觉');
+  } finally {
+    for (const c of [甲, 乙]) {
+      if (!c) continue;
+      try { if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(c.pid), '/T', '/F'], { stdio: 'ignore' }); else c.kill('SIGKILL'); } catch { /* 已经没了 */ }
+    }
+    fs.rmSync(配置目录, { recursive: true, force: true });
+  }
+});
+
+T('监工先没了：三个进程跟着收工，不留空壳占端口', async () => {
+  // 原先「共存亡」只是单向的（监工发现子进程死了就全停）。实测那次是反过来——
+  // 监工没了、server 独活，配置目录都被删了它还占着端口，挡住下一份起不来，
+  // 最后靠人 Stop-Process 才腾出来。
+  const 账本 = 临根();
+  // 隔一层：直接 spawn 的话监工的父进程就是测试进程，没法只杀监工而不动它的子进程。
+  const 中间件 = path.join(账本, '起监工.js');
+  fs.writeFileSync(中间件, [
+    "const { spawn } = require('child_process');",
+    'const c = spawn(process.execPath, [' + JSON.stringify(path.join(平台根, 'scripts', '开机.js')) + '], {',
+    "  env: { ...process.env, PORT: '4885', WORKSPACE_PORT: '4886', EXECUTOR_PORT: '4887',",
+    '    PLATFORM_JOURNAL: ' + JSON.stringify(账本) + ", PLATFORM_NO_QUOTA_FETCH: '1' },",
+    "  stdio: ['ignore', 'ignore', 'ignore', 'ipc'],",
+    '});',
+    'console.log(c.pid);',
+  ].join('\n'), 'utf8');
+  const 壳 = spawn(process.execPath, [中间件], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let 监工pid = '';
+  壳.stdout.on('data', (d) => { 监工pid += String(d); });
+  try {
+    assert.ok(await 等就绪(4885, 80), 'server 没在 4885 起来');
+    for (let i = 0; i < 40 && !监工pid.trim(); i++) await 等(50);
+    const pid = Number(监工pid.trim());
+    assert.ok(pid > 0, '拿不到监工 pid，这一格就没法只杀监工');
+
+    // 只杀监工，**不带 /T**：三个子进程成了孤儿，全靠 IPC 断开自己发现。
+    if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore' });
+    else process.kill(pid, 'SIGKILL');
+
+    for (const 口 of [4885, 4886, 4887]) {
+      let 走了 = false;
+      for (let i = 0; i < 60 && !走了; i++) {
+        const [码] = await 打(口, 口 === 4885 ? '/api/health' : '/health');
+        走了 = 码 === 0;
+        if (!走了) await 等(250);
+      }
+      assert.ok(走了, `监工没了之后 ${口} 还在应答——空壳占着端口，下一份就起不来`);
+    }
+  } finally {
+    try { 壳.kill(); } catch { /* 已经没了 */ }
+    for (const 口 of [4885, 4886, 4887]) { /* 上面已经断言它们都走了 */ void 口; }
+  }
+});
+
 // ---------- 跑异步那批 ----------
 (async () => {
   for (const [名, fn] of 异步项) { await fn(); passed++; console.log('  ✓ ' + 名); }

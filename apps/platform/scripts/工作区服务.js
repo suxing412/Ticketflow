@@ -38,6 +38,7 @@ const 现读注册表 = () => {
   const c = 本地覆盖.应用(平台根, 读JSON(path.join(平台根, 'config', 'platform.config.json'), {})).配置;
   return (c.项目 && c.项目.注册) || {};
 };
+const 实例身份 = require(path.join(平台根, 'lib', '实例身份.js'));
 const 端口 = Number(process.env.WORKSPACE_PORT || (配置.workspace && 配置.workspace.port) || 4371);
 const 允许写 = (配置.workspace && 配置.workspace.允许写) === true;
 const { 令牌 } = 门禁.取令牌(平台根);
@@ -87,7 +88,10 @@ const 服务 = http.createServer((req, res) => {
   if (拒) return 发JSON(res, 拒.码, { ok: false, error: 拒.错误 });
 
   if (路径 === '/health') {
-    return 发JSON(res, 200, { ok: true, 服务: '工作区', 端口, 仓根, 允许写, 说明: '本进程是唯一被允许起 git 进程的地方' });
+    return 发JSON(res, 200, {
+      ok: true, 服务: '工作区', 端口, 仓根, 允许写, 说明: '本进程是唯一被允许起 git 进程的地方',
+      ...实例身份.身份(平台根, '工作区'),   // 自报身份（协-038）：同机两份时靠它认人
+    });
   }
 
   // ——— 只读几条 ———
@@ -281,8 +285,12 @@ const 服务 = http.createServer((req, res) => {
   return 发JSON(res, 404, { ok: false, error: '未知路径：' + 路径 });
 });
 
+实例身份.装端口冲突(服务, { 名: '工作区服务', 端口 });   // 撞端口时说清对方是谁（协-038）
+
 服务.listen(端口, '127.0.0.1', () => {
   process.stdout.write(`[工作区服务] 上岗 → http://127.0.0.1:${端口}  仓根 ${仓根}\n`);
+  const 横幅 = 实例身份.横幅(平台根, { 工作区: 端口 });
+  if (横幅) process.stdout.write(`[工作区服务] ${横幅}\n`);
   process.stdout.write(`[工作区服务] ${本地覆盖.摘要(生效的覆盖)}
 `);
   process.stdout.write(`[工作区服务] 写操作：${允许写 ? '**已启用**（可建分支/提交/合并）' : '关闭（默认）'}\n`);
@@ -298,3 +306,4 @@ function 收工(因) {
 }
 for (const 信号 of ['SIGINT', 'SIGTERM']) process.on(信号, () => 收工(信号));
 process.on('message', (m) => { if (m && m.停机) 收工(`IPC:${m.停机}`); });
+实例身份.盯监工('工作区服务', 收工);   // 监工没了就别独活（协-038）
