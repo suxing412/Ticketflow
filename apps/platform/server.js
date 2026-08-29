@@ -698,6 +698,7 @@ const 服务 = http.createServer((req, res) => {
       允许真跑: 执.允许真跑 === true,
       允许写: !!(配置.workspace && 配置.workspace.允许写 === true),
       放开: Array.isArray(执.权限 && 执.权限.放开) ? 执.权限.放开 : [],
+      并发: (执.并发 && typeof 执.并发 === 'object' && !Array.isArray(执.并发)) ? 执.并发 : { 默认: 1 },
       预算: (配置.预算 && 配置.预算.池) || {},
       计费: 配置.计费 || {},
       池表,

@@ -424,6 +424,12 @@ td .空卡 p { margin:0; }
 /* 表头永不折行：折了就分不清是一列还是两列 */
 th { white-space:nowrap; }
 
+/* Provider 并发上限：紧凑步进器。只给加减按钮，避免一列里再塞一套表单。 */
+.并发步 { display:inline-flex; align-items:center; gap:7px; white-space:nowrap; }
+.并发步 .btn { min-width:28px; height:28px; padding:0 7px; justify-content:center; }
+.并发步 strong { min-width:2ch; text-align:center; font-family:var(--mono); font-variant-numeric:tabular-nums; }
+.并发步 .btn:disabled { opacity:.38; cursor:not-allowed; }
+
 @media (max-width: 860px) {
   body { padding:0 18px 60px; }
   .topbar { flex-wrap:wrap; gap:10px; }

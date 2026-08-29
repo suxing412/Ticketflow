@@ -428,10 +428,11 @@ t('null 要一路带到磁盘才生效——中途任何一次合并都不能消
 
     // 同一个文件的多条补丁要合成**一次**写，否则后写的拿到的是前一次写之前的快照。
     // 放开 与 允许真跑 都落 执行.local.json，这不是假设性的。
-    设置落盘.应用设置(根, { 允许真跑: true, 放开: ['backend', 'frontend'] });
+    设置落盘.应用设置(根, { 允许真跑: true, 放开: ['backend', 'frontend'], 并发: { claude: 3, codex: 1 } });
     const 执 = 读('执行.local.json');
     assert.equal(执.允许真跑, true, '两条补丁互相覆盖了');
     assert.deepEqual(执.权限.放开, ['backend', 'frontend']);
+    assert.deepEqual(执.并发, { claude: 3, codex: 1 }, '每个 Provider 的并发上限要落在 执行.并发');
   } finally {
     if (原 === undefined) delete process.env.PLATFORM_CONFIG; else process.env.PLATFORM_CONFIG = 原;
     fs.rmSync(根, { recursive: true, force: true });
@@ -447,6 +448,8 @@ t('坏值一律拒，不许悄悄当成 true（协-037）', () => {
   assert.match(设置落盘.应用设置(平台根, { 计费: { claude: { 模式: '白嫖' } } }).错误, /订阅\/api\/本地/);
   assert.match(设置落盘.应用设置(平台根, { 预算: { claude: { 日token: -1 } } }).错误, /正数/);
   assert.match(设置落盘.应用设置(平台根, { 放开: ['../../etc'] }).错误, /非法角色名/);
+  assert.match(设置落盘.应用设置(平台根, { 并发: { claude: 0 } }).错误, /正整数/);
+  assert.match(设置落盘.应用设置(平台根, { 并发: { claude: 1.5 } }).错误, /正整数/);
   assert.equal(设置落盘.应用设置(平台根, {}).ok, false, '空请求不该算成功');
 });
 
@@ -574,11 +577,12 @@ t('交付皮三件套齐全：部署入口、首装脚本、安装指南（协-0
       // 而测试绝不该有这种副作用。写的那半在上面用临时目录单测过了。
       const { 码, 体 } = await 取(port, '/api/setup/switches');
       assert.equal(码, 200);
-      for (const k of ['允许真跑', '允许写', '放开', '预算', '计费', '池表']) {
+      for (const k of ['允许真跑', '允许写', '放开', '并发', '预算', '计费', '池表']) {
         assert.ok(k in 体, `回执缺 ${k}——界面画不出当前状态`);
       }
       assert.equal(typeof 体.允许真跑, 'boolean', '开关要是布尔，界面靠它决定亮不亮');
       assert.ok(Array.isArray(体.放开) && Array.isArray(体.池表));
+      assert.equal(体.并发.默认, 1, '没单配的 Provider 默认并发上限应为 1');
       // 这个夹具带 PLATFORM_NO_LOCAL=1，读到的必然是**入库默认**——
       // 而入库默认必须是最严的那一档。这条顺带守住「缺配置即最严」。
       assert.equal(体.允许真跑, false, '入库默认不该是能花钱的');

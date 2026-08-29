@@ -889,13 +889,31 @@ async function 刷战绩() {
 // ── Providers ──
 async function 刷providers() {
   try {
-    const { 体: j } = await 取JSON('/api/providers');
-    if (!j.ok) { $('表体').innerHTML = '<tr><td colspan="5" class="级急">' + 转义(j.error) + '</td></tr>'; return; }
+    const [{ 体: j }, { 体: 设置 }] = await Promise.all([
+      取JSON('/api/providers'), 取JSON('/api/setup/switches'),
+    ]);
+    if (!j.ok) { $('表体').innerHTML = '<tr><td colspan="6" class="级急">' + 转义(j.error) + '</td></tr>'; return; }
+    const 并发 = 设置 && 设置.ok && 设置.并发 && typeof 设置.并发 === 'object' ? 设置.并发 : { 默认: 1 };
     $('表体').innerHTML = j.providers.map((p) =>
-      '<tr><td><code>' + 转义(p.名称) + '</code></td><td>' + 转义(p.adapter || '') + '</td><td>' + (p.启用 ? '✔' : '✘')
-      + '</td><td class="淡">' + 转义(p.说明 || '') + '</td><td><button class="btn" onclick="回声测(\'' + 转义(p.名称) + '\')">echo 桩测</button></td></tr>'
+      (() => {
+        const 原 = 并发[p.名称] !== undefined ? 并发[p.名称] : 并发.默认;
+        const 上限 = Number.isFinite(Number(原)) && Number(原) > 0 ? Math.floor(Number(原)) : 1;
+        const 名参 = JSON.stringify(p.名称).replace(/"/g, '&quot;');
+        return '<tr><td><code>' + 转义(p.名称) + '</code></td><td>' + 转义(p.adapter || '') + '</td><td>' + (p.启用 ? '✔' : '✘')
+          + '</td><td><span class="并发步"><button class="btn" aria-label="降低 ' + 转义(p.名称) + ' 并发上限" title="减 1" '
+          + (上限 <= 1 ? 'disabled ' : '') + 'onclick="调并发(' + 名参 + ',' + 上限 + ',-1)">−</button>'
+          + '<strong>' + 上限 + '</strong><button class="btn" aria-label="提高 ' + 转义(p.名称) + ' 并发上限" title="加 1" '
+          + 'onclick="调并发(' + 名参 + ',' + 上限 + ',1)">＋</button></span>'
+          + '</td><td class="淡">' + 转义(p.说明 || '') + '</td><td><button class="btn" onclick="回声测(' + 名参 + ')">echo 桩测</button></td></tr>';
+      })()
     ).join('');
-  } catch { $('表体').innerHTML = '<tr><td colspan="5" class="级急">providers 接口不可达</td></tr>'; }
+  } catch { $('表体').innerHTML = '<tr><td colspan="6" class="级急">providers 接口不可达</td></tr>'; }
+}
+
+async function 调并发(名, 当前, 增量) {
+  const 下一个 = Math.max(1, Math.floor(Number(当前) || 1) + Number(增量 || 0));
+  if (下一个 === 当前) { 吐('并发上限最小为 1'); return; }
+  if (await 存开关({ 并发: { [名]: 下一个 } }, 名 + ' 并发上限已设为 ' + 下一个)) await 刷providers();
 }
 
 async function 回声测(名) {
