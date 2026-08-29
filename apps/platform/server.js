@@ -87,6 +87,7 @@ const 播种结果 = require('./lib/配置位置').播种示例(仓根);
 // server 侧也要走同一套合并，否则它看到的配置与执行器不一致（比如工作区写开关），
 // 两个进程对同一份事实各执一词，是最难查的那类 bug。
 const 本地覆盖 = require('./lib/本地覆盖');
+const 实例身份 = require('./lib/实例身份');
 const { 配置, 生效的覆盖 } = 本地覆盖.应用(仓根, 读JSON(path.join(仓根, 'config', 'platform.config.json'), {}));
 const 包 = 读JSON(path.join(仓根, 'package.json'), {});
 const 端口 = Number(process.env.PORT || (配置.server && 配置.server.port) || 4370);
@@ -300,11 +301,16 @@ const 服务 = http.createServer((req, res) => {
   }
 
   if (url路径 === '/api/health') {
+    // 自报身份（协-038）：pid / 启动时间 / 配置目录及其来源。
+    // 少这几个字段时，同机跑两份 platform 的场景下这条接口是**假信号**——
+    // 它照样 `ok: true`，但答话的是另一份实例（用另一个 PLATFORM_CONFIG、
+    // 另一份令牌）。当时靠 netstat + 读进程命令行才认出来，花了十几分钟。
     return 发JSON(res, 200, {
       ok: true, 平台: 平台名, 版本, 端口,
       时刻: new Date().toISOString(),
       桩模式: true,
       公用件: 公用件.PACKAGES,
+      ...实例身份.身份(仓根, 'server'),
     });
   }
 
@@ -1137,8 +1143,16 @@ const 服务 = http.createServer((req, res) => {
   return 发静态(res, url路径);
 });
 
+// 撞端口时说清对方是谁（协-038）。没有这条，人拿到的只有一段裸 EADDRINUSE，
+// 而真因（同机另一份 platform 占着同一组端口）还差三步取证。
+实例身份.装端口冲突(服务, { 名: 平台名, 端口 });
+
 服务.listen(端口, '127.0.0.1', () => {
   process.stdout.write(`[${平台名}] v${版本} 开机 → http://127.0.0.1:${端口}  （桩模式，零真实 CLI 调用）\n`);
+  // 非默认配置目录必须说破（协-038）：PLATFORM_CONFIG 只换配置目录、**不换端口**，
+  // 它很容易被读成「换个配置目录就能并行跑一份」——实际上两份必抢同三个端口。
+  const 横幅 = 实例身份.横幅(仓根, { server: 端口, 工作区: 工作区端口, 执行器: 执行器端口 });
+  if (横幅) process.stdout.write(`[${平台名}] ${横幅}\n`);
   process.stdout.write(`[${平台名}] 门禁：${令牌新建 ? '已生成新令牌' : '沿用既有令牌'} → ${令牌路径}`
     + `（浏览器打开首页无需手工填；curl 需带 Authorization: Bearer <令牌>；`
     + `/api/health 免令牌，供瞭望塔心跳探测）\n`);
@@ -1179,3 +1193,6 @@ function 停机(信号) {
 for (const 信号 of ['SIGINT', 'SIGTERM']) process.on(信号, () => 停机(信号));
 // IPC：Windows 上信号是无条件终止，handler 收不到。监工收摊时走这条请我们自己收工。
 process.on('message', (m) => { if (m && m.停机) 停机(`IPC:${m.停机}`); });
+// 共存亡是**双向**的（协-038）：监工先没了、server 独活的那次，它占着 4370
+// 挡住下一份起不来，配置目录都被删了还在应答，最后靠人 Stop-Process 才腾出来。
+实例身份.盯监工(平台名, 停机);
