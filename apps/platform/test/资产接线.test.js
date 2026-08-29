@@ -264,4 +264,14 @@ t('工单正文里的「写入范围」真的会被执行（不能只是装饰�
   assert.deepEqual(wt.正文写入范围(模板.取('frontend').正文), ['public/**']);
 });
 
+t('消耗表把 token、厂商窗口和最终处置并在同一行', () => {
+  const 页 = fs.readFileSync(path.join(平台根, 'public', 'index.html'), 'utf8');
+  const 脚 = fs.readFileSync(path.join(平台根, 'public', 'app.js'), 'utf8');
+  for (const 标题 of ['今日账本', '厂商窗口', '实际处置']) assert.match(页, new RegExp(标题));
+  assert.match(脚, /p\.额度/);
+  assert.match(脚, /p\.处置/);
+  assert.ok(!/p\.超\s*\?\s*'<span class="级急">超/.test(脚),
+    '不能再把原始 token 超线直接画成红色冻结——订阅池有可信窗口时它只是警戒');
+});
+
 console.log(`全部通过：${passed} 项`);

@@ -75,7 +75,7 @@
     "三条各自独立：防手滑 / 防「服务起来了就能花钱」/ 防没有刹车就上路。",
     "权限（协-002 拍板 A3）：白名单之外一律受限——缺配置即最严不是最松。判据只看角色不看项目。",
     "受限参数**按适配器分**：一个厂商的 flag 拿给另一个厂商用必挂（claude 的 --permission-mode codex 不认）。跨厂评审让执行方与判官不同源，这个错必然会踩。",
-    "预算池上限写在 预算.池 段，口径见 packages/budget/README.md；注意 codex 取不到 usage，其消耗不计入。"
+    "预算池上限写在 预算.池 段，口径见 packages/budget/README.md；不同 Provider 的 input/cache 归类不可横向比较，订阅池以厂商窗口为主、token 只在盲区兜底。"
   ],
   "执行": {
     "port": 4372,
@@ -137,7 +137,7 @@
         },
         "来源": "SWE-bench Verified，GPT-5.3 Codex 56.8%（该分出自其自有 scaffold，与下面 claude 的口径不完全可比）",
         "日期": "2026-08-10",
-        "注意": "OpenAI 2026-02 起停报 Verified 分数，此值可能滞后；且 codex 取不到 usage，其消耗不计入预算账"
+        "注意": "OpenAI 2026-02 起停报 Verified 分数，此值可能滞后；预算是否计量以每次 JSONL 是否携带 usage 为准"
       }
     },
     "claude": {

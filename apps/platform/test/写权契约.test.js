@@ -179,6 +179,7 @@ t('订阅池：额度闸是盲区时，token 上限照旧兜底冻结（没读�
   const 冻 = 派单.冻结情况(假公用件(['codex']), 订阅配置(), 临);   // 没有快照 = 盲区
   assert.ok(冻.挡.codex, '读不到窗口时，唯一还剩的刹车就是它，不能一起松掉');
   assert.match(冻.挡.codex, /兜底冻结/, '要说清这是兜底，不然人会以为 token 上限一直是刹车');
+  assert.match(冻.挡.codex, /盲区原因：.*还没有额度读数/, '要说清是取数失败、读数过旧还是从未取到');
   assert.equal((冻.警戒 || []).length, 0);
   fs.rmSync(临, { recursive: true, force: true });
 });

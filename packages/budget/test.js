@@ -83,6 +83,8 @@ t('token 上限：日线触发，且是 ≥ 不是 >', () => {
   const r = B.超预算(cfg, root, 'k', 今);
   assert.equal(r.超, true);
   assert.ok(r.因.includes('日用量'));
+  assert.equal(r.重置于, '2026-08-09T00:00:00.000Z');
+  assert.match(r.因, /按 UTC 自然日统计，下一次重置于 2026-08-09T00:00:00\.000Z/);
 });
 
 t('月线独立生效：日线没到但月线到了照样超', () => {
@@ -93,6 +95,8 @@ t('月线独立生效：日线没到但月线到了照样超', () => {
   const r = B.超预算(cfg, root, 'k', 今);
   assert.equal(r.超, true);
   assert.ok(r.因.includes('月'), '应由月线触发：' + r.因);
+  assert.equal(r.重置于, '2026-09-01T00:00:00.000Z');
+  assert.match(r.因, /按 UTC 自然月统计，下一次重置于 2026-09-01T00:00:00\.000Z/);
 });
 
 t('金额上限：按价目表估算，缓存默认按输入价 1/10', () => {

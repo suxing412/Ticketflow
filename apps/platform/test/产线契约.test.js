@@ -55,6 +55,23 @@ t('无依赖的单直接放行', () => {
   assert.equal(派单.依赖就绪(工单库, 沙盒, 工单库.find(沙盒, 'D-1')).ok, true);
 });
 
+t('零改动重派不抹掉上一轮 workspace.commit', () => {
+  const sha = 'c'.repeat(40);
+  工单库.create(沙盒, 'D-4', {
+    id: 'D-4', role: 'backend', 检查点: sha,
+    workspace: { path: '旧路径', branch: 'platform/p/D-4', mode: 'worktree', commit: sha },
+  }, '## 验收标准\n- [ ] npm run quality 退出码为 0');
+  工单库.move(沙盒, 'D-4', '草稿', '待投');
+  const r = 派单.落单(工单库, 沙盒, 'D-4', {
+    选中: 'codex', 权限: { 模式: '放开' },
+    工作区: { path: '新路径', branch: 'platform/p/D-4', mode: 'worktree', commit: '本轮起点不能覆盖交付检查点' },
+  });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const fm = 工单库.find(沙盒, 'D-4').fm;
+  assert.equal(fm.workspace.commit, sha, '重派重建 workspace 对象时把上一轮检查点抹掉了');
+  assert.equal(fm.workspace.path, '新路径', '路径等本轮工作区信息仍要刷新');
+});
+
 // ---- 调度并发 ----
 t('并发上限默认 1（并发是显式决定，不是默认姿态）', () => {
   assert.equal(调度.并发上限({}, 'claude'), 1, '缺配置必须是 1——默认并发等于默认多烧钱');
@@ -626,6 +643,9 @@ t('模板给的是填空提示而不是空行（空行只会被跳过）', () =>
   assert.ok(r.有);
   assert.ok(/## 验收标准/.test(r.正文));
   assert.ok(/具体文件|具体函数名/.test(r.正文), '要逼人想「这条怎么验」');
+  for (const 角色 of ['backend', 'frontend', 'integrator']) {
+    assert.match(工单模板.取(角色).正文, /质量总闸命令/, `${角色} 代码模板漏了质量总闸`);
+  }
   // reviewer 模板要点破那个最常见的写坏方式
   assert.ok(/不是「被评审方要满足什么」/.test(工单模板.取('reviewer').正文));
 });
@@ -644,6 +664,15 @@ t('体检挑毛病但不拦不改（标准是人对「做对了」的定义）',
   // 会让人去改一张本来没问题的单，而真正的错误原封不动。
   const R1 = ['## 验收标准', '- [ ] 有非空文字输出', '- [ ] 未产生任何文件改动'].join('\n');
   assert.equal(工单模板.体检(R1).ok, true);
+
+  const 漏总闸 = ['## 验收标准', '- [ ] npm run lint:code 退出码为 0', '- [ ] npm run typecheck 退出码为 0'].join('\n');
+  assert.ok(工单模板.体检(漏总闸, { 产出物类型: '代码' }).病.some((b) => /质量总闸/.test(b.说)),
+    '代码单只列子闸、漏总闸时应提醒');
+  assert.ok(!工单模板.体检(漏总闸, { 产出物类型: '文档' }).病.some((b) => /质量总闸/.test(b.说)),
+    '文档单不该套代码质量总闸');
+  const 有总闸 = 漏总闸 + '\n- [ ] npm run quality 退出码为 0';
+  assert.ok(!工单模板.体检(有总闸, { 产出物类型: '代码' }).病.some((b) => /质量总闸/.test(b.说)),
+    '已经写了总闸就不重复提醒');
 });
 
 fs.rmSync(沙盒, { recursive: true, force: true });

@@ -89,6 +89,11 @@ const 播种结果 = require('./lib/配置位置').播种示例(仓根);
 const 本地覆盖 = require('./lib/本地覆盖');
 const 实例身份 = require('./lib/实例身份');
 const { 配置, 生效的覆盖 } = 本地覆盖.应用(仓根, 读JSON(path.join(仓根, 'config', 'platform.config.json'), {}));
+// 预算是运行策略，不是进程形状。手改或经设置页更新后，报表与最终派单必须看同一份现值。
+const 现配置 = () => {
+  try { return 本地覆盖.应用(仓根, 读JSON(path.join(仓根, 'config', 'platform.config.json'), {})).配置; }
+  catch { return 配置; }
+};
 const 包 = 读JSON(path.join(仓根, 'package.json'), {});
 const 端口 = Number(process.env.PORT || (配置.server && 配置.server.port) || 4370);
 const { 令牌, 文件: 令牌路径, 新建: 令牌新建 } = 门禁.取令牌(仓根);
@@ -220,9 +225,8 @@ function 转发工作区(res, 路径, 方法, 体) {
 // 战绩表有耗时，消耗表有池的日/月总量，而人真正想问的是
 // 「FE-1 这一趟花了多少额度」，那两张表都答不了。
 //
-// **取不到读数的池必须点名**。codex 是非 stream-json 输出，usageOf 取不到 usage，
-// 所以它跑过的那几次在账本里根本没有行。只报一个数字的话，
-// 人会把「没记到」读成「没花」——而那正是花得最多的那次。
+// **取不到读数的池必须点名**。是否取到按真账本判断，不按池名猜：同一个适配器
+// 升级输出格式后可能开始携带 usage，写死「某池永远取不到」会让回执与账本互相打脸。
 function 按单花费(id, 真跑记录) {
   try {
     const budget = 公用件.载入('budget', 'budget.js');
@@ -574,7 +578,7 @@ const 服务 = http.createServer((req, res) => {
           // 验收标准体检：**只提醒不拦**。标准是人对「做对了」的定义，
           // 机器无权替人改写，也不该因为写得不够好就拒绝建单——
           // 但把毛病说出来，比等它跑三轮判不过再由巡检报「反复回炉」便宜得多。
-          const 检 = 工单模板.体检(体.正文 || '');
+          const 检 = 工单模板.体检(体.正文 || '', 体.fm || {});
           return 发JSON(res, 201, {
             ok: true, ...r,
             验收标准: { 条数: 检.条数, ...(检.病.length ? { 体检: 检.病 } : {}) },
@@ -752,8 +756,26 @@ const 服务 = http.createServer((req, res) => {
   // 但一直没有消费方——账记着没人看，等于没记。
   if (url路径 === '/api/budget' && req.method === 'GET') {
     try {
+      const 当前配置 = 现配置();
       const budget = 公用件.载入('budget', 'budget.js');
-      const 池表 = budget.view(配置, 账本根);
+      const 额度 = require('./lib/额度闸').现况(当前配置, 账本根);
+      const 冻结 = 派单.冻结情况(公用件, 当前配置, 账本根);
+      const 额度明细 = new Map((额度.明细 || []).map((m) => [m.池, m]));
+      const 警戒 = new Map((冻结.警戒 || []).map((m) => [m.池, m]));
+      // 原始「超 token」与实际「不可派」不是一回事：订阅池有可信窗口读数时，前者只是警戒。
+      // 接口把两把尺并到同一行，界面无需靠人肉对照两个端点猜最终处置。
+      const 池表 = budget.view(当前配置, 账本根).map((p) => {
+        const q = 额度明细.get(p.池) || null;
+        const 冻因 = 冻结.挡 && 冻结.挡[p.池];
+        const 警 = 警戒.get(p.池);
+        return {
+          ...p,
+          额度: q && q.适用 ? { 盲区: !!q.盲区, 窗口: q.窗口 || [], 说明: q.说明 || null } : null,
+          处置: 冻因 ? { 状态: '冻结', 原因: 冻因 }
+            : 警 ? { 状态: '警戒', 原因: 警.说 || 警.因 }
+              : { 状态: '可用', 原因: p.超 ? 'token 已越线，但可信的订阅窗口未挡；token 只作警戒' : '未触发预算或额度冻结' },
+        };
+      });
       const 明细 = budget.读账(账本根).slice(-200);
       // 按工单归集：一张单可能跑过多次（判不过回炉重跑），成本要算总账。
       const 按单 = {};
@@ -791,7 +813,7 @@ const 服务 = http.createServer((req, res) => {
           .sort((a, b) => (b.输入 + b.输出) - (a.输入 + a.输出)).slice(0, 20),
         条数: 明细.length,
         ...(池表.length ? {} : { 说明: '还没有配任何池的预算上限——没有上限就没有刹车，也无从判超' }),
-        codex提示: 'codex 非 stream-json 输出，取不到 usage，其消耗**不计入本账**（见 packages/budget/README.md）',
+        计量提示: '不同 Provider 的 input / cache 归类口径不同，token 只在各池内部看；订阅池是否可派以厂商窗口为准，可信读数缺失时才用 token 上限兜底。',
       });
     } catch (e) { return 发JSON(res, 500, { ok: false, error: `预算闸不可用：${e.message}` }); }
   }

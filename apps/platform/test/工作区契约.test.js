@@ -212,6 +212,42 @@ t('默认分支前缀是 platform，不是 studio', () => {
   assert.equal(工作区.configOf({ workspace: { branchPrefix: '自定义' } }).branchPrefix, '自定义');
 });
 
+t('依赖检查点兼容旧单：workspace.commit 缺失时回退到一致的顶层字段', () => {
+  const 仓 = 建仓();
+  try {
+    git(仓, ['checkout', '-q', '-b', '上游']);
+    fs.writeFileSync(path.join(仓, 'upstream.txt'), '上游产出\n');
+    git(仓, ['add', '-A']);
+    git(仓, ['commit', '-q', '--no-gpg-sign', '-m', '上游检查点']);
+    const sha = git(仓, ['rev-parse', 'HEAD']);
+    git(仓, ['checkout', '-q', 'master']);
+
+    const r = 工作区.integrate({ path: 仓 }, [{
+      id: 'OLD-1', fm: { 产出物类型: '代码', 检查点: sha, 发布提交: sha, workspace: {} },
+    }]);
+    assert.equal(r.merged.length, 1, JSON.stringify(r));
+    assert.equal(r.merged[0].commit, sha);
+    assert.equal(r.merged[0].检查点来源, '顶层 检查点');
+    assert.equal(fs.readFileSync(path.join(仓, 'upstream.txt'), 'utf8').replace(/\r\n/g, '\n'), '上游产出\n');
+  } finally { 清(仓); }
+});
+
+t('依赖检查点不猜：顶层两个字段不一致时把三个字段值说清', () => {
+  const a = 'a'.repeat(40); const b = 'b'.repeat(40);
+  const r = 工作区.依赖检查点({ id: 'BAD-1', fm: { 检查点: a, 发布提交: b, workspace: {} } });
+  assert.equal(r.commit, null);
+  assert.match(r.reason, /workspace\.commit 缺失/);
+  assert.match(r.reason, new RegExp(`检查点 = ${a}`));
+  assert.match(r.reason, new RegExp(`发布提交 = ${b}`));
+  assert.match(r.reason, /不一致/);
+  const 仓 = 建仓();
+  try {
+    assert.throws(() => 工作区.integrate({ path: 仓 }, [{
+      id: 'BAD-1', fm: { 产出物类型: '代码', 检查点: a, 发布提交: b, workspace: {} },
+    }]), /BAD-1.*workspace\.commit 缺失.*两者不一致/);
+  } finally { 清(仓); }
+});
+
 // 造一个**真的**处在冲突中途的仓。冲突这件事假不出来：
 // 「git add 之后 U 态就没了」正是这一组要盯的行为，模拟对象不会有这个性质。
 function 建冲突仓() {
