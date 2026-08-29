@@ -312,6 +312,34 @@ t('本地覆盖：深合并而非整段替换，且只认白名单文件', () =>
   assert.ok(!覆盖.覆盖表['providers.local.json'], 'providers 不在白名单内，不许被本地覆盖');
 });
 
+t('预算是运行策略：执行器每次现读，改上限不用重启三进程', () => {
+  const 源 = fs.readFileSync(path.join(平台根, 'scripts', '执行器.js'), 'utf8');
+  const 现读 = 源.match(/function 现配置\(\)[\s\S]*?\n}/);
+  assert.ok(现读, '执行器缺现配置入口');
+  assert.match(现读[0], /预算:\s*c\.预算/, '现配置只热载 routing，预算仍停在开机快照');
+  const 许可 = 源.match(/function 真跑许可[\s\S]*?\n}/);
+  assert.ok(许可);
+  assert.match(许可[0], /const 当前配置 = 现配置\(\)/);
+  assert.match(许可[0], /冻结情况\(公用件, 当前配置, 账本根\)/,
+    '最后一道冻结判定还在用开机配置，前面热载等于白做');
+  const 服务源 = fs.readFileSync(path.join(平台根, 'server.js'), 'utf8');
+  const 起 = 服务源.indexOf("url路径 === '/api/budget'");
+  const 报表段 = 服务源.slice(起, 起 + 5000);
+  assert.ok(起 > 0);
+  assert.match(报表段, /const 当前配置 = 现配置\(\)/);
+  assert.match(报表段, /budget\.view\(当前配置, 账本根\)/,
+    '执行器热载了但报表还显示开机旧上限，会让人以为修改没生效');
+});
+
+t('是否计量按本次 usage 判断，不再把 codex 永久写死成「不入账」', () => {
+  const 源 = fs.readFileSync(path.join(平台根, 'scripts', '执行器.js'), 'utf8');
+  const 段 = 源.match(/function 计量提示[\s\S]*?\n}/);
+  assert.ok(段);
+  assert.match(段[0], /budget\.usageOf\(原始输出/);
+  assert.doesNotMatch(段[0], /池\s*===\s*['"]codex['"]/,
+    'codex JSONL 已经可能携带 usage，按池名断言永不计量会让回执与账本互相打脸');
+});
+
 t('无覆盖文件时摘要说清「全部按入库默认，即最严」', () => {
   const 覆盖 = require(path.join(平台根, 'lib', '本地覆盖.js'));
   assert.ok(/最严/.test(覆盖.摘要([])), '没有覆盖时也要明说当前是最严状态');

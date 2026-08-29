@@ -421,13 +421,49 @@ function 拦冲突标记(ticket, dir, 文件表) {
     + '在工单 frontmatter 上加 "允许冲突标记": true。');
 }
 
+const 合法提交 = (值) => /^[0-9a-f]{7,64}$/i.test(String(值 || '').trim());
+
+// 新单以 workspace.commit 为正本；旧单与曾被零改动重派覆盖 workspace 的单，允许从
+// 顶层「检查点 / 发布提交」恢复。两个顶层字段都在时必须一致，不能悄悄猜一个。
+function 依赖检查点(ticket) {
+  const fm = (ticket && ticket.fm) || {};
+  const workspace值 = fm.workspace && fm.workspace.commit;
+  const workspace提交 = String(workspace值 || '').trim();
+  if (workspace提交) {
+    return 合法提交(workspace提交)
+      ? { commit: workspace提交, 来源: 'workspace.commit' }
+      : { commit: null, reason: `workspace.commit 不是合法 Git 检查点：${workspace提交}` };
+  }
+
+  const 检查点 = String(fm.检查点 || '').trim();
+  const 发布提交 = String(fm.发布提交 || '').trim();
+  if (检查点 && 发布提交 && 检查点.toLowerCase() !== 发布提交.toLowerCase()) {
+    return {
+      commit: null,
+      不一致: true,
+      reason: `workspace.commit 缺失；顶层 检查点 = ${检查点}，发布提交 = ${发布提交}，两者不一致`,
+    };
+  }
+  const 回退 = 检查点 || 发布提交;
+  if (回退) {
+    return 合法提交(回退)
+      ? { commit: 回退, 来源: 检查点 ? '顶层 检查点' : '顶层 发布提交' }
+      : { commit: null, reason: `workspace.commit 缺失；顶层 ${检查点 ? '检查点' : '发布提交'} = ${回退}，但它不是合法 Git 检查点` };
+  }
+  return { commit: null, reason: 'workspace.commit 缺失；顶层 检查点 / 发布提交 也都没有' };
+}
+
 function integrate(workspace, dependencyTickets) {
   const merged = []; const already = []; const skipped = [];
   const initialConflicts = unresolved(workspace.path);
   if (initialConflicts.length) return { merged, already, skipped, conflicts: initialConflicts, pending: true };
   for (const ticket of dependencyTickets || []) {
-    const commit = ticket && ticket.fm && ticket.fm.workspace && ticket.fm.workspace.commit;
-    if (!commit || !/^[0-9a-f]{7,64}$/i.test(String(commit))) {
+    const 检查点信息 = 依赖检查点(ticket);
+    const commit = 检查点信息.commit;
+    if (检查点信息.不一致) {
+      throw new Error(`依赖 ${(ticket && ticket.id) || 'unknown'} 的 Git 检查点不一致：${检查点信息.reason}`);
+    }
+    if (!commit) {
       // 「没有检查点」有两种，处置完全相反（协-023，HW-4 实测撞出来）：
       //   · 只读单（产出是判定不是文件）——**它本来就不会有检查点**，没有是正常的，
       //     跳过它继续走。HW-3 是评审单，跑完零改动、报告落在工单里；HW-4 依赖它，
@@ -440,20 +476,21 @@ function integrate(workspace, dependencyTickets) {
         id: (ticket && ticket.id) || 'unknown',
         reason: 只读
           ? `只读单（产出物类型「${ticket.fm.产出物类型}」）没有 Git 检查点是正常的——它的产出是判定，不落盘`
-          : '依赖单没有可集成的 Git 检查点',
+          : `依赖单没有可集成的 Git 检查点：${检查点信息.reason}`,
         只读,
       });
       continue;
     }
     const sha = String(commit);
+    const 来源 = 检查点信息.来源 === 'workspace.commit' ? {} : { 检查点来源: 检查点信息.来源 };
     git(workspace.path, ['cat-file', '-e', `${sha}^{commit}`]);
     const ancestor = git(workspace.path, ['merge-base', '--is-ancestor', sha, 'HEAD'], [0, 1]);
-    if (ancestor.code === 0) { already.push({ id: ticket.id, commit: sha }); continue; }
+    if (ancestor.code === 0) { already.push({ id: ticket.id, commit: sha, ...来源 }); continue; }
     const result = git(workspace.path, [
       '-c', 'user.name=AI Workflow Studio', '-c', 'user.email=noreply@local',
       'merge', '--no-ff', '--no-edit', '--no-gpg-sign', sha,
     ], [0, 1]);
-    if (result.code === 0) { merged.push({ id: ticket.id, commit: sha }); continue; }
+    if (result.code === 0) { merged.push({ id: ticket.id, commit: sha, ...来源 }); continue; }
     const conflicts = unresolved(workspace.path);
     if (!conflicts.length) throw new Error(`集成依赖 ${ticket.id} 失败：${result.stderr || result.stdout || '未知错误'}`);
     return { merged, already, skipped, conflicts, failedDependency: ticket.id, pending: true };
@@ -532,7 +569,7 @@ function prepare(monitorRoot, cfg, ticket, project, options = {}) {
     // （那是协-016 治过的病：检查点 sha 不落盘导致 DAG 静默断链）。
     const 真缺 = result.integration.skipped.filter((item) => !item.只读);
     if (真缺.length && !wc.allowMissingDependencies)
-      throw new Error(`依赖缺少 Git 检查点：${真缺.map((item) => item.id).join('、')}`);
+      throw new Error(`依赖缺少 Git 检查点：${真缺.map((item) => `${item.id}（${item.reason}）`).join('；')}`);
     if (result.integration.conflicts.length && options.role !== 'integrator') {
       try { git(workPath, ['merge', '--abort']); } catch { /* 保留原始错误；失败分诊会暴露工作区 */ }
       throw new Error(`依赖合并发生冲突，需要 Integrator 处理：${result.integration.conflicts.join('、')}`);
@@ -782,6 +819,6 @@ module.exports = {
   装依赖, 依赖目录表, 缺依赖目录, 预授沙箱写权,
   收工, 遗留工作区, 审阅区,
   configOf, isGitRepo, repoTop, workspaceRoot, worktreeList,
-  prepare, integrate, checkpoint, dependencyTickets, publish, changedFiles, 变更分类, enforceWriteScope,
+  prepare, integrate, 依赖检查点, checkpoint, dependencyTickets, publish, changedFiles, 变更分类, enforceWriteScope,
   正文写入范围, 冲突残留, 拦冲突标记, 含有,
 };

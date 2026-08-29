@@ -104,19 +104,28 @@ function 超预算(cfg, root, 池, now) {
   const 限 = (((cfg || {}).预算 || {}).池 || {})[池];
   if (!限) return { 超: false };
   const s = 汇总(root, 池, now);
+  const 此刻 = now instanceof Date ? new Date(now.getTime()) : new Date(now || Date.now());
+  const 下一重置 = (窗名) => (窗名 === '日'
+    ? new Date(Date.UTC(此刻.getUTCFullYear(), 此刻.getUTCMonth(), 此刻.getUTCDate() + 1)).toISOString()
+    : new Date(Date.UTC(此刻.getUTCFullYear(), 此刻.getUTCMonth() + 1, 1)).toISOString());
   const 查 = (窗名, 用, 限token, 限额) => {
     if (限token > 0 && 用.token >= 限token) {
-      return `${窗名}用量 ${用.token} token ≥ 上限 ${限token}`;
+      return { 说: `${窗名}用量 ${用.token} token ≥ 上限 ${限token}`, 重置于: 下一重置(窗名) };
     }
     if (限额 > 0) {
       const 费 = 估费(cfg, 池, 用);
-      if (费 != null && 费 >= 限额) return `${窗名}估算费用 ${费.toFixed(2)} ≥ 上限 ${限额}`;
+      if (费 != null && 费 >= 限额) return { 说: `${窗名}估算费用 ${费.toFixed(2)} ≥ 上限 ${限额}`, 重置于: 下一重置(窗名) };
     }
     return null;
   };
   const 因 = 查('日', s.日, Number(限.日token) || 0, Number(限.日额) || 0)
     || 查('月', s.月, Number(限.月token) || 0, Number(限.月额) || 0);
-  return 因 ? { 超: true, 因: `${池} 池预算已用尽：${因}`, 汇总: s } : { 超: false, 汇总: s };
+  return 因 ? {
+    超: true,
+    因: `${池} 池预算已用尽：${因.说}；按 UTC 自然${因.说.startsWith('日') ? '日' : '月'}统计，下一次重置于 ${因.重置于}`,
+    重置于: 因.重置于,
+    汇总: s,
+  } : { 超: false, 汇总: s };
 }
 
 // ---- 并入 gatesInfo 的冻结表 ----

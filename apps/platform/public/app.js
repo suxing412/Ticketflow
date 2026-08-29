@@ -732,17 +732,28 @@ async function 刷排名() {
 async function 刷消耗() {
   try {
     const { 码, 体: j } = await 取JSON('/api/budget');
-    if (码 !== 200 || !j.ok) { $('消耗体').innerHTML = '<tr><td colspan="5" class="淡">' + 转义(j.error || '不可用') + '</td></tr>'; return; }
-    $('消耗提示').textContent = j.codex提示 ? 'codex 消耗不计入' : '';
+    if (码 !== 200 || !j.ok) { $('消耗体').innerHTML = '<tr><td colspan="6" class="淡">' + 转义(j.error || '不可用') + '</td></tr>'; return; }
+    $('消耗提示').textContent = j.计量提示 || '';
     const 千 = (n) => (n == null ? '—' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n));
     $('消耗体').innerHTML = (j.池 || []).map((p) => {
       const 日上限 = p.上限 && (p.上限.日token || p.上限.日金额);
+      const 日 = p.汇总 && p.汇总.日;
+      const 次 = (日 && 日.条数) || 0;
+      const 均 = 次 ? Math.round((日.token || 0) / 次) : 0;
+      const 窗 = p.额度
+        ? (p.额度.盲区 ? '盲区' : (p.额度.窗口 || []).map((w) => w.label + ' ' + w.pct + '%').join('、') || '有读数')
+        : '—';
+      const 处 = p.处置 || { 状态: p.超 ? '冻结' : '可用', 原因: p.因 || '' };
+      const 处类 = 处.状态 === '冻结' ? '级急' : 处.状态 === '警戒' ? '级常' : '';
       return '<tr><td><code>' + 转义(p.池) + '</code></td>'
-        + '<td>' + 千(p.汇总 && p.汇总.日 && p.汇总.日.token) + '</td>'
+        + '<td>' + 千(日 && 日.token) + '<div class="淡">' + 次 + ' 次' + (次 ? ' · 均 ' + 千(均) + '/次' : '') + '</div></td>'
         + '<td>' + 千(p.汇总 && p.汇总.月 && p.汇总.月.token) + '</td>'
         + '<td class="淡">' + 转义(日上限 ? '日 ' + 千(日上限) : '—') + '</td>'
-        + '<td>' + (p.超 ? '<span class="级急">超</span>' : '<span style="color:var(--绿)">正常</span>') + '</td></tr>';
-    }).join('') || '<tr><td colspan="5" class="淡">' + 转义(j.说明 || '还没有配预算上限') + '</td></tr>';
+        + '<td>' + 转义(窗) + '</td>'
+        + '<td title="' + 转义(处.原因 || '') + '">' + (处.状态 === '可用'
+          ? '<span style="color:var(--绿)">可用</span>'
+          : '<span class="' + 处类 + '">' + 转义(处.状态) + '</span>') + '</td></tr>';
+    }).join('') || '<tr><td colspan="6" class="淡">' + 转义(j.说明 || '还没有配预算上限') + '</td></tr>';
     const 按单 = (j.按工单 || []).slice(0, 5);
     // 项目在前、工单在后。「这个项目花了多少」是先问的那个问题——
     // 工单级明细只有在知道是哪个项目超了之后才有用。
@@ -755,7 +766,7 @@ async function 刷消耗() {
       + (按单.length
         ? '<div>花得最多的单：' + 按单.map((o) => 转义(o.单) + '（' + 千(o.输入 + o.输出) + ' token，' + o.次数 + ' 次）').join('　') + '</div>'
         : '');
-  } catch { $('消耗体').innerHTML = '<tr><td colspan="5" class="级急">预算接口不可达</td></tr>'; }
+  } catch { $('消耗体').innerHTML = '<tr><td colspan="6" class="级急">预算接口不可达</td></tr>'; }
 }
 
 // ── 现在在跑（协-027）──

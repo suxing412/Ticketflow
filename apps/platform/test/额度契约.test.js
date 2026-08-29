@@ -178,6 +178,27 @@ t('额度冻结并进 派单.冻结情况 的 挡——池序降级三处零额�
   fs.rmSync(临, { recursive: true, force: true });
 });
 
+t('现场回放：token 超线但订阅窗口可信且仅 4% 时，只警戒不冻结', () => {
+  const 临 = fs.mkdtempSync(path.join(os.tmpdir(), '额度闸-现场-'));
+  try {
+    const cfg = 基配();
+    cfg.预算 = { 池: { codex: { 日token: 100 } } };
+    const budget = 公用件.载入('budget', 'budget.js');
+    budget.记(临, { 池: 'codex', 单: 'HW-6', 输入: 200, 输出: 1, t: new Date().toISOString() });
+    fs.mkdirSync(path.join(临, 'journal'), { recursive: true });
+    fs.writeFileSync(path.join(临, 'journal', '额度快照.json'), JSON.stringify({
+      更新于: new Date().toISOString(),
+      池: { codex: { 形态: 'codex', 取于: new Date().toISOString(),
+        rl: { primary: { usedPercent: 4, windowDurationMins: 300, resetsAt: new Date(Date.now() + 3600e3).toISOString() },
+          secondary: { usedPercent: 60, windowDurationMins: 10080, resetsAt: new Date(Date.now() + 86400e3).toISOString() } } } },
+    }), 'utf8');
+    const 冻 = 派单.冻结情况(公用件, cfg, 临);
+    assert.ok(!冻.挡.codex, '可信窗口只有 4%，token 口径差不该独立否决：' + JSON.stringify(冻));
+    assert.equal(冻.警戒.length, 1);
+    assert.match(冻.警戒[0].说, /5小时 4%.*周 60%.*未越线/);
+  } finally { fs.rmSync(临, { recursive: true, force: true }); }
+});
+
 t('额度闸失效不阻断派单（fail-open），与预算闸失效的 503 方向相反', () => {
   // 预算闸读不到数 → 真跑前提 503 拒跑（钱的事）。额度闸读不到 → 照跑（订阅窗口的事）。
   // 这两个方向必须都被钉住：合并成一个 ok 的那天，其中一个就会悄悄变成另一个。
