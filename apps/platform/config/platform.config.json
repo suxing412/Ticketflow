@@ -207,5 +207,14 @@
     "快照最长秒": 900,
     "快照弃用秒": 3600,
     "claude最小间隔秒": 600
+  },
+  "orchestration": {
+    "_说明": [
+      "planFile：orchestrator 子工单计划在【目标项目仓】内的相对路径。",
+      "plan.js 的出厂默认是 .studio/plan.json（监制台的约定）。本机用的是 platform，",
+      "故改到 .platform/plan.json，避免继续在项目仓里维护一个 studio 命名的文件。",
+      "注意：本段不在 lib/本地覆盖.js 的覆盖表里，只能改这份入库配置。"
+    ],
+    "planFile": ".platform/plan.json"
   }
 }
