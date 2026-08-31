@@ -198,7 +198,9 @@ t('桩 Provider 不参与自动挑选，但点名仍可用（接线自测要靠�
   assert.deepEqual(点名, ['桩'], 'allow 点名时桩池必须能选出来');
   const 偏好 = router.rankProviders(null,
     { ...配, routing: { roles: { backend: { prefer: ['桩'] } } } }, { role: 'backend' }).map((x) => x.name);
-  assert.ok(偏好.includes('桩'), 'prefer 点名同样要放行');
+  assert.deepEqual(偏好, ['真'], 'prefer 只管排序，不能赋予桩池自动派发资格');
+  const 固定 = router.rankProviders(null, 配, { task: { fm: { routing: { pin: '桩' } } } });
+  assert.equal(固定[0].name, '桩', '显式 pin 仍能用于接线自测');
 
   // 出厂配置里 echo 得真的标着
   const 出厂 = require(path.join(__dirname, '..', 'config', 'platform.config.json'));
