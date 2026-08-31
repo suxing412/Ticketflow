@@ -370,7 +370,9 @@ const 服务 = http.createServer((req, res) => {
       const 排名 = 路由器.rankProviders(账本根, 配置, { role: 角色, kind: 类别 });
       // 全平局要**说出来**。否则调用方会把「按字母序排第一」误当成「评估下来最优」，
       // 那比没有排名更危险——它看起来像个判断，实际上一点信号都没有。
-      const 无区分度 = 排名.length > 1 && 排名.every((r) => r.score === 排名[0].score);
+      // 分数相同但池序不同仍有确定顺序，不能再解释成「仅按字母序」。
+      const 无区分度 = 排名.length > 1 && 排名.every((r) => r.score === 排名[0].score
+        && r.preferenceRank === 排名[0].preferenceRank);
       return 发JSON(res, 200, {
         ok: true,
         角色: 排名[0] ? 排名[0].role : (角色 || (类别 === '执行' ? 'generalist' : 'reviewer')),
@@ -382,7 +384,7 @@ const 服务 = http.createServer((req, res) => {
           : 无区分度 ? '本次排名无区分度：各候选得分相同，当前顺序仅按名称字母序，不代表评估结论。'
             + '要让排名真正有信号，需其一：providers.<名>.scores 显式打分、'
             + 'routing.roles.<角色>.prefer 声明偏好，或 journal/provider-runs.jsonl 积累实际战绩。'
-            : '仅排名，未派发任何任务',
+            : '合格候选按指定池序优先，其余按分数排序；仅排名，未派发任何任务',
       });
     } catch (e) { return 发JSON(res, 500, { ok: false, error: e.message }); }
   }

@@ -1,5 +1,5 @@
 // routing/router.js — 角色与 Provider 解耦的动态路由。
-// 先按能力/启用状态做硬过滤，再结合配置评分与近期成功率排序；不负责启动进程。
+// 先按能力/启用状态做硬过滤，再按角色池序优先、评分兜底排序；不负责启动进程。
 // 公用件消费统一走 lib/公用件（仓根 packages/，TICKETFLOW_PACKAGES 可覆盖）。
 // 原样搬家留下的 `../../../../packages/providers/registry` 从本仓 lib/routing
 // 上溯四级已跑出盘符，必然 MODULE_NOT_FOUND——交壳清单里标为「留白」的就是这处。
@@ -71,6 +71,11 @@ function rankProviders(root, cfg, { agent = null, task = null, role = '', kind =
   const allow = new Set(arr(roleRouting.allow));
   const deny = new Set(arr(roleRouting.deny));
   const prefer = arr(roleRouting.prefer);
+  // prefer 是硬顺序，不是白名单：未指定的合格池仍在链尾，可在首选全冻时借调。
+  const preferenceRank = (name) => {
+    const index = prefer.indexOf(name);
+    return index < 0 ? null : index + 1;
+  };
   const required = requiredCapabilities(cfg, task, actualRole);
   const weights = weightsOf(cfg, actualRole);
 
@@ -86,27 +91,30 @@ function rankProviders(root, cfg, { agent = null, task = null, role = '', kind =
     // 用显式字段 桩:true，不去认自述里的措辞——那种判据改个字就静默失效，
     // 而失效的表现是「质检被派给桩池」，跟正常派活长得一模一样。
     //
-    // 显式 pin（allow/prefer 点名）仍然放行：接线自测要靠它。
-    if (provider.桩 === true && !allow.has(provider.name) && !prefer.includes(provider.name)) return false;
+    // 只有 allow 点名（或上面的显式 pin）仍放行，供接线自测。
+    // prefer 只管顺序，不能授予桩池资格，手写旧配置也不能绕过这道闸。
+    if (provider.桩 === true && !allow.has(provider.name)) return false;
     if (provider.roles && provider.roles.length && !provider.roles.includes(actualRole)) return false;
     const caps = arr(provider.capabilities);
     return !required.length || !caps.length || required.every((cap) => caps.includes(cap));
   }).map((provider) => {
     const metrics = metricsOf(provider, actualRole);
     const recent = root ? history.summary(root, provider.name, actualRole) : { runs: 0, successRate: 50 };
-    const preferenceBonus = prefer.includes(provider.name) ? (prefer.length - prefer.indexOf(provider.name)) * 2 : 0;
+    const order = preferenceRank(provider.name);
     const score = metrics.quality * weights.quality
       + recent.successRate * weights.success
       + metrics.latency * weights.latency
-      + metrics.cost * weights.cost
-      + preferenceBonus;
+      + metrics.cost * weights.cost;
     return {
       name: provider.name,
       role: actualRole,
       score: Math.round(score * 100) / 100,
-      reasons: [`质量 ${metrics.quality}`, `近期成功率 ${recent.successRate}%/${recent.runs} 次`, `偏好加分 ${preferenceBonus}`],
+      preferenceRank: order,
+      reasons: [`质量 ${metrics.quality}`, `近期成功率 ${recent.successRate}%/${recent.runs} 次`,
+        order !== null ? `池序第 ${order} 位（优先于评分）` : '未指定池序，按评分排序'],
     };
-  }).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  }).sort((a, b) => (a.preferenceRank ?? prefer.length + 1) - (b.preferenceRank ?? prefer.length + 1)
+    || b.score - a.score || a.name.localeCompare(b.name));
 
   // 自动评审默认采用不同厂商，降低同源盲区；只有没有替代者时才回到原 Provider。
   const original = task && task.fm && (task.fm.provider || task.fm.供应商 || task.fm.执行池);
