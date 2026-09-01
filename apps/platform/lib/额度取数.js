@@ -132,6 +132,12 @@ function 取数口(配置, 池) {
   return null;
 }
 
+function 取数盲因(配置, 池) {
+  const a = (((配置 && 配置.providers) || {})[池] || {}).adapter;
+  if (a === 'opencode-cli') return 'OpenCode / GLM Coding Plan 暂无已验证的机器可读额度端点，明确不支持取数（fail-open 并标盲区）';
+  return '不认识这个 adapter 的额度来源';
+}
+
 // 节流：limited 的口子（claude）守死间隔 + 失败退避 ×3；本地口子（codex）只做轻缓存。
 function 节流判(账本根, 池, 配置, 现在) {
   const q = (配置 && 配置.quota) || {};
@@ -167,7 +173,7 @@ async function 取一轮(配置, 账本根, o = {}) {
   for (const 池 of Object.keys((配置 && 配置.providers) || {})) {
     if (计费.模式(配置, 池) !== 计费.订阅) continue;       // 只有订阅池有窗口这回事
     const 口 = 取数口(配置, 池);
-    if (!口) { 动作.push({ 池, 结果: '跳过', 因: '不认识这个 adapter 的额度来源' }); continue; }
+    if (!口) { 动作.push({ 池, 结果: '跳过', 因: 取数盲因(配置, 池) }); continue; }
 
     if (口.限流) {
       const 节 = 节流判(账本根, 池, 配置, 现在);
@@ -193,4 +199,4 @@ async function 取一轮(配置, 账本根, o = {}) {
   return { ok: true, 快照, 动作 };
 }
 
-module.exports = { 取一轮, 拉codex, 拉claude, 取数口, 快照文件, 节流文件 };
+module.exports = { 取一轮, 拉codex, 拉claude, 取数口, 取数盲因, 快照文件, 节流文件 };

@@ -238,6 +238,13 @@ t('取数口按 adapter 认，不按池名认', () => {
   assert.equal(取数.取数口(cfg, 'codex'), null, '叫 codex 但 adapter 是 command-cli 的池，不该被当成 codex');
 });
 
+t('OpenCode / GLM 额度源明确标不支持，不伪造读数', () => {
+  const 取数 = require('../lib/额度取数');
+  const cfg = { providers: { glm: { adapter: 'opencode-cli' } } };
+  assert.equal(取数.取数口(cfg, 'glm'), null);
+  assert.match(取数.取数盲因(cfg, 'glm'), /明确不支持|暂无已验证/);
+});
+
 t('公用件消费面：额度闸走 lib/公用件，不自抄第二份解析', () => {
   const 闸源 = fs.readFileSync(path.join(平台根, 'lib', '额度闸.js'), 'utf8');
   assert.match(闸源, /require\('\.\/公用件'\)/);

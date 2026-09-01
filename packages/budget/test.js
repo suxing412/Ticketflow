@@ -31,6 +31,14 @@ t('usage 提取：输入/缓存取最大值，输出累加，三者分列', () =
   assert.deepEqual(B.usageOf(null), { 输入: 0, 缓存: 0, 输出: 0 });
 });
 
+t('OpenCode usage：逐 step_finish 累加，reasoning 保守计入输出', () => {
+  const 流 = [
+    { type: 'step_finish', part: { reason: 'tool-calls', tokens: { input: 39, output: 21, reasoning: 44, cache: { read: 10112, write: 0 } } } },
+    { type: 'step_finish', part: { reason: 'stop', tokens: { input: 110, output: 5, reasoning: 0, cache: { read: 10112, write: 0 } } } },
+  ].map(JSON.stringify).join('\n');
+  assert.deepEqual(B.usageOf(流), { 输入: 149, 缓存: 20224, 输出: 70 });
+});
+
 t('记账只追加；坏行容错；缺文件返回空汇总不抛', () => {
   const root = 新根();
   assert.deepEqual(B.读账(root), []);

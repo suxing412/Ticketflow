@@ -33,6 +33,17 @@ CLI 厂商适配层——把"由哪家 AI 执行"从两个产品的业务逻辑�
 | `configs(cfg)` | 内部 | `list` 的底层，返回对象而非数组。形状可能变 |
 | `resolveLegacy(name, model)` | **已弃用** | 旧测试兼容入口。新代码一律走 `create().buildInvocation()` |
 
+### OpenCode / GLM（协议基线 1.18.25）
+
+`opencode-cli` 生成 `opencode run --pure --model <固定模型> --format json --agent <档位>`，
+提示词走 stdin，输出格式为 `opencode-jsonl`。首期模型只允许
+`zhipuai-coding-plan/glm-*`；provider 配置中的固定模型不能被请求体改成别家模型。
+
+2026-09-01 用本机 OpenCode 1.18.25 实采了成功、stdin/cwd/读写、bash、401、429、
+命令不存在、EPERM 与中断流，原始事件夹具在 `apps/platform/test/fixtures/opencode/`。
+升级 OpenCode 后必须重采并跑契约测试。成功必须以最终 `step_finish.reason="stop"` 为准；
+退出码 0 或正文非空都不能替代完整终态。
+
 ### `list(cfg)` 的字段契约
 
 返回**数组**，元素字段（注意是英文键——中文键是消费方自己映射的，不是本包契约）：

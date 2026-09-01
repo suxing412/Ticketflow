@@ -105,7 +105,11 @@
           "read-only",
           "--skip-git-repo-check"
         ],
-        "command-cli": []
+        "command-cli": [],
+        "opencode-cli": [
+          "--agent",
+          "plan"
+        ]
       }
     },
     "自动派发": {
@@ -136,6 +140,12 @@
       "adapter": "codex-cli",
       "enabled": true,
       "roles": [],
+      "identity": {
+        "modelVendor": "openai",
+        "harness": "codex",
+        "authRealm": "openai-codex",
+        "reviewDomain": "openai-codex"
+      },
       "说明": "Codex CLI（无头 exec，提示词走 stdin）",
       "scores": {
         "default": {
@@ -150,6 +160,12 @@
       "adapter": "claude-cli",
       "enabled": true,
       "roles": [],
+      "identity": {
+        "modelVendor": "anthropic",
+        "harness": "claude",
+        "authRealm": "anthropic-claude",
+        "reviewDomain": "anthropic-claude"
+      },
       "说明": "Claude Code CLI（无头 -p，提示词走 stdin）",
       "scores": {
         "default": {
@@ -159,6 +175,23 @@
         "日期": "2026-08-10",
         "注意": "对应本机 claude CLI 实测自报的 claude-sonnet-5；若改用 Opus 5（榜首 97.0%）需同步改此值"
       }
+    },
+    "glm": {
+      "adapter": "opencode-cli",
+      "enabled": true,
+      "model": "zhipuai-coding-plan/glm-5.3",
+      "agent": "build",
+      "roles": [
+        "backend",
+        "frontend"
+      ],
+      "identity": {
+        "modelVendor": "zhipu",
+        "harness": "opencode",
+        "authRealm": "zhipuai-coding-plan",
+        "reviewDomain": "zhipu-glm"
+      },
+      "说明": "GLM Coding Plan 经 OpenCode 1.18.25 无头接入；首期只承接 backend/frontend，判官与编排保持关闭"
     },
     "echo": {
       "adapter": "command-cli",
