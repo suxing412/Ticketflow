@@ -1,0 +1,12 @@
+{
+  "_说明": [
+    "本机编制。allow 是硬白名单，prefer 是其中候选的严格优先顺序；prefer 不会扩大 allow。",
+    "修复职责由质检不过产生，默认交给 codex，claude 作为名单内后备；不要把首次执行方 glm 加进修复池序。"
+  ],
+  "roles": {
+    "修复": {
+      "allow": ["codex", "claude"],
+      "prefer": ["codex"]
+    }
+  }
+}

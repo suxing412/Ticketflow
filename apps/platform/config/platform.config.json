@@ -35,6 +35,10 @@
     "reviewer": {
       "说明": "评审，只读角色",
       "requiredCapabilities": []
+    },
+    "修复": {
+      "说明": "质检不过后的异源修复；不得由编排计划直接创建",
+      "requiredCapabilities": []
     }
   },
   "_路由说明": [
@@ -82,12 +86,14 @@
     "允许真跑": false,
     "超时毫秒": 900000,
     "静默毫秒": 120000,
+    "返修上限": 2,
     "权限": {
       "默认": "受限",
       "放开": [
         "backend",
         "frontend",
-        "integrator"
+        "integrator",
+        "修复"
       ],
       "受限参数": {
         "claude-cli": [
