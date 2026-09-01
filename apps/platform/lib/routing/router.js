@@ -14,6 +14,26 @@ function routeConfig(value) {
   return value && typeof value === 'object' ? value : {};
 }
 
+function identityOf(cfg, provider) {
+  if (provider && typeof provider === 'object' && provider.identity) {
+    return { provider: provider.name || null, ...provider.identity };
+  }
+  const name = typeof provider === 'string' ? provider : provider && provider.name;
+  const pc = name && ((cfg || {}).providers || {})[name];
+  return pc && pc.identity ? { provider: name, ...pc.identity } : null;
+}
+
+function isCrossReview(executorIdentity, reviewerIdentity) {
+  if (!executorIdentity || !reviewerIdentity) return '未核验';
+  const leftDomain = String(executorIdentity.reviewDomain || '').trim();
+  const rightDomain = String(reviewerIdentity.reviewDomain || '').trim();
+  if (leftDomain && rightDomain) return leftDomain !== rightDomain;
+  const leftVendor = String(executorIdentity.modelVendor || '').trim();
+  const rightVendor = String(reviewerIdentity.modelVendor || '').trim();
+  if (leftVendor && rightVendor) return leftVendor !== rightVendor;
+  return '未核验';
+}
+
 function requiredCapabilities(cfg, task, role) {
   const roleCfg = (cfg.roles || {})[role] || {};
   const fm = task && task.fm || {};
@@ -119,7 +139,12 @@ function rankProviders(root, cfg, { agent = null, task = null, role = '', kind =
   // 自动评审默认采用不同厂商，降低同源盲区；只有没有替代者时才回到原 Provider。
   const original = task && task.fm && (task.fm.provider || task.fm.供应商 || task.fm.执行池);
   if (kind !== '执行' && original && routing.crossProviderReview !== false) {
-    const alternatives = ranked.filter((candidate) => candidate.name !== original);
+    const frozenIdentity = task.fm.执行身份 || identityOf(cfg, original);
+    const alternatives = ranked.filter((candidate) => {
+      const cross = isCrossReview(frozenIdentity, identityOf(cfg, candidate.name));
+      // 旧配置没身份时仍按池名做保守避让，但只能算「未核验」，绝不据此宣称跨厂。
+      return cross === true || (cross === '未核验' && candidate.name !== original);
+    });
     if (alternatives.length) return alternatives;
   }
   return ranked;
@@ -129,4 +154,4 @@ function chooseProvider(root, cfg, context) {
   return rankProviders(root, cfg, context)[0] || null;
 }
 
-module.exports = { taskRole, agentRole, requiredCapabilities, rankProviders, chooseProvider };
+module.exports = { taskRole, agentRole, requiredCapabilities, rankProviders, chooseProvider, identityOf, isCrossReview };

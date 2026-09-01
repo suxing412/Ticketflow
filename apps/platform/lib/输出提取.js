@@ -50,6 +50,53 @@ function 抽codex(文本) {
   return 末;
 }
 
+function 抽opencode(文本) {
+  let 末 = '';
+  for (const e of 逐行JSON(文本)) {
+    const p = e && e.part;
+    if (e.type === 'text' && p && p.type === 'text' && typeof p.text === 'string'
+      && p.text.trim() && p.time && p.time.end != null) 末 = p.text;
+  }
+  return 末;
+}
+
+function opencode工具事件(文本) {
+  const out = [];
+  for (const e of 逐行JSON(文本)) {
+    const p = e && e.part; const s = p && p.state;
+    if (e.type !== 'tool_use' || !p || p.type !== 'tool' || !s) continue;
+    out.push({
+      工具: p.tool || '', 命令: s.input && s.input.command || '', 状态: s.status || '',
+      输出: String(s.output || s.metadata && s.metadata.output || ''),
+      错误: String(s.error && (s.error.message || s.error) || ''), 输入: s.input || {},
+      退出码: s.metadata && s.metadata.exit != null ? Number(s.metadata.exit) : null,
+    });
+  }
+  return out;
+}
+
+function 抽opencode收尾(文本) {
+  const events = 逐行JSON(文本);
+  let lastFinish = null; let lastError = null;
+  for (const e of events) {
+    if (e && e.type === 'step_finish' && e.part) lastFinish = e.part;
+    if (e && e.type === 'error' && e.error) lastError = e.error;
+  }
+  if (lastError) {
+    const data = lastError.data || {};
+    return {
+      是错: true, 完整: false, 终因: 'api_error', 错名: 错名于(lastError) || 错名于(data),
+      api状态: data.statusCode != null ? data.statusCode : null,
+    };
+  }
+  if (!lastFinish) return { 是错: true, 完整: false, 终因: 'missing_step_finish', 错名: null, api状态: null };
+  const 完整 = lastFinish.reason === 'stop';
+  return {
+    是错: !完整, 完整, 终因: lastFinish.reason || 'unknown', 停因: lastFinish.reason || null,
+    错名: null, api状态: null, tokens: lastFinish.tokens || null,
+  };
+}
+
 // 按适配器声明的格式抽正文。**抽不出来时回退原文**——
 // 宁可让人看到原始输出，也不要返回空字符串：空会让上游误判成「零输出」，
 // 进而把一次成功的运行记成失败，污染路由战绩。
@@ -58,6 +105,7 @@ function 抽正文(输出, 格式) {
   let 抽 = '';
   if (格式 === 'claude-stream-json') 抽 = 抽claude(原);
   else if (格式 === 'codex-jsonl') 抽 = 抽codex(原);
+  else if (格式 === 'opencode-jsonl') 抽 = 抽opencode(原);
   else return { 正文: 原, 来源: '原文（未知格式，未做提取）' };
 
   if (抽.trim()) return { 正文: 抽, 来源: 格式 };
@@ -102,6 +150,7 @@ function 错名于(e) {
 
 function 抽收尾(输出, 格式) {
   const 原 = String(输出 || '');
+  if (格式 === 'opencode-jsonl') return 抽opencode收尾(原);
   if (格式 !== 'claude-stream-json') return null;      // 只认已知形状，不替别的厂商猜
   const 行 = 原.split(/\r?\n/).filter((l) => l.trim());
   for (let i = 行.length - 1; i >= 0; i--) {           // 从后往前找：result 是最后一条
@@ -152,6 +201,10 @@ function 收尾说因(收尾) {
     return `**API 出错收场**${尾}——照 error 的名字去查这个池，别按「活干砸了」处理。`;
   }
 
+  if (收尾.完整 === false) {
+    return `CLI 流不完整（终因=${收尾.终因 || '未知'}）——没有最终 reason=stop，不许按成功结案。`;
+  }
+
   // ② 回合数上限。只有真绕了好几圈才配这么说：num_turns=1 意味着它连第二轮都没开始，
   //    那不是「上限用光」，是开头就死了——原因得另找，硬套上限会把人送到错误的方向上去。
   if (收尾.停因 === 'stop_sequence' && 收尾.回合数 != null && 收尾.回合数 > 1) {
@@ -196,7 +249,7 @@ function 死因于(文) {
   return (m ? m[1] : s.split(/\r?\n/)[0] || '').replace(/[\\"\s]+$/, '').trim().slice(0, 200) || null;
 }
 
-function 抽进程故障(输出, 错出) {
+function 抽进程故障(输出, 错出, 格式) {
   const 起不来 = []; const 见过 = new Set(); let 跑起来了 = 0;
   const 记 = (命令, 因) => {
     const 键 = String(命令 || '').replace(/\s+/g, ' ').trim().slice(0, 300);
@@ -204,6 +257,15 @@ function 抽进程故障(输出, 错出) {
     if (键) 见过.add(键);
     起不来.push({ 命令: 键.slice(0, 200), 因: 死因于(因) });
   };
+
+  if (格式 === 'opencode-jsonl') {
+    for (const e of opencode工具事件(输出)) {
+      if (e.工具 !== 'bash') continue;
+      const 出 = `${e.错误}\n${e.输出}`;
+      if (/CommandNotFoundException|not recognized as (?:a )?(?:cmdlet|runnable program)|\bENOENT\b|CreateProcess\s*\{/i.test(出)) 记(e.命令, 出);
+      else if (e.状态 === 'completed') 跑起来了 += 1;
+    }
+  }
 
   for (const 行 of String(输出 || '').split(/\r?\n/)) {
     const s = 行.trim();
@@ -267,9 +329,21 @@ function 进程故障说因(故障) {
 const 写权码 = /\b(EPERM|EACCES)\b[^\n]{0,200}/g;
 const 写权动作 = /operation not permitted|permission denied|拒绝访问|Access is denied/i;
 
-function 抽写权阻断(输出, 区路径) {
+function 抽写权阻断(输出, 区路径, 格式) {
   const 例 = []; const 见过 = new Set();
   const 区 = String(区路径 || '').replace(/\\/g, '/').toLowerCase();
+  if (格式 === 'opencode-jsonl') {
+    for (const e of opencode工具事件(输出)) {
+      const 出 = `${e.错误}\n${e.输出}`;
+      for (const m of 出.match(写权码) || []) {
+        if (!写权动作.test(m)) continue;
+        const 路径 = (m.match(/'([^']{3,300})'/) || [])[1] || null;
+        const 键 = (路径 || m).slice(0, 300); if (见过.has(键)) continue; 见过.add(键);
+        例.push({ 命令: String(e.命令 || '').slice(0, 160), 路径, 说: m.trim().slice(0, 200),
+          区内: !!(区 && 路径 && 路径.replace(/\\/g, '/').toLowerCase().startsWith(区)) });
+      }
+    }
+  }
   for (const 行 of String(输出 || '').split(/\r?\n/)) {
     const s = 行.trim();
     if (!s || s[0] !== '{') continue;

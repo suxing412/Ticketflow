@@ -3,6 +3,7 @@ const assert = require('node:assert');
 const registry = require('../registry');
 const codexProvider = require('../codex-cli');
 const claudeProvider = require('../claude-cli');
+const opencodeProvider = require('../opencode-cli');
 
 let passed = 0; const t = (name, fn) => { fn(); passed++; console.log('  ✓ ' + name); };
 console.log('providers Provider Adapter 测试');
@@ -47,6 +48,26 @@ t('通用 command-cli 可接入 Kimi 等后续厂商', () => {
   const run = registry.create(cfg, 'kimi').buildInvocation({ model: 'kimi-code' });
   assert.equal(run.cmd, 'kimi');
   assert.deepEqual(run.args, ['run', '--model', 'kimi-code']);
+});
+
+t('OpenCode Adapter 固定 GLM Coding Plan 模型并走 stdin JSONL', () => {
+  const cfg = { providers: { glm: { adapter: 'opencode-cli', model: 'zhipuai-coding-plan/glm-5.3',
+    identity: { modelVendor: 'zhipu', harness: 'opencode', authRealm: 'zhipuai-coding-plan', reviewDomain: 'zhipu-glm' } } } };
+  const run = registry.create(cfg, 'glm').buildInvocation({});
+  assert.equal(run.promptMode, 'stdin');
+  assert.equal(run.outputFormat, 'opencode-jsonl');
+  assert.deepEqual(run.args.slice(0, 2), ['run', '--pure']);
+  assert.ok(run.args.includes('zhipuai-coding-plan/glm-5.3'));
+  assert.ok(run.args.includes('json'));
+  assert.throws(() => registry.create(cfg, 'glm').buildInvocation({ model: 'openai/gpt-5' }), /拒绝请求体覆盖/);
+});
+
+t('OpenCode identity 与 adapter/model 必须一致', () => {
+  const base = { adapter: 'opencode-cli', model: 'zhipuai-coding-plan/glm-5.3',
+    identity: { modelVendor: 'zhipu', harness: 'opencode', authRealm: 'zhipuai-coding-plan', reviewDomain: 'zhipu-glm' } };
+  assert.throws(() => registry.list({ providers: { x: { ...base, identity: { ...base.identity, harness: 'claude' } } } }), /不一致/);
+  assert.throws(() => registry.list({ providers: { x: { ...base, model: 'zhipuai-coding-plan/not-glm' } } }), /只允许/);
+  assert.throws(() => opencodeProvider.assertModel('openai/gpt-5'), /只允许/);
 });
 
 t('停用或未知 Adapter 会明确拒绝', () => {

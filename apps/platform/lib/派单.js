@@ -27,6 +27,7 @@ const 默认受限参数 = {
   // codex 用沙箱与审批策略表达同一件事；另外它在非 git 目录会拒跑，
   // 而我们的隔离工作目录经常就不是 git 仓（不带项目的工单跑在临时目录里）。
   'codex-cli': ['--sandbox', 'read-only', '--skip-git-repo-check'],
+  'opencode-cli': ['--agent', 'plan'],
   'command-cli': [],                       // echo 桩不需要权限概念
 };
 
@@ -380,11 +381,23 @@ function 选派(仓根, 配置, { 角色, 类别 = '执行', 公用件, 账本�
   }
   // adapter 从配置里查：受限参数按适配器分，不知道是哪家就注不对参数。
   const adapter = ((配置.providers || {})[择.选中.name] || {}).adapter || null;
+  const 身份 = 路由器.identityOf(配置, 择.选中.name);
+  const 执行身份 = 工单 && 工单.fm && (工单.fm.执行身份 || 路由器.identityOf(配置, 工单.fm.执行池));
+  const 跨厂 = 类别 === '执行' ? null : 路由器.isCrossReview(执行身份, 身份);
   const 权 = 权限参数(配置, 角色, adapter);
   return {
     ok: true,
     选中: 择.选中.name,
     adapter,
+    身份,
+    ...(类别 === '执行' ? {} : {
+      跨厂,
+      跨厂依据: {
+        执行方: 执行身份 || null,
+        判官方: 身份 || null,
+        口径: 执行身份 && 身份 && 执行身份.reviewDomain && 身份.reviewDomain ? 'reviewDomain' : 'modelVendor/未核验',
+      },
+    }),
     分数: 择.选中.score,
     理由: 择.选中.reasons,
     降级: 择.降级 || !!同源兜底,
@@ -441,6 +454,7 @@ function 落单(工单库, 根, id, 派单结果) {
   }
   const r = 工单库.move(根, id, '待投', '在途', (fm) => {
     fm.执行池 = 派单结果.选中;
+    fm.执行身份 = 派单结果.身份 || null;
     fm.派单时间 = new Date().toISOString();
     fm.权限模式 = 派单结果.权限.模式;
     if (派单结果.降级) fm.降级留痕 = 派单结果.跳过;

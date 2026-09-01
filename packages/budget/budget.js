@@ -27,6 +27,14 @@ function usageOf(raw) {
     if (!s.startsWith('{')) continue;
     try {
       const e = JSON.parse(s);
+      const ot = e && e.type === 'step_finish' && e.part && e.part.tokens;
+      if (ot) {
+        输入 += Number(ot.input) || 0;
+        缓存 += Number(ot.cache && ot.cache.read) || 0;
+        缓存 += Number(ot.cache && ot.cache.write) || 0;
+        输出 += (Number(ot.output) || 0) + (Number(ot.reasoning) || 0);
+        continue;
+      }
       const u = e.usage || (e.message && e.message.usage);
       if (!u) continue;
       if (u.input_tokens) 输入 = Math.max(输入, u.input_tokens);
