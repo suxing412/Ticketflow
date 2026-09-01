@@ -132,6 +132,7 @@ function normalizePlan(cfg, value) {
     const role = String(raw.role || raw.角色 || '').trim();
     if (!roles.has(role)) 记错(`子任务 ${key} 使用未知角色：${role}（可用：${[...roles].join(' / ')}）`);
     if (role === 'orchestrator' && (cfg.orchestration || {}).allowNested !== true) 记错(`子任务 ${key} 不允许递归创建 Orchestrator`);
+    if (role === '修复') 记错(`子任务 ${key} 不允许预设「修复」职责——它只能由质检判不过产生`);
     const title = String(raw.title || raw.标题 || '').trim();
     if (!title || title.length > 100) 记错(`子任务 ${key} 标题为空或超过 100 字`);
     const acceptance = arr(raw.acceptance || raw.验收标准).map(String).map((x) => x.trim()).filter(Boolean);

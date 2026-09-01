@@ -27,12 +27,14 @@ t('状态机：加态靠改表不改逻辑（协-004 质检、协-009 已归档�
   // 协-001 决定 1 承诺「表驱动，加态是改表不是改逻辑」。两次加态都兑现了：
   // 状态机代码一行没动，只改了 STATES 与 TRANSITIONS 两张表。
   // 这条 deepEqual 的价值就在于**加一个态不能悄悄发生**——每次都要有人来这里确认。
-  assert.deepEqual(库.STATES, ['草稿', '待投', '在途', '质检', '完成', '已归档']);
+  assert.deepEqual(库.STATES, ['草稿', '待投', '在途', '质检', '挂起', '完成', '已归档']);
   assert.equal(库.isLegal('草稿', '待投'), true);
   assert.equal(库.isLegal('在途', '质检'), true, '干完送检');
   assert.equal(库.isLegal('在途', '完成'), true, '免检时直达完成');
   assert.equal(库.isLegal('质检', '完成'), true, '判过');
   assert.equal(库.isLegal('质检', '待投'), true, '判不过回待投重做——不是失败终态，同一张单可以再跑');
+  assert.equal(库.isLegal('质检', '挂起'), true, '返修次数到上限后停手待人工');
+  assert.equal(库.isLegal('挂起', '待投'), true, '人工处理后能重投');
   assert.equal(库.isLegal('在途', '待投'), true, '退回重投要合法');
   assert.equal(库.isLegal('草稿', '完成'), false, '不许跳级');
   assert.equal(库.isLegal('草稿', '质检'), false, '没干过的活不能直接送检');
@@ -41,7 +43,7 @@ t('状态机：加态靠改表不改逻辑（协-004 质检、协-009 已归档�
 t('已归档：任何状态都能归，且归了能取回', () => {
   // 归档是「删掉它」的正规入口。此前工单库**只能建不能销**，
   // 人想清一张废单只能去磁盘 rm 文件——绕过产品，账本还留下对不上号的记录。
-  for (const s of ['草稿', '待投', '在途', '质检', '完成']) {
+  for (const s of ['草稿', '待投', '在途', '质检', '挂起', '完成']) {
     assert.equal(库.isLegal(s, '已归档'), true, `${s} 该能归档——废单不分状态`);
   }
   // **归档必须可逆**。不可逆的话人不敢用它，只会继续攒着，
@@ -125,7 +127,7 @@ t('落位：拒空、拒相对路径、拒装进产品自己的目录', () => {
   } finally { fs.rmSync(假平台, { recursive: true, force: true }); }
 });
 
-t('落位：正常路径建齐五个状态目录，写出的配置能被解析回来', () => {
+t('落位：正常路径建齐全部状态目录，写出的配置能被解析回来', () => {
   const 假平台 = fs.mkdtempSync(path.join(os.tmpdir(), 'platform-fake-'));
   const 目标 = fs.mkdtempSync(path.join(os.tmpdir(), 'platform-store-'));
   const 存 = process.env.PLATFORM_TICKETS;
