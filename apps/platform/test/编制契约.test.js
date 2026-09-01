@@ -18,7 +18,7 @@ console.log('编制契约测试');
 
 const 配 = (routing) => ({
   roles: { backend: {}, reviewer: {}, orchestrator: {} },
-  providers: { claude: {}, codex: {}, echo: {} },
+  providers: { claude: {}, codex: {}, echo: { 桩: true } },
   ...(routing ? { routing } : {}),
 });
 
@@ -57,7 +57,8 @@ t('快照的可用性来自注入的冻结判定（与调度同一把尺）', ()
 t('没指定池序时，快照要如实摆出「实际会考虑哪些池」', () => {
   // 显示一个空表会让人以为没人干活，而实际它在按全局排名派。
   const b = 编制.快照(配(), () => false).find((r) => r.角色 === 'backend');
-  assert.deepEqual(b.池态.map((p) => p.池), ['claude', 'codex', 'echo']);
+  assert.deepEqual(b.池态.map((p) => p.池), ['claude', 'codex'],
+    'echo 是桩池，router 不会自动派，快照也不能把它显示成可用候选');
   assert.ok(b.池态.every((p) => p.指定 === false), '这些是全局排名带出来的，不是指定的');
   assert.ok(/全局排名/.test(b.态));
 });
@@ -157,6 +158,41 @@ t('池序全冻 → 名单外仍按分数借调；全部冻结才无候选', () 
   assert.deepEqual(择.跳过.map((p) => p.名称), ['codex', 'claude']);
   assert.equal(择.降级, true);
   assert.equal(加固.择候选(排, { ...冻, spare: '冻结', reserve: '冻结' }).选中, null);
+});
+
+t('快照与 router 同候选链：池序全冻时明确说将借调谁', () => {
+  const c = 路由配(['codex', 'claude']);
+  const 冻结 = (池) => ['codex', 'claude'].includes(池);
+  const b = 编制.快照(c, 冻结).find((r) => r.角色 === 'backend');
+  const 实派 = 加固.择候选(排名(c), { codex: '冻结', claude: '冻结' });
+  assert.equal(b.首个可用, 'spare');
+  assert.equal(b.首个可用, 实派.选中.name, '界面快照与候选链实际落点必须一致');
+  assert.equal(b.可用, true);
+  assert.match(b.态, /池序全冻·将借调 spare/);
+  assert.equal(b.池态.find((p) => p.池 === 'spare').指定, false, '借调池要明确标成非指定');
+});
+
+t('快照资格完全复用 router，不显示 allow/deny/enabled/roles/capabilities 淘汰项', () => {
+  const c = 路由配(['codex', 'claude', 'spare', 'reserve']);
+  c.routing.roles.backend.allow = ['codex', 'claude', 'spare', 'reserve'];
+  c.routing.roles.backend.deny = ['claude'];
+  c.providers.codex.enabled = false;
+  c.providers.spare.roles = ['reviewer'];
+  c.providers.reserve.capabilities = ['chat'];
+  c.roles.backend.requiredCapabilities = ['code'];
+  const b = 编制.快照(c, () => false).find((r) => r.角色 === 'backend');
+  assert.deepEqual(b.池态, [], '四个候选都被 router 淘汰，快照不能再报首个可用');
+  assert.equal(b.首个可用, null);
+  assert.equal(b.态, '无可用池·止派');
+});
+
+t('池序无合格候选但有名单外候选时，如实说明借调而非已指定', () => {
+  const c = 路由配(['codex']);
+  c.providers.codex.enabled = false;
+  const b = 编制.快照(c, () => false).find((r) => r.角色 === 'backend');
+  assert.equal(b.首个可用, 'spare');
+  assert.match(b.态, /池序无合格候选·将借调 spare/);
+  assert.equal(b.可用, true);
 });
 
 t('没指定池序仍按分数排；池序不能绕过白名单、禁用和能力过滤', () => {
