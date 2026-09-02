@@ -3,9 +3,11 @@
     "改名为 预算.local.json 即生效（不入库）。口径见 packages/budget/README.md。",
     "日token/月token 是保险丝不是财务系统，宁可早刹一点。",
     "没在这里配上限的池，一律不许真跑——这是第三道闸，独立于总开关。",
-    "注意 codex 取不到 usage（非 stream-json），给它配上限也不会累计，见 budget README。"
+    "OpenCode JSONL 的 step_finish.tokens 已记账，reasoning 保守计入输出；GLM 没有机器可读订阅窗口，token 上限是必要兜底。",
+    "给 预算.池.glm 写上限会赋予真实平台运行资格，必须先完成施工令里的人工确认。"
   ],
   "池": {
-    "claude": { "日token": 200000 }
+    "claude": { "日token": 200000 },
+    "glm": { "日token": 200000 }
   }
 }

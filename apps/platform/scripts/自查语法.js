@@ -27,6 +27,13 @@ function 扫(dir, 出 = []) {
 const 全 = 扫(平台根);
 const 坏 = [];
 for (const f of 全) {
+  if (fs.readFileSync(f).includes(0)) {
+    坏.push({
+      文件: path.relative(平台根, f),
+      说: '含字面 NUL 字节（0x00）；请改用 \\0 转义，字面 NUL 会让 git 把源文件当二进制、PR 上审不了 diff',
+    });
+    continue;
+  }
   try {
     execFileSync(process.execPath, ['--check', f], { stdio: ['ignore', 'ignore', 'pipe'] });
   } catch (e) {
