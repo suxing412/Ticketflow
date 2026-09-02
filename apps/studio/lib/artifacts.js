@@ -32,7 +32,7 @@ const MENU_RE = /^(?:Tools|SLG|Window|GameObject|Component|Assets\/Create|Edit|H
 const GLOB_RE = /[*?[\]{}]/;                                            // 通配元字符
 const PLACEHOLDER_RE = /…|\.{3}|<[^<>]*>|\$\{[^}]*\}|\{\{[^}]*\}\}|%s/; // 省略号／尖括号／${}／{{}}／%s 占位
 
-// 路径解析 + 越界防护（同 stylelib 铁律：越出项目仓 → null）
+// 路径解析 + 越界防护：越出项目仓 → null。
 function resolveIn(root, rel) {
   if (!root || !rel) return null;
   const abs = path.resolve(root, rel);

@@ -21,7 +21,7 @@ const 大态兜底 = { // H116 十三态：已排期（放行∧有排期，候�
   在途: ['在途', '初检', '核查', '仲裁', '完成'],
   结束: ['归档', '挂起', '废弃'],
 };
-// 施工令-015：wiki 升格唯一知识入口（施工令-020 起五分区），风格库导航退役——美术标杆并入 Wiki 页签
+// 施工令-015：wiki 升格唯一知识入口（施工令-020 起五分区），美术标杆并入 Wiki 页签
 // NAV（2026-08-20 四层架构改版）：工单页＝归属结构面（管线→特性→专项→工单三级钻取），
 // 看板＝流转面（谁在哪一态）。制作人定的分工原话：「工单页管归属，看板页管流转」。
 // 专项页并入工单页第三层，旧书签在 route() 里转向。
@@ -366,7 +366,7 @@ async function viewOverview() {
       ${值守债.map((x) => `<div class="inbox-row card${值守逾(x) ? ' od' : ''}" onclick="location.hash='${esc(x.路由 || '#/')}'" tabindex="0" role="button"
         onkeydown="if(event.key==='Enter'){location.hash='${esc(x.路由 || '#/')}'}">
         <span class="rid">${esc(x.id)}</span><span class="rt clamp2" title="${esc(x.title)}">${esc(x.title)}</span>
-        <span class="rnote">${esc((值守停文(x.停摆小时) ? '已停 ' + 值守停文(x.停摆小时) + ' · ' : '') + (x.按钮 || x.落点 || ''))}</span>
+        <span class="rnote">${esc((值守停文(x.停摆小时) ? '已停 ' + 值守停文(x.停摆小时) + ' · ' : '') + (x.指引 || x.落点 || ''))}</span>
         ${stPill(x.闸名)}</div>`).join('')}</details>`;
   const inboxHtml = inbox.map((r) => `<div class="inbox-row card${r.逾期 ? ' od' : ''}" onclick="location.hash='${esc(r.到)}'" tabindex="0" role="button"
       onkeydown="if(event.key==='Enter'){location.hash='${esc(r.到)}'}">
@@ -507,6 +507,50 @@ function paintGate(paused, oauth) {
       <button class="btn h32 primary" style="margin-left:auto" onclick="togglePause(false)">开闸</button></div>` : '') + oa;
 }
 // D43 批量放行：当前项目语境的待派整批放行（项管闸 H109；fm.放行 标记，不再是目录跳变）
+// 看板卡片渲染。**抽成顶层函数而不是留在 viewBoard 的闭包里**，是为了让它可直接测——
+// gate-buttons.test.js 的既定打法就是「调纯渲染函数、从真吐出来的 HTML 里剥 <button>」；
+// 埋在闭包里只能整页跑 viewBoard，而沙箱的 getElementById 对所有 id 返回同一元素，
+// 顶栏一写就把看板覆盖了，取不到。可测性是接口设计的一部分，不是测试自己的事。
+//
+// 停靠单（议程第 33 条）：一眼认得出，且带得动 G26 宣告的那两颗钮。
+// 闸表写着按钮而界面上没有，比没有这条闸更坏——人会以为自己已经处置过了。
+function bcard(t) {
+  const 停 = t.停靠 === true;
+  const 因 = String(t.停靠因 || '');
+  const 钮 = 停
+    ? `<div class="cacts">`
+      + `<button class="cact" title="解除停靠：放回自动化视野（放行仍需 G1 另判）"`
+      + ` onclick="event.stopPropagation();unpark('${esc(t.id)}')">解除停靠</button>`
+      + `<button class="cact danger" title="废弃本单"`
+      + ` onclick="event.stopPropagation();discardOne('${esc(t.id)}')">废弃</button>`
+      + `</div>`
+    : '';
+  const 提示 = 停 ? `停靠候裁：${因}` : (suspOf(t) ? suspTip(t) : t.title);
+  return `<div class="bcard2${suspCls(t)}${停 ? ' parked' : ''}" data-tid="${esc(t.id)}" onclick="location.hash='#/t/${t.id}'" title="${esc(提示)}">
+      <span class="cid">${snowB(t)}${停 ? '<span class="pk">停靠</span>' : ''}${esc(t.id)}</span>
+      <span class="cpri ${t.优先级 === 'P0' ? 'p0' : ''}">${esc(t.优先级 || '')}</span>
+      <div class="ct clamp2" title="${esc(t.title)}">${esc(t.title)}</div>${fnPill(t.职能)}${钮}</div>`;
+}
+
+// G26 停靠单候裁的两颗钮（议程第 33 条，2026-08-28）。
+// 整批放行那颗是批量的，这两颗**必须逐单**——每张停靠单各有各的因由，
+// 「批量解除停靠」等于把九个不同的判断合成一次点击。
+window.unpark = async (id) => {
+  const b = await loadBoard();
+  const t = ((b.board && b.board['待派']) || []).find((x) => x.id === id);
+  const 因 = t ? String(t.停靠因 || '') : '';
+  if (!await ask(`解除 ${id} 的停靠？\n\n停靠因由：${因 || '（未记）'}\n\n解除后它回到自动化视野；放行仍需 G1 项管闸另判。`)) return;
+  const r = await post('/api/act/解除停靠', { id, 操作者: '制作人' });
+  toast(r.ok ? `${id} 已解除停靠` : `解除失败：${r.error || ''}`);
+  route();
+};
+window.discardOne = async (id) => {
+  if (!await ask(`废弃 ${id}？\n\n销毁性动作，走 G5b 人闸。`)) return;
+  const r = await post('/api/act/废弃', { id });
+  toast(r.ok ? `${id} 已废弃` : `废弃失败：${r.error || ''}`);
+  route();
+};
+
 window.releaseAll = async () => {
   const { board } = await loadBoard();
   const items = board['待派'] || [];
@@ -535,10 +579,7 @@ async function viewBoard() {
       : s === '待派' && items.length
         ? `<h4>${s}<button class="newdraft" title="整批放行（H109 项管闸：放行落 fm.放行 标记，依赖就绪即自动派发；闸就是这一下）" onclick="releaseAll()">⇧ 全放行 ${items.length}</button></h4>`
         : `<h4>${s}<span class="cnt">${items.length}</span></h4>`;
-    const cards = items.map((t) => `<div class="bcard2${suspCls(t)}" data-tid="${esc(t.id)}" onclick="location.hash='#/t/${t.id}'"${suspOf(t) ? ` title="${esc(suspTip(t))}"` : ''}>
-        <span class="cid">${snowB(t)}${esc(t.id)}</span>
-        <span class="cpri ${t.优先级 === 'P0' ? 'p0' : ''}">${esc(t.优先级 || '')}</span>
-        <div class="ct clamp2" title="${esc(t.title)}">${esc(t.title)}</div>${fnPill(t.职能)}</div>`).join('');
+    const cards = items.map(bcard).join('');
     return `<div class="bcol2 ${widths[s] || ''} ${hot ? 'hot' : ''}">${head}${cards}</div>`;
   };
   // 待办/在途 两段铺列（列序照 大态 分组表，完成 摘出）；结束段只给计数入口，不铺一张卡。
@@ -1167,7 +1208,7 @@ function viewAgentsDispatch(d, all) {
 
 /* D42 项目语境过滤（施工令-012 / 巡礼 P2-1）：在途页原先把 /api/agents 原样交给渲染，
    他项目工单混进驾驶舱，而同页下方的执行时间轴吃的是过滤后的 all——上半页有、下半页没有。
-   口径与决策台/报表/风格库一致：在跑按单自带的项目章过滤，就绪队列/判官按「在不在本项目盘面」判，
+   口径与决策台/报表一致：在跑按单自带的项目章过滤，就绪队列/判官按「在不在本项目盘面」判，
    保证在途页上下半页同源。轮询回来的数据也走这道闸（否则张数对不上会无限整页重画）。 */
 function agentsScoped(d, all) {
   const p = projActive();
@@ -1264,46 +1305,6 @@ async function viewDecisions() {
 }
 window.dAct = async (name, id, 通过, 决定) => { const r = await post('/api/act/' + name, { id, 通过, 决定 }); toast(r.ok ? '已处理' : (r.error || '失败')); route(); };
 window.dReject = async (id) => { if (await ask('打回将归档旧单，需另开新单重走流程。确认？')) dAct('验收', id, false); };
-
-/* ===== P5 风格库 → 施工令-015 迁为 Wiki「美术标杆」页签（数据零迁移，仅展示位并入） ===== */
-async function wkArtRef() {
-  const d = await api('/api/style-lib');
-  // D42：风格库跟项目走——条目按落款/meta 的项目归属过滤，旧条目（无项目记号）归默认项目
-  const p = projActive();
-  if (p) { await loadCfg();
-    d.标杆 = d.标杆.filter((e) => (e.项目 || projDefault()) === p);
-    d.美术 = d.美术.filter((x) => ((x.来源 && x.来源.项目) || projDefault()) === p);
-  }
-  const ax = d.标杆.length ? d.标杆.map((e) => `<div class="axcard card"><h4>${esc(e.标题)}</h4><p title="${esc(e.正文)}">${esc(e.正文.slice(0, 80))}</p>
-      <div class="axmeta">${e.源单 && e.源单 !== '手工' ? `<a class="pill sm fn mono" href="#/t/${esc(e.源单)}">${esc(e.源单)}</a>` : '<span class="pill sm mut">手工</span>'}
-        ${e.日期 ? `<span class="axdate mono">${esc(e.日期)}</span>` : ''}
-        <button class="axdel" title="移出标杆（精选制反向闸）" onclick="axRemove('${esc(e.标题)}')">×</button></div></div>`).join('')
-    : '<div class="emptycard"><h5>标杆空</h5><p>完成态的策划单详情页有「入标杆」——由你提炼一句话进公理库（审批点④）。</p></div>';
-  const art = d.美术.map((x) => `<div class="artcard card">
-      ${x.isImage ? `<div class="thumb"><img src="/stylelib-files/美术库/${encodeURIComponent(x.name)}" loading="lazy" alt="${esc(x.name)}"/></div>`
-    : `<div class="thumb ftype"><span class="mono">${esc(x.ext.replace('.', '').toUpperCase() || 'FILE')}</span></div>`}
-      <div class="an" title="${esc(x.name)}">${esc(x.name.replace(/\.[^.]+$/, ''))}</div>
-      <div class="ac">${x.来源 && x.来源.源单 ? `<a class="mono" style="color:var(--accent-ink)" href="#/t/${esc(x.来源.源单)}">${esc(x.来源.源单)}</a>` : '手工'}${x.来源 && x.来源.说明 ? ' · ' + esc(x.来源.说明.slice(0, 16)) : ''}
-        <button class="axdel" title="移出美术库" onclick="artRemove('${esc(x.name)}')">×</button></div></div>`).join('');
-  // D12 精选制入库按钮随迁本页签（API 不变；不填源单 = 手工入库，填了则仍走完成态校验）
-  return `<div class="p5grid" style="margin-top:18px"><div>
-      <div class="sec-h"><h3 class="h17">标杆公理</h3><span class="subnote">提炼式 · 设计公理 · 来源可溯</span>
-        <button class="btn h32" style="margin-left:auto" onclick="axModal('')">＋ 入标杆</button></div>${ax}</div>
-    <div><div class="sec-h"><h3 class="h17">美术图集</h3><span class="subnote">精选范例 · 只进精品</span>
-        <button class="btn h32" style="margin-left:auto" onclick="artModal('')">＋ 入美术库</button></div>
-      ${art ? `<div class="artgrid">${art}</div>` : `<div class="emptycard"><h5>范本库空</h5>
-        <p>完成态的美术/装配单详情页有「入美术库」，或用上方按钮手工精选——agent 领单前先看这里对齐风格。</p></div>`}</div></div>`;
-}
-window.axRemove = async (标题) => {
-  if (!await ask(`把「${标题}」移出标杆？`)) return;
-  const r = await post('/api/stylelib/axiom-remove', { 标题 });
-  toast(r.ok ? '已移出' : (r.error || '失败')); if (r.ok) route();
-};
-window.artRemove = async (name) => {
-  if (!await ask(`把 ${name} 移出美术库？（文件会删除，来源仓库里的原件不受影响）`)) return;
-  const r = await post('/api/stylelib/art-remove', { name });
-  toast(r.ok ? '已移出' : (r.error || '失败')); if (r.ok) route();
-};
 
 /* ===== P13 消耗报表（停车场老待办落地）===== */
 // 派发制报表：按主办已无意义（一次性主办恒单数=1）→ 单耗排行（实耗降序，直链工单）
@@ -2187,10 +2188,6 @@ async function viewDetail(id) {
   if (['待审', '待派', '待处理', '待重派', '已排期', '在途', '初检', '核查', '仲裁'].includes(d.state))
     ops.push(['废弃', '进废弃态（留档不删，R2；返工另开新单）', `dropModal('${id}')`]);
   if (d.state === '待审') ops.push(['编辑', '打开起草页修改', `location.hash='#/draft?edit=${id}'`]);
-  if (['完成', '归档'].includes(d.state)) { // 审批点④：入库（D12 精选制，唯一写者=制作人层）
-    if (fm.职能 === '策划') ops.push(['入标杆', '提炼进设计公理（审批点④）', `axModal('${id}')`]);
-    if (fm.职能 === '美术' || fm.职能 === '装配') ops.push(['入美术库', '产出精选进风格库（审批点④）', `artModal('${id}')`]);
-  }
   // 批量验收子单（施工令-028 从树形迁入）：只在真有候验子单时出按钮——与退役前
   // 「acceptN ? 出按钮 : 不出」同款条件，不给一个点了没反应的钮。带确认门，行为不扩权。
   if (候验数) ops.push([`✓ 批量验收子单 ×${候验数}`, `该父单下 ${候验数} 张完成候验子单一次性验收归档（只动完成态，孙单不连带）`, `acceptKids('${id}')`]);
@@ -2314,43 +2311,6 @@ function showModal(inner) {
   document.body.appendChild(w);
   return w;
 }
-// id 可空 = 手工入库（施工令-015：按钮随迁 Wiki 美术标杆页签，无源单语境）
-window.axModal = (id) => {
-  const w = showModal(`<h3>入标杆 · 来源 ${id ? `<span class="mono">${esc(id)}</span>` : '<span class="pill sm mut">手工</span>'}<span class="x" onclick="this.closest('.mwrap').remove()">×</span></h3>
-    <div class="f-field"><label>条目标题（≤40 字）</label><input id="ax-t" placeholder="如：忠诚多向"/></div>
-    <div class="f-field"><label>提炼一句话（≤300 字）</label><textarea id="ax-b" rows="3" placeholder="精选制的精髓是人工提炼，不是摘录"></textarea></div>
-    <div class="note">写入 策划标杆.md（明文唯一事实源），来源单号与日期自动落款</div>
-    <div class="mfoot"><div class="rgt2"><button class="btn h36" onclick="this.closest('.mwrap').remove()">取消</button>
-      <button class="btn accent h36" onclick="axSubmit('${esc(id)}', this)">入标杆</button></div></div>`);
-  const t = w.querySelector('#ax-t'); if (t) t.focus();
-};
-window.axSubmit = async (id, btn) => {
-  btn.disabled = true;
-  const r = await post('/api/stylelib/axiom', { 源单: id, 标题: $('ax-t').value, 正文: $('ax-b').value });
-  btn.disabled = false;
-  if (!r.ok) return toast(r.error || '失败');
-  const m = document.querySelector('.mwrap'); if (m) m.remove();
-  toast('已入标杆：' + r.标题);
-  if (location.hash.startsWith('#/wiki')) route(); // 在美术标杆页签入库 → 就地刷新看见新条目
-};
-window.artModal = (id) => {
-  const w = showModal(`<h3>入美术库 · 来源 ${id ? `<span class="mono">${esc(id)}</span>` : '<span class="pill sm mut">手工</span>'}<span class="x" onclick="this.closest('.mwrap').remove()">×</span></h3>
-    <div class="f-field"><label>产出文件路径（相对项目仓库，或绝对路径）</label><input id="art-p" class="mono" placeholder="相对项目仓库的产出路径"/></div>
-    <div class="f-field"><label>说明（可选，≤100 字）</label><input id="art-n" placeholder="为什么值得当范本"/></div>
-    <div class="note">文件复制进 风格库/美术库/（原件不动），旁存来源记录；仅项目仓库内文件可入</div>
-    <div class="mfoot"><div class="rgt2"><button class="btn h36" onclick="this.closest('.mwrap').remove()">取消</button>
-      <button class="btn accent h36" onclick="artSubmit('${esc(id)}', this)">入美术库</button></div></div>`);
-  const p = w.querySelector('#art-p'); if (p) p.focus();
-};
-window.artSubmit = async (id, btn) => {
-  btn.disabled = true;
-  const r = await post('/api/stylelib/art', { 源单: id, 源路径: $('art-p').value, 说明: $('art-n').value });
-  btn.disabled = false;
-  if (!r.ok) return toast(r.error || '失败');
-  const m = document.querySelector('.mwrap'); if (m) m.remove();
-  toast('已入美术库：' + r.name);
-  if (location.hash.startsWith('#/wiki')) route();
-};
 window.act3 = async (name, id, 决定) => { const r = await post('/api/act/' + name, { id, 决定 }); toast(r.ok ? `${决定} 完成` : (r.error || '失败')); route(); };
 window.askDecide = async (id, 决定, msg) => { if (await ask(msg)) act3('定夺', id, 决定); };
 // 验收（审批点③ · H110 验收闸）：走 /api/act/验收。三大态改造后 通过=完成→归档（落袋），
@@ -2445,10 +2405,10 @@ const WK_TABS = [
   ['策划案', '📘', '策划产出·设计正文，按定案/草案分层'],
   ['调研方案', '🔬', '策划产出·给制作人与总监看'],
   ['技术方案', '🛠', '技术策划产出·程序与装配的施工图'],
-  ['美术标杆', '🎨', '美术参考·风格标杆图库'],
+  ['美术标杆', '🎨', '美术参考资料'],
 ];
 const WK_TAB_DESC = Object.fromEntries(WK_TABS.map(([n, , d]) => [n, d || '']));
-// 文档型分区（走 /api/docs 视图聚合）——设计事实与美术标杆各有各的数据源，不在此列
+// 文档型分区（走 /api/docs 视图聚合）——设计事实不在此列
 const WK_DOC_TABS = ['策划案', '调研方案', '技术方案'];
 const wkState = { entry: '', mode: 'read', q: '', cat: '', tab: '设计事实', doc: '', dq: '', cdEdit: false, cdNew: '' };
 window.wkTab = (n) => { if (wkState.tab === n) return; wkState.tab = n; wkState.doc = ''; wkState.dq = ''; cdReset(); route(); };
@@ -2503,7 +2463,7 @@ async function viewWiki() {
   let body;
   try {
     if (WK_DOC_TABS.includes(wkState.tab)) body = await wkDocZone(proj, wkState.tab);
-    else if (wkState.tab === '美术标杆') body = await wkArtRef();
+    else if (wkState.tab === '美术标杆') body = '<div class="emptycard" style="margin-top:20px"><h5>美术标杆</h5><p>资料保留事宜由制作人另行裁决。</p></div>';
     else body = await wkFacts(proj);
   } catch (e) { body = `<div class="emptycard" style="margin-top:20px"><h5>分区加载失败</h5><p>${esc(e.message || String(e))}</p></div>`; }
   return bar + body;
@@ -2853,9 +2813,9 @@ async function wkGraph(proj) {
   cv.onclick = (ev) => { const n = hit(pos(ev)); if (n && n.分类 !== '未建') wkOpen(n.id); };
 }
 
-// 施工令-015：stylelib 路由退役（内容并入 wiki 美术标杆页签），旧书签在 route() 里转向
+// 施工令-015：旧书签在 route() 里转向 Wiki 美术标杆页签。
 const ROUTES = { '': viewOverview, tickets: viewTickets, specials: viewTickets, board: viewBoard, agents: viewAgents, wiki: viewWiki, relay: viewRelay, report: viewReport };
-const WK_ALIAS = ['style', 'stylelib', '风格库']; // 旧书签不死：一律落 wiki 美术标杆
+const WK_ALIAS = ['style'];
 /* 退役页转向表（2026-08-20 页签定案 11→8）：键=旧 hash 段，值=新落点。
    一律 location.replace 不用 assign——assign 会让退役页占一格历史，用户按返回又被弹回来一次
    （WK_ALIAS 与 #/tree 早有此先例，此处收归一张表，免得每退一页就在 route() 里多长一个 if）。
@@ -4335,7 +4295,7 @@ async function route() {
     // D42 项目语境守卫：多项目时，被删项目的残留选择作废；未选项目 → 落启动页；单项目自动进语境
     if (projMulti() && curProj() && !projNames().includes(curProj())) setProj('');
     if (!projMulti()) setProj(projNames()[0] || '');
-    // 风格库退役（施工令-015）：#/style · #/stylelib 旧书签 301 到 wiki 美术标杆页签
+    // 施工令-015：#/style 旧书签 301 到 wiki 美术标杆页签
     if (WK_ALIAS.includes(decodeURIComponent(h))) { wkState.tab = '美术标杆'; wkState.doc = ''; location.replace('#/wiki'); return; }
     // 退役页转向（#/tree 施工令-028；#/ideas · #/flow · #/queue 2026-08-20 页签定案 11→8）：
     // 用 replace 不用 assign——否则退役页会占一格历史，用户按返回又被弹回来一次（同 WK_ALIAS 的处理）。
@@ -4597,7 +4557,7 @@ function viewSetup(su) {
         <button class="btn" onclick="doSetupAsk()">自己填一个路径…</button>
       </p>
     </div>
-    <p class="dim" style="margin-top:14px">建好后会自动落：十态目录 + 回执/流水 + 六份岗位协议 + 风格库骨架，
+    <p class="dim" style="margin-top:14px">建好后会自动落：十态目录 + 回执/流水 + 六份岗位协议，
       然后直接进参数页注册你的项目仓库。</p>
   </div>`;
 }

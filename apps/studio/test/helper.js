@@ -120,4 +120,34 @@ async function 等到(判, 上限ms = 5000, 名 = '条件') {
   }
 }
 
-module.exports = { CFG, makeRoot, seed, 等到, 临时目录, 收尾, 回收临时根 };
+// ── 判据与操作员活体凭据解耦（2026-08-28，质检结论.test.js 假红）─────────────
+//
+// 案源：02:36 本机 OAuth token 到期，02:40 跑全量 → 质检结论.test.js ⑧ 翻红。
+// 红的不是被测逻辑，是**测试进程去读了 ~/.claude/.credentials.json**：派发预检判「已过期，拒派」，
+// 于是 startWork 一发都没打出去，calls=0，断言 calls===2 自然不成立。
+//
+// 这类耦合两个方向都坏，而且坏得不对称：
+//   · 假红（今天这次）看得见，代价是一轮排查；
+//   · **假绿**看不见——token 健康时这些用例照样全过，无论派发预检的逻辑对不对，
+//     等于这批用例从来没验过自己声称要验的东西，只是搭了个顺风车。
+// 后者才是真风险，也是必须在 helper 层一次修掉、而不是给红的那条打补丁的原因。
+//
+// 修法：缺省注入一份健康凭据；**调用方显式给了 读/文件/now 就照给的来**——
+// oauth.test.js 十二处 startWork 全部显式传（now + 文件），语义分毫不动，
+// 它仍然是唯一一处真在验凭据态的套件。
+//
+// 打的是 oauth.派发预检 而不是 oauth.寿命：runner 走 `oauth.派发预检(...)`（调用时取属性，打得中），
+// 而 派发预检 内部调 寿命 用的是模块内的函数绑定（打 oauth.寿命 打不中）。
+// 同一个坑本会话已踩过一次（brain.js 顶部 `const { spawn } = require(...)` 在加载期解构，
+// 逐次装 mock 全部落空）——**能不能被 mock 命中，取决于调用点是属性访问还是闭包绑定**。
+const _oauth = require('../lib/oauth');
+const _原派发预检 = _oauth.派发预检;
+const 健康凭据 = () => JSON.stringify({
+  claudeAiOauth: { accessToken: 'test-only', refreshToken: 'test-only', expiresAt: Date.now() + 24 * 3600 * 1000 },
+});
+// 决策抽成纯函数：**为了可被判据直接验**。埋在包装闭包里就只剩「读活体凭据看它红不红」
+// 这一种验法，而那正是本条要根除的东西——判据自己不能再依赖操作员的 token 状态。
+const 凭据注入 = (o = {}) => ((o.读 || o.文件 || o.now != null) ? o : { ...o, 读: 健康凭据 });
+_oauth.派发预检 = (root, cfg, o = {}) => _原派发预检(root, cfg, 凭据注入(o));
+
+module.exports = { CFG, makeRoot, seed, 等到, 临时目录, 收尾, 回收临时根, 健康凭据, 凭据注入 };

@@ -272,6 +272,10 @@ app.get('/api/board', (req, res) => {
     id: t.id, title: t.fm.title, 职能: t.fm.职能, 优先级: t.fm.优先级, 规模: t.fm.规模,
     QA: t.fm.QA, 验收方式: t.fm.验收方式, 主办: t.fm.主办 || null, 项目: t.fm.项目 || null, // D42 多项目视界按此归属
     阶段: t.fm.阶段 || null, 预计时间: t.fm.预计时间 || null, // D43 流程视图用
+    // 停靠三件（议程第 33 条）：看板要一眼认得出停靠单并画得出 G26 那两颗钮。
+    // 因由必须一起下发——只给一个布尔的话，界面只能显示「它停着」而说不出在等什么，
+    // 那正是 G26 这条闸的价值所在（九张单不说因由，人看到的只是九个单号）。
+    停靠: t.fm.停靠 === true, 停靠因: t.fm.停靠因 || null, 停靠自: t.fm.停靠自 || null,
     父单: t.fm.父单 || null, 依赖: t.fm.依赖 || null, 管线: t.fm.管线 || null, // H51 管线章
     父单类型: t.fm.父单类型 || null,
     // H103 · 施工令-058：专项挂链 + 伪单印。迁移至专项 有值 = 这张单是被实体化掉的**容器伪单**，
@@ -1070,10 +1074,10 @@ app.get('/api/relay', (req, res) => {
 });
 app.post('/api/relay', (req, res) => {
   if (!ready(res)) return;
-  const text = (req.body || {}).text;
-  const r = relay.append(ROOT, '制作人', text);
+  const { text, 发言人 = '制作人' } = req.body || {};
+  const r = relay.append(ROOT, 发言人, text);
   if (!r.ok) return res.status(400).json(r);
-  journal.append(ROOT, `项管信道·制作人：${String(text).slice(0, 60)}`);
+  journal.append(ROOT, `项管信道·${发言人}：${String(text).slice(0, 60)}`);
   if (pmBusy) { relay.append(ROOT, '项管', '（上一问仍在作答，稍候再问——项管一次一问）'); return res.json({ ...r, 项管忙: true }); }
   pmBusy = true;
   require('./lib/pm/brain').answer(ROOT, cfg, text, (a) => {
@@ -1582,6 +1586,26 @@ const ACTIONS = {
   解除复核: (b) => life.解除待复核(ROOT, b.id, b.说明), // D36：核对新版后解除
   返修: (b) => life.返修(ROOT, b.id, b.说明), // H65：同活同号——完成→待审 回炉改写（原 执行失败/待验收→草稿），计数保留（掐在飞审检会话已内置在 life.返修，施工令-032①，别在这层重复掐）
   实证放行: (b) => life.实证放行(ROOT, b.id, b.操作者, b.说明), // 施工令-032② H97：门禁单核查过后候检，总监确认引擎证据入回执 → 转完成
+  // 核查打回（2026-08-28 TF-15 案）：初检判不过时单原地留核查，而深检要求「初检=过」、初检又只挑无章的单——
+  // 这张单既不会被深检捡走也不会被重判，永远蹲着。流水许诺的「返修或人工裁」当时一条路都没有。
+  // 操作域＝总监/制作人：回炉是审检链上的判断，不是项管的排期动作。
+  // 待审打回（2026-08-28）：G21 闸表上「审过/打回」的第二颗钮，此前只有宣告没有实现。
+  // 操作域＝总监/制作人：切单审核归总监（G21 归属），制作人可越位；项管不在域内——
+  // 打回自己起草的稿子是自己给自己判分，那不叫审核。
+  待审打回: (b) => {
+    const 人 = String(b.操作者 || '').trim();
+    if (!['总监', '制作人'].includes(人)) return { ok: false, error: `待审打回是人闸，操作者须为 总监/制作人（收到「${人 || '空'}」）——项管不在操作域内` };
+    const r = life.待审打回(ROOT, b.id, b.说明);
+    if (r.ok) journal.append(ROOT, `待审打回操作者：${人}（${b.id}）`);
+    return r;
+  },
+  核查打回: (b) => {
+    const 人 = String(b.操作者 || '').trim();
+    if (!['总监', '制作人'].includes(人)) return { ok: false, error: `核查打回是人闸，操作者须为 总监/制作人（收到「${人 || '空'}」）` };
+    const r = life.核查打回(ROOT, b.id, b.说明);
+    if (r.ok) journal.append(ROOT, `核查打回操作者：${人}（${b.id}）`);
+    return r;
+  },
   推翻: (b) => life.推翻(ROOT, b.id, b.理由), // 制作人翻案：完成/归档 → 自动编号返工单（落 待审）
   隐藏: (b) => life.隐藏(ROOT, b.id, b.值), // 隐藏归档：默认视图湮灭，纸面可考
   // 施工令-021 制作人裁决权：挂起=原位冻结（单不挪窝，全链路跳过），解挂=原位复活。
@@ -1595,6 +1619,31 @@ const ACTIONS = {
     return life.挂起树(ROOT, b.id, b.理由, b.操作者);
   },
   解挂: (b) => (b.全树 ? life.解挂树(ROOT, b.id, b.操作者) : life.解挂(ROOT, b.id, b.操作者)),
+  // ---- 停靠（议程第 33 条，2026-08-27 制作人拍板）----
+  // G26 闸上写着按钮「解除停靠/废弃」，后面就得真有口——闸表宣告一个点了没反应的按钮，
+  // 比没有这个闸更坏：人会以为自己已经处置过了。
+  //
+  // 操作域＝总监/制作人，**项管不在域内**：停靠的定义就是「等一个人的决定」，
+  // 让项管能停靠等于让自动化自己决定什么时候不受自动化管，那是循环。
+  停靠: (b) => {
+    const 人 = String(b.操作者 || '').trim();
+    if (!['总监', '制作人'].includes(人)) {
+      return { ok: false, error: `停靠是人闸，操作者须为 总监/制作人（收到「${人 || '空'}」）——项管不在操作域内` };
+    }
+    const r = life.停靠(ROOT, b.id, b.因);
+    if (r.ok) journal.append(ROOT, `停靠操作者：${人}（${b.id} · 议程第 33 条）`);
+    return r;
+  },
+  解除停靠: (b) => {
+    const 人 = String(b.操作者 || '').trim();
+    if (!['总监', '制作人'].includes(人)) {
+      return { ok: false, error: `解除停靠是人闸，操作者须为 总监/制作人（收到「${人 || '空'}」）` };
+    }
+    const r = life.解除停靠(ROOT, b.id);
+    if (r.ok) journal.append(ROOT, `解除停靠操作者：${人}（${b.id}）`);
+    return r;
+  },
+
   放行: (b) => { // H108 项管闸：待派单标 fm.放行（不再是目录跳变——原 待投→池 语义收成标记写口）
     // 操作域=项管/总监：放行是派发授权，制作人层的需求走 /api/pm/draft 委托，不直接开闸。
     // 写口唯一在 life.放行（态校验/重复放行拒绝都在那儿），这里只加操作域闸并把操作者记账。
@@ -1741,59 +1790,6 @@ app.get('/api/quota', async (req, res) => {
   res.json({ codex: rl ? { windows: quota.windowsOf(rl) } : null, claude: cu ? { windows: quota.claudeWindows(cu) } : null });
 });
 
-// ---- 风格库（P5 · D12 精选制，审批点④落地）----
-const stylelib = require('./lib/stylelib');
-app.get('/api/style-lib', (req, res) => {
-  if (!ready(res)) return;
-  res.json({ 标杆: stylelib.parseAxioms(ROOT), 美术: stylelib.listArt(ROOT) });
-});
-// 入标杆（策划单 · 完成态；人工提炼是精选制的精髓，不自动摘录）
-app.post('/api/stylelib/axiom', (req, res) => {
-  if (!ready(res)) return;
-  const { 标题, 正文, 源单 } = req.body || {};
-  let axProj = String((req.body || {}).项目 || '').trim() || null;
-  if (源单) {
-    const t = store.find(ROOT, 源单);
-    if (!t) return res.status(400).json({ error: '源单不存在：' + 源单 });
-    // H108 语义：完成=做完等关账、归档=落袋，两者都够格入标杆；带 归档原因（废弃/打回/替代）的归档不算
-    if (!(t.state === '完成' || (t.state === '归档' && !t.fm.归档原因))) return res.status(400).json({ error: `只有完成/归档（无因）单可入标杆（${源单} 当前 ${t.state}${t.fm.归档原因 ? '·' + t.fm.归档原因 : ''}）` });
-    axProj = t.fm.项目 || (cfg.项目 && cfg.项目.默认) || axProj; // 归属跟源单走（多项目视界）
-  }
-  const r = stylelib.addAxiom(ROOT, { 标题, 正文, 源单, 项目: axProj });
-  if (!r.ok) return res.status(400).json(r);
-  journal.append(ROOT, `入标杆：「${r.标题}」（来源 ${源单 || '手工'}，审批点④）`);
-  res.json(r);
-});
-app.post('/api/stylelib/axiom-remove', (req, res) => {
-  if (!ready(res)) return;
-  const r = stylelib.removeAxiom(ROOT, (req.body || {}).标题);
-  if (!r.ok) return res.status(400).json(r);
-  journal.append(ROOT, `移出标杆：「${(req.body || {}).标题}」（精选制反向闸）`);
-  res.json(r);
-});
-// 入美术库（美术/装配单 · 完成态；源文件限项目仓库内）
-app.post('/api/stylelib/art', (req, res) => {
-  if (!ready(res)) return;
-  const { 源单, 源路径, 说明 } = req.body || {};
-  const t = 源单 ? store.find(ROOT, 源单) : null;
-  if (源单 && !t) return res.status(400).json({ error: '源单不存在：' + 源单 });
-  // H108 同上：完成/无因归档都算做完，可入美术库
-  if (t && !(t.state === '完成' || (t.state === '归档' && !t.fm.归档原因))) return res.status(400).json({ error: `只有完成/归档（无因）单可入库（${源单} 当前 ${t.state}${t.fm.归档原因 ? '·' + t.fm.归档原因 : ''}）` });
-  const projName = (t && t.fm.项目) || (cfg.项目 && cfg.项目.默认);
-  const proj = cfg.项目 && cfg.项目.注册 && cfg.项目.注册[projName];
-  const r = stylelib.addArt(ROOT, { 源路径, 项目路径: proj && proj.路径, 说明, 源单, 项目: projName });
-  if (!r.ok) return res.status(400).json(r);
-  journal.append(ROOT, `入美术库：${r.name}（来源 ${源单 || '手工'}，审批点④）`);
-  res.json(r);
-});
-app.post('/api/stylelib/art-remove', (req, res) => {
-  if (!ready(res)) return;
-  const r = stylelib.removeArt(ROOT, (req.body || {}).name);
-  if (!r.ok) return res.status(400).json(r);
-  journal.append(ROOT, `移出美术库：${(req.body || {}).name}`);
-  res.json(r);
-});
-
 // ---- 可选模型（D38 扩展）：监测 + 配置增补。codex 读 ~/.codex/config.toml 的 model，
 // claude 探 CLI 存在（别名 sonnet/opus/haiku 稳定）；config.模型.可选 可手动增补 ----
 app.get('/api/models', (req, res) => {
@@ -1883,8 +1879,6 @@ app.get('/api/pulse', (req, res) => {
 
 // no-store：asar 内文件 mtime 恒定会骗过 ETag，换版后 Electron 磁盘缓存端出旧 UI（0.17.2 实测坑）
 app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModified: false, setHeaders: (res) => res.setHeader('Cache-Control', 'no-store') }));
-// 风格库静态服务（美术库缩略图直读；express.static 自带路径穿越防护）
-if (!initError) app.use('/stylelib-files', express.static(path.join(ROOT, '风格库')));
 // STUDIO_PORT 覆盖（2026-08-08）：配置未就绪时也得有个能听的端口，
 // 且开第二实例做验证时不该去抢正在服役那个的 4270。
 const port = Number(process.env.STUDIO_PORT) || (cfg && cfg.server && cfg.server.port) || 4270;

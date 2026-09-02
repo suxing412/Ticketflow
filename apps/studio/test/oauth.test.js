@@ -81,18 +81,54 @@ t('阈值可配（config.凭据.临期分钟）：厂商砍寿命时改配置不
 // ---- ② 巡检哨兵：临期 / 过期 / 缺失 三分支的告警形态（自续探不成时）----
 console.log('oauth 巡检哨兵告警（要件 1）');
 
-await ta('临期 → 呼叫队列急件一条（含一键重登配方），不挂门禁横幅', async () => {
+// 三态分言（2026-08-28 改，议程第 43 条）。判据换轴的理由写在这儿，别当成放宽：
+//
+// 旧判据要求临期告警含「即将到期」+「一键重登」——那正是病灶。实据（journal 2026-08-27 10:37）：
+//   「OAuth 自续成功 +8h（第 1 发探针；**原剩 -3 分钟** → 现剩 479 分钟）」
+// ——续期发生在**过期之后**。临期时 CLI 一般不刷新仍有效的 token，探针「跑通了但 expiresAt 没动」
+// 是正常现象。旧文案把这个正常态写得像故障、还甩一条重登命令，
+// 08-27 一日三响、总监两次据此误判（判「会一直死到早上」、判「不登可能就断」），两次都被自续打脸。
+//
+// 新轴：临期＝说清不用动手；过期重挂中＝说清在自动重试；过期且连败＝这才喊人。
+// **命令只在真该人工时给**——每次都喊「快动手」，喊多了就没人看了。
+await ta('临期 → 急件说清「通常不需要动手」，且**不甩重登命令**，不挂门禁横幅', async () => {
   const root = makeRoot(); oauth.重置(root);
   const r = await 哨(root, CFG, { now: T0, 文件: 凭据(root, 12) });
   assert.equal(r.态, '临期');
   assert.equal(r.剩余分, 12);
-  assert.ok(r.告警.includes('即将到期'), '告警文案：' + r.告警);
-  assert.ok(r.告警.includes('一键重登'), '附一键 cmd 配方文本');
+  assert.ok(r.告警.includes('通常不需要动手'), '临期必须说清这是正常态：' + r.告警);
+  assert.ok(/续期发生在到期之后|重挂/.test(r.告警), '要讲明真正的续期时机，否则人还是会以为机制坏了');
+  assert.ok(!r.告警.includes('一键重登'), '临期不许甩重登命令——狼来了喊多了就没人看了：' + r.告警);
   assert.equal(r.横幅, null, '临期只发急件，门禁位不挂常驻条');
   const 信 = 急件(root);
   assert.equal(信.length, 1);
   assert.equal(信[0].级别, '急');
   assert.ok(ledger.events(root, 50).some((e) => e.类型 === 'OAuth告警' && e.态 === '临期'), '台账留痕');
+});
+
+await ta('过期首发 → 说「自续重挂中」而非喊人；连败之后才喊「真该人工登了」并给命令', async () => {
+  // 首发：探针试过一次没成 → 属重挂进行中，不该喊人。
+  // **凭据必须落在哨兵自己那个 root 里**——上一版写成 哨(makeRoot(), …, 凭据(makeRoot(), …))，
+  // 两个 makeRoot() 是两个目录，凭据落在哨兵看不到的地方。
+  const root1 = makeRoot(); oauth.重置(root1);
+  const r1 = await 哨(root1, CFG, { now: T0, 文件: 凭据(root1, -5) });
+  assert.equal(r1.态, '过期');
+  assert.ok(r1.告警, '首发不该被节流');
+  assert.ok(r1.告警.includes('自续重挂中'), '首发应说在自动重试，而不是喊人：' + r1.告警);
+  assert.ok(!r1.告警.includes('一键重登'), '重挂进行中不甩命令');
+
+  // 连败：同一到期窗口反复试到「已尽」→ 必须喊人并给命令。
+  // 每发间隔要跨过节流窗（默认 30 分钟同态至多一封），否则第二发起 告警 恒为 null。
+  const root2 = makeRoot(); oauth.重置(root2);
+  const f2 = 凭据(root2, -60);
+  let 末 = null;
+  for (let i = 0; i < 5; i++) {
+    const r = await 哨(root2, CFG, { now: T0 + i * 31 * 60000, 文件: f2 });
+    if (r.告警) 末 = r;
+  }
+  assert.ok(末, '跨过节流窗后应拿得到告警');
+  assert.ok(末.告警.includes('真该人工登了'), '连败之后必须明确喊人：' + 末.告警);
+  assert.ok(末.告警.includes('一键重登'), '真该人工时才给命令');
 });
 
 await ta('已过期 → 急件 + 门禁横幅（横幅带重登配方）', async () => {
@@ -152,7 +188,8 @@ await ta('状态升级（临期→过期）立刻放行一封，不被上一封�
   await 哨(root, CFG, { now: T0, 文件: 凭据(root, 20) });
   const r = await 哨(root, CFG, { now: 分(5), 文件: 凭据(root, -1) });
   assert.ok(r.告警 && r.态 === '过期', '状态一变即放行：' + JSON.stringify(r.告警));
-  assert.deepEqual(急件(root).map((e) => e.摘要.slice(0, 8)), ['OAuth 即将到期', 'OAuth 已过期'].map((s) => s.slice(0, 8)));
+  // 临期文案 2026-08-28 由「即将到期」改为「临期」（议程第 43 条三态分言），这里跟着改
+  assert.deepEqual(急件(root).map((e) => e.摘要.slice(0, 8)), ['OAuth 临期', 'OAuth 已过期'].map((s) => s.slice(0, 8)));
 });
 
 await ta('重登恢复（回到有效）→ 记忆清空，下次临期重新武装', async () => {
@@ -320,6 +357,30 @@ await ta('runner 实拍：拒因升级（剩余不足 → 过期）另起一条�
   assert.equal(ledger.events(root, 50).filter((e) => e.类型 === 'OAuth拒派').length, 2);
 });
 
+await ta('变异自证：同单同因连拒三拍落 1 条是去重挣来的——逐拍换态即落 3 条，流水本就写得出来', async () => {
+  // 侧 A：同态三拍（-20 / -20 / -20，态恒为「过期」）→ 只落 1 条
+  const 同根 = makeRoot(); oauth.重置(同根);
+  seed(同根, '初检', { id: 'O-06', 职能: '策划', 主办: '策划·O-06' });
+  const 同态 = { oauth: { now: T0, 文件: 凭据(同根, -20) } };
+  for (let i = 0; i < 3; i++) {
+    const ok = await runner.startWork(同根, CFG, store.find(同根, 'O-06'), 'QA', '质检', 同态);
+    assert.equal(ok, false, `同态第 ${i + 1} 拍拒派`);
+  }
+  const 同态行 = 流水(同根).split('\n').filter((l) => l.includes('拒派 O-06'));
+  assert.equal(同态行.length, 1, '同态三拍只落 1 条（去重的功劳）：' + JSON.stringify(同态行));
+
+  // 侧 B：逐拍换态（临期 2 分钟 → 过期 -1 → 未登录）→ 落满 3 条
+  // 逐拍内联现写凭据——凭据() 写的都是同一张 .credentials.test.json，预存数组会被后一拍覆盖，
+  // 那样第一拍读到的不是「临期」而是末一拍的值，换态三拍就退化成同态（这是本用例要防的假绿）。
+  const 换根 = makeRoot(); oauth.重置(换根);
+  seed(换根, '初检', { id: 'O-06', 职能: '策划', 主办: '策划·O-06' });
+  assert.equal(await runner.startWork(换根, CFG, store.find(换根, 'O-06'), 'QA', '质检', { oauth: { now: T0, 文件: 凭据(换根, 2) } }), false, '换态第 1 拍（临期）拒派');
+  assert.equal(await runner.startWork(换根, CFG, store.find(换根, 'O-06'), 'QA', '质检', { oauth: { now: T0, 文件: 凭据(换根, -1) } }), false, '换态第 2 拍（过期）拒派');
+  assert.equal(await runner.startWork(换根, CFG, store.find(换根, 'O-06'), 'QA', '质检', { oauth: { now: T0, 文件: path.join(换根, '没有.json') } }), false, '换态第 3 拍（未登录）拒派');
+  const 换态行 = 流水(换根).split('\n').filter((l) => l.includes('拒派 O-06'));
+  assert.equal(换态行.length, 3, '逐拍换态三拍落 3 条（流水本就写得出来）：' + JSON.stringify(换态行));
+});
+
 // ---- ⑦ 临期自续：成功 / 失败 / 超时 / 探针节流（要件 2/3）----
 console.log('oauth 临期自续探针（施工令-057 要件 2/3）');
 
@@ -360,9 +421,14 @@ await ta('自续失败（探针 401）→ 才发急件，正文保留一键重�
     探针: async () => ({ ok: false, 因: '探针退出码 1：API Error 401 · OAuth token expired' }) });
   assert.equal(r.自续.成功, false);
   assert.equal(r.自续.尝试, true);
-  assert.ok(r.告警.includes('即将到期'), '沿用既有配方文本');
+  // 2026-08-28 换轴（议程第 43 条）：临期本身不喊人，**但探针被 401 硬拒是另一回事**——
+  // 服务端已不认这张 token，expiresAt 说有效也没用，等不回来。这种必须喊人并给命令。
+  assert.ok(r.告警.includes('硬拒'), '401 不是「临期正常现象」，要单独说：' + r.告警);
+  assert.ok(r.告警.includes('该人工登'), '硬拒必须喊人');
   assert.ok(r.告警.includes('一键重登'), '重登配方不被自续说明挤掉');
-  assert.ok(r.告警.includes('自续已试') && r.告警.includes('401'), '把自续为什么没成说清：' + r.告警);
+  // 措辞 08-28 由「自续已试：」改为「自续：」，**意图不变**——必须把自续为什么没成说清，
+  // 不能只说「没续上」。判据盯的是那个 401 有没有被带出来。
+  assert.ok(r.告警.includes('自续：') && r.告警.includes('401'), '把自续为什么没成说清：' + r.告警);
   assert.equal(急件(root).length, 1);
   assert.ok(急件(root)[0].摘要.includes('一键重登'), '急件截 300 字后配方仍在：' + 急件(root)[0].摘要);
   assert.ok(ledger.events(root, 50).some((e) => e.类型 === 'OAuth告警' && e.自续 === '试过未成'), '台账记下「试过了才叫的人」');
@@ -506,8 +572,10 @@ await ta('自续总闸可配（config.凭据.自续=false）→ 逐字节退回 
   const r = await oauth.哨兵(root, cfg关, { now: T0, 文件: 凭据(root, 12), 探针: async () => { 发数++; return { ok: true, 因: '桩' }; } });
   assert.equal(发数, 0, '关了就一发不探');
   assert.equal(r.自续, null);
-  assert.ok(r.告警.includes('即将到期'));
-  assert.equal(r.告警.includes('自续已试'), false, '关闸时急件正文与 055 同形');
+  // 08-28 文案换轴后，「逐字节退回 055」这个说法已不成立（临期措辞整体改了，见议程第 43 条）。
+  // 本格真正要守的是**关了自续闸就一发不探、正文里不出现任何自续说明**——那两条仍原样守着。
+  assert.ok(r.告警.includes('临期'), '关闸不改变态判定：' + r.告警);
+  assert.equal(r.告警.includes('自续'), false, '关闸时正文不带自续说明（没试过就不许说试过）');
   assert.equal(急件(root).length, 1);
 });
 

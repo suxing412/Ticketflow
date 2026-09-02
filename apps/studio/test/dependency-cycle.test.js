@@ -138,5 +138,42 @@ t('/api/draft：与既有单成真环时 400 阻断、无落盘且不写 journal
   }
 });
 
+t('/api/draft：异常边随成功响应单独上报且不阻断', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tk188-api-anomaly-'));
+  try {
+    store.ensureDirs(root);
+    fs.writeFileSync(path.join(root, 'studio.config.json'), JSON.stringify({}), 'utf8');
+    assert.equal(store.create(root, 'TK-1', { id: 'TK-1', 依赖: 'TK-404' }, '既有单').ok, true);
+    const serverPath = path.join(__dirname, '..', 'server.js');
+    const storePath = path.join(__dirname, '..', 'lib', 'core', 'store.js');
+    const code = `
+      const studio = require(${JSON.stringify(serverPath)});
+      const store = require(${JSON.stringify(storePath)});
+      const root = process.env.STUDIO_ROOT;
+      studio.start().then(async ({ server, initError }) => {
+        if (initError) throw new Error(initError);
+        const response = await fetch('http://127.0.0.1:' + process.env.STUDIO_PORT + '/api/draft', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id: 'TK-2', title: '异常边样张' }),
+        });
+        const body = await response.json();
+        const result = { status: response.status, body, exists: !!store.find(root, 'TK-2') };
+        server.close(() => { process.stdout.write('@@' + JSON.stringify(result) + '@@'); process.exit(0); });
+      }).catch((error) => { process.stdout.write('@@' + JSON.stringify({ error: error.message }) + '@@'); process.exit(1); });`;
+    const raw = execFileSync(process.execPath, ['-e', code], {
+      encoding: 'utf8', timeout: 30000,
+      env: { ...process.env, STUDIO_ROOT: root, STUDIO_PORT: '4960', STUDIO_STUB: '1' },
+    });
+    const result = JSON.parse((raw.match(/@@([\s\S]*?)@@/) || [])[1] || '{}');
+    assert.equal(result.status, 200, JSON.stringify(result));
+    assert.equal(result.exists, true, '异常边不阻断试落盘单');
+    assert.equal(result.body.依赖异常.missing.length, 1);
+    assert.deepEqual(result.body.依赖异常.missing[0].from, 'TK-1');
+    assert.deepEqual(result.body.依赖异常.missing[0].to, 'TK-404');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 console.log('全部通过：' + passed + ' 项');
 console.log(`用例总数 ${passed} / 通过 ${passed} / 失败 0`);

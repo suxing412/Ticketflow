@@ -18,3 +18,6 @@ dist/
 
 # 体检临时工作单（代理间传参用，非源码）
 apps/studio/.体检工作单.json
+
+# Claude Code 本地权限设置（个人机器上的放行规则，不入库）
+.claude/settings.local.json

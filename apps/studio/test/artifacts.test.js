@@ -153,6 +153,71 @@ t('TK-160 落盘核验：真路径缺失才红，且红点数由 3 降到实缺�
     ['Assets/Scripts/Map/RiverMesh.cs', 'Docs/SLG/地图/水系参数.md']); // 真缺的照红不误
 });
 
+/* ---- TF-7 过形闸：带合法扩展名 ≠ 指向某个具体文件（案源 TK-203） ----
+   051 的四道闸放行了两类残余：glob 通配（一族文件）与占位／省略（一个样例）。
+   两者都被 EXT_RE 判成真路径、被 statSync 判成缺失，于是扣红。红色专供「声称交了、仓里却没有」，
+   声称本身不具体时它没有资格出现。判据一律直调 isArtifactPath/extract/locate，不 grep 源码（H104）。 */
+
+// 判据逐条把**实跑值**打出来再断言：回执要贴的就是这几行，不必另起探针、更不必 grep 源码
+const 判 = (s, 期望, root) => {
+  const v = A.isArtifactPath(s, root);
+  console.log(`    · isArtifactPath('${s}') → ${v}`);
+  assert.equal(v, 期望, `期望 ${期望}，实测 ${v}：${s}`);
+};
+
+t('glob 通配串 → 剔（说的是一族文件，不是一个产出）', () => {
+  判('Assets/**/*.unity', false);
+  判('Assets/*.unity', false);
+  判('Assets/SLG/Tests/Editor/?apTests.cs', false);
+  判('Docs/{草案,定稿}/方案.md', false);
+  判('Docs/[未定]/方案.md', false);
+  判('Assets/Scenes/主城.unity', true); // 同族真路径不误伤
+});
+
+t('占位／省略串 → 剔（说的是一个样例，不是交付件）', () => {
+  判('enginectl-baselines/results-….xml', false);
+  判('enginectl-baselines/results-....xml', false);
+  判('enginectl-baselines/results-<时间戳>.xml', false);
+  判('enginectl-runs/${单号}-x.log', false);
+  判('enginectl-runs/{{单号}}-x.log', false);
+  判('enginectl-runs/%s.log', false);
+  判('enginectl-baselines/results-20260826.xml', true); // 具体时间戳照认
+});
+
+t('过形闸压在磁盘实测之前：给了仓根也不去问磁盘', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tf7-'));
+  fs.mkdirSync(path.join(root, 'build'));
+  fs.writeFileSync(path.join(root, 'build', 'Dockerfile'), 'FROM node');
+  判('build/Dockerfile', true, root);  // 无扩展名实测通道原样保留
+  判('build/*', false, root);          // 通配串不走实测通道
+  判('build/<名>', false, root);
+});
+
+t('通配与占位串不进清单：extract 两条通道都拦', () => {
+  const 结构化 = A.extract(['## 产出',
+    '- `Assets/**/*.unity`',
+    '- Docs/SLG/地图/水系参数.md',
+    '- `enginectl-baselines/results-….xml`', ''].join('\n'));
+  assert.equal(结构化.来源, '结构化');
+  assert.deepEqual(结构化.路径, ['Docs/SLG/地图/水系参数.md']);
+  const f = A.extract('复跑见 `Assets/**/*.unity` 与 `enginectl-baselines/results-<时间戳>.xml`，产物 `Docs/报告.md`');
+  assert.deepEqual(f.路径, ['Docs/报告.md']);
+});
+
+t('TK-203 落盘核验：通配与占位串一个红标不留，真声明照红', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tk203-'));
+  const raw = 夹具('TK-203');
+  const 收敛前 = raw.match(/`[^`\n]+`/g).map((s) => s.slice(1, -1));
+  assert.ok(收敛前.includes('Assets/**/*.unity') && 收敛前.includes('enginectl-baselines/results-….xml'),
+    '夹具已不含案发那两串，回归失去意义');
+  const r0 = A.locate(raw, root);
+  console.log('    ├ 原夹具条目清单：' + JSON.stringify(r0.产出));
+  assert.deepEqual(r0.产出.filter((a) => !a.存在), []); // 假红清零
+  const r1 = A.locate(raw + '\n- 另交 `Docs/不存在.md`\n', root);
+  console.log('    └ 追加真声明后条目清单：' + JSON.stringify(r1.产出));
+  assert.deepEqual(r1.产出.filter((a) => !a.存在).map((a) => a.路径), ['Docs/不存在.md']); // 红色语义未被降级
+});
+
 /* ---- 施工令-051 三、前端假红降级 ----
    测的是 public/app.js 里生产那一份 artifactsPanel（@testable 原样抽出），不是抄本。 */
 const artifactsPanel = (() => {

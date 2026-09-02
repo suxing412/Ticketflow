@@ -119,5 +119,47 @@ await t('#58 孤儿步进器 rStep 已下岗（它 POST 的 /api/config/recommen
   assert.equal(typeof ctx.rrStep, 'function', 'rrStep 是另一个函数，不许被一起误删');
 });
 
+// ---- 看板待派列（G26 停靠单候裁 · 落点「看板 · 待派列」）----
+//
+// 本文件立此的原意就是防「闸表指着一个不存在的控件」（#64 G8 / #14 G9 两颗当年零命中）。
+// 2026-08-28 新立 G26 时又犯一次：动作口接了、闸表写了按钮，界面上那颗钮没画。
+// **而本文件是逐闸手写的、没有全闸覆盖闸，所以它自己没抓出来**——这个局限记在这儿，
+// 真要根治得另立一格遍历闸表逐条验，那是更大的一改。
+const 卡 = (停靠) => 装载前端().bcard({
+  id: 'TK-9', title: '手感闸复验', 职能: '程序', 优先级: 'P1',
+  停靠, 停靠因: 停靠 ? '前置人闸未决：TK-180 闸一待制作人拍板' : null,
+});
+
+await t('G26·停靠单在看板上认得出来，且「解除停靠/废弃」是两颗真按钮', () => {
+  const html = 卡(true);
+  assert.ok(/class="pk"/.test(html), '停靠单要有可见标记，否则跟普通待派单分不出来');
+  assert.ok(有钮(html, '解除停靠'), 'G26 闸表宣告的钮必须真存在。现有按钮＝' + JSON.stringify(按钮内文(html)));
+  assert.ok(有钮(html, '废弃'), 'G26 按钮列写的是「解除停靠/废弃」两颗');
+  assert.ok(/前置人闸未决/.test(html), '因由要带出来——不说在等什么，这条闸就只是九个单号');
+});
+
+await t('G26·未停靠的单不长这两颗钮（不误伤普通待派单）', () => {
+  const html = 卡(false);
+  assert.deepEqual(按钮内文(html), [], '普通待派单不该出现任何逐卡动作钮');
+  assert.ok(!/class="pk"/.test(html), '也不该带停靠标记');
+});
+
+await t('G26·两颗钮各自打对端点，且挡住卡片跳转的冒泡', () => {
+  const html = 卡(true);
+  // 用 includes 而不是正则：这一段被转义吃了两轮（生成脚本的模板字面量一轮、shell 一轮），
+  // 括号先变捕获组、再变任意字符，两次都「看着在验实际没验」。字面量匹配没有这个问题。
+  assert.ok(html.includes("unpark('TK-9')"), '解除停靠要调 unpark');
+  assert.ok(html.includes("discardOne('TK-9')"), '废弃要调 discardOne');
+  // 卡片本身 onclick 会跳详情；不挡冒泡的话点钮＝跳走，动作根本发不出去
+  const 钮们 = String(html).match(/<button[^>]*>/g) || [];
+  for (const b of 钮们) assert.ok(/stopPropagation/.test(b), '逐卡钮必须挡冒泡：' + b);
+});
+
+await t('G26·动作口在前端真存在（unpark/discardOne 不是写在字符串里的空名字）', () => {
+  const ctx = 装载前端();
+  assert.equal(typeof ctx.unpark, 'function', 'onclick 里写了 unpark，函数就得真在');
+  assert.equal(typeof ctx.discardOne, 'function');
+});
+
 收尾('闸表按钮落地', passed);
 })().catch((e) => { console.error('  ✗ ' + (e && e.stack || e)); process.exit(1); });

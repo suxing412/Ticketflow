@@ -3,7 +3,7 @@
 // 案源：源码模式下 config.resolveRoot() 找不到 studio.config.json → server 挂 initError
 // → Electron 直接 showErrorBox + app.quit()。而**加项目的 UI 就在那个进不去的 app 里**，
 // 于是「必须先手写 JSON 才能用」。套件路线靠 部署.bat 铺骨架绕开了，源码路线没人铺。
-// 本模块把 部署.bat 干的事搬进 app：建目录 → 落配置 → 铺岗位协议 → 铺风格库骨架。
+// 本模块把 部署.bat 干的事搬进 app：建目录 → 落配置 → 铺岗位协议。
 //
 // 纪律：
 //   · 已存在的 studio.config.json **绝不覆盖**（升级模式，同 部署.bat 的行为）；
@@ -157,11 +157,6 @@ function 建工作区(目录) {
     fs.writeFileSync(dst, 内容, 'utf8');
     落章程.push(名);
   }
-
-  const 风格库 = path.join(root, '风格库');
-  fs.mkdirSync(path.join(风格库, '美术库'), { recursive: true });
-  const ax = path.join(风格库, '策划标杆.md');
-  if (!fs.existsSync(ax)) fs.writeFileSync(ax, '# 策划标杆（提炼式设计公理）\n\n', 'utf8');
 
   // 凭据文件不进版本库（托管 key 是 DPAPI 密文，但也没有进 git 的道理）
   const gi = path.join(root, '.gitignore');

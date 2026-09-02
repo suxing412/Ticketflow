@@ -400,6 +400,38 @@ function charter(root, 职能) {
 
 // 工单 → 执行提示词（岗位协议 + 装配包 + 范围/不要做/验收标准；中文走 stdin 防 argv 乱码）
 // H49 装配器：协议选段 + 坑档案 + 上游依赖回执随包注入（修 TK-29 上游盲区）
+// 回炉轮要把上一轮回执带进去（2026-08-28 TF-15 案）。
+//
+// 执行会话**结构性读不到回执**：回执在监制台数据根，而会话的 cwd 是项目仓，跨仓读权限没开
+// （正是 TF-1 卡住的那道口子）。它只是把回执正文吐出来、由 runner 落盘——所以每一轮都是
+// **从零重写**，上一轮写过什么它一无所知。
+// TF-15 实测代价：重投轮只写了夹具那一处的增量，初检当场判「十一条验收标准已答 0 条」，
+// 于是又多绕一轮。而 buildAuditPrompt 早就会读回执传给核查——执行侧漏了同一件事。
+// 只在回炉轮带（首轮没有前文可带），并截断防止把 18KB 的历史回执整个灌进提示词。
+function 前轮回执(root, t) {
+  const 回炉 = (Number(t.fm.返修轮) || 0) + (Number(t.fm.重投次数) || 0) + (Number(t.fm.自修次数) || 0);
+  if (!回炉) return '';
+  let 文 = '';
+  try { 文 = fs.readFileSync(path.join(root, '回执', `${t.id}.md`), 'utf8'); } catch { return ''; }
+  if (!文.trim()) return '';
+  // 超长要**头尾都留**（2026-08-28，TF-15 第六轮实测）。
+  //
+  // 首版只取头 6000 字。而回执的排布是：执行方的正文在**头**，判官最新的结论与修复指引在**尾**
+  // （质检/核查是往后追加的）。于是回炉那一轮拿到的恰恰是「自己上次写了什么」，
+  // 却看不见「判官说哪儿不行、该怎么改」——最该照着改的那段被截掉了。
+  // 实测代价：TF-15 第六轮质检判不通过并给了逐条修复指引，而下一轮的提示词里那段根本不在。
+  const 上限 = 6000;
+  const 裁 = (t) => {
+    if (t.length <= 上限) return t;
+    const 头 = Math.floor(上限 * 0.45), 尾 = 上限 - 头;
+    return t.slice(0, 头) + `\n\n…（中间省略 ${t.length - 上限} 字；**下面是文件末尾**，判官最新的结论与修复指引在这里）…\n\n` + t.slice(-尾);
+  };
+  return ['', '=== 上一轮回执（你读不到这个文件，故誊在这里）===',
+    裁(文),
+    '**本轮回执是整份重写，不是追加**：上面那份里仍然成立的部分要照样写进来，别只写这一轮的增量——'
+    + '少写的部分在判官眼里就是「没做」。'].join('\n');
+}
+
 function buildPrompt(root, t, proj) {
   const ch = charter(root, t.fm.职能);
   let pack = '';
@@ -411,6 +443,7 @@ function buildPrompt(root, t, proj) {
     '只做工单范围内的事，遵守「不要做」，产出满足全部验收标准。',
     pack ? '\n' + pack : '',
     '', '=== 工单正文 ===', t.body || '（无正文）',
+    前轮回执(root, t),
     '', '完成后按通用章程的回执格式输出完工报告，它会作为回执存档。',
   ].filter(Boolean).join('\n');
 }
@@ -659,10 +692,32 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
       计量回灌(root, { 池: cliPool, 单: t.id, 流: out2, 流式: !!stream });
       const parsed = parseQaConclusion(text);
       if (!parsed || parsed.结论 === '待人工判') {
-        置待人工判(parsed ? '同会话补问明确标为待人工判' : '同会话补问后仍无可判结论标记', text);
+        // 首轮报告必须一起留下（2026-08-28 TF-15 案）。
+        //
+        // 原样这一支只传 `text`——补问轮的回复。而补问的提示词写死了「**不要重写报告**，
+        // 只在最后单独一行输出结论标记」，于是 text 就是那一行标记，仅此而已。
+        // 结果：TF-15 的人工判回执全文只有两行「## 质检（待人工判）/【质检结论】待人工判」，
+        // 而首轮那份 3592 字的逐条复核（十条判据实跑证据 + 根因定位到夹具口径过期 + 两条修法）
+        // **被丢掉了**——要人判的人，手里没有任何可判的东西。
+        //
+        // 其余每一条失败分支传的都是 firstReport，唯独这一支不是。而这一支恰恰是
+        // **唯一一条以「把材料交给人」为全部目的的路径**：它把材料扔了。
+        // 两段都留：首轮是判断材料，补问轮是结论出处，缺哪段都得去翻原始事件流。
+        const 合 = [String(firstReport || '').trim(), String(text || '').trim()]
+          .filter(Boolean).join('\n\n---\n**同会话补问轮回复：**\n');
+        置待人工判(parsed ? '同会话补问明确标为待人工判' : '同会话补问后仍无可判结论标记', 合 || text);
         return;
       }
-      finishOk(String(text).slice(-8000), parsed.通过);
+      // 通过/不通过这一支同样只能拿到补问轮那一行标记——**首轮报告一样得留**。
+      //
+      // 上面「待人工判」那一支我先修了，改完当场以为收工，**结果这一支原封不动**：
+      // TF-15 第三轮实测，QA 判「通过」，它那份 3725 字的逐条核验（十一条逐条实跑/归因、
+      // 产出存在性表、局限说明）全丢，回执里 QA 一个字都没留下。
+      // 这正是 08-26 那次围栏修复犯过的错——**只修了自己当时盯着的那一半**，
+      // 换个分支同一个病立刻复发。修一处病，要把同族的调用点一起看完。
+      const 合过 = [String(firstReport || '').trim(), String(text || '').trim()]
+        .filter(Boolean).join('\n\n---\n**同会话补问轮回复：**\n');
+      finishOk((合过 || String(text)).slice(-8000), parsed.通过);
     });
     const prompt2 = '你刚才的质检报告没有机器可判结论。不要重写报告；请只在本次会话最后单独一行输出 `【质检结论】通过`、`【质检结论】不通过` 或 `【质检结论】待人工判`。';
     try { follow.stdin.write(prompt2, 'utf8'); follow.stdin.end(); } catch { 置待人工判('同会话补问写入失败', firstReport); }
@@ -687,8 +742,17 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
         const mq = String(note).match(/质量分[:：]\s*([1-5])/);
         if (mq) { try { require('./pm/ledger').score(root, { 线: '审检评执行', 席: '质检', 单: t.id, 职能: t.fm.职能, 池: t.fm.执行池 || 'claude', 分: Number(mq[1]) }); } catch { /* 不阻塞 */ } }
       }
+      // 质检报告入回执（2026-08-28）。**这一支原本一个字都不写回执**——
+      // 代裁写、核查写、待人工判写，唯独质检不写，报告只进 journal 那一行。
+      // 全仓实测：196 份回执里含「## 核查」83 份、含「## 仲裁」3 份、**含质检报告 0 份**。
+      // 也就是说项目开张至今，每一次质检的判断依据都只以一行流水的形式存在，
+      // 而回执才是这张单的长期记录——下游核查、日后复盘、以及本夜的人工判，读的都是它。
+      // 与 代裁/核查 同口径：6000 字截断、append 不覆盖、写失败不阻塞流转。
+      const rpQA = path.join(root, '回执', `${t.id}.md`);
+      try { fs.appendFileSync(rpQA, `\n\n## 质检（${verdict ? '通过' : '不通过'}）\n${String(note).slice(0, 6000)}\n`, 'utf8'); } catch { /* 无回执文件不阻塞裁定 */ }
       const r = lifecycle.QA裁定(root, cfg, t.id, verdict); // 曾硬编码 true——QA 写"不过"也放行，自修/待定夺全成死代码（TK-31/33 空壳两连过的真凶）
-      if (r.ok) journal.append(root, `质检执行完成 ${t.id}（${agentId} · ${note}）`);
+      // journal 只留结论摘要，不再把整份报告塞进一行流水——报告的家是回执
+      if (r.ok) journal.append(root, `质检执行完成 ${t.id}（${agentId} · ${verdict ? '通过' : '不通过'} · 报告已入回执 ${String(note).length} 字）`);
     } else if (kind === '代裁') {
       // D43③ / H108：仲裁会话跑在「仲裁」目录（原 待定夺）。解析裁判档结论：
       // 给方向→仲裁定「给方向」回在途（方向文本进正文，主办重执行能读到）；
@@ -916,6 +980,26 @@ async function startWork(root, cfg, t, agentId, kind, opts = {}) {
   if (!proj) { failLocal('项目未注册或路径不存在（config.项目）'); return true; }
   const { cmd, args, stream } = resolveCli(cliPool, compat ? (kind === '初检' ? model : (compat.模型 || model)) : model, (cfg.执行器 || {}).放行工具); // 质检/代核/代裁走 claude
   const receiptPath = path.join(root, '回执', `${t.id}.md`);
+  // 重投前先把上一轮回执归档（2026-08-28 TF-15 案）。
+  //
+  // 回执是**执行会话自己写**的，而它拿到的指令是「写回执到这个路径」——于是重投时它整份重写。
+  // TF-15 第三轮实测：回执从 4689 字节变成 1745，第一轮的逐条应答、质检的完整复核报告、
+  // 以及总监从事件流补回的那 3592 字分析，**一次抹干净**。
+  // 六个月后来查这张单的人，看到的只有最后一轮那点增量。
+  //
+  // 不靠改提示词让模型「记得追加」——**记录保全不该建立在模型自觉上**。
+  // 机器在开工前拍一张快照，模型爱怎么写怎么写，历史一律留得住。
+  // 只对 执行 轮做：质检/核查/仲裁本来就是 appendFileSync 追加，它们不覆盖。
+  if (kind === '执行') {
+    try {
+      if (fs.existsSync(receiptPath)) {
+        const 历 = path.join(root, '回执', '历轮');
+        fs.mkdirSync(历, { recursive: true });
+        const 戳 = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        fs.copyFileSync(receiptPath, path.join(历, `${t.id}-${戳}.md`));
+      }
+    } catch (e) { journal.append(root, `回执归档失败 ${t.id}：${String(e.message).slice(0, 80)}——本轮照常开工`); }
+  }
   const prompt = kind === '质检' ? buildQaPrompt(root, t, proj, receiptPath)
     : kind === '代核' ? buildAuditPrompt(root, t, proj, receiptPath)
     : kind === '代裁' ? buildArbPrompt(root, t, proj, receiptPath)
@@ -1071,6 +1155,18 @@ function 排期复判Tick(root, cfg, sim) {
     require('./journal').append(root, `排期复判触发（H115）：${触因}`);
     require('./pm/brain').replanReview(root, cfg, 触因, (a) => {
       require('./journal').append(root, `排期复判收官：${a.ok ? a.决定 + '——' + (a.因 || '') : '失败 ' + a.error}`.slice(0, 160));
+      // 判出「不是排期的锅」时要升格，不能只记账（议程第 35 条，2026-08-28）。
+      //
+      // 案源 2026-08-27 整夜：复判**诊断是对的**——00:07 收官原话「空转属派发侧未拉起而非排期偏差」——
+      // 但它只往 journal 写一行就完事，15 分钟一轮连报四次，无人知晓，产线整夜零产出。
+      // 一个能正确判出病因、却没有任何途径把病因交出去的诊断，等于没诊断。
+      // 这是「判了没人执行」在监控层的第四例（前三例：粒到点无人开闸、代裁章在边未走、复判重排集为空）。
+      try {
+        // 词表不在这儿自带一份：与 patrol 的去重键同读 patrol.非排期空转类，否则改一处漏一处
+        // （2026-08-28：原样这里写正则、那里写 slice(因,80) 当键，两把尺各走各的，去重从未生效）。
+        const P = require('./pm/patrol');
+        if (a.ok && P.非排期空转类(a.因).length) P.升格非排期空转(root, String(a.因 || '').slice(0, 200));
+      } catch { /* 升格失败不改变复判本身的结论，也不阻塞收官留痕 */ }
       try { require('./relay').append(root, '项管', `排期复判（${触因.slice(0, 40)}…）：${a.ok ? a.决定 + '。' + (a.因 || '') + (a.重排结果 ? ' ' + a.重排结果 : '') : '失败：' + a.error}`); } catch { /* 信道不通不阻塞 */ }
     });
   } catch (e) { try { require('./journal').append(root, '排期复判触发异常：' + e.message); } catch { /* 双失稳不再叠 */ } }
@@ -1409,4 +1505,4 @@ function killTicket(root, id, 因) {
   return false;
 }
 
-module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, parseQaConclusion, extractClaudeSessionId, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi, 计量回灌, 流分拣器, 分派, 剪闲聊, 流尾, 人闸升格Tick, start升格环, stop升格环, 核查孤儿们, 仲裁孤儿们, 排期态兜底 };
+module.exports = { tick, startWork, 凭据Of, start, stop, startLoop, stopLoop, status, running, isOn, projectPath, resolveCli, pickModel, charter, buildPrompt, 前轮回执, buildQaPrompt, buildAuditPrompt, buildArbPrompt, settleClose, parseQaConclusion, extractClaudeSessionId, extractClaudeText, killTicket, engineJobs, tailFrom, stripAnsi, 计量回灌, 流分拣器, 分派, 剪闲聊, 流尾, 人闸升格Tick, start升格环, stop升格环, 核查孤儿们, 仲裁孤儿们, 排期态兜底 };

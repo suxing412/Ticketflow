@@ -13,7 +13,7 @@ console.log('setup 首次运行向导测试（2026-08-08）');
 
 const 新目录 = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'setup-')), '工作区');
 
-t('建工作区：配置 + 十态目录 + 章程 + 风格库 一次到位', () => {
+t('建工作区：配置 + 十态目录 + 章程 一次到位', () => {
   const d = 新目录();
   const r = setup.建工作区(d);
   assert.equal(r.ok, true);
@@ -22,7 +22,6 @@ t('建工作区：配置 + 十态目录 + 章程 + 风格库 一次到位', () =
   for (const s of store.STATES) assert.ok(fs.existsSync(path.join(d, s)), `缺状态目录 ${s}`);
   assert.ok(fs.existsSync(path.join(d, '回执')));
   assert.ok(fs.existsSync(path.join(d, 'journal')));
-  assert.ok(fs.existsSync(path.join(d, '风格库', '策划标杆.md')));
   for (const n of ['通用', '策划', '程序', '美术', 'QA', '装配']) {
     assert.ok(fs.existsSync(path.join(d, '岗位协议', `${n}.md`)), `缺章程 ${n}`);
   }

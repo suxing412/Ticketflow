@@ -114,7 +114,7 @@ t('起草落盘：真 draftTicket（假 CLI）→ 草稿 md frontmatter 含 依�
   const 桩目录 = 临时目录('p07cli-');
   // 假 CLI：吃完 stdin 后原样吐一段 ticket 块（不含 依赖 行——依赖走注入路，不靠模型转述）
   fs.writeFileSync(path.join(桩目录, 'canned.txt'),
-    '```ticket\ntitle: 依赖透传验证\n职能: 程序\n---\n## 范围\n验证 P0-7 透传\n```\n\n## 起草说明\n无样本，未校准\n', 'utf8');
+    '```ticket\ntitle: 依赖透传验证\n职能: 程序\n专项: S-3\n---\n## 背景\n验证起草链的依赖透传。\n\n## 执行内容\n验证 P0-7 透传。\n\n## 验收标准\n依赖字段随草稿落盘。\n```\n\n## 起草说明\n无样本，未校准\n', 'utf8');
   fs.writeFileSync(path.join(桩目录, 'fake-cli.js'),
     "const fs=require('fs');const path=require('path');\n"
     + "process.stdin.on('data',()=>{});\n"

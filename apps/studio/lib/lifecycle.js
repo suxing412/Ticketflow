@@ -32,6 +32,11 @@ function 放行(root, id) {
   if (!t) return { ok: false, error: '不存在' };
   if (t.state !== '待派') return { ok: false, error: `只有待派单可放行（当前 ${t.state}）` };
   if (t.fm.放行 === true) return { ok: false, error: '该单已放行' };
+  // 停靠单不许放行：停靠就是「等一个人的决定」，绕过它开闸正是 2026-08-26 两次职权对冲的形态。
+  // 要放行先显式 解除停靠——让「我知道它停着而我决定放它走」成为一个留痕的动作。
+  if (t.fm.停靠 === true) {
+    return { ok: false, error: `该单已停靠，须先解除停靠：${String(t.fm.停靠因 || '').slice(0, 80)}` };
+  }
   const r = store.update(root, id, (fm) => { fm.放行 = true; }, nowIso());
   if (r.ok) journal.append(root, `放行 ${id}（待派原地落 fm.放行=true · 人闸）`);
   // H116 对称同步：放行时粒若已有计划（先排后放的顺序），此刻补迁 已排期——
@@ -56,6 +61,50 @@ function 撤回放行(root, id) {
   if (r.ok) journal.append(root, `撤回放行 ${id}（待派原地 fm.放行=false）`);
   return r;
 }
+
+// ---- 停靠（H33 议程第 33 条，2026-08-27 制作人拍板）----
+//
+// 「停靠」＝**故意把一张单摁住，等一个人的决定**，与「还没轮到放行」是两回事。
+// 在此之前它只是流水散文里的人工语义，代码里不存在——一个缺失的标记派生出四个方向相反的症状：
+//   ① 项管裁决 adjudicateReferral 自动带放行，把总监刚停靠的单重新开闸
+//      （2026-08-26 实测两次同分钟对冲：TK-187 16:51/16:52、TK-207 18:17/18:18）
+//   ② 排期把停靠单的粒照排不误（08-27 今夜十一粒里九粒挂在停靠单上，复判还反复挪动它们）
+//   ③ G1「派发放行」把停靠单算成项管欠债并逾期告警——**误报**，因为开闸恰恰是错的
+//   ④ patrol 零派发狗因就绪队列空而静默——**漏报**（③④同源反向）
+//
+// 停靠 ≠ 挂起：挂起是冻结在途会话（fm.挂起，看门狗全线回避）；停靠只作用于待派单，
+// 单还在队列里、还看得见，只是不许任何自动化把它推上产线。
+function 停靠(root, id, 因) {
+  const t = store.find(root, id);
+  if (!t) return { ok: false, error: '不存在' };
+  if (t.state !== '待派') return { ok: false, error: `只有待派单可停靠（当前 ${t.state}）` };
+  if (t.fm.停靠 === true) return { ok: false, error: '该单已停靠' };
+  const 由 = String(因 || '').trim();
+  // 因由必填：一张停不明不白的单，跟一张被遗忘的单在后果上是同一件事
+  if (!由) return { ok: false, error: '停靠须给因由（停靠是等人决定，不写等谁决定什么就是把单藏起来）' };
+  const r = store.update(root, id, (fm) => {
+    fm.停靠 = true; fm.停靠因 = 由.slice(0, 200); fm.停靠自 = nowIso();
+    fm.放行 = false;   // 停靠必然含撤放行：两者同时为真是自相矛盾的状态
+  }, nowIso());
+  if (r.ok) journal.append(root, `停靠 ${id}（待派原地 fm.停靠=true · 候人裁）：${由.slice(0, 120)}`);
+  return r;
+}
+
+// 解除停靠：把单放回自动化的视野。解除不等于放行——放行仍是 G1 项管闸另一道手续。
+function 解除停靠(root, id) {
+  const t = store.find(root, id);
+  if (!t) return { ok: false, error: '不存在' };
+  if (t.fm.停靠 !== true) return { ok: false, error: '该单未停靠' };
+  const r = store.update(root, id, (fm) => {
+    delete fm.停靠; delete fm.停靠因; delete fm.停靠自;
+  }, nowIso());
+  if (r.ok) journal.append(root, `解除停靠 ${id}（回自动化视野；放行仍需 G1 另判）`);
+  return r;
+}
+
+// 判读口径统一走这里：严判 === true，沿用 G1 对 fm.放行 的同一条纪律
+// （字符串 'true'/1 这类脏值一律当没停靠——宁可多推一张，不可把一张单静默藏起来）。
+const 已停靠 = (t) => !!(t && t.fm && t.fm.停靠 === true);
 
 // 交产出：执行完工〔原 在途→质检(QA开)/待验收(QA关)〕⇒ 在途→初检(QA开)/核查(QA关·简检)/完成(免检保留单)。
 // 回执写入 回执/<id>.md（含 QA 章节，若开）。
@@ -117,6 +166,36 @@ function 核查过(root, id) {
   if (t.state !== '核查') return { ok: false, error: `只有核查中单可核查过（当前 ${t.state}）` };
   const r = store.move(root, id, '核查', '完成', null, nowIso());
   if (r.ok) journal.append(root, `核查过 ${id}（核查→完成 · 判官全过，驻留等验收）`);
+  return r;
+}
+
+// 核查打回：核查→在途，回炉自修（2026-08-28 TF-15 案）。
+//
+// 为什么非补不可：初检判「不过」时 runner 只写 fm.初检 与一行流水「留核查（返修或人工裁）」，
+// 单**原地留在核查**。而深检挑单要求 `fm.初检.结论 === '过'`，初检本身又只挑 `!fm.初检` 的单——
+// 于是初检一旦不过，这张单**既不会被深检捡走、也不会被初检重判**，永远蹲在核查里。
+// 流水许诺的「返修或人工裁」两条路当时一条都不存在：核查态对外只暴露了 实证放行
+// （还要求已盖 H97 候检印），其余出边只有废弃。**闸表宣告了一个点了没反应的按钮**——
+// 与 G21「审过/打回」那处同型（打回在待审同样无实现），本次一并按同一取向补上实现。
+//
+// 章要一起销：初检/代核 两枚章不清，回炉重跑一轮后照旧卡在同一个坑里。
+// 自修次数归零同 仲裁定「给方向」的口径（TK-97 案）——回炉是人给的新起点，不清则回来即三振。
+// 说明写进正文而不是只落 fm：**执行会话读的是正文**，写进 fm 等于说给自己听。
+function 核查打回(root, id, 说明) {
+  const t = store.find(root, id);
+  if (!t) return { ok: false, error: '不存在' };
+  if (t.state !== '核查') return { ok: false, error: `只有核查中单可打回自修（当前 ${t.state}）` };
+  const 由 = String(说明 || '').trim();
+  if (!由) return { ok: false, error: '打回须给说明——不说为什么打回，回炉那一轮只能靠猜' };
+  const r = store.move(root, id, '核查', '在途', (fm) => {
+    delete fm.初检; delete fm.代核;   // 章不销，回炉后照旧卡在同一个坑
+    fm.自修次数 = 0;
+  }, nowIso());
+  if (!r.ok) return r;
+  store.update(root, id, (fm, t2) => ({
+    body: (t2.body || '') + `\n\n## 核查打回（人工 · ${nowIso().slice(0, 10)}）\n${由.slice(0, 2000)}\n`,
+  }));
+  journal.append(root, `核查打回 ${id}（核查→在途 · 回炉自修 · 初检/代核章已销）：${由.slice(0, 80)}`);
   return r;
 }
 
@@ -211,6 +290,22 @@ function 撤回(root, id) {
 
 // 废弃：→废弃 目录〔原 任意非终态→已归档+归档原因:废弃 的独立化〕。制作人拉闸权。
 // 完成单没有废弃边（做完的活翻案走 推翻，收账走 验收）；历史「归档原因:废弃」的单留在归档不重分类（不改史）。
+// 依赖悬空扫描：还有哪些未完成单挂着 id 的依赖。废弃与待审打回共用一份——
+// 两处各抄一遍就是两把尺，改一处漏一处（本仓白名单吞字段家族的老病）。
+// 扫描面=待办五态+审检链在途四态+挂起（挂起会复活，依赖同样会悬空）；完成单依赖是历史，不扫。
+// H116：已排期 入扫描面——排好期的单依赖被废弃同样悬空，漏扫它就是静默死锁的新形态。
+function 悬空依赖(root, id) {
+  const 出 = [];
+  for (const s of ['待审', '待派', '待处理', '待重派', '已排期', '在途', '初检', '核查', '仲裁', '挂起']) {
+    for (const x of store.list(root, s)) {
+      const d = x.fm.依赖; if (!d) continue;
+      const arr = Array.isArray(d) ? d.map(String) : String(d).split(/[，,\s]+/).filter(Boolean);
+      if (arr.includes(String(id))) 出.push(x.id);
+    }
+  }
+  return 出;
+}
+
 function 废弃(root, id, 因) {
   const t = store.find(root, id);
   if (!t) return { ok: false, error: '不存在' };
@@ -219,18 +314,49 @@ function 废弃(root, id, 因) {
   // 依赖悬空扫描（夜班推演 #5）：废弃前查未完成单里还挂着本单依赖的——不阻断，呼叫+留痕，防静默死锁。
   // 扫描面=待办五态+审检链在途四态+挂起（挂起会复活，依赖同样会悬空）；完成单依赖是历史，不扫。
   // H116：已排期 入扫描面——排好期的单依赖被废弃同样悬空，漏扫它就是静默死锁的新形态。
-  const 悬空 = [];
-  for (const s of ['待审', '待派', '待处理', '待重派', '已排期', '在途', '初检', '核查', '仲裁', '挂起']) {
-    for (const x of store.list(root, s)) {
-      const d = x.fm.依赖; if (!d) continue;
-      const arr = Array.isArray(d) ? d.map(String) : String(d).split(/[，,\s]+/).filter(Boolean);
-      if (arr.includes(String(id))) 悬空.push(x.id);
-    }
-  }
+  const 悬空 = 悬空依赖(root, id);
   const r = store.move(root, id, t.state, '废弃', (fm) => { fm.废弃因 = String(因 || '制作人拉闸').replace(/\s+/g, ' ').trim().slice(0, 200); }, nowIso());
   if (r.ok) {
     journal.append(root, `废弃 ${id}（${t.state}→废弃）${悬空.length ? ` · 依赖悬空：${悬空.join('、')} 需改挂` : ''}`);
     if (悬空.length) { try { require('./inbox').post(root, '急', '依赖悬空', `${id} 被废弃，${悬空.join('、')} 的依赖需改挂接棒单`, { 单号: id }); } catch { /* 信箱失败不阻塞 */ } }
+  }
+  return r;
+}
+
+// 待审打回（2026-08-28）：G21 闸表宣告「审过/打回」两颗钮，**打回这颗一直没有实现**。
+// 今日 lifecycle.js 补 核查打回 时，我在那段注释里写下「与 G21 那处同型，本次一并按同一取向
+// 补上实现」——然后只做了核查那一半。**在注释里宣告一件没发生的事**，正是本仓提案里批的病，
+// 我自己犯了一次。这里还上。
+//
+// 案源（四张实证）：TF-3/TF-6/TF-14/TK-213 卡在待审 30~79 小时。四张全是起草解析器腰斩的
+// 残稿（断点都在代码围栏将开处，根因今日已修），TF-14 连「验收标准」整章都没有。
+// 这四张既**不能审过**（没有验收标准的单不可审，判官拿什么判过与不过），
+// 也**不该废弃**（需求是真的——起草链确实缺那道预检闸）。当时一条出路都没有。
+//
+// 落点为什么是 废弃 而不是 归档：`待审` 的合法出边只有 废弃 与 待派 两条（store.isLegal 实测），
+// 加一条 待审→归档 是改 H108 状态机，属协议动作，不在本次范围。走废弃边、
+// 但把「需求还活着」写死在 fm.打回重拆 上，并在流水里明喊「须另行委托重拆」——
+// **稿子废掉，需求不废**。调用方（总监）打回后须立即走 /api/pm/draft 委托重拆，
+// 让重拆义务几分钟内变成待审里的真单，而不是一个没人看的标记位。
+function 待审打回(root, id, 说明) {
+  const t = store.find(root, id);
+  if (!t) return { ok: false, error: '不存在' };
+  if (t.state !== '待审') return { ok: false, error: `只有待审单可打回重拆（当前 ${t.state}）` };
+  const 由 = String(说明 || '').trim();
+  if (!由) return { ok: false, error: '打回须给说明——不说为什么打回，重拆那一轮只能靠猜' };
+  const 悬空 = 悬空依赖(root, id);
+  const r = store.move(root, id, '待审', '废弃', (fm) => {
+    fm.废弃因 = ('打回重拆：' + 由).replace(/\s+/g, ' ').trim().slice(0, 200);
+    fm.打回重拆 = true;   // 与普通废弃的分水岭：这张稿子作废，它承载的需求没作废
+  }, nowIso());
+  if (!r.ok) return r;
+  store.update(root, id, (fm, t2) => ({
+    body: (t2.body || '') + `\n\n## 待审打回（人工 · ${nowIso().slice(0, 10)}）\n${由.slice(0, 2000)}\n`,
+  }));
+  journal.append(root, `待审打回 ${id}（待审→废弃 · 打回重拆 · **需求未废，须另行委托重拆**）：${由.slice(0, 80)}`
+    + (悬空.length ? ` · 依赖悬空：${悬空.join('、')} 需改挂` : ''));
+  if (悬空.length) {
+    try { require('./inbox').post(root, '急', '依赖悬空', `${id} 被打回重拆，${悬空.join('、')} 的依赖需改挂接棒单`, { 单号: id }); } catch { /* 信箱失败不阻塞 */ }
   }
   return r;
 }
@@ -450,17 +576,73 @@ function 引擎门禁特征(cfg) {
 }
 // 命中判定：只扫工单「验收标准」章（施工令原文口径）——背景/执行内容里顺口提一句 enginectl
 // 不该把整张单拖进门禁。返回命中的那条特征（写进 fm 与流水，可复核），未命中返回 null。
+// 词边界（议程第 38 条，2026-08-28）：特征词不许匹配进更长的词里面。
+//
+// 案源 TF-7：验收标准写着 `isArtifactPath('enginectl-baselines/results-….xml')`——
+// 特征 `enginectl` 匹配进了 `enginectl-baselines` 内部。那是**另一个词**（一个测试基线目录名），
+// 不是在说这单要跑引擎。
+//
+// **第一版我修错了方向**：写成「遮掉所有代码区」。那立刻把真阳性也放走了——
+// lifecycle 的夹具是 `` `node tools/enginectl.js unity-test` ``，
+// 而**行内 code 恰恰是写「要跑什么命令」最自然的形式**。遮代码遮的是症状，
+// 真病是匹配没有边界。边界式修法两边都对：`enginectl-baselines` 不中，`enginectl.js` 中。
+//
+// 右边界只排除 [-_A-Za-z0-9]：`.js` `/` 空格 都算词已结束。
+// 左边界同理，免得 `pre-enginectl` 这类也中。
+// **不转义**：特征本来就是正则（配置里可写 `dotnet\s+build`），转义会把 \s 变成字面反斜杠，
+// 正则语义当场失效——lifecycle.test.js 那格「正则语义生效（不是字面量）」正是守这个的，
+// 我加边界时顺手转义，被它当场抓住。只包一层非捕获组再上边界。
+function 带边界(p) {
+  return new RegExp(`(?<![-_A-Za-z0-9])(?:${String(p)})(?![-_A-Za-z0-9])`, 'gi');
+}
+
+// 否定语境（议程第 38 条）：命中处**前面**若出现否定词，那是在说「本单不用引擎」，不是在用。
+// 案源 TF-8：验收标准原话「上述条目均为前端沙箱判据与 node 测试链，**不涉 enginectl /
+// unity-test / 受控重建**，不触发 H97 引擎门禁停闸」——三条特征全中，而它说的恰恰是不用。
+// 窗口取命中点前 24 字：太长会把上一句的否定误算进来，太短接不住「均为…，不涉 X」这种句式。
+const 否定词 = /(不涉|不触发|不需要|不需|无需|不用|不走|不含|非引擎|不属于|无关|不做|未涉及|不牵涉)/;
+// 转折词：否定之后又转回来的，不算否定（「不涉 A，但要跑 B」里的 B 是真的要跑）
+const 转折词 = /(但|然而|不过|仍需|仍要|还需|除外|例外)/;
+
+// 否定语境：**按句读切子句**，不用定长窗口。
+// 定长窗口对付不了列表式否定——TF-8 原话「不涉 enginectl / unity-test / 受控重建」，
+// 否定词在列表最前，第三项距它 26 字，24 字的窗口刚好够不着，于是前两项豁免、第三项照拦。
+// 一个「差两个字就失效」的判据不是判据。改按句读（。！？；换行）取当前子句，
+// 列表整体落在同一子句里，三项一并豁免。
+function 否定语境(正文, 位置) {
+  const 前全 = 正文.slice(0, 位置);
+  const 界 = Math.max(前全.lastIndexOf('。'), 前全.lastIndexOf('！'), 前全.lastIndexOf('？'),
+    前全.lastIndexOf('；'), 前全.lastIndexOf(';'), 前全.lastIndexOf('\n'));
+  const 子句 = 前全.slice(界 + 1);
+  if (!否定词.test(子句)) return false;
+  // 否定之后若出现转折，否定就被翻回来了——取最后一个否定词之后的片段再看
+  const 末否 = 子句.search(否定词);
+  const 尾 = 子句.slice(末否);
+  return !转折词.test(尾);
+}
+
 function 引擎门禁命中(cfg, t) {
   const c = ((cfg || {}).执行器 || {}).引擎门禁 || {};
   if (c.开 === false) return null; // 总开关（缺省开）
-  let 正文 = null;
-  try { 正文 = require('./precheck').章节((t && t.body) || '', '验收标准'); } catch { /* 取不到章就退整篇 */ }
-  if (正文 === null) return null; // 无验收标准章 = 无从判门禁（定稿预检 H62 另有一道拦这个）
+  let 章 = null;
+  try { 章 = require('./precheck').章节((t && t.body) || '', '验收标准'); } catch { /* 取不到章就退整篇 */ }
+  if (章 === null) return null; // 无验收标准章 = 无从判门禁（定稿预检 H62 另有一道拦这个）
+  const 正文 = 章;
   for (const p of 引擎门禁特征(cfg)) {
     // 坏正则不能炸掉整条核查收尾路径，但也不能静默放行——回落成字面量包含判定（fail-safe 向严）
-    let 中 = false;
-    try { 中 = new RegExp(p, 'i').test(正文); } catch { 中 = 正文.toLowerCase().includes(p.toLowerCase()); }
-    if (中) return p;
+    let re = null;
+    try { re = 带边界(p); } catch { re = null; }
+    if (!re) {
+      const i = 正文.toLowerCase().indexOf(String(p).toLowerCase());
+      if (i >= 0 && !否定语境(正文, i)) return p;
+      continue;
+    }
+    // 逐个命中点看否定语境：**同一特征可能出现多次**，一处被否定不代表处处被否定。
+    // 只要有一处是肯定语境，门禁就该拦——fail-safe 仍然向严。
+    let x;
+    while ((x = re.exec(正文))) {
+      if (!否定语境(正文, x.index)) return p;
+    }
   }
   return null;
 }
@@ -583,9 +765,9 @@ function 隐藏(root, id, 值) {
 }
 
 module.exports = {
-  审过, 放行, 撤回放行, 交产出, QA裁定, 核查过, 送仲裁, 仲裁定, 定夺, 验收,
+  审过, 待审打回, 放行, 撤回放行, 停靠, 解除停靠, 已停靠, 交产出, QA裁定, 核查过, 核查打回, 送仲裁, 仲裁定, 定夺, 验收,
   撤回, 废弃, 收回, 返修, 滞留检查, 返工, 执行失败, 失败分诊,
-  引擎门禁命中, 引擎门禁特征, 引擎门禁默认特征, 候引擎实证, 实证放行, // 施工令-032② H97
+  引擎门禁命中, 引擎门禁特征, 引擎门禁默认特征, 候引擎实证, 实证放行, 带边界, 否定语境, // 施工令-032② H97 + 议程38
   标记待复核, 解除待复核, 推翻, 隐藏,
   挂起, 复活, 挂起树, 复活树, 子孙,
   // 过渡别名（H108 改名对照，B/C 组接线完成后删）：旧调用点语义就近映射到新函数

@@ -204,4 +204,125 @@ t('门槛读 config.并发.零输出分钟；判官会话与无时间戳会话�
   assert.equal(零输出数(root2), 0, '判官会话/无拉起时间戳一律不适用');
 });
 
+// ── 议程第 34 条：队列空时的盲区（2026-08-28 补）──
+//
+// 盲区案源（2026-08-27 整夜）：十一粒排到点，而十一张待派单全部 放行=false。
+// 就绪队列**恰恰是空的**，原判据第一条就判「队列本来就空」计数归零，整夜零告警。
+// 原始案源（2026-08-06）盯的是「已放行单滞留」，看不见「排期到点却从未放行」这个变种。
+
+t('第34条·队列空但有到点粒卡在放行侧 → 照报（原判据在这一路上是瞎的）', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  seed(root, '待派', { id: 'K-1', 职能: '程序' });        // 未放行 → 不进就绪面
+  const 卡 = [{ 单: 'K-1', 粒: 'g1', 计划开始: '2026-08-27T23:30' }];
+  const r = patrol.零派发告警(root, CFG, { 执行中: 0, 到点无单: 卡 });
+  assert.equal(r.就绪.length, 0, '就绪面本来就是空的——这正是原判据看不见它的原因');
+  assert.ok(r.告警, '队列空 + 有到点粒卡放行侧 = 必须报，不许判「本来就空」了事');
+  assert.match(r.告警, /到点无单可派/);
+  assert.match(r.告警, /K-1/, '要点名是哪张单卡着');
+  assert.equal(inbox.list(root, 200).filter((e) => e.类型 === '到点无单').length, 1, '进急件');
+  assert.ok(ledger.events(root, 50).some((e) => e.类型 === '到点无单'), '台账留痕');
+});
+
+t('第34条·同一批单只在集合变化时报一次（15 分钟一拍不许喊三十遍）', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  seed(root, '待派', { id: 'K-2', 职能: '程序' });
+  const 卡 = [{ 单: 'K-2', 粒: 'g2', 计划开始: '2026-08-27T23:30' }];
+  const a1 = patrol.零派发告警(root, CFG, { 执行中: 0, 到点无单: 卡 });
+  const a2 = patrol.零派发告警(root, CFG, { 执行中: 0, 到点无单: 卡 });
+  assert.ok(a1.告警, '首次报');
+  assert.equal(a2.告警, null, '同一批不重复喊——喊多了就没人看了');
+  const a3 = patrol.零派发告警(root, CFG, { 执行中: 0,
+    到点无单: [...卡, { 单: 'K-3', 粒: 'g3', 计划开始: '2026-08-27T23:45' }] });
+  assert.ok(a3.告警, '集合变化要重报——多卡一张是新信息');
+});
+
+t('第34条·无卡放行单时不误报（边界：传空数组）', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  const r = patrol.零派发告警(root, CFG, { 执行中: 0, 到点无单: [] });
+  assert.equal(r.告警, null, '没有卡放行的单就不该报此类告警');
+  assert.equal(inbox.list(root, 200).filter((e) => e.类型 === '到点无单').length, 0);
+});
+
+// ── 议程第 35 条：复判诊断对但只记账不升级（2026-08-28 补）──
+//
+// 案源 2026-08-27 整夜：复判**诊断没错**——00:07 收官原话「空转属派发侧未拉起而非排期偏差」——
+// 但它只往 journal 写一行就完事，15 分钟一轮连报四次，无人知晓，产线整夜零产出。
+// **能正确判出病因、却没有任何途径把病因交出去，等于没诊断。**
+// 这是「判了没人执行」在监控层的第四例。
+
+t('第35条·复判判出非排期因 → 升格进急件与台账，不只是记一行流水', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  const r = patrol.升格非排期空转(root, '空转属派发侧未拉起而非排期偏差');
+  assert.equal(r.升, true, '首次必须升格');
+  assert.match(r.文, /非排期/);
+  assert.match(r.文, /复判只会重排/, '要说清为什么复判自己解不了这一类');
+  assert.equal(inbox.list(root, 200).filter((e) => e.类型 === '空转非排期').length, 1, '进急件——只写 journal 就是原病');
+  assert.ok(ledger.events(root, 50).some((e) => e.类型 === '空转非排期'), '台账留痕');
+});
+
+t('第35条·同一因由只升一次（复判是循环触发的，不去重就成新的刷屏源）', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  const a = patrol.升格非排期空转(root, '空转属派发侧未拉起而非排期偏差');
+  const b = patrol.升格非排期空转(root, '空转属派发侧未拉起而非排期偏差');
+  assert.equal(a.升, true);
+  assert.equal(b.升, false, '同一因由不重复升——否则从「漏报」翻到另一头去了');
+  assert.equal(inbox.list(root, 200).filter((e) => e.类型 === '空转非排期').length, 1);
+
+  // 因由变了要重升：那是新信息
+  const c = patrol.升格非排期空转(root, '九张单全部停靠，堵在制作人定夺');
+  assert.equal(c.升, true, '换了因由要重升');
+  assert.equal(inbox.list(root, 200).filter((e) => e.类型 === '空转非排期').length, 2);
+});
+
+// ── 去重键取结构不取措辞（2026-08-28 15:2x 实测案）────────────────────────────
+// 上面那条「同一因由只升一次」用的是**逐字节相同的字符串**——而生产里的 因 是复判会话
+// 现写的散文，两轮之间永远不会字节相同。于是那条判据测的是一个不可能发生的情形：
+// 它绿着，真 bug 照样上线，十五分钟两封急件。**判据要挑真会发生的输入，否则绿得没有意义。**
+// 下面四条用今天那两封急件的原文当标本。
+
+const 空转数 = (root) => inbox.list(root, 200).filter((e) => e.类型 === '空转非排期').length;
+
+t('真标本回归·同一局面换个说法，不许再喊一封（06:39 与 06:54 两封急件原文）', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  const 甲 = '停靠粒挪不动、待派粒卡在放行侧，且全表实起实完为 null，无偏差证据';
+  const 乙 = '无实起实完可读，偏差不可断言；停靠粒等裁决、放行=false待派粒卡在放行侧，均非排期问题';
+  assert.notEqual(甲, 乙, '前提：两句措辞确实不同，否则这条判据退化成上面那条');
+  const a = patrol.升格非排期空转(root, 甲);
+  const b = patrol.升格非排期空转(root, 乙);
+  assert.equal(a.升, true, '首封要喊');
+  assert.equal(b.升, false, '同一局面（都是 停靠+放行 堵着）换个说法不许再喊——原样这里会喊第二封');
+  assert.equal(空转数(root), 1, '信箱里只该有一封');
+});
+
+t('真标本回归·堵点真换了一类才重喊（停靠 → 无单可派）', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  patrol.升格非排期空转(root, '九张单全部停靠，堵在制作人定夺');
+  const c = patrol.升格非排期空转(root, '队列空了，无单可派');
+  assert.equal(c.升, true, '换了一类堵点是新信息，该喊');
+  assert.equal(空转数(root), 2);
+});
+
+t('非排期因类一个都不命中 → 不升格（不是所有空转都归这条闸管）', () => {
+  const root = makeRoot();
+  patrol.重置(root);
+  const r = patrol.升格非排期空转(root, '排期偏差过大，计划开始普遍早于实起');
+  assert.equal(r.升, false, '这句讲的是排期本身的锅，不该走「非排期」这条升格口');
+  assert.equal(空转数(root), 0, '不该有急件');
+});
+
+t('两把尺合一·词表里每一个因类都真能被判出来（调用侧与去重键同读一份）', () => {
+  assert.ok(patrol.空转因类.length >= 5, '词表要导出且非空——调用侧靠它判要不要升格');
+  for (const w of patrol.空转因类) {
+    assert.deepEqual(patrol.非排期空转类('本轮空转因由：' + w), [w],
+      `词表里的「${w}」必须被判出来——判定另写一份就是两把尺，改一处漏一处`);
+  }
+});
+
 console.log(`全部通过：${passed} 项`);

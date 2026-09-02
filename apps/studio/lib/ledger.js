@@ -56,7 +56,16 @@ function 越界目标(repo, targets) {
 }
 
 
-function commitStudio(root, cb) {
+// 索引锁争用的判定（议程第 39 条）。**提到模块级是为了可被测**——
+// 埋在 commitStudio 的闭包里，除了 grep 源码没有第二种验法，而 grep 既漏真病又误伤重构
+// （本文件 记账回调 那段注释记的就是同一条教训）。
+// 只认锁：git 的锁错在不同版本/语言下措辞不同，四种形态都收；其余错一律不重试。
+const 锁错 = (e, se) => /index\.lock|Unable to create|another git process|资源.*占用/i
+  .test(String((se || '') + ' ' + ((e && e.message) || '')));
+const 重试次数 = 4;   // 退避 120/240/480/960ms，合计约 1.8s——锁通常几百毫秒放开
+const 退避毫秒 = (剩) => 120 * Math.pow(2, 重试次数 - 剩);
+
+function commitStudio(root, cb, deps = {}) {
   const done = (ok, note) => { if (cb) cb(ok, note); };
   // 仓库根让 git 自己找（--show-toplevel）：不再假定"工作区上一级是仓库根"——
   // 套件部署布局（工作区自身即仓库根）曾让记账静默跳过（另会话实测）
@@ -72,9 +81,29 @@ function commitStudio(root, cb) {
     const 越 = 越界目标(repo, targets);
     if (越.length) return done(false, '目标含被 ignore 的路径，已中止：' + 越.slice(0, 5).join('、'));
     if (!targets.length) return done(false, '无可记账目录');
-    const g = (args, next) => execFile('git', ['-C', repo, ...args], { windowsHide: true, timeout: 30000 }, next);
-    g(['add', '--', ...targets], (e2) => {
-      if (e2) return done(false, 'add 失败');
+    // 索引锁争用要重试（议程第 39 条，2026-08-28）。
+    //
+    // 案源：共树里同时有别的 git 在跑（执行会话提交、总监手工提交、另一次记账），
+    // `.git/index.lock` 被占，输的那方直接失败——而记账是 10 分钟一拍，
+    // **一次毫秒级的争用换来十分钟的账不落**。2026-08-27 一天碰撞六次。
+    //
+    // 只对锁错重试：钩子拒绝、没配 user.email、pathspec 不存在这些重试一百次也一样，
+    // 盲目重试只会把「一次明确失败」变成「拖长的明确失败」，还盖住真因。
+    // 判定提到模块级并导出（见文件末），照本文件自己的规矩——「抽出来不是为了好看，是为了可被测」。
+    const 跑 = deps.execFile || execFile;
+    const g = (args, next, 剩 = 重试次数) => 跑('git', ['-C', repo, ...args],
+      { windowsHide: true, timeout: 30000 }, (e, so, se) => {
+        if (e && 剩 > 0 && 锁错(e, se)) {
+          // 退避：120/240/480/960ms。锁通常在一两百毫秒内放开，四次退避覆盖到约两秒——
+          // 比等下一拍（10 分钟）好三个数量级，又不至于在真死锁时空转。
+          const 等 = 退避毫秒(剩);
+          return setTimeout(() => g(args, next, 剩 - 1), 等);
+        }
+        next(e, so, se);
+      });
+    g(['add', '--', ...targets], (e2, so2, se2) => {
+      // 失败要带原因（同下方 commit 的教训）：'add 失败' 四个字查不出是锁、是 pathspec 还是权限
+      if (e2) return done(false, 'add 失败：' + String((se2 || e2.message) || '').trim().slice(0, 160));
       g(['diff', '--cached', '--quiet'], (e3) => {
         if (!e3) return done(false, '无变更'); // diff --quiet 退出 0 = 无暂存变更
         const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
@@ -109,4 +138,4 @@ function 记账回调(root, deps = {}) {
   };
 }
 
-module.exports = { 越界目标, 记账目标, commitStudio, 记账回调 };
+module.exports = { 越界目标, 记账目标, commitStudio, 记账回调, 锁错, 重试次数, 退避毫秒 };

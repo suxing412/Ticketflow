@@ -51,8 +51,14 @@ await t('G9：注册表承诺的「开线」按钮真在管线层，且是一颗
     { id: 'P-9', 名称: '旧线', 状态: '封存' }], []);
   const 钮 = 钮文(html);
   const g9 = 闸('G9');
-  assert.ok(钮.some((s) => s.includes(g9.按钮)),
-    `注册表 G9 写着 落点「${g9.落点}」/ 按钮「${g9.按钮}」，管线层的按钮却只有 ${JSON.stringify(钮)}`);
+  // 2026-08-28：注册表的 按钮 已拆成 动作键（须真实存在于 ACTIONS）+ 指引（给人看的话），
+  // 而指引可以是多动作的一句（「开线／封存」「接受／给方向／打回」）。
+  // 故判「**任一段**落在钮上」而不是「整串落在钮上」——后者会因为闸表多写一个动作就假红，
+  // 而本条要防的是「闸表说这儿有钮、界面上其实没有」，与写了几个动作无关。
+  const 段 = String(g9.指引 || '').split(/[／/、]/).map((x) => x.trim()).filter(Boolean);
+  assert.ok(段.length, 'G9 指引不能为空——闸表得说得出这儿该干什么');
+  assert.ok(段.some((seg) => 钮.some((s) => s.includes(seg))),
+    `注册表 G9 写着 落点「${g9.落点}」/ 指引「${g9.指引}」，管线层的按钮却只有 ${JSON.stringify(钮)}`);
   assert.equal(typeof ctx.plOpen, 'function', '按钮绑的函数要真存在，不能只画个壳');
   assert.equal(typeof ctx.plToggleSealed, 'function',
     'window._showSealed 此前全库一处读零处写——封存的线调不出来，开关也得有入口');

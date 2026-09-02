@@ -15,7 +15,6 @@ if (-not (Test-Path $exe)) { throw "找不到 $exe —— 先在 apps\studio 下
 $stage = Join-Path $env:TEMP "aistudio-suite-stage"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force "$stage\骨架\岗位协议" | Out-Null
-New-Item -ItemType Directory -Force "$stage\骨架\风格库\美术库" | Out-Null
 
 # 装配件
 Copy-Item $exe "$stage\监制台 $ver.exe"
@@ -25,9 +24,6 @@ Copy-Item (Join-Path $repo '套件\studio.config.template.json') "$stage\骨架\
 # 岗位协议用通用模板（不打包本工作室的 TK 定制版——发布纪律：套件内容全部通用默认）
 # 施工令-024：模板迁 packages/role-protocol-templates；包自带的 README.md 是包说明不是章程，排除
 Copy-Item (Join-Path $repo 'packages\role-protocol-templates\*.md') "$stage\骨架\岗位协议\" -Exclude 'README.md'
-# 风格库空模板（新部署不继承本项目的公理）
-Set-Content -Encoding UTF8 "$stage\骨架\风格库\策划标杆.md" "# 策划标杆（提炼式设计公理）`n"
-
 $zip = Join-Path ([Environment]::GetFolderPath('Desktop')) "监制台-套件-v$ver.zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }
 # 打包方式实测记录（PS 5.1 三选一，各有残缺）：

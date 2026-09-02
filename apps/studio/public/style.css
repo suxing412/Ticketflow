@@ -753,33 +753,10 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
 .dside .qitem .qi { font-family:var(--mono); font-size:12px; font-weight:500; }
 .dside .qitem .qn2 { font-size:11px; color:var(--ink2); margin-top:3px; }
 
-/* ===== P5 风格库 ===== */
-.p5grid { display:grid; grid-template-columns:680fr 636fr; gap:40px; margin-top:24px; align-items:start; }
-.axcard { border-radius:12px; padding:16px 26px 14px; margin-bottom:16px; }
-.axcard h4 { margin:0 0 8px; font-size:14px; }
-.axcard p { margin:0 0 10px; font-size:12.5px; color:var(--ink2); }
-.addbar { border-radius:12px; height:56px; display:flex; align-items:center; gap:16px; padding:0 26px; cursor:pointer; }
-.addbar:hover { border-color:var(--ink3); }
-.addbar .a1 { color:var(--accent-ink); font-size:13px; font-weight:500; }
-.artgrid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
-.artcard { border-radius:12px; padding:16px; }
-.artcard .thumb { height:118px; border-radius:8px; position:relative; overflow:hidden; background:var(--sect);
-  box-shadow:inset 0 1px 2px var(--groove-soft); }
-.artcard .thumb img { width:100%; height:100%; object-fit:cover; display:block; }
-.artcard .thumb.ftype { display:flex; align-items:center; justify-content:center; font-size:18px; color:var(--ink3); letter-spacing:.1em; }
-.artcard .thumb .pill { position:absolute; top:14px; left:14px; background:var(--card); }
-/* 条目元信息行 + 移出按钮（精选制反向闸） */
-.axmeta { display:flex; align-items:center; gap:10px; margin-top:4px; }
-.axmeta .axdate { font-size:10px; color:var(--ink3); }
-.axdel { margin-left:auto; width:22px; height:22px; border-radius:11px; color:var(--ink3); font-size:14px;
-  display:inline-flex; align-items:center; justify-content:center; transition:color 150ms var(--ease-out), background 150ms var(--ease-out); }
-.axdel:hover { color:var(--danger); background:var(--dangerbg); }
-.artcard .ac .axdel { float:right; }
-/* 入库弹窗遮罩 */
+/* 共享模态遮罩 */
 .mwrap .mback { position:fixed; inset:0; background:var(--mask); z-index:44; }
 .mwrap .modal2 { z-index:45; width:460px; padding:24px 28px; }
-.artcard .an { font-size:13px; font-weight:500; margin-top:12px; }
-.artcard .ac { font-family:var(--mono); font-size:10px; color:var(--ink3); margin-top:2px; }
+/* 共享空态 */
 .emptycard { background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px 26px; margin-top:20px; }
 .emptycard h5 { margin:0 0 8px; font-size:13px; color:var(--ink2); }
 .emptycard p { margin:0; font-size:12px; color:var(--ink3); }
@@ -1092,7 +1069,7 @@ select option, select optgroup { background:var(--paper); color:var(--ink); }
   .prow { flex-wrap:wrap; row-gap:6px; }
   .rl-wrap { min-height:calc(100vh - 150px); margin-top:12px; }
   .rl-msg { max-width:94%; }
-  .p6grid, .p5grid, .dgrid, .artgrid { grid-template-columns:1fr !important; display:block; }
+  .p6grid, .dgrid { grid-template-columns:1fr !important; display:block; }
 }
 
 /* ===== P14 想法池（H49） ===== */
@@ -1907,3 +1884,14 @@ a.gt2nm:hover, a.gt2nm:focus-visible { background:var(--sect); color:var(--accen
 .gt2cbadge { background:var(--dangerbg); color:var(--danger); border:1px solid var(--danger);
   font-size:11.5px; font-weight:700; font-family:var(--mono); padding:2px 10px; border-radius:999px; }
 .gt2cbadge:hover, .gt2cbadge:focus-visible { filter:brightness(1.08); outline:none; }
+
+/* 停靠单（议程第 33 条 · G26）：看板上一眼认得出，并带 解除停靠/废弃 两颗钮。
+   底色用琥珀低透而不是描边——描边在密排卡片里会跟相邻卡的边混在一起看不出来。 */
+.bcard2.parked { background: rgba(240,166,60,.10); box-shadow: inset 0 0 0 1px rgba(240,166,60,.45); }
+.bcard2 .pk { display:inline-block; margin-right:4px; padding:0 4px; border-radius:3px;
+  background: rgba(240,166,60,.85); color:#1a1a1a; font-size:10px; font-weight:600; vertical-align:1px; }
+.bcard2 .cacts { display:flex; gap:4px; margin-top:5px; }
+.bcard2 .cact { flex:1; padding:2px 0; border:1px solid rgba(128,128,128,.35); border-radius:3px;
+  background:transparent; font:inherit; font-size:10px; cursor:pointer; }
+.bcard2 .cact:hover { border-color: rgba(240,166,60,.8); }
+.bcard2 .cact.danger:hover { border-color:#c0392b; color:#c0392b; }

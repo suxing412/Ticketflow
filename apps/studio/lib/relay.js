@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const FILE = (root) => path.join(root, '遥控', 'thread.jsonl');
+const 发言人白名单 = ['制作人', 'Claude', '项管', '助理', '总监'];
 
 // 拒收留痕（坑档案-017 治本条）：校验不过就 return {ok:false} 是**静默丢弃**——
 // 五处生产调用里 brain.js×4 与 wake.js 全部裸吞返回值（catch 注释「信道失败不阻塞」），
@@ -24,7 +25,7 @@ function append(root, from, text) {
   if (!t) return 拒收(root, from, t, '空指令不收');
   if (t.length > 4000) return 拒收(root, from, t, '单条 ≤4000 字');
   // 项管入列（2026-08-05 夜班推演案：答话/简报/收口/起草的信道发言全被旧白名单静默丢弃）
-  if (!['制作人', 'Claude', '项管'].includes(from)) return 拒收(root, from, t, '非法署名');
+  if (!发言人白名单.includes(from)) return 拒收(root, from, t, '非法署名');
   fs.mkdirSync(path.dirname(FILE(root)), { recursive: true });
   const entry = { t: new Date().toISOString(), from, text: t };
   fs.appendFileSync(FILE(root), JSON.stringify(entry) + '\n', 'utf8');
@@ -48,4 +49,4 @@ function list(root, limit = 100) {
   } catch { return []; }
 }
 
-module.exports = { append, 发, list, FILE, 拒收 };
+module.exports = { append, 发, list, FILE, 拒收, 发言人白名单 };
