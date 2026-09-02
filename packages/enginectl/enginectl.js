@@ -2,9 +2,14 @@
 // enginectl — 引擎通道注册表（Ticketflow 通用件）
 // 用法：node enginectl.js <通道> --project <工程目录> [--out <产物>] [--preset <导出预设>] [--script <测试脚本>]
 //      node enginectl.js 探测            ← 列出本机可用引擎
+//      node enginectl.js 用法            ← 打印本注释同源的用法清单（help / --help 同义）
 //      unity-test [--filter 类名1,类名2] ← 只跑点名测试类的子集
 //      unity-test/unity-run [--fresh]   ← 净室：请求活编辑器排空队列后自退，重新可见拉起再投递（重启后首跑）
 //      unity-* [--boot-timeout-min N]   ← 可见编辑器拉起后等监听器上线的上限（默认 5min，首次导入可调大）
+//      unity-* [--tag <单号>]            ← 本轮取证的归属标记（TK-204）。缺省 untagged，从不因缺 tag 报错中断。
+//                                          每轮除照旧写固定名 enginectl-results.xml / enginectl-test.log 外，
+//                                          同内容另落独立件 enginectl-runs/<tag>-<UTC时间戳>.xml|.log ——
+//                                          固定名件解决向后兼容，独立件解决并发互毁。路径见输出 resultsFile/logFile。
 // 施工令-011「编辑器绝对可见化」：Unity 侧只允许存在带可见窗口的编辑器，无头 batchmode 整族退役，无例外旗标。
 //   无活监听器 → 可见拉起 Unity.exe -projectPath <工程>（不带任何无头/无图形旗标）→ 等监听器上线 → 投递。
 //   拉不起/等不到 → 人话报错，绝不回落无头。已在跑的可见编辑器永不被杀死或抢占（--fresh 也只是礼貌请求自退）。
@@ -162,19 +167,117 @@ function readCounts(xml) {
   try { const x = fs.readFileSync(xml, 'utf8'); return { passed: (x.match(/passed="(\d+)"/) || [])[1] ?? null, failed: (x.match(/failed="(\d+)"/) || [])[1] ?? null, total: (x.match(/total="(\d+)"/) || [])[1] ?? null }; } catch { return { passed: null, failed: null, total: null }; }
 }
 
-// —— 基线归档：全量（无 --filter）结果落盘成功后存一份带 UTC 时间戳的副本，只留最近 10 份
+// ——————————————————————————————————————————————————————————
+// 取证归档三池（TK-204）——案源：TK 仓根只有一组固定名产物，两条链同时跑测后写者覆盖前写者，
+// 两边都拿不到自己那轮的数字（并发互毁）；且施工令-056 的 stale 挪件与基线归档件共用
+// enginectl-baselines/ 同一个 keep-10 池，stale 把基线对照线驱逐干净（背景 3：10 个件全是 stale）。
+//   · enginectl-baselines/       只放 results-<UTC>.xml 基线归档件，留最近 10 份
+//   · enginectl-runs/            每轮取证的独立件 <tag>-<UTC>.xml|.log，xml+log 成对计一份，留最近 30 份
+//   · enginectl-runs/stale/      起跑净场挪走的旧件 results-stale-<旧件mtime>.xml，留最近 10 份
+// 三池各清各的，互不驱逐——「一个池的清理策略把另一个池的货清空」就是背景 3 的病根。
+// ——————————————————————————————————————————————————————————
 const BASELINE_DIR = 'enginectl-baselines';
 const BASELINE_KEEP = 10;
-const STALE_PREFIX = 'results-stale-'; // 挪走的旧件也叫 results-*.xml，一并吃 keep-10 的清理，不会无限堆
+const RUNS_DIR = 'enginectl-runs';
+const RUNS_KEEP = 30;      // xml+log 成对计一份
+const STALE_SUBDIR = 'stale';
+const STALE_KEEP = 10;
+const STALE_PREFIX = 'results-stale-';
+const TAG_DEFAULT = 'untagged';
+
+const utc戳 = () => new Date().toISOString().replace(/[-:.]/g, ''); // 20260826T034512345Z
+const 独立件池 = (proj) => path.join(proj, RUNS_DIR);
+const 陈旧池 = (proj) => path.join(proj, RUNS_DIR, STALE_SUBDIR);
+const 是基线件 = (f) => /^results-\d.*\.xml$/.test(f) && !f.startsWith(STALE_PREFIX); // results-<UTC>.xml，不含 stale
+const 是陈旧件 = (f) => f.startsWith(STALE_PREFIX) && f.endsWith('.xml');
+
+// --tag 归一化：缺参 / 只给旗标没给值 → untagged（硬约束：从不因缺 tag 报错中断，既有命令行原样可跑）。
+// 值只留文件名安全字符（ASCII 字母数字点下划线连字符 + 中日韩汉字），其余一律折成 '-'。
+function normalizeTag(v) {
+  if (v === undefined || v === true || v === null) return TAG_DEFAULT;
+  const s = String(v).trim().replace(/[^0-9A-Za-z._一-龥-]+/g, '-').slice(0, 64).replace(/^-+|-+$/g, '');
+  return s || TAG_DEFAULT;
+}
+
+// 独立件池清理：按「成对一份」计数（同 stem 的 .xml/.log 算一份），按 mtime 从旧到新删到只剩 RUNS_KEEP 份。
+// stale/ 是子目录，isFile 过滤天然把它排除在外——两池互不驱逐的实现落点就在这一行。
+function pruneRunsPool(proj) {
+  const dir = 独立件池(proj);
+  let ents;
+  try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return 0; }
+  const 组 = new Map();
+  for (const e of ents) {
+    if (!e.isFile()) continue;
+    const m = /^(.+)\.(xml|log)$/.exec(e.name);
+    if (!m) continue;
+    const f = path.join(dir, e.name);
+    const g = 组.get(m[1]) || { files: [], mtimeMs: 0 };
+    g.files.push(f); g.mtimeMs = Math.max(g.mtimeMs, statMtimeMs(f) ?? 0);
+    组.set(m[1], g);
+  }
+  const 旧到新 = [...组.values()].sort((a, b) => a.mtimeMs - b.mtimeMs);
+  let 删 = 0;
+  for (const g of 旧到新.slice(0, Math.max(0, 旧到新.length - RUNS_KEEP))) {
+    for (const f of g.files) { try { fs.unlinkSync(f); 删++; } catch { /* 下次再清 */ } }
+  }
+  return 删;
+}
+
+// 陈旧池清理：文件名带旧件自己的 mtime，名序即时序，留最近 STALE_KEEP 份。只认 results-stale-*.xml，
+// 不碰基线目录一个字节。
+function pruneStalePool(proj) {
+  const dir = 陈旧池(proj);
+  try {
+    const olds = fs.readdirSync(dir).filter(是陈旧件).sort().reverse();
+    for (const f of olds.slice(STALE_KEEP)) { try { fs.unlinkSync(path.join(dir, f)); } catch { /* 下次再清 */ } }
+  } catch { /* 池还没建，无事可清 */ }
+}
+
+// 归档池分家自愈：施工令-056 时代 stale 件落在 enginectl-baselines/，把基线归档件挤空了。
+// 分家后每轮起跑先把老位置的残留一次性挪进 enginectl-runs/stale/——不必人工搬迁，跑一次就干净。
+function migrateStalePool(proj) {
+  const from = path.join(proj, BASELINE_DIR);
+  let names;
+  try { names = fs.readdirSync(from).filter(是陈旧件); } catch { return 0; }
+  if (!names.length) return 0;
+  const to = 陈旧池(proj);
+  try { fs.mkdirSync(to, { recursive: true }); } catch { return 0; }
+  let moved = 0;
+  for (const f of names) { try { fs.renameSync(path.join(from, f), path.join(to, f)); moved++; } catch { /* 单件失败不拖累其余 */ } }
+  if (moved) pruneStalePool(proj);
+  return moved;
+}
+
+// 双写落件：固定名件已由监听器写在原位，这里再把同内容拷一份进独立件池。
+// copyFileSync 逐字节复制 ⇒ 两份 sha256 必然相等（验收 B1②）。同 tag 同毫秒撞名时加序号，
+// xml/log 共用同一个 stem，成对可辨。归档是附加品：失败只丢独立件，不影响本轮测试结论。
+function archiveRun(proj, tag, 件) {
+  const r = { resultsFile: null, logFile: null };
+  try {
+    const dir = 独立件池(proj);
+    fs.mkdirSync(dir, { recursive: true });
+    const ts = utc戳();
+    let stem = `${tag}-${ts}`;
+    for (let n = 1; fs.existsSync(path.join(dir, `${stem}.xml`)) || fs.existsSync(path.join(dir, `${stem}.log`)); n++) stem = `${tag}-${ts}-${n}`;
+    if (件.results && fs.existsSync(件.results)) { const d = path.join(dir, `${stem}.xml`); fs.copyFileSync(件.results, d); r.resultsFile = d; }
+    if (件.log && fs.existsSync(件.log)) { const d = path.join(dir, `${stem}.log`); fs.copyFileSync(件.log, d); r.logFile = d; }
+    pruneRunsPool(proj);
+  } catch { /* 附加品，失败不影响测试结论 */ }
+  return r;
+}
+
+// —— 基线归档：全量（无 --filter）结果落盘成功后存一份带 UTC 时间戳的副本，只留最近 10 份
 function archiveBaseline(proj, xml) {
   try {
     if (!fs.existsSync(xml)) return null;
     const dir = path.join(proj, BASELINE_DIR);
     fs.mkdirSync(dir, { recursive: true });
-    const ts = new Date().toISOString().replace(/[-:.]/g, ''); // 20260807T001234567Z
-    const dest = path.join(dir, `results-${ts}.xml`);
+    // 撞名序号：同一毫秒内连归两份会同名覆盖，「留最近 10 份」就被静默削成 9 份（TK-204 自测实证）。
+    const ts = utc戳();
+    let dest = path.join(dir, `results-${ts}.xml`);
+    for (let n = 1; fs.existsSync(dest); n++) dest = path.join(dir, `results-${ts}-${n}.xml`);
     fs.copyFileSync(xml, dest);
-    const olds = fs.readdirSync(dir).filter((f) => /^results-.+\.xml$/.test(f)).sort().reverse(); // 文件名即时序
+    const olds = fs.readdirSync(dir).filter(是基线件).sort().reverse(); // 文件名即时序；stale 件已分家，不参与本池计数
     for (const f of olds.slice(BASELINE_KEEP)) { try { fs.unlinkSync(path.join(dir, f)); } catch { /* 下次再清 */ } }
     return dest;
   } catch { return null; } // 归档是附加品，失败不影响测试结论
@@ -197,14 +300,15 @@ function stashStaleResults(proj, xml) {
   const mtimeMs = statMtimeMs(xml);
   if (mtimeMs === null) return { stashed: null }; // 本就没有旧件 = 已是净场
   try {
-    const dir = path.join(proj, BASELINE_DIR);
+    const dir = 陈旧池(proj); // TK-204 分家：陈旧件进 enginectl-runs/stale/，不再挤占基线归档池
     fs.mkdirSync(dir, { recursive: true });
     const dest = path.join(dir, `${STALE_PREFIX}${时戳(mtimeMs).replace(/[-:.]/g, '')}.xml`);
     fs.renameSync(xml, dest);
     if (fs.existsSync(xml)) return { err: `起跑前挪走上一轮 ${path.basename(xml)} 后它仍在原位（${xml}）——拒绝带着旧件开跑` };
+    pruneStalePool(proj);
     return { stashed: dest, mtimeMs };
   } catch (e) {
-    return { err: `起跑前挪走上一轮 ${path.basename(xml)} 失败：${e.message}——旧件还在原位（${xml}），继续开跑就可能把上一轮成绩读成本轮的（TK-144 案）。请手动移走该文件、或修好 ${BASELINE_DIR}/ 的目录权限后重跑` };
+    return { err: `起跑前挪走上一轮 ${path.basename(xml)} 失败：${e.message}——旧件还在原位（${xml}），继续开跑就可能把上一轮成绩读成本轮的（TK-144 案）。请手动移走该文件、或修好 ${RUNS_DIR}/${STALE_SUBDIR}/ 的目录权限后重跑` };
   }
 }
 
@@ -318,7 +422,25 @@ async function requestEditorRestart(proj, hit, probeMs, waitMin) {
   }
 }
 
+// 用法清单：与文件头注释同源，供 `node enginectl.js 用法` 打印（机器可 grep，人也读得下去）
+const 用法 = [
+  'node enginectl.js <通道> --project <工程目录> [选项]',
+  '通道：探测 / 用法 / 自测 / unity-test / unity-run / unity-build(占位) / godot-import / godot-test / godot-export',
+  'unity-test   [--filter 类名1,类名2] [--fresh] [--tag <单号>] [--timeout-min N] [--boot-timeout-min N] [--lock-wait-min N]',
+  'unity-run    --method <类.静态无参方法> [--fresh] [--tag <单号>] [--timeout-min N] [--boot-timeout-min N]',
+  'godot-test   --script res://xxx.gd ｜ godot-export --preset <预设名> --out <产物路径>',
+  '--filter 类名1,类名2   只跑点名测试类的子集（不给即全量，全量绿才归档基线）',
+  '--fresh                净室：请求活编辑器排空队列后自退，重新可见拉起再投递',
+  '--tag <单号>           本轮取证的归属标记（TK-204）；不给即 untagged，绝不因此报错中断',
+  '                       每轮除固定名 enginectl-results.xml / enginectl-test.log 外，同内容另落独立件',
+  '                       enginectl-runs/<tag>-<UTC时间戳>.xml|.log（两份 sha256 相等），并发不互毁；',
+  '                       独立件绝对路径见输出的 resultsFile / logFile 两个字段，池留最近 30 份（成对计一份）',
+  '归档三池：enginectl-baselines/（基线 results-<UTC>.xml，留 10）· enginectl-runs/（独立件，留 30）· enginectl-runs/stale/（起跑挪走的旧件，留 10）——各清各的，互不驱逐',
+];
+
 async function main() {
+  if (channel === '用法' || channel === 'help' || args.help) return out({ ok: true, 用法 });
+  if (channel === '自测' || channel === 'selftest') return require('./test.js'); // 包自测（零引擎调用），自定退出码
   if (channel === '探测' || channel === 'probe') {
     return out({ ok: true, godot: findGodot(), unity: findUnityEditors().map((e) => e.版本), unreal: findUnreal(), 通道: ['godot-import', 'godot-test', 'godot-export', 'unity-test', 'unity-run', 'unity-build(占位)', 'unreal-*(未装/预留)'] });
   }
@@ -338,6 +460,7 @@ async function main() {
     const probeMs = Number(args['attach-probe-ms'] || 2000);
     const bootMin = Number(args['boot-timeout-min'] ?? 5);
     const lockWaitMin = Number(args['lock-wait-min'] || 30);
+    const tag = normalizeTag(args.tag); // 缺省 untagged——不给 tag 从不是错误
 
     const xml = path.join(proj, 'enginectl-results.xml');
     // 起跑时刻 + 净场（施工令-056）：只对 unity-test——unity-run 不产结果文件，此段整体不进，行为零变化。
@@ -345,6 +468,8 @@ async function main() {
     let startedAtMs = null;
     if (isTest) {
       startedAtMs = Date.now();
+      const 迁 = migrateStalePool(proj); // TK-204 分家自愈：老位置残留的 stale 件一次性搬进新池
+      if (迁) console.error(`[enginectl] 归档池分家：${BASELINE_DIR}/ 里 ${迁} 个 ${STALE_PREFIX}*.xml 已挪进 ${RUNS_DIR}/${STALE_SUBDIR}/（基线池腾空给对照线）`);
       const st = stashStaleResults(proj, xml);
       if (st.err) return out({ ok: false, channel, mode: 'visible', error: st.err });
       if (st.stashed) console.error(`[enginectl] 上一轮遗留的结果文件已挪走：${st.stashed}（mtime ${时戳(st.mtimeMs)}）`);
@@ -377,18 +502,25 @@ async function main() {
     const m = r.final;
     const err = ATTACH.errOf(m);
     if (!isTest) {
-      return out({ ok: ATTACH.okOf(m), channel, mode: 'visible', ...编辑器, status: m.status, method: String(args.method), log: ATTACH.pathOf(proj, m.logPath, runLog), durationMs: m.durationMs, ...(m.summary ? { summary: m.summary } : {}), ...(err ? { error: err } : {}) });
+      const 日志 = ATTACH.pathOf(proj, m.logPath, runLog);
+      const 独立 = archiveRun(proj, tag, { log: 日志 }); // unity-run 不产结果文件，只双写日志
+      return out({ ok: ATTACH.okOf(m), channel, mode: 'visible', ...编辑器, status: m.status, method: String(args.method), tag, log: 日志, ...(独立.logFile ? { logFile: 独立.logFile } : {}), durationMs: m.durationMs, ...(m.summary ? { summary: m.summary } : {}), ...(err ? { error: err } : {}) });
     }
     const results = ATTACH.pathOf(proj, m.resultsPath, xml);
     // 新鲜度闸（施工令-056）：过不了闸就 status=error，passed/failed/total 一个都不出现在输出里——
     // 「没有数字」比「有一组来路不明的数字」安全得多。listenerStatus 留着，供人对照监听器自己怎么说。
     const 新鲜 = freshnessGate(results, startedAtMs);
+    const 日志 = ATTACH.pathOf(proj, m.logPath, testLog);
     if (新鲜.stale) {
-      return out({ ok: false, channel, mode: 'visible', ...编辑器, status: 'error', listenerStatus: m.status, ...(filters.length ? { filter: filters } : {}), results, resultsMtime: 新鲜.resultsMtime, log: ATTACH.pathOf(proj, m.logPath, testLog), durationMs: m.durationMs, error: [新鲜.error, err].filter(Boolean).join('；另：') });
+      // 过不了闸的这一轮没有「本轮结果」可归档——把陈旧件拷进独立件池会让它冒充本轮成绩，
+      // 与「一个数字都不报」同一口径，故只双写日志（诊断要用），resultsFile 不出现。
+      const 独立 = archiveRun(proj, tag, { log: 日志 });
+      return out({ ok: false, channel, mode: 'visible', ...编辑器, status: 'error', listenerStatus: m.status, ...(filters.length ? { filter: filters } : {}), tag, results, resultsMtime: 新鲜.resultsMtime, log: 日志, ...(独立.logFile ? { logFile: 独立.logFile } : {}), durationMs: m.durationMs, error: [新鲜.error, err].filter(Boolean).join('；另：') });
     }
     const c = readCounts(results); // 数字以落盘 XML 为准（口径唯一，禁 tail 截尾推数），summary 只作旁证
     const baseline = (filters.length === 0 && c.passed !== null) ? archiveBaseline(proj, results) : null;
-    return out({ ok: ATTACH.okOf(m) && c.failed === '0', channel, mode: 'visible', ...编辑器, status: m.status, passed: c.passed, failed: c.failed, total: c.total, ...(filters.length ? { filter: filters } : {}), results, resultsMtime: 新鲜.resultsMtime, log: ATTACH.pathOf(proj, m.logPath, testLog), durationMs: m.durationMs, ...(baseline ? { baseline } : {}), ...(err ? { error: err } : {}) });
+    const 独立 = archiveRun(proj, tag, { results, log: 日志 }); // 双写：固定名件留原位，同内容另落独立件
+    return out({ ok: ATTACH.okOf(m) && c.failed === '0', channel, mode: 'visible', ...编辑器, status: m.status, passed: c.passed, failed: c.failed, total: c.total, ...(filters.length ? { filter: filters } : {}), tag, results, resultsMtime: 新鲜.resultsMtime, log: 日志, ...(独立.resultsFile ? { resultsFile: 独立.resultsFile } : {}), ...(独立.logFile ? { logFile: 独立.logFile } : {}), durationMs: m.durationMs, ...(baseline ? { baseline } : {}), ...(err ? { error: err } : {}) });
   }
 
   // 互斥 + 自愈（godot 通道）：抢不到锁=有同工程会话在跑，排队等待而非撞锁三振
@@ -424,5 +556,9 @@ async function main() {
 }
 
 // 命令行照旧直接跑；被 require 时只交出算子（test.js 拿去实测新鲜度三分支），一行都不执行。
-module.exports = { readCounts, archiveBaseline, statMtimeMs, stashStaleResults, freshnessGate, BASELINE_DIR, BASELINE_KEEP, STALE_PREFIX };
+module.exports = {
+  readCounts, archiveBaseline, statMtimeMs, stashStaleResults, freshnessGate,
+  normalizeTag, archiveRun, pruneRunsPool, pruneStalePool, migrateStalePool, 用法,
+  BASELINE_DIR, BASELINE_KEEP, STALE_PREFIX, RUNS_DIR, RUNS_KEEP, STALE_SUBDIR, STALE_KEEP, TAG_DEFAULT,
+};
 if (require.main === module) main();

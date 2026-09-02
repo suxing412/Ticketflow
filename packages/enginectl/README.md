@@ -9,25 +9,29 @@
 | 通道 | 说明 |
 |---|---|
 | `探测` | 列本机可用引擎（godot / unity 版本 / unreal） |
-| `unity-test` / `unity-run` | 只走「可见编辑器 + 任务投递」（施工令-011：无头 batchmode 整族退役，`--no-attach` 作废）；无活监听器则可见拉起，绝不抢占已开编辑器。`--filter 类名1,类名2` 跑子集；`--fresh` 净室（礼貌请求编辑器排空自退再拉起） |
+| `用法` | 打印用法清单（`help` / `--help` 同义），一行 JSON 的 `用法` 数组 |
+| `自测` | 跑包自测（= `node test.js`，零引擎调用） |
+| `unity-test` / `unity-run` | 只走「可见编辑器 + 任务投递」（施工令-011：无头 batchmode 整族退役，`--no-attach` 作废）；无活监听器则可见拉起，绝不抢占已开编辑器。`--filter 类名1,类名2` 跑子集；`--fresh` 净室（礼貌请求编辑器排空自退再拉起）；`--tag <单号>` 取证归属标记 |
 | `unity-build` | 占位，按项目落地后启用 |
 | `godot-import` / `godot-test` / `godot-export` | headless 三通道（导出前显式导入，#69511 怪癖） |
 | `unreal-*` | 预留（本机未装） |
 
 ```
-node enginectl.js unity-test --project D:/GitHub/TK [--filter A,B] [--fresh] [--boot-timeout-min N]
+node enginectl.js unity-test --project D:/GitHub/TK [--filter A,B] [--fresh] [--tag TK-204] [--boot-timeout-min N]
 ```
 
 ## 纪律要点
 
 - 工程级互斥锁 `.enginectl-lock`（孤儿锁自愈）；`Temp/UnityLockfile` 有活编辑器时永不抢占；
-- 测试数字只从落盘 `enginectl-results.xml` 取（禁 tail 截尾推数）；全量成功自动归档 `enginectl-baselines/`（留最近 10 份）；
+- 测试数字只从落盘 XML 根节点属性取（禁 tail 截尾推数）；全量成功自动归档 `enginectl-baselines/`（留最近 10 份）；
+- **取证归档双写分件**（TK-204，案源：仓根只有一组固定名产物，两条链同时跑测后写者覆盖前写者，两边都拿不到自己那轮的数字）：`unity-test` / `unity-run` 接受 `--tag <单号>`（**不给不报错**，回退 `untagged`，所有既有命令行原样可跑）。每轮除照旧写固定名 `enginectl-results.xml` / `enginectl-test.log` 外，同内容另落独立件 `enginectl-runs/<tag>-<UTC时间戳>.xml|.log`——`copyFileSync` 逐字节复制，两份 sha256 相等；固定名件保向后兼容，独立件解并发互毁。绝对路径见输出新增的 `resultsFile` / `logFile` 两字段（`resultsMtime` / `baseline` 语义不动）。过不了新鲜度闸的那一轮没有「本轮结果」，只双写日志、不出 `resultsFile`；
+- **归档三池分家**（TK-204 ④）：`enginectl-baselines/` 只放基线件 `results-<UTC>.xml`（留 10）· `enginectl-runs/` 放独立件（xml+log 成对计一份，按 mtime 旧→新删，留 30）· `enginectl-runs/stale/` 放起跑净场挪走的 `results-stale-<旧件mtime>.xml`（留 10）。**三池各清各的，互不驱逐**——原先 stale 与基线共用一个 keep-10 池，stale 把对照线驱逐干净了。老位置残留的 stale 件在 `unity-test` 起跑时自动迁入新池，无需人工搬迁；
 - **结果新鲜度自校**（施工令-056，案源 TK-144「旧件被读成本轮 523 全绿」）：`unity-test` 起跑前记时刻、把在位的旧 `enginectl-results.xml` 挪进 `enginectl-baselines/results-stale-<旧件mtime>.xml`（挪不动即报错停手，不开编辑器）；收尾核 `mtime ≥ 起跑时刻`，不达标则 `status=error`、`error=stale_results：…`，**passed/failed/total 一个字段都不输出**（监听器自己的说法留在 `listenerStatus` 里存证）。放行时输出 `resultsMtime` 供外部复核。`unity-run` 不产结果文件，此闸整体不进；
 - 引擎定位：env（`ENGINECTL_UNITY_EXE` 等）> 同目录 `enginectl.config.json` > ProjectVersion→Hub；版本不匹配拒开（防静默升级工程）。
 
 ## 测试
 
-`npm test` = `node test.js`（包自测 30 项，零引擎调用）：新鲜度三分支（陈旧/新鲜/挪件失败）单元 + 端到端——端到端在系统临时目录造假工程、起一个照 TK-103 协议应答的**假监听器**（本地 TCP），走 enginectl 自己的 attach 正路取真输出；另含探测冒烟与 `unity-run`/参数校验零回归。`npm run probe` = 原来的 `node enginectl.js 探测`（本地文件系统探测冒烟）。真实通道取证按 TK 侧 `unity-evidence` 细则走。
+`npm test` = `node test.js`（包自测 53 项，零引擎调用）；权限白名单只放行 `node …/enginectl.js*` 的环境走同源入口 `node enginectl.js 自测`。内容：新鲜度三分支（陈旧/新鲜/挪件失败）单元 + 端到端——端到端在系统临时目录造假工程、起一个照 TK-103 协议应答的**假监听器**（本地 TCP），走 enginectl 自己的 attach 正路取真输出；另含探测冒烟与 `unity-run`/参数校验零回归。TK-204 另加四章：`T0` `--tag` 归一化、`T1` 两个 tag 各跑一轮（独立件并存不互覆盖 / 固定名件被后轮覆盖属预期 / 独立件与同轮固定名件 sha256 相等 / 不带 tag 原样可跑）、`T2` 独立件池留 30 份（成对计一份、按 mtime 旧→新删）、`T3` 三池互不驱逐与分家自愈。`npm run probe` = 原来的 `node enginectl.js 探测`（本地文件系统探测冒烟）。真实通道取证按 TK 侧 `unity-evidence` 细则走。
 
 `enginectl.js` 被 `require` 时只交出算子（`freshnessGate` / `stashStaleResults` / `readCounts` 等），不跑主流程；命令行调用行为一字未变。
 

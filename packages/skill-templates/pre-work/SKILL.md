@@ -27,14 +27,15 @@ description: 工单开工前流程化检查（H66 强制）。领单后第一动
 ### 三·程序版（程序 / 装配单）
 
 1. **不跑测试**：改 `dotnet build`（或本工程等价编译命令）做**静态自查**，零错误、零新增警告才算过；命令原文与结论写进回执。
-2. 基线**取读不取跑**：读最近一次 `enginectl-results.xml`（注明 mtime）或 `enginectl-baselines/` 里最新一份归档（注明文件名的 UTC 时间戳），照抄既有红灯清单。
+2. 基线**取读不取跑**：读最近一次 `enginectl-results.xml`（注明 mtime）、或 `enginectl-runs/` 里对应轮次的独立件（**注明独立件文件名 + mtime**，TK-204 后这是并发环境下唯一辨得出归属的取数口径）、或 `enginectl-baselines/` 里最新一份归档（注明文件名的 UTC 时间戳），照抄既有红灯清单。
 3. 回执必列**「受影响测试类清单」**：本单改动波及哪些测试类（写类名，供审检 `--filter` 照单直跑）。漏列 = 回执不合格。
 
 ### 三·审检版（审检 / 质检单）
 
-1. 先按上游程序回执的「受影响测试类清单」跑**子集**：`node tools/enginectl.js unity-test --project <工程> --filter 类名1,类名2`——几分钟一轮，子集红了直接打回，不必先烧一轮全量。
+1. 先按上游程序回执的「受影响测试类清单」跑**子集**：`node tools/enginectl.js unity-test --project <工程> --tag <本单单号> --filter 类名1,类名2`——几分钟一轮，子集红了直接打回，不必先烧一轮全量。
 2. 子集全绿再**全量定案**；全量一律走**净室**——即 `--fresh`（请求活编辑器排空队列后自退，再可见拉起新编辑器投递，「重启后首跑」即净室），与 H67 两检并存不冲突。测试一律在**带可见窗口的 Unity 编辑器**里跑（施工令-011：无头启动整族退役，`--no-attach` 已作废）。
-3. 全量取数口径见「基线归档」：`enginectl` 输出行里的 `baseline` 字段即本轮归档件 `enginectl-baselines/results-<UTC时间戳>.xml`（只留最近 10 份），回执写该文件名作对照线。
+3. **`--tag <本单单号>` 每轮必带**（TK-204）：固定名 `enginectl-results.xml` 是全仓共用的一份，两条链同时跑测后写者会覆盖前写者；带 tag 后同内容另落一份**独立件** `enginectl-runs/<单号>-<UTC时间戳>.xml|.log`（与固定名件 sha256 相等），谁也覆盖不了谁。**并发时一律以独立件为准**，路径直接读输出行的 `resultsFile` / `logFile`。不带 tag 不报错，只是落成 `untagged-<UTC>` 件、辨不出是谁跑的。
+4. 全量取数口径见「基线归档」：`enginectl` 输出行里的 `baseline` 字段即本轮归档件 `enginectl-baselines/results-<UTC时间戳>.xml`（只留最近 10 份，**只放基线件**——起跑挪走的 `results-stale-*.xml` 已分家到 `enginectl-runs/stale/` 独立留 10 份，不再互相驱逐），回执写该文件名作对照线。
 
 ## 四、开工声明
 
