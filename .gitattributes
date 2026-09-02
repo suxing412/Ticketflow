@@ -1,0 +1,3 @@
+# 这两个 JS 的历史版本含字面 NUL；强制按文本展示，保证清理提交和后续 PR 都有逐行 diff。
+apps/platform/lib/编制.js diff
+apps/platform/test/实例页契约.test.js diff
